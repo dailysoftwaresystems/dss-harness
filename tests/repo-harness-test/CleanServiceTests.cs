@@ -54,6 +54,27 @@ public sealed class CleanServiceTests
         Assert.False(File.Exists(new HarnessLayout(temp.Path, temp.Path).LockFile));
     }
 
+    /// <summary>
+    /// A host cleaning a leg for another machine names the build directory from its home, as <c>~</c>, in words
+    /// and as data: the machine that asked puts both in its own output.
+    /// </summary>
+    [Fact]
+    public async Task AHostAnsweringAnotherMachine_NamesTheBuildDirectoryFromItsHome()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory(home: HostDoubles.HomeAt(temp.Path));
+        var config = OneLocalLeg(harness);
+        var directory = BuildDirectory(temp, harness, config);
+        File.WriteAllText(Written(Path.Combine(directory, "a.o")), "a");
+        var shown = "~" + directory[temp.Path.Length..];
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.StartsWith($"removed 1 byte from '{shown}'; ", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Equal(shown, leg.GetProperty("space").GetProperty("directory").GetString());
+    }
+
     /// <summary>A dry run says what each build directory holds and the room beside it, and removes nothing.</summary>
     [Fact]
     public async Task ADryRun_SaysWhatTheBuildDirectoryHolds_AndRemovesNothing()

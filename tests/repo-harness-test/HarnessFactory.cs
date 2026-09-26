@@ -22,14 +22,20 @@ namespace RepoHarness.Tests;
 /// </summary>
 public sealed class HarnessFactory
 {
-    public HarnessFactory(bool verbose = false)
+    /// <summary>Assembles the services.</summary>
+    /// <param name="verbose">Whether the output shows detail.</param>
+    /// <param name="home">
+    /// How the output writes this machine's home: as a host answering another machine writes it, or as it is
+    /// where this is left out.
+    /// </param>
+    public HarnessFactory(bool verbose = false, HomeShorthand? home = null)
     {
         Platform = new HostPlatform();
         FilePermissions = FilePermissionsFactory.Create();
 
         // The real console output, writing to buffers: a hand-written recorder would test
         // that the recorder behaves, not that the output does.
-        Output = new ConsoleHarnessOutput(StandardOutput, StandardError, verbose);
+        Output = new ConsoleHarnessOutput(StandardOutput, StandardError, verbose, home);
 
         FileSystem = new PhysicalFileSystem(FilePermissions);
         ProcessRunner = new ProcessRunner(Platform, FilePermissions);

@@ -23,7 +23,8 @@ public sealed class HostAgentService(
     LocalProgramResolver programs,
     KeepAwake keepAwake,
     HoldAwakeStore holds,
-    IDetachedProcessLauncher launcher)
+    IDetachedProcessLauncher launcher,
+    HomeShorthand home)
 {
     private readonly IHostPlatform _platform = platform;
     private readonly IToolIdentityProvider _identity = identity;
@@ -34,6 +35,7 @@ public sealed class HostAgentService(
     private readonly KeepAwake _keepAwake = keepAwake;
     private readonly HoldAwakeStore _holds = holds;
     private readonly IDetachedProcessLauncher _launcher = launcher;
+    private readonly HomeShorthand _home = home;
 
     /// <summary>Reads one request from <paramref name="input"/> and serves it.</summary>
     /// <param name="input">
@@ -124,7 +126,7 @@ public sealed class HostAgentService(
                     new RoomQuestions(request.SpaceAt, request.Builds),
                     abandoned.Token)
                 .ConfigureAwait(false);
-            await output.WriteLineAsync(JsonSerializer.Serialize(info, HostAgentProtocol.JsonOptions)).ConfigureAwait(false);
+            await output.WriteLineAsync(JsonSerializer.Serialize(Told(info), HostAgentProtocol.JsonOptions)).ConfigureAwait(false);
             await output.FlushAsync(cancellationToken).ConfigureAwait(false);
             return HarnessExit.Success;
         }
@@ -276,6 +278,38 @@ public sealed class HostAgentService(
             Builds = [.. room.Builds.Distinct(StringComparer.Ordinal).Select(BuildRoom)],
         };
     }
+
+    /// <summary>
+    /// <paramref name="info"/> as the machine that asked is told it: every reason, and every place the answer
+    /// only describes - where a filesystem is mounted, the instance a developer environment would be set up
+    /// from - with this host's home as <c>~</c>.
+    /// </summary>
+    /// <remarks>
+    /// Told so, and nothing else. Where each program is, and the directories they were found in, are written
+    /// as they are: the machine that asked hands them back for a hold here to look for its command in. So is
+    /// each build directory, named as it was asked about, and what an emulator's witness printed, which is the
+    /// witness's own words. <see cref="DescribeAsync"/> itself answers as it found, because this machine sets
+    /// its own developer environments up from what it answers there.
+    /// </remarks>
+    private HostAgentInfo Told(HostAgentInfo info) => info with
+    {
+        Emulators = info.Emulators.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value with { Reason = Told(pair.Value.Reason) },
+            StringComparer.OrdinalIgnoreCase),
+        DeveloperEnvironments = info.DeveloperEnvironments.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value with { Reason = Told(pair.Value.Reason), InstallationPath = Told(pair.Value.InstallationPath) },
+            StringComparer.OrdinalIgnoreCase),
+        Programs = [.. info.Programs.Select(program => program with { Reason = Told(program.Reason) })],
+        Space = Told(info.Space),
+        SpaceUnmeasured = Told(info.SpaceUnmeasured),
+        Builds = [.. info.Builds.Select(build => build with { Disk = Told(build.Disk), Unmeasured = Told(build.Unmeasured) })],
+    };
+
+    private string? Told(string? text) => text is null ? null : _home.Shown(text);
+
+    private DiskSpace? Told(DiskSpace? space) => space is null ? null : space with { Filesystem = _home.Shown(space.Filesystem) };
 
     /// <summary>
     /// What the build directory <paramref name="asked"/> holds, as the build that last finished there recorded
@@ -486,9 +520,10 @@ public sealed class HostAgentService(
         }
     }
 
-    private static async Task<int> RefuseAsync(TextWriter error, int exitCode, string message)
+    /// <summary>Refuses the request, saying why as the machine that asked is told it.</summary>
+    private async Task<int> RefuseAsync(TextWriter error, int exitCode, string message)
     {
-        await error.WriteLineAsync(FailureLine.For(HostAgentProtocol.CommandName, message)).ConfigureAwait(false);
+        await error.WriteLineAsync(FailureLine.For(HostAgentProtocol.CommandName, _home.Shown(message))).ConfigureAwait(false);
         return exitCode;
     }
 }

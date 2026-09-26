@@ -46,6 +46,19 @@ public interface IHarnessOutput
     void RawError(string line);
 
     /// <summary>
+    /// <paramref name="text"/> as this output's reader is told it. On a host answering another machine,
+    /// with the host's home directory written as <c>~</c> - as every line of the harness's own written
+    /// here already is - and unchanged anywhere else.
+    /// </summary>
+    /// <param name="text">A path, or a line of the harness's own, bound for what a command answers with.</param>
+    /// <remarks>
+    /// For what reaches the reader through <see cref="Data"/>, whose documents this output cannot look into:
+    /// the command that writes one knows which of its fields are its own words and which a program's.
+    /// Passthrough output and documents are written as they are given.
+    /// </remarks>
+    string Shown(string text);
+
+    /// <summary>
     /// Sends everything except <see cref="Data"/> to standard error until the returned scope is
     /// disposed, so a command answering with a document leaves standard output holding only that
     /// document.

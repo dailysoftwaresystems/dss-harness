@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
@@ -164,7 +165,10 @@ public sealed class LegsCliTests
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains("verify-git: OK", result.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains(temp.Path, result.StandardOutput, StringComparison.OrdinalIgnoreCase);
+
+        // Named as a host names a path to another machine: from its home, as ~, where it is under the home.
+        var shown = HomeShorthand.Of(new HostPlatform(), new PhysicalFileSystem(FilePermissionsFactory.Create())).Shown(temp.Path);
+        Assert.Contains(shown, result.StandardOutput, StringComparison.OrdinalIgnoreCase);
 
         // The last line says how the command finished; the machine that asked reads its exit code from there.
         Assert.EndsWith(

@@ -459,6 +459,12 @@ internal static class HostDoubles
     }
 
     /// <summary>
+    /// How a host answering another machine writes its home, where its home is <paramref name="home"/> on this
+    /// machine's own platform: the paths a test makes are this machine's.
+    /// </summary>
+    public static HomeShorthand HomeAt(string home) => HomeShorthand.For([home], new HostPlatform().PlatformKey);
+
+    /// <summary>
     /// A loader that hands every command <paramref name="config"/>, for a tree at <paramref name="root"/>:
     /// a worktree of the main checkout at <paramref name="mainCheckoutRoot"/> when one is given.
     /// </summary>

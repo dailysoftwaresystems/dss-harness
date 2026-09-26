@@ -762,6 +762,36 @@ build, or has no copy of the repository.
   made by hand unless `--adopt` names that host, and reports what taking it over would cost
   either way.
 
+### A host's home is `~`
+
+A host answering another machine writes into that machine's output: its terminal, its
+`--json`, and every transcript and file that keeps them. So the host writes its own home
+directory as `~`, and no path it names says which account it was reached as:
+`~/src/app.worktree-x/.harness-config/runs/<id>`. The path still works in a shell there, since
+bash, zsh and PowerShell all read a leading `~` as the home.
+
+- **Every line of DssHarness's own**, whatever the command: a leg's reason, a lock or
+  free-space message, a refusal, a failure line quoting git or the system. The
+  `logs of <leg> on <host>:` line the machine that asked prints comes from them.
+- **The paths in its ledger**: `runDirectory`, a leg's `detail` and `space`, and the
+  instance a developer environment was set up from. A survey's answer names the mount of a
+  filesystem, and every reason, the same way. Where each program is, and the directories they
+  were found in, stay whole: the machine that asked hands them back, for a hold there to look
+  for its command in.
+- **Only the home, and only as whole path segments.** `/home/al` is not the start of
+  `/home/alice`, and `/home/alice` is not the home inside `/data/home/alice`. A home reached
+  through a link is matched both ways, because git names a repository's paths with every link
+  resolved. On a Windows host the home is matched with either separator and in any case, and
+  the separator after it stays as written: `~\src\app`. PowerShell reads that; cmd.exe,
+  OpenSSH's default shell there, reads no `~` at all.
+- **A program's words stay as it printed them**: a phase's last lines in `logTail`, and the
+  output a command relays. A command typed on the host itself names its paths in full, as a
+  command typed on any machine does.
+- **A copy's path this machine builds is said as configured.** The sync line, a lock held on a
+  host's copy and delete-worktree's lines name the copy from `repositoryPath` as the
+  configuration writes it, so `"repositoryPath": "~/src/app"` keeps the account out of those
+  too. `keptOutputs` is relative to the tree already.
+
 ### Installing what a host is missing
 
 `install-missing-tools` runs over every declared leg, or those `--legs` names, on the host each
@@ -1391,7 +1421,7 @@ with it; and a run is resumed from the tree it was started in. A caller never wo
 `build`, `test` and `run` name it on every exit that created one, as `logs: <directory>` and as
 `runDirectory` in `--json`. A leg another host ran was run there under a run of its own, and its
 line names that host's directory, as `logs of <leg> on <host>: <directory>` and as the leg's own
-`runDirectory`.
+`runDirectory`, with the host's home written as `~` (see "A host's home is `~`").
 
 ## Disk space
 

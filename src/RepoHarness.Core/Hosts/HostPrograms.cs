@@ -123,7 +123,11 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
                 : await ThereAsync(connection, program, directories, home, budget, cancellationToken).ConfigureAwait(false);
         }
 
-        return connection with { Programs = found };
+        // The home, where a search asked the host for it, kept with what it found: a program found under it is
+        // named from there.
+        var measured = home.IsValueCreated ? (await home.Value.ConfigureAwait(false)).Directory : null;
+
+        return connection with { Programs = found, Home = measured ?? connection.Home };
     }
 
     private async Task<ProgramLocation> ThereAsync(

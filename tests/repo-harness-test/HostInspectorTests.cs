@@ -173,6 +173,11 @@ public sealed class HostInspectorTests
             call => Assert.Equal($"{Home}/.dotnet/dotnet", call.Command.Program));
     }
 
+    /// <summary>
+    /// Said from the home the host named, as <c>~</c>: the host's reason reaches every leg reported unavailable,
+    /// the ledger and <c>--json</c>, and the home names the account the host was reached as. The program is
+    /// still started by its whole path.
+    /// </summary>
     [Fact]
     public async Task AHostWhoseDotnetIsOffThePathAndWillNotRun_SaysWhereItWasFound()
     {
@@ -182,7 +187,11 @@ public sealed class HostInspectorTests
 
         var report = await fixture.InspectAsync(HostId.Wsl(Distro));
 
-        Assert.Contains($"'dotnet' is installed at '{Home}/.dotnet/dotnet'", report.Reason, StringComparison.Ordinal);
+        Assert.Contains("'dotnet' is installed at '~/.dotnet/dotnet'", report.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(Home, report.Reason, StringComparison.Ordinal);
+        Assert.Contains(
+            fixture.Commands.Calls,
+            call => call.Command.Arguments.Contains("--list-sdks") && call.Command.Program == $"{Home}/.dotnet/dotnet");
         Assert.Contains("off the PATH of a command run without a login shell", report.Reason, StringComparison.Ordinal);
         Assert.Contains("Permission denied", report.Reason, StringComparison.Ordinal);
     }
@@ -1319,7 +1328,8 @@ public sealed class HostInspectorTests
                 new LocalProgramResolver(platform, FilePermissionsFactory.Create()),
                 new KeepAwake(processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
-                new RecordingLauncher());
+                new RecordingLauncher(),
+                HomeShorthand.Of(platform, fileSystem));
             var secrets = new HostSecretsStore(fileSystem, Permissions, platform);
             _lookup = new FixedLookup(resolves);
             var addresses = new HostAddressResolver(_lookup, TimeProvider.System, TimeSpan.Zero);

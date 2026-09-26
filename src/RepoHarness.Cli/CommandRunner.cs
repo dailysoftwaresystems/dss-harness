@@ -165,7 +165,7 @@ internal static class CommandRunner
     {
         if (ledger)
         {
-            output.Data(LedgerReport.Stopped(exitCode, message));
+            output.Data(LedgerReport.Stopped(exitCode, message, output.Shown));
         }
 
         output.Fail(commandName, message);

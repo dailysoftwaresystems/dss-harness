@@ -69,6 +69,13 @@ public sealed record HostConnection
     /// </summary>
     public IReadOnlyDictionary<string, ProgramLocation> Programs { get; init; } = NoPrograms;
 
+    /// <summary>
+    /// The host's home directory, as the host said it when a search for a program needed it; <see langword="null"/>
+    /// until one did. Kept so that a program found under it is named with the home as <c>~</c>, as everything
+    /// the harness says about another machine's home is.
+    /// </summary>
+    public string? Home { get; init; }
+
     /// <summary>What was measured about <paramref name="program"/> here, or <see langword="null"/> when it was never asked about.</summary>
     public ProgramLocation? Located(string program)
     {

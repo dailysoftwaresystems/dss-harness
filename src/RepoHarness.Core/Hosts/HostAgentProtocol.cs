@@ -271,7 +271,11 @@ public sealed class HostAgentRequest
 }
 
 /// <summary>A host's answer to an info request.</summary>
-public sealed class HostAgentInfo
+/// <remarks>
+/// A record, so the answer the machine that asked is told can be this one with the fields it tells otherwise,
+/// and every other field kept as it is.
+/// </remarks>
+public sealed record HostAgentInfo
 {
     /// <summary>The version of DssHarness that answered.</summary>
     public required string Version { get; init; }

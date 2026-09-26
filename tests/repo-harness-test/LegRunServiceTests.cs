@@ -395,6 +395,44 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A host running a leg for another machine names its records from its home, as <c>~</c>, in the ledger it
+    /// answers with - where it keeps them, and why a run that owns them stopped it - and the same run typed on
+    /// the machine itself names them in full. The machine that asked puts the host's words in its own output,
+    /// and the home names the account the host was reached as.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task AHostAnsweringAnotherMachine_NamesItsRecordsFromItsHome(bool servesAnotherMachine, bool logHeld)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory(home: servesAnotherMachine ? HostDoubles.HomeAt(temp.Path) : null);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy },
+            logs: logHeld ? new LogOwnership(new LogsOwnedElsewhere(harness.FileSystem), harness.Output, harness.Identity) : null);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var runs = Path.Combine(servesAnotherMachine ? "~" : temp.Path, ".harness-config", "runs") + Path.DirectorySeparatorChar;
+
+        Assert.StartsWith(runs, document.RootElement.GetProperty("runDirectory").GetString(), StringComparison.Ordinal);
+
+        if (logHeld)
+        {
+            var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+            Assert.StartsWith($"another run owns '{runs}", document.RootElement.GetProperty("summary").GetString(), StringComparison.Ordinal);
+            Assert.StartsWith($"another run owns '{runs}", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// A leg another host ran was run there under a run of its own: its records are in that host's
     /// directory, which the run names beside its own, in the text and on the leg's JSON line.
     /// </summary>

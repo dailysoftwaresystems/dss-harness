@@ -169,7 +169,7 @@ its emulator - and is turned away there when that host lacks a program its comma
 {
   "hosts": {
     "wsl": { "Ubuntu": { "repositoryPath": "~/src/app" } },
-    "ssh": { "mac-mini": { "repositoryPath": "/Users/dev/src/app", "env": { "CCACHE_DIR": "/Users/dev/.cache/app-ccache" } } }
+    "ssh": { "mac-mini": { "repositoryPath": "~/src/app", "env": { "CCACHE_DIR": "/Users/dev/.cache/app-ccache" } } }
   },
   "emulators": {
     "rosetta": {

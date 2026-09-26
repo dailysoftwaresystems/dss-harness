@@ -343,7 +343,7 @@ public sealed class LegRunService(
     /// reasons - it reached the machine that dispatched the leg as a host whose answer could not be
     /// read, where the host had said exactly what happened.
     /// </remarks>
-    private static CommandOutcome Stopped(
+    private CommandOutcome Stopped(
         LegRunRequest request,
         int exitCode,
         string message,
@@ -352,7 +352,7 @@ public sealed class LegRunService(
         IReadOnlyList<string> details,
         string? runDirectory)
         => request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory)] }
+            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory, _output.Shown)] }
             : CommandOutcome.Failed(exitCode, message, details);
 
     /// <summary>
@@ -566,7 +566,7 @@ public sealed class LegRunService(
         {
             return new CommandOutcome(exitCode, message)
             {
-                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory)],
+                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory, _output.Shown)],
                 Quiet = true,
             };
         }

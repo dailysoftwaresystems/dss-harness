@@ -1,4 +1,5 @@
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Tests;
 
@@ -141,11 +142,65 @@ public sealed class ConsoleHarnessOutputTests
         Assert.All(lines, line => Assert.Matches(@"^leg: ([a-z])\1{63}$", line));
     }
 
-    private static (ConsoleHarnessOutput Output, StringWriter StandardOutput, StringWriter StandardError) Create(bool verbose)
+    /// <summary>
+    /// A host answering another machine writes its home as <c>~</c> in every line of the harness's own, and
+    /// tells a command's document the same way when asked: the machine that asked relays those lines, and
+    /// keeps them wherever it keeps its output.
+    /// </summary>
+    [Fact]
+    public void AHostAnsweringAnotherMachine_WritesItsHomeAsTilde_InEveryLineOfItsOwn()
+    {
+        var (output, standardOutput, standardError) = Create(verbose: true, HomeShorthand.For(["/home/alice"], PlatformNames.Linux));
+
+        output.Info("test", "logs: /home/alice/src/repo/.harness-config/runs/1");
+        output.Detail("test", "taking '/home/alice/src/repo'");
+        output.Ok("clean", "removed '/home/alice/src/repo/build'");
+        output.Warn("test", "the log path '/home/alice/src/repo/.harness-config/runs/1' was taken");
+        output.Fail("sync-serve", "Access to the path '/home/alice/src/repo/a.txt' is denied.");
+
+        Assert.Equal(
+            ["test: logs: ~/src/repo/.harness-config/runs/1", "test: taking '~/src/repo'", "clean: OK - removed '~/src/repo/build'"],
+            Lines(standardOutput));
+        Assert.Equal(
+            ["test: WARN - the log path '~/src/repo/.harness-config/runs/1' was taken", "sync-serve: FAIL - Access to the path '~/src/repo/a.txt' is denied."],
+            Lines(standardError));
+        Assert.Equal("~/src/repo", output.Shown("/home/alice/src/repo"));
+    }
+
+    /// <summary>
+    /// What a program printed stays as it printed it, on a host answering another machine too: its output
+    /// passed through, and a row quoting its last lines beneath a ledger. So does a document, which the
+    /// command writing it tells field by field; and a command typed here writes every path as it is.
+    /// </summary>
+    [Fact]
+    public void AProgramsWords_AndDocuments_AndACommandTypedHere_AreWrittenAsTheyAre()
+    {
+        var (serving, servingOutput, servingError) = Create(verbose: false, HomeShorthand.For(["/home/alice"], PlatformNames.Linux));
+        var (typed, typedOutput, _) = Create(verbose: false);
+
+        serving.Raw("/home/alice/src/repo/main.c:3: warning");
+        serving.RawError("/home/alice/src/repo/main.c:4: error");
+        serving.Info("test", QuotedLine.Of("/home/alice/src/repo/main.c:4: error"));
+        serving.Data("""{"runDirectory": "/home/alice/src/repo/.harness-config/runs/1"}""");
+        typed.Info("test", "logs: /home/alice/src/repo/.harness-config/runs/1");
+
+        Assert.Equal(
+            [
+                "/home/alice/src/repo/main.c:3: warning",
+                "test:   | /home/alice/src/repo/main.c:4: error",
+                """{"runDirectory": "/home/alice/src/repo/.harness-config/runs/1"}""",
+            ],
+            Lines(servingOutput));
+        Assert.Equal(["/home/alice/src/repo/main.c:4: error"], Lines(servingError));
+        Assert.Equal(["test: logs: /home/alice/src/repo/.harness-config/runs/1"], Lines(typedOutput));
+        Assert.Equal("/home/alice/src/repo", typed.Shown("/home/alice/src/repo"));
+    }
+
+    private static (ConsoleHarnessOutput Output, StringWriter StandardOutput, StringWriter StandardError) Create(bool verbose, HomeShorthand? home = null)
     {
         var standardOutput = new StringWriter();
         var standardError = new StringWriter();
-        return (new ConsoleHarnessOutput(standardOutput, standardError, verbose), standardOutput, standardError);
+        return (new ConsoleHarnessOutput(standardOutput, standardError, verbose, home), standardOutput, standardError);
     }
 
     private static List<string> Lines(StringWriter writer)
