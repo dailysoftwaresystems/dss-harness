@@ -3,8 +3,12 @@ using RepoHarness.Core.Platform;
 namespace RepoHarness.Core.Output;
 
 /// <inheritdoc cref="IHarnessOutput"/>
-/// <param name="standardOutput">Where results, and progress while no document is being written, go.</param>
-/// <param name="standardError">Where failures, warnings, and progress while a document is being written, go.</param>
+/// <param name="standardOutput">
+/// Where results go, and progress and a program's own output while no document is being written.
+/// </param>
+/// <param name="standardError">
+/// Where failures, warnings and a program's own error output go, and progress while a document is being written.
+/// </param>
 /// <param name="verbose">Whether detail is shown.</param>
 /// <param name="home">
 /// How the machine's home directory is written in every line of the harness's own: as <c>~</c> on a host

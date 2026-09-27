@@ -64,8 +64,8 @@ public sealed class HomeShorthandTests
         => Assert.Equal(shown, HomeShorthand.For([@"C:\Users\alice\"], PlatformNames.Windows).Shown(text));
 
     /// <summary>
-    /// A home spelt two ways - as the platform names it, and through the link it is reached by - is written as
-    /// <c>~</c> either way, the longer spelling never cut short by the shorter.
+    /// A home spelt two ways - as the platform names it, and with the link it is reached through resolved -
+    /// is written as <c>~</c> either way, the longer spelling never cut short by the shorter.
     /// </summary>
     [Theory]
     [InlineData("/var/home/alice/src/repo", "~/src/repo")]
@@ -119,6 +119,37 @@ public sealed class HomeShorthandTests
         var home = HomeShorthand.Of(platform, fileSystem);
 
         Assert.Equal("'~/src' and '~/bin'", home.Shown("'/var/home/alice/src' and '/home/alice/bin'"));
+    }
+
+    /// <summary>
+    /// A home that is not a whole path is never resolved: made whole against wherever the process happens to be,
+    /// it would take that directory for the home.
+    /// </summary>
+    [Fact]
+    public void ARelativeHome_IsNeverTakenForWhereTheProcessIs()
+    {
+        var platform = HostDoubles.Platform(PlatformId.Linux, home: "home/alice");
+        var fileSystem = Substitute.For<IFileSystem>();
+        fileSystem.ResolveLinks(Arg.Any<string>()).Returns("/work/home/alice");
+
+        Assert.Equal("/work/home/alice/x", HomeShorthand.Of(platform, fileSystem).Shown("/work/home/alice/x"));
+        fileSystem.DidNotReceive().ResolveLinks(Arg.Any<string>());
+    }
+
+    /// <summary>
+    /// A machine this build does not run on has no home to shorten, and its output is still made: that is what
+    /// says, in its failure line, why it refuses every request.
+    /// </summary>
+    [Fact]
+    public void AMachineThisBuildDoesNotRunOn_HasNoHomeToShorten()
+    {
+        var fileSystem = Substitute.For<IFileSystem>();
+
+        var unsupported = HomeShorthand.Of(() => throw new PlatformNotSupportedException("DssHarness supports Windows, Linux and macOS only."), fileSystem);
+        var supported = HomeShorthand.Of(() => HostDoubles.Platform(PlatformId.Linux, home: "/home/alice"), fileSystem);
+
+        Assert.Same(HomeShorthand.None, unsupported);
+        Assert.Equal("~/x", supported.Shown("/home/alice/x"));
     }
 
     /// <summary>A home whose links cannot be read is written as the platform names it.</summary>

@@ -281,15 +281,17 @@ public sealed class HostAgentService(
 
     /// <summary>
     /// <paramref name="info"/> as the machine that asked is told it: every reason, and every place the answer
-    /// only describes - where a filesystem is mounted, the instance a developer environment would be set up
-    /// from - with this host's home as <c>~</c>.
+    /// only describes - where each program is, where a filesystem is mounted, the instance a developer
+    /// environment would be set up from - with this host's home as <c>~</c>.
     /// </summary>
     /// <remarks>
-    /// Told so, and nothing else. Where each program is, and the directories they were found in, are written
-    /// as they are: the machine that asked hands them back for a hold here to look for its command in. So is
-    /// each build directory, named as it was asked about, and what an emulator's witness printed, which is the
-    /// witness's own words. <see cref="DescribeAsync"/> itself answers as it found, because this machine sets
-    /// its own developer environments up from what it answers there.
+    /// Told so, except for what the machine that asked uses as it is. The directories the programs were found
+    /// in are written in full, because it hands them back for a hold here to look for its command in; and each
+    /// build directory as it was asked about, because it matches the answer to its question by that text. What
+    /// an emulator's witness printed where it worked is the witness's own words, and stays as printed; a reason
+    /// quoting a witness that failed is this host's own line, told like every other.
+    /// <see cref="DescribeAsync"/> itself answers as it found, because this machine sets its own developer
+    /// environments up from what it answers there.
     /// </remarks>
     private HostAgentInfo Told(HostAgentInfo info) => info with
     {
@@ -301,7 +303,7 @@ public sealed class HostAgentService(
             pair => pair.Key,
             pair => pair.Value with { Reason = Told(pair.Value.Reason), InstallationPath = Told(pair.Value.InstallationPath) },
             StringComparer.OrdinalIgnoreCase),
-        Programs = [.. info.Programs.Select(program => program with { Reason = Told(program.Reason) })],
+        Programs = [.. info.Programs.Select(program => program with { Path = Told(program.Path), Reason = Told(program.Reason) })],
         Space = Told(info.Space),
         SpaceUnmeasured = Told(info.SpaceUnmeasured),
         Builds = [.. info.Builds.Select(build => build with { Disk = Told(build.Disk), Unmeasured = Told(build.Unmeasured) })],

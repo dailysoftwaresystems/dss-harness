@@ -1,4 +1,5 @@
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Configuration;
 using System.Globalization;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Execution;
@@ -163,8 +164,8 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// The copy a host has not got is named from its home, as <c>~</c>, as it is everywhere the host tells
-    /// another machine a path: the machine that asked quotes the refusal into every leg it reports.
+    /// The copy a host has not got is named from its home, as <c>~</c>, as it is in every line the host writes
+    /// for another machine: the machine that asked quotes the refusal into every leg it reports.
     /// </summary>
     [Fact]
     public async Task Run_NamesACopyItHasNot_FromItsHome()
@@ -185,12 +186,12 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// An answer about the host names from its home every place it only describes - here where the filesystem
-    /// its copies are on is mounted - and names in full where each program is and the directories they were
+    /// An answer about the host names from its home every place it only describes - where each program is, and
+    /// where the filesystem its copies are on is mounted - and names in full the directories the programs were
     /// found in, which the machine that asked hands back for a hold here to look for its command in.
     /// </summary>
     [Fact]
-    public async Task Info_NamesWhatItDescribesFromItsHome_AndWhereProgramsAreInFull()
+    public async Task Info_NamesWhatItDescribesFromItsHome_AndTheDirectoriesItFoundProgramsInInFull()
     {
         using var home = new TempDirectory();
         var tool = home.WriteProgram("bin", "harness-home-tool");
@@ -216,8 +217,58 @@ public sealed class HostAgentServiceTests
         var info = JsonSerializer.Deserialize<HostAgentInfo>(output.ToString(), HostAgentProtocol.JsonOptions)!;
 
         Assert.Equal("~", info.Space?.Filesystem);
-        Assert.Equal(tool, Assert.Single(info.Programs).Path);
+        Assert.Equal("~" + tool[home.Path.Length..], Assert.Single(info.Programs).Path);
         Assert.Equal([Path.GetDirectoryName(tool)!], info.ProgramDirectories);
+    }
+
+    /// <summary>
+    /// Every reason an answer gives names the host's home as <c>~</c> - why the room here, or a build
+    /// directory's, could not be measured, and why an emulator cannot run - while each build directory is named
+    /// as the machine that asked named it, which it matches the answer to its question by.
+    /// </summary>
+    [Fact]
+    public async Task Info_TellsEveryReasonFromItsHome_AndNamesEachBuildDirectoryAsItWasAsked()
+    {
+        using var home = new TempDirectory();
+        var build = home.Combine("repo", "build", "x");
+        var absent = home.Combine("bin", "absent");
+        var platform = HostDoubles.Platform(ThisPlatform, "arm64");
+        using var output = new StringWriter();
+
+        var request = JsonSerializer.Serialize(
+            new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Info,
+                SpaceAt = "~/repo",
+                Builds = [build],
+                Emulators = new(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["qemu"] = new EmulatorConfig
+                    {
+                        HostOs = platform.PlatformKey,
+                        HostProcessor = "arm64",
+                        Processor = "x86_64",
+                        Requires = [absent],
+                        Witness = new EmulatorWitness { Command = ["witness"], Pattern = "x" },
+                    },
+                },
+            },
+            HostAgentProtocol.JsonOptions);
+
+        await Service(home.Path, current: ThisPlatform, files: new Unmeasurable()).ServeAsync(
+            new StringReader(request),
+            output,
+            new StringWriter(),
+            NothingRuns,
+            TestContext.Current.CancellationToken);
+
+        var info = JsonSerializer.Deserialize<HostAgentInfo>(output.ToString(), HostAgentProtocol.JsonOptions)!;
+        var room = Assert.Single(info.Builds);
+
+        Assert.Equal($"'{Path.Combine("~", "repo")}' cannot be measured", info.SpaceUnmeasured);
+        Assert.Equal(build, room.Path);
+        Assert.Equal($"'{Path.Combine("~", "repo", "build", "x")}' cannot be measured", room.Unmeasured);
+        Assert.Equal($"{Path.Combine("~", "bin", "absent")} is missing", info.Emulators["qemu"].Reason);
     }
 
     [Fact]
@@ -464,7 +515,9 @@ public sealed class HostAgentServiceTests
         Assert.Empty(processes.Started);
     }
 
-    /// <summary>This machine's kind, whose paths the tests that make them name.</summary>
+    /// <summary>
+    /// Windows on Windows and Linux anywhere else, so the paths the tests make are read as this machine writes them.
+    /// </summary>
     private static PlatformId ThisPlatform => OperatingSystem.IsWindows() ? PlatformId.Windows : PlatformId.Linux;
 
     private static string RunRequest(string directory, params string[] arguments)
@@ -503,5 +556,11 @@ public sealed class HostAgentServiceTests
     private sealed class MountedAt(string mount) : PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create()))
     {
         public override DiskSpace SpaceAt(string path) => base.SpaceAt(path) with { Filesystem = mount };
+    }
+
+    /// <summary>The real file system, except that the room at no path can be measured, as the system says it of one.</summary>
+    private sealed class Unmeasurable() : PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create()))
+    {
+        public override DiskSpace SpaceAt(string path) => throw new IOException($"'{path}' cannot be measured.");
     }
 }

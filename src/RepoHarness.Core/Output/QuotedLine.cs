@@ -12,7 +12,7 @@ namespace RepoHarness.Core.Output;
 public static class QuotedLine
 {
     /// <summary>What a row quoting a program's line starts with.</summary>
-    public const string Mark = "  | ";
+    private const string Mark = "  | ";
 
     /// <summary>The row quoting <paramref name="printed"/>.</summary>
     /// <param name="printed">The line, as the program printed it.</param>

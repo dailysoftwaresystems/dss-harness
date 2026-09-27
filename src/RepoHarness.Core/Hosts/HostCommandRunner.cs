@@ -70,9 +70,10 @@ public sealed record HostConnection
     public IReadOnlyDictionary<string, ProgramLocation> Programs { get; init; } = NoPrograms;
 
     /// <summary>
-    /// The host's home directory, as the host said it when a search for a program needed it; <see langword="null"/>
-    /// until one did. Kept so that a program found under it is named with the home as <c>~</c>, as everything
-    /// the harness says about another machine's home is.
+    /// The host's home directory, a whole POSIX path as the host said it when a search for a program needed it;
+    /// <see langword="null"/> until one did, or where what it said was no such path. Kept so that a program
+    /// found under it off the PATH is named in the host's reason with the home as <c>~</c>, as a host names its
+    /// own home to the machine that asks.
     /// </summary>
     public string? Home { get; init; }
 

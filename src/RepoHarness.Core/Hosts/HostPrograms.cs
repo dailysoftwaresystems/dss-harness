@@ -124,10 +124,14 @@ public sealed class HostProgramResolver(LocalProgramResolver local, IHostCommand
         }
 
         // The home, where a search asked the host for it, kept with what it found: a program found under it is
-        // named from there.
+        // named from there. Only a whole POSIX path is a home: PowerShell answers pwd with a table.
         var measured = home.IsValueCreated ? (await home.Value.ConfigureAwait(false)).Directory : null;
 
-        return connection with { Programs = found, Home = measured ?? connection.Home };
+        return connection with
+        {
+            Programs = found,
+            Home = measured is not null && PlatformPaths.IsAbsoluteOn(measured, PlatformNames.Linux) ? measured : connection.Home,
+        };
     }
 
     private async Task<ProgramLocation> ThereAsync(

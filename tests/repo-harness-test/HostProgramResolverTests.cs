@@ -67,8 +67,8 @@ public sealed class HostProgramResolverTests
 
     /// <summary>
     /// The home a search asked the host for is kept with what it found, so a program found under it can be
-    /// named from there as <c>~</c>; a search the PATH answered asked for none, and a later one keeps the home
-    /// an earlier one was told.
+    /// named from there as <c>~</c>; a search the PATH answered asked for none, a later one keeps the home an
+    /// earlier one was told, and an answer that is no whole POSIX path is no home.
     /// </summary>
     [Fact]
     public async Task TheHomeASearchAskedTheHostFor_IsKeptWithWhatItFound()
@@ -86,11 +86,22 @@ public sealed class HostProgramResolverTests
             _ => throw HostResults.Unexpected(command),
         });
 
+        var table = new ScriptedHostCommands((_, command) => (command.Program, command.Arguments.FirstOrDefault()) switch
+        {
+            ("command", "-v") or ("where", _) => HostResults.Failed(1, string.Empty),
+            ("pwd", _) => HostResults.Ok("\nPath\n----\nC:\\Users\\harness\n"),
+            ("ls", _) => HostResults.Failed(2, "ls: No such file or directory"),
+            _ => throw HostResults.Unexpected(command),
+        });
+
         var found = await Resolve(offPath, SshHost, ["dotnet"]);
 
         Assert.Equal(Home, found.Home);
         Assert.Null((await Resolve(onPath, SshHost, ["cmake"])).Home);
         Assert.Equal(Home, (await Resolve(onPath, found, ["cmake"])).Home);
+
+        // PowerShell answers pwd with a table, which is no home to name anything from.
+        Assert.Null((await Resolve(table, SshHost, ["dotnet"])).Home);
     }
 
     [Fact]

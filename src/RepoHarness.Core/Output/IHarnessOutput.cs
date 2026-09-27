@@ -52,9 +52,11 @@ public interface IHarnessOutput
     /// </summary>
     /// <param name="text">A path, or a line of the harness's own, bound for what a command answers with.</param>
     /// <remarks>
-    /// For what reaches the reader through <see cref="Data"/>, whose documents this output cannot look into:
-    /// the command that writes one knows which of its fields are its own words and which a program's.
-    /// Passthrough output and documents are written as they are given.
+    /// For what reaches the reader other than as a line of the harness's own. A document written through
+    /// <see cref="Data"/>, which this output cannot look into: the command that writes one knows which of its
+    /// fields are its own words and which a program's, and a ledger tells its own - any other document is
+    /// written as the command gives it. And a defect's report, which is written through
+    /// <see cref="RawError"/>. Passthrough output and documents are written as they are given.
     /// </remarks>
     string Shown(string text);
 

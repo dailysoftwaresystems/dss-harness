@@ -75,6 +75,25 @@ public sealed class CleanServiceTests
         Assert.Equal(shown, leg.GetProperty("space").GetProperty("directory").GetString());
     }
 
+    /// <summary>
+    /// A host cleaning for another machine that can place no leg says why from its home too: the ledger it ends
+    /// with hands each leg's reason to the machine that asked, which puts it in its own output.
+    /// </summary>
+    [Fact]
+    public async Task AHostAnsweringAnotherMachine_NamesItsHomeAsTilde_WhenNoLegCanBeCleaned()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory(home: HostDoubles.HomeAt(temp.Path));
+        var gone = temp.Combine("gone");
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Reason = $"'{gone}' could not be read" });
+
+        var (outcome, leg) = await CleanAsync(temp, harness, OneLocalLeg(harness), inspector);
+
+        Assert.NotEqual(HarnessExit.Success, outcome.ExitCode);
+        Assert.EndsWith($"'{Path.Combine("~", "gone")}' could not be read", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(temp.Path, leg.GetProperty("detail").GetString()!, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>A dry run says what each build directory holds and the room beside it, and removes nothing.</summary>
     [Fact]
     public async Task ADryRun_SaysWhatTheBuildDirectoryHolds_AndRemovesNothing()

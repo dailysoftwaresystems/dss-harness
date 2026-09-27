@@ -61,7 +61,7 @@ internal static class HarnessServices
         // A host answering another machine writes its home as ~ in what it tells that machine; a command
         // typed here writes its own paths as they are.
         services.AddSingleton(provider => servesAnotherMachine
-            ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IFileSystem>())
+            ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>, provider.GetRequiredService<IFileSystem>())
             : HomeShorthand.None);
         services.AddSingleton<IHarnessOutput>(provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>()));
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();

@@ -9,16 +9,18 @@ namespace RepoHarness.Core.Platform;
 /// <remarks>
 /// A host answering another machine writes into that machine's output: its terminal, its <c>--json</c>, and
 /// every transcript and file that keeps them. A path under the host's home names the account the host was
-/// reached as, which is the host's own business and not the run's. Written from <c>~</c> the path still
-/// works in a shell there - bash, zsh and PowerShell all read a leading <c>~</c> as the home - and names
-/// nobody. Only the home is replaced, and the rest is left as it was written, separators included: a path
-/// inside a message has no end anybody can find, so nothing after the home can be rewritten safely.
+/// reached as, which is the host's own business and not the run's. Written from <c>~</c> the path names
+/// nobody, and still works in bash, zsh and PowerShell, which all read a leading <c>~</c> as the home -
+/// though not in cmd.exe, OpenSSH's default shell on Windows, which reads no <c>~</c> at all. Only the home
+/// is replaced, and the rest is left as it was written, separators included: a path inside a message has no
+/// end anybody can find, so nothing after the home can be rewritten safely.
 /// <para>
 /// The home is only ever a whole path segment. <c>/home/al</c> is not the start of <c>/home/alice/x</c>, and
-/// <c>/home/alice</c> is not the home inside <c>/data/home/alice/x</c>: a separator, or a character that
-/// continues a directory's name, just before the home or just after it means the text names somewhere else.
-/// After it, a space continues the name too: a Windows profile is often named for a person, and
-/// <c>C:\Users\alice smith</c> is not <c>C:\Users\alice</c>.
+/// <c>/home/alice</c> is not the home inside <c>/data/home/alice/x</c>. A separator, or a character that
+/// continues a directory's name, just before the home means the text names somewhere else, and so does a
+/// character that continues the name just after it - a space among them there: a Windows profile is often
+/// named for a person, and <c>C:\Users\alice smith</c> is not <c>C:\Users\alice</c>. A separator after the
+/// home, or the end of the text, is where the home ends.
 /// </para>
 /// </remarks>
 public sealed class HomeShorthand
@@ -55,9 +57,11 @@ public sealed class HomeShorthand
     /// <param name="fileSystem">Resolves the links along the home.</param>
     /// <remarks>
     /// Both, because git names a repository by its path with every link resolved: on a machine whose home is
-    /// reached through a link - <c>/home</c> linked to <c>/var/home</c> - every path under a repository is spelt
-    /// the second way, and a path built from the home itself the first. A home whose links cannot be read is
-    /// written as the platform names it.
+    /// reached through a link - <c>/home</c> linked to <c>/var/home</c> - every path the harness takes from git
+    /// is spelt the second way, and a path built from the home itself, or from a directory it was given, the
+    /// first. A home whose links cannot be read is written as the platform names it. One that is not a whole
+    /// path is never resolved: made whole against wherever this process happens to be, it would name that
+    /// directory as the home.
     /// </remarks>
     public static HomeShorthand Of(IHostPlatform platform, IFileSystem fileSystem)
     {
@@ -67,7 +71,7 @@ public sealed class HomeShorthand
         var home = platform.HomeDirectory;
         var homes = new List<string> { home };
 
-        if (!string.IsNullOrWhiteSpace(home))
+        if (!string.IsNullOrEmpty(home) && PlatformPaths.IsAbsoluteOn(home, platform.PlatformKey))
         {
             try
             {
@@ -80,6 +84,35 @@ public sealed class HomeShorthand
         }
 
         return For(homes, platform.PlatformKey);
+    }
+
+    /// <summary>
+    /// This machine's home, as <see cref="Of(IHostPlatform, IFileSystem)"/> takes it, where the machine is one
+    /// this build runs on; <see cref="None"/> where it is not.
+    /// </summary>
+    /// <param name="platform">Tells which machine this is, which throws on one this build does not run on.</param>
+    /// <param name="fileSystem">Resolves the links along the home.</param>
+    /// <remarks>
+    /// Such a machine refuses every request, and says why in its failure line. The line is written through the
+    /// output this shorthand is part of, so a shorthand that refused to exist took the reason with it, and the
+    /// machine that asked quoted a stack trace instead.
+    /// </remarks>
+    public static HomeShorthand Of(Func<IHostPlatform> platform, IFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(platform);
+
+        IHostPlatform machine;
+
+        try
+        {
+            machine = platform();
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return None;
+        }
+
+        return Of(machine, fileSystem);
     }
 
     /// <summary>

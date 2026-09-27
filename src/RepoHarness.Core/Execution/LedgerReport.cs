@@ -476,10 +476,11 @@ public sealed class LedgerReport
 
     /// <summary>The document, with every path and every line of the harness's own told as <paramref name="show"/> tells it.</summary>
     /// <remarks>
-    /// Told so, and nothing else: a host answering another machine writes its home as <c>~</c> in what the
-    /// harness wrote - where the records are, why a leg ended as it did, a build directory and its room,
-    /// the developer environment it started in - while the last lines a phase printed, and what a timing
-    /// pattern matched, are a program's own words, and stay as it printed them.
+    /// A host answering another machine writes its home as <c>~</c> in what the harness wrote - where the
+    /// records are, why a leg ended as it did, what a timing pattern matched, a build directory and its room,
+    /// the developer environment it started in - as the same ledger's text form writes each of its rows. The
+    /// last lines a phase printed are that program's own lines, beneath the table as here, and stay as it
+    /// printed them.
     /// </remarks>
     private string Json(int exitCode, string summary, bool cancelled, IReadOnlyList<string> unfinished, bool stopped, string? runDirectory, Func<string, string> show) => JsonSerializer.Serialize(
         new
@@ -559,8 +560,8 @@ public sealed class LedgerReport
                 Timings = line.Timings.Select(timing => new
                 {
                     timing.Phase,
-                    timing.Text,
-                    timing.Value,
+                    Text = show(timing.Text),
+                    Value = show(timing.Value),
                 }),
             }),
         },

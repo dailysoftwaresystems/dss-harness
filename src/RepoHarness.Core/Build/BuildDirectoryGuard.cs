@@ -117,7 +117,7 @@ public sealed class BuildDirectoryGuard(IFileSystem fileSystem, IHostPlatform pl
             return;
         }
 
-        if (record.HomeDirectory is { Length: > 0 } home && !SamePath(home, sourceDirectory))
+        if (record.HomeDirectory is { Length: > 0 } home && !SameTree(home, sourceDirectory))
         {
             throw new HarnessException(
                 HarnessExit.Refused,
@@ -170,6 +170,36 @@ public sealed class BuildDirectoryGuard(IFileSystem fileSystem, IHostPlatform pl
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(left.Replace('/', Path.DirectorySeparatorChar))),
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
             _platform.PathComparison);
+
+    /// <summary>
+    /// Whether the tree a build directory recorded is <paramref name="sourceDirectory"/>: the two compared with
+    /// every link along each followed, as CMake itself compares them and as git names the tree.
+    /// </summary>
+    /// <remarks>
+    /// A tree reached through a link - a home at <c>/home</c> linked to <c>/var/home</c> - is recorded as it
+    /// was spelt when the directory was configured, and named by git with the link followed. Compared as
+    /// written, the same tree was refused as another; and a host answering another machine, which writes both
+    /// spellings of its home as <c>~</c>, then named one path twice in the refusal.
+    /// </remarks>
+    private bool SameTree(string recorded, string sourceDirectory)
+        => string.Equals(Followed(recorded.Replace('/', Path.DirectorySeparatorChar)), Followed(sourceDirectory), _platform.PathComparison);
+
+    /// <summary><paramref name="path"/> made whole, with every link along it followed where the links can be read.</summary>
+    private string Followed(string path)
+    {
+        var full = Path.GetFullPath(path);
+
+        try
+        {
+            full = _fileSystem.ResolveLinks(full);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Compared as written: a link nobody may read still names somewhere.
+        }
+
+        return Path.TrimEndingDirectorySeparator(full);
+    }
 
     /// <summary>
     /// Whether a directory's recorded compiler is <paramref name="expected"/>: the same program, and

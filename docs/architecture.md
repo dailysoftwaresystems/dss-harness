@@ -766,27 +766,32 @@ build, or has no copy of the repository.
 
 A host answering another machine writes into that machine's output: its terminal, its
 `--json`, and every transcript and file that keeps them. So the host writes its own home
-directory as `~`, and no path it names says which account it was reached as:
-`~/src/app.worktree-x/.harness-config/runs/<id>`. The path still works in a shell there, since
-bash, zsh and PowerShell all read a leading `~` as the home.
+directory as `~` in what it tells that machine, as in
+`~/src/app.worktree-x/.harness-config/runs/<id>`. The path still works in bash, zsh and
+PowerShell there, which all read a leading `~` as the home.
 
 - **Every line of DssHarness's own**, whatever the command: a leg's reason, a lock or
-  free-space message, a refusal, a failure line quoting git or the system. The
-  `logs of <leg> on <host>:` line the machine that asked prints comes from them.
-- **The paths in its ledger**: `runDirectory`, a leg's `detail` and `space`, and the
-  instance a developer environment was set up from. A survey's answer names the mount of a
-  filesystem, and every reason, the same way. Where each program is, and the directories they
-  were found in, stay whole: the machine that asked hands them back, for a hold there to look
-  for its command in.
+  free-space message, a refusal, a failure line quoting git or the system, and under
+  `--verbose` a defect's report.
+- **The paths in its ledger**: `runDirectory`, a leg's `detail` and `space`, what a timing
+  pattern matched, and the instance a developer environment was set up from. The machine that
+  asked prints that `runDirectory` in its `logs of <leg> on <host>:` line. A survey's answer
+  names where each program is, the mount of a filesystem, and every reason the same way. The
+  directories the programs were found in stay whole, because the machine that asked hands them
+  back for a hold there to look for its command in; so does each build directory it asked
+  about, which it matches to its question by that text.
 - **Only the home, and only as whole path segments.** `/home/al` is not the start of
-  `/home/alice`, and `/home/alice` is not the home inside `/data/home/alice`. A home reached
+  `/home/alice`, and `/home/alice` is not the home inside `/data/home/alice`. A space after it
+  continues the name too, since `C:\Users\alice smith` is not `C:\Users\alice`. A home reached
   through a link is matched both ways, because git names a repository's paths with every link
   resolved. On a Windows host the home is matched with either separator and in any case, and
   the separator after it stays as written: `~\src\app`. PowerShell reads that; cmd.exe,
   OpenSSH's default shell there, reads no `~` at all.
-- **A program's words stay as it printed them**: a phase's last lines in `logTail`, and the
-  output a command relays. A command typed on the host itself names its paths in full, as a
-  command typed on any machine does.
+- **A program's own lines stay as it printed them**: a phase's last lines, in `logTail` and
+  beneath a ledger's table, the output a command relays, and what an emulator's witness
+  printed. A command typed on the host itself names its paths in full, as a command typed on any
+  machine does. Under `host-exec`, a document other than a ledger - a listing, `legs --json` -
+  is written as the host prints it.
 - **A copy's path this machine builds is said as configured.** The sync line, a lock held on a
   host's copy and delete-worktree's lines name the copy from `repositoryPath` as the
   configuration writes it, so `"repositoryPath": "~/src/app"` keeps the account out of those
