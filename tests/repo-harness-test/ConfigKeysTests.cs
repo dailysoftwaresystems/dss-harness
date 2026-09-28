@@ -85,9 +85,9 @@ public sealed class ConfigKeysTests
     [Fact]
     public void AnActionFilesSections_TakeTheirOwnKeys()
     {
-        Assert.Same(ActionFileKeys.Input, Section(ActionFileKeys.File, "inputs"));
-        Assert.Same(ActionFileKeys.Step, Section(ActionFileKeys.File, "steps"));
-        Assert.Same(ActionFileKeys.Input, Section(ActionFileKeys.Step, "inputs"));
+        Assert.Equal(Listed(ActionFileKeys.Input), Listed(Section(ActionFileKeys.File, "inputs")));
+        Assert.Equal(Listed(ActionFileKeys.Step), Listed(Section(ActionFileKeys.File, "steps")));
+        Assert.Equal(Listed(ActionFileKeys.Input), Listed(Section(ActionFileKeys.Step, "inputs")));
         Assert.Equal(["steps"], ActionFileKeys.File.Where(key => key.Required).Select(key => key.Name));
         Assert.Equal(["name"], ActionFileKeys.Step.Where(key => key.Required).Select(key => key.Name));
     }
@@ -108,6 +108,10 @@ public sealed class ConfigKeysTests
             ["name", "uses", "ref", "run", "runOn", "manual", "needs"],
             KeyDescription.Names(ActionFileKeys.Step).Except(runBlock, StringComparer.Ordinal));
     }
+
+    /// <summary>Each key as help lists it: its name, what it does and whether the file must name it.</summary>
+    private static IEnumerable<(string Name, string Meaning, bool Required)> Listed(IReadOnlyList<KeyDescription> keys)
+        => keys.Select(key => (key.Name, key.Meaning, key.Required));
 
     private static IReadOnlyList<KeyDescription> Section(IReadOnlyList<KeyDescription> keys, string name)
         => Assert.Single(keys, key => key.Name == name).Keys;

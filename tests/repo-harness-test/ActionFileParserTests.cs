@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
@@ -1131,9 +1132,32 @@ public sealed class ActionFileParserTests
     [MemberData(nameof(ListedKeys))]
     public void EveryListedKey_IsRead(string where, string key)
     {
+        var listed = Record.Exception(() => Parse(WithKey(where, key)));
+        var unlisted = Record.Exception(() => Parse(WithKey(where, "unlisted")));
+
+        // Checked against a key that is refused as unknown, so a change to the words it is refused in
+        // fails here, rather than letting every listed key pass whether it was read or not.
+        Assert.True(RefusedAsUnknown(unlisted, "unlisted"), $"an unlisted key was not refused as one: {unlisted?.Message}");
+        Assert.IsNotType<UnreachableException>(listed);
+        Assert.False(RefusedAsUnknown(listed, key), $"'{key}' is listed and was refused as unknown: {listed?.Message}");
+    }
+
+    /// <summary>
+    /// Whether <paramref name="failure"/> refuses <paramref name="key"/> as no key of the file's, which
+    /// names every key that is: a value refused for its shape says it is not a mapping, and no more.
+    /// </summary>
+    private static bool RefusedAsUnknown(Exception? failure, string key)
+        => failure is not null && Regex.IsMatch(failure.Message, $"'{Regex.Escape(key)}' is not a [^.]+\\. Known: '");
+
+    /// <summary>
+    /// A file holding <paramref name="key"/> where <paramref name="where"/> says, with a value it may well
+    /// refuse: what matters is whether the key was read.
+    /// </summary>
+    private static string WithKey(string where, string key)
+    {
         const string Steps = "steps:\n  - name: build\n    run: cmake --build build\n";
 
-        var text = (where, key) switch
+        return (where, key) switch
         {
             ("file", "steps") => Steps,
             ("file", _) => $"{key}: x\n{Steps}",
@@ -1142,12 +1166,6 @@ public sealed class ActionFileParserTests
             ("step", "run") => "steps:\n  - name: build\n    run: x\n",
             _ => $"steps:\n  - name: build\n    run: cmake --build build\n    {key}: x\n",
         };
-
-        var failure = Record.Exception(() => Parse(text));
-
-        // Refused as unknown, a key is named with every key that is known.
-        Assert.IsNotType<UnreachableException>(failure);
-        Assert.DoesNotContain("Known: '", failure?.Message ?? string.Empty, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1211,6 +1229,18 @@ public sealed class ActionFileParserTests
         }
 
         return data;
+    }
+
+    /// <summary>
+    /// A value spelling half a character - an escape of a lone surrogate - is refused as the file, with
+    /// its line, as config.json refuses one: no text can hold it.
+    /// </summary>
+    [Fact]
+    public void AValueSpellingHalfACharacter_IsRefusedAsTheFile()
+    {
+        var exception = Refused("steps:\n  - name: \"b\\ud800\"\n    run: cmake --build build\n");
+
+        Assert.Contains("line 2, column 11: the file is not valid YAML", exception.Message, StringComparison.Ordinal);
     }
 
     private static ActionFileParser CreateParser()

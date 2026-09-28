@@ -1698,6 +1698,34 @@ public sealed class ConfigStoreTests
         Assert.Contains("messages", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A key or a value spelling half a character - an escape of a lone surrogate - is refused as the
+    /// file, naming the line and what it said, wherever it stands: no text can hold it, and reading one
+    /// stopped the command as a defect in this tool.
+    /// </summary>
+    [Theory]
+    [InlineData("{ \"predefinedRunners\": { \"b\\ud800\": { \"phases\": [ { \"name\": \"go\", \"command\": [\"tool\"] } ] } } }", 1, "b\\ud800")]
+    [InlineData("{\n  \"sync\": { \"never\\udc00\": [\"x\"] }\n}", 2, "never\\udc00")]
+    [InlineData("{\n  \"predefinedRunners\": {\n    \"bench\": { \"description\": \"half \\ud83d\", \"phases\": [ { \"name\": \"go\", \"command\": [\"tool\"] } ] } } }", 3, "half \\ud83d")]
+    [InlineData("{ \"predefinedRunners\": { \"bench\": { \"legs\": [\"\\udfff\"], \"phases\": [ { \"name\": \"go\", \"command\": [\"tool\"] } ] } } }", 1, "\\udfff")]
+    [InlineData("{ \"\\ud800\": 1 }", 1, "\\ud800")]
+    [InlineData("{ \"hosts\": { \"ssh\": { \"m\\ud800\": { \"repositoryPath\": \"~/r\" } } } }", 1, "m\\ud800")]
+    public void AStringSpellingHalfACharacter_IsRefusedAsTheFile_NamingItsLine(string json, int line, string spelt)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains($"line {line}: '{spelt}' spells half a character", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A whole character, spelt as the pair of escapes it takes, is read as that character.</summary>
+    [Fact]
+    public void ACharacterSpeltAsItsPairOfEscapes_IsRead()
+    {
+        var config = LoadValid("{ \"predefinedRunners\": { \"bench\": { \"description\": \"\\ud83d\\ude00\", \"phases\": [ { \"name\": \"go\", \"command\": [\"tool\"] } ] } } }");
+
+        Assert.Equal("\U0001F600", config.PredefinedRunners["bench"].Description);
+    }
+
     private static ConfigException LoadInvalid(string json)
     {
         using var temp = new TempDirectory();

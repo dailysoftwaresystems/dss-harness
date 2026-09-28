@@ -165,7 +165,7 @@ public sealed partial class HelpTests
     public async Task RunnersTopic_SaysWhatAStepsSuccessPatternIsMatchedAgainst()
     {
         var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
-        var words = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var words = Words(result.StandardOutput);
 
         foreach (var text in new[]
         {
@@ -205,7 +205,7 @@ public sealed partial class HelpTests
     public async Task RunnersTopic_SaysWhichStallBoundApplies()
     {
         var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
-        var words = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var words = Words(result.StandardOutput);
 
         foreach (var text in new[]
         {
@@ -226,7 +226,7 @@ public sealed partial class HelpTests
     public async Task ConfigTopic_NamesTheDefaultStallBound_AndEveryLayerOfARunnersEnvironment()
     {
         var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
-        var words = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var words = Words(result.StandardOutput);
 
         foreach (var text in new[]
         {
@@ -269,7 +269,7 @@ public sealed partial class HelpTests
     public async Task RunnersTopic_SaysAStepThatUsesAPredefinedAction_TakesNoKeyOnlyARunBlockReads()
     {
         var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
-        var words = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var words = Words(result.StandardOutput);
 
         Assert.Contains(
             $"A step that uses {string.Join(" or ", PredefinedActions.All)} runs no program, so it takes none of the keys "
@@ -446,7 +446,7 @@ public sealed partial class HelpTests
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         // Read as prose: a description is wrapped to the terminal, with its continuation indented.
-        var prose = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var prose = Words(result.StandardOutput);
 
         Assert.Contains("with no hyphen on either side", prose, StringComparison.Ordinal);
     }
@@ -512,7 +512,7 @@ public sealed partial class HelpTests
     public async Task RunnerTopic_SaysALegsLineNamesWhatItKept_AsSyncPullTakesIt()
     {
         var result = await CliRunner.RunAsync(["help", "runner"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
         Assert.Contains("sync --pull' takes to bring it back", text, StringComparison.Ordinal);
@@ -526,7 +526,7 @@ public sealed partial class HelpTests
     public async Task WorktreesTopic_SaysDeadOutputsAreLeftOutOfTheWarning_AndWhatRemovesThem()
     {
         var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Contains("A Ninja build leaves out of that warning the outputs ninja says no target of it produces any more", text, StringComparison.Ordinal);
         Assert.Contains("naming 'ninja -t cleandead', which removes them. The harness removes nothing.", text, StringComparison.Ordinal);
@@ -540,7 +540,7 @@ public sealed partial class HelpTests
     public async Task ConfigTopic_SaysAHoldBetweenCommandsEndsWhenACommandsOwnKeepAwakeStarts()
     {
         var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Contains("holdAwakeSeconds holds it awake between commands, until a command's own keepAwake takes over", text, StringComparison.Ordinal);
         Assert.Contains("The next command's own keepAwake ends it there", text, StringComparison.Ordinal);
@@ -554,7 +554,7 @@ public sealed partial class HelpTests
     public async Task LegsTopic_SaysWhatAWakeWindowTriesAgain_AndWhatItNeverDoes()
     {
         var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Contains("hosts.ssh.<name>.wakeWaitSeconds", text, StringComparison.Ordinal);
         Assert.Contains($"every {SshWakeWindow.DefaultPollDelay.TotalSeconds:0} seconds until that many seconds have passed", text, StringComparison.Ordinal);
@@ -569,7 +569,7 @@ public sealed partial class HelpTests
     public async Task SpaceTopic_SaysCleanWritesNothingFirst_AndWhatItLeavesAlone()
     {
         var result = await CliRunner.RunAsync(["help", "space"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("It writes nothing where it removes before it has removed", text, StringComparison.Ordinal);
@@ -725,6 +725,12 @@ public sealed partial class HelpTests
     }
 
     /// <summary>Reads the command names out of the root help listing.</summary>
+    /// <summary>
+    /// <paramref name="text"/> with every run of whitespace, line breaks among it, read as one space, so
+    /// a sentence help wraps across lines is found whole.
+    /// </summary>
+    private static string Words(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
     private static IEnumerable<(KeyDescription Key, int Depth)> Listed(IReadOnlyList<KeyDescription> keys, int depth)
         => keys.SelectMany(key => Listed(key.Keys, depth + 1).Prepend((key, depth)));
 
