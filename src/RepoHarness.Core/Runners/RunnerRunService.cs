@@ -1791,7 +1791,7 @@ public sealed class RunnerRunService(
         /// <summary>The steps whose work began, by name, each once, in the order they began.</summary>
         public List<string> RanSteps { get; } = [];
 
-        /// <summary>Records <paramref name="phase"/>'s step as one whose work began: a runner's own phase is its own step.</summary>
+        /// <summary>Records <paramref name="phase"/>'s step as one whose work began: its step name, or the phase itself where it names none.</summary>
         public void Ran(RunnerPhase phase)
         {
             var step = phase.StepName.Length > 0 ? phase.StepName : phase.Name;

@@ -7,6 +7,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Runners;
 
 namespace RepoHarness.Tests;
 
@@ -164,17 +165,117 @@ public sealed partial class HelpTests
     public async Task RunnersTopic_SaysWhatAStepsSuccessPatternIsMatchedAgainst()
     {
         var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
-        var words = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var words = Words(result.StandardOutput);
 
         foreach (var text in new[]
         {
-            "successPattern: <regular expression> what the step's last line must print",
+            "successPattern: <regular expression> what its last run line must print, besides exiting 0",
             "matched with ^ and $ at each line - whether a line ends in CRLF or LF, as its log keeps it - against that "
                 + "line's standard output and standard error read together, after secrets are redacted.",
         })
         {
             Assert.Contains(text, words, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The runners topic lists every key a runner and an action file take, each indented to the depth
+    /// it is nested at and with what it does, read from what the files are read with: a key cannot be
+    /// taken without being listed here.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_ListsEveryKeyARunnerAndAnActionFileTake()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var lines = result.StandardOutput.ReplaceLineEndings("\n").Split('\n');
+
+        foreach (var (key, depth) in Listed(ConfigKeys.Of<RunnerConfig>(), 0).Concat(Listed(ActionFileKeys.File, 0)))
+        {
+            var pattern = $"^ {{{2 + (2 * depth)}}}{Regex.Escape(key.Name)} +{Regex.Escape(key.Meaning)}{(key.Required ? "; required" : string.Empty)}$";
+
+            Assert.True(lines.Any(line => Regex.IsMatch(line, pattern)), $"'{key.Name}' is not listed as: {pattern}");
+        }
+    }
+
+    /// <summary>
+    /// The runners topic says which stall bound a phase or step runs under, and where the order its
+    /// environment is built in is given.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysWhichStallBoundApplies()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var words = Words(result.StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "The stall bound a phase or step runs under is its own stallSeconds, else its runner's, else "
+                + "defaults.stallSeconds: the first of them set, where 0 means none, as does setting none.",
+            "'help config' gives the order its environment is built in.",
+        })
+        {
+            Assert.Contains(text, words, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The config topic names the repository's own stall bound, and every layer a runner's phase or
+    /// step is given in order, its action's inputs among them.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_NamesTheDefaultStallBound_AndEveryLayerOfARunnersEnvironment()
+    {
+        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var words = Words(result.StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "stallSeconds, the stall bound nothing more specific replaces ('help runners')",
+            "run host env, developer environment, then the runner's values and secrets, its env, the action's "
+                + $"inputs as INPUT_<NAME> where a {PredefinedActions.ReadInputs} step read them, the phase's or step's",
+        })
+        {
+            Assert.Contains(text, words, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// Wherever the runners topic shows how a step key is written, what it does is what 'Every key'
+    /// says of it: one meaning, from one place, however many times the key is shown.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysWhatAStepKeyDoes_InTheWordsItsListUses()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var meanings = ActionFileKeys.Step.ToDictionary(key => key.Name, key => key.Meaning, StringComparer.Ordinal);
+        var shown = result.StandardOutput.ReplaceLineEndings("\n").Split('\n')
+            .Select(line => SpeltKeyLine().Match(line))
+            .Where(line => line.Success && meanings.ContainsKey(line.Groups["key"].Value))
+            .ToList();
+
+        Assert.NotEmpty(shown);
+
+        foreach (var line in shown)
+        {
+            Assert.Equal(meanings[line.Groups["key"].Value], line.Groups["meaning"].Value);
+        }
+    }
+
+    /// <summary>
+    /// The runners topic says a step that performs a predefined action is refused with each key only a
+    /// run block reads, naming every one of them from the list the parser refuses them by.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysAStepThatUsesAPredefinedAction_TakesNoKeyOnlyARunBlockReads()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var words = Words(result.StandardOutput);
+
+        Assert.Contains(
+            $"A step that uses {string.Join(" or ", PredefinedActions.All)} runs no program, so it takes none of the keys "
+                + $"only a run block reads, and is refused with any of them: '{string.Join("', '", KeyDescription.Names(ActionFileKeys.RunBlock))}'.",
+            words,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -206,7 +307,7 @@ public sealed partial class HelpTests
     {
         var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
 
-        foreach (var text in new[] { $"runOn: [{string.Join(", ", PlatformNames.OperatingSystems)}]", "skippedSteps", "refused before anything starts" })
+        foreach (var text in new[] { "runOn: [<system>, ...]", $"of {string.Join(", ", PlatformNames.OperatingSystems)}; absent, all", "skippedSteps", "refused before anything starts" })
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
         }
@@ -345,7 +446,7 @@ public sealed partial class HelpTests
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         // Read as prose: a description is wrapped to the terminal, with its continuation indented.
-        var prose = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var prose = Words(result.StandardOutput);
 
         Assert.Contains("with no hyphen on either side", prose, StringComparison.Ordinal);
     }
@@ -411,7 +512,7 @@ public sealed partial class HelpTests
     public async Task RunnerTopic_SaysALegsLineNamesWhatItKept_AsSyncPullTakesIt()
     {
         var result = await CliRunner.RunAsync(["help", "runner"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
         Assert.Contains("sync --pull' takes to bring it back", text, StringComparison.Ordinal);
@@ -425,7 +526,7 @@ public sealed partial class HelpTests
     public async Task WorktreesTopic_SaysDeadOutputsAreLeftOutOfTheWarning_AndWhatRemovesThem()
     {
         var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Contains("A Ninja build leaves out of that warning the outputs ninja says no target of it produces any more", text, StringComparison.Ordinal);
         Assert.Contains("naming 'ninja -t cleandead', which removes them. The harness removes nothing.", text, StringComparison.Ordinal);
@@ -439,7 +540,7 @@ public sealed partial class HelpTests
     public async Task ConfigTopic_SaysAHoldBetweenCommandsEndsWhenACommandsOwnKeepAwakeStarts()
     {
         var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Contains("holdAwakeSeconds holds it awake between commands, until a command's own keepAwake takes over", text, StringComparison.Ordinal);
         Assert.Contains("The next command's own keepAwake ends it there", text, StringComparison.Ordinal);
@@ -453,7 +554,7 @@ public sealed partial class HelpTests
     public async Task LegsTopic_SaysWhatAWakeWindowTriesAgain_AndWhatItNeverDoes()
     {
         var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Contains("hosts.ssh.<name>.wakeWaitSeconds", text, StringComparison.Ordinal);
         Assert.Contains($"every {SshWakeWindow.DefaultPollDelay.TotalSeconds:0} seconds until that many seconds have passed", text, StringComparison.Ordinal);
@@ -468,7 +569,7 @@ public sealed partial class HelpTests
     public async Task SpaceTopic_SaysCleanWritesNothingFirst_AndWhatItLeavesAlone()
     {
         var result = await CliRunner.RunAsync(["help", "space"], TestContext.Current.CancellationToken);
-        var text = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = Words(result.StandardOutput);
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("It writes nothing where it removes before it has removed", text, StringComparison.Ordinal);
@@ -624,6 +725,15 @@ public sealed partial class HelpTests
     }
 
     /// <summary>Reads the command names out of the root help listing.</summary>
+    /// <summary>
+    /// <paramref name="text"/> with every run of whitespace, line breaks among it, read as one space, so
+    /// a sentence help wraps across lines is found whole.
+    /// </summary>
+    private static string Words(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    private static IEnumerable<(KeyDescription Key, int Depth)> Listed(IReadOnlyList<KeyDescription> keys, int depth)
+        => keys.SelectMany(key => Listed(key.Keys, depth + 1).Prepend((key, depth)));
+
     private static async Task<IReadOnlyList<string>> ListCommandsAsync(CancellationToken cancellationToken)
     {
         var result = await CliRunner.RunAsync(["--help"], cancellationToken);
@@ -675,4 +785,8 @@ public sealed partial class HelpTests
 
     [GeneratedRegex(@"""legJobPattern"": (?<pattern>""(?:[^""\\]|\\.)*"")")]
     private static partial Regex ExamplePattern();
+
+    /// <summary>A step key shown as it is written, then what it does: '  outputs: [&lt;path&gt;, ...]  files it writes'.</summary>
+    [GeneratedRegex(@"^  (?<key>[A-Za-z]+): \S.*?  +(?<meaning>\S.*)$")]
+    private static partial Regex SpeltKeyLine();
 }

@@ -1,5 +1,6 @@
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
@@ -1753,12 +1754,122 @@ public sealed class RunnerRunServiceTests
         Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
     }
 
+    /// <summary>
+    /// The stall bound a phase runs under is its own stallSeconds, else its runner's, else the
+    /// repository's default, and 0 as the first of them set means none - as 'help runners' says. Pinned
+    /// by where a phase that goes quiet is stopped. One that must be stopped lives thirty times the
+    /// bound, as the phase runner's own stall tests allow, and every bound not meant to apply is longer
+    /// still, so one applied by mistake lets it run out and pass; one that must not be stopped lives three
+    /// times a bound applied by mistake, and passes only if none was.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 60, 60, 1)]
+    [InlineData(null, 1, 60, 1)]
+    [InlineData(null, null, 1, 1)]
+    [InlineData(0, 1, 1, null)]
+    [InlineData(null, 0, 1, null)]
+    public async Task AStallBound_IsThePhasesOwn_ElseItsRunners_ElseTheDefault(int? phase, int? runner, int defaults, int? stoppedAt)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { StallSeconds = defaults } };
+        var runnerConfig = new RunnerConfig
+        {
+            Phases = [Phase("measure", "exit", ["0"]) with { StallSeconds = phase }],
+            StallSeconds = runner,
+        };
+
+        var result = await Service(factory, new QuietProcessRunner(TimeSpan.FromSeconds(stoppedAt is null ? 3 : 30))).RunAsync(
+            config,
+            Request(temp, runnerConfig),
+            TestContext.Current.CancellationToken);
+
+        if (stoppedAt is { } seconds)
+        {
+            Assert.Contains($"hung: no output for {seconds}s", result.Verdict.Detail, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        }
+    }
+
+    /// <summary>
+    /// A runner's own phase that names a step is reported under that step in ranSteps, once however many
+    /// of its phases name it; one that names none is its own step.
+    /// </summary>
+    [Fact]
+    public async Task APhasesStepName_IsTheStepItIsReportedUnder()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("warm", "exit", ["0"]) with { StepName = "measure" },
+                Phase("time", "exit", ["0"]) with { StepName = "measure" },
+                Phase("go", "exit", ["0"]),
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["measure", "go"], result.Entry.RanSteps);
+    }
+
+    /// <summary>
+    /// An action's inputs, read by harness/read-inputs, reach its steps as INPUT_&lt;NAME&gt; over the
+    /// runner's own environment and beneath a step's: the order 'help config' gives.
+    /// </summary>
+    [Fact]
+    public async Task AnActionsInputs_ReachItsSteps_OverTheRunnersEnvironment_AndBeneathAStepsOwn()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            inputs:
+              size:
+                default: '7'
+            steps:
+              - name: read
+                uses: harness/read-inputs
+              - name: input
+                successPattern: '^7$'
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" INPUT_SIZE
+              - name: own
+                env:
+                  INPUT_SIZE: step
+                successPattern: '^step$'
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" INPUT_SIZE
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "print-env", ["INPUT_SIZE"] = "runner" },
+        };
+
+        var result = await Service(factory).RunAsync(config, Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["input", "own"], result.Entry.RanSteps);
+    }
+
     private static LegIdentity Identity(string os)
         => new(Leg, os, "x86_64", "gcc", "release", "gcc-release", "local", RunId);
 
-    private static RunnerRunService Service(HarnessFactory factory)
+    private static RunnerRunService Service(HarnessFactory factory, IProcessRunner? phases = null)
         => new(
-            new PhaseRunner(factory.ProcessRunner, factory.FileSystem, factory.Output),
+            new PhaseRunner(phases ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
             new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform),
             new ActionToolPolicy(factory.Platform),
             new ActionValuesReader(factory.FileSystem, factory.Output),

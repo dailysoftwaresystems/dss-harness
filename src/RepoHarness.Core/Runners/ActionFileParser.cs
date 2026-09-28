@@ -1,5 +1,7 @@
 using System.CommandLine.Parsing;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
@@ -67,34 +69,17 @@ public sealed class ActionFileParser(
     /// </summary>
     public static readonly TimeSpan PatternTimeout = TimeSpan.FromSeconds(1);
 
-    /// <summary>Top-level keys an action file may carry.</summary>
-    private static readonly string[] FileKeys = ["name", "description", "inputs", "steps"];
+    /// <summary>Top-level keys an action file may hold.</summary>
+    private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(ActionFileKeys.File);
 
-    /// <summary>Keys one declared input may carry.</summary>
-    private static readonly string[] InputKeys = ["default", "required", "description"];
+    /// <summary>Keys one declared input may hold.</summary>
+    private static readonly IReadOnlyList<string> InputKeys = KeyDescription.Names(ActionFileKeys.Input);
 
-    /// <summary>Keys one step may carry.</summary>
-    private static readonly string[] StepKeys =
-    [
-        "name",
-        "uses",
-        "ref",
-        "run",
-        "workingDirectory",
-        "workingDirectoryRoot",
-        "runOn",
-        "env",
-        "successPattern",
-        "stallSeconds",
-        "continueOnError",
-        "watchContention",
-        "requireInputsUnmoved",
-        "outputs",
-        "persist",
-        "manual",
-        "needs",
-        "inputs",
-    ];
+    /// <summary>Keys one step may hold.</summary>
+    private static readonly IReadOnlyList<string> StepKeys = KeyDescription.Names(ActionFileKeys.Step);
+
+    /// <summary>Keys only a step's run block reads.</summary>
+    private static readonly IReadOnlyList<string> RunBlockKeys = KeyDescription.Names(ActionFileKeys.RunBlock);
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
@@ -148,7 +133,7 @@ public sealed class ActionFileParser(
 
         foreach (var (keyNode, valueNode) in root.Children)
         {
-            var key = KeyOf(keyNode, problems);
+            var key = KnownKeyOf(keyNode, FileKeys, "top-level key", problems);
 
             if (key is null)
             {
@@ -175,8 +160,7 @@ public sealed class ActionFileParser(
                     break;
 
                 default:
-                    problems.Add(Unknown(keyNode, key, "top-level key", FileKeys));
-                    break;
+                    throw Unread(key);
             }
         }
 
@@ -329,13 +313,15 @@ public sealed class ActionFileParser(
 
             foreach (var (declarationKeyNode, declarationValueNode) in declaration.Children)
             {
-                var key = KeyOf(declarationKeyNode, problems);
+                var key = KnownKeyOf(declarationKeyNode, InputKeys, $"key of {Named(owner, inputName)}", problems);
+
+                if (key is null)
+                {
+                    continue;
+                }
 
                 switch (key)
                 {
-                    case null:
-                        break;
-
                     case "default":
                         fallback = RequireScalar(declarationValueNode, $"{owner}.{inputName}.default", problems);
                         break;
@@ -353,8 +339,7 @@ public sealed class ActionFileParser(
                         break;
 
                     default:
-                        problems.Add(Unknown(declarationKeyNode, key, $"key of {Named(owner, inputName)}", InputKeys));
-                        break;
+                        throw Unread(key);
                 }
             }
 
@@ -428,8 +413,6 @@ public sealed class ActionFileParser(
         string? run = null;
         YamlNode? runNode = null;
         string? workingDirectory = null;
-        YamlNode? workingDirectoryNode = null;
-        string? workingDirectoryKey = null;
         var workingDirectoryRoot = Runners.WorkingDirectoryRoot.Tree;
         var runOn = (IReadOnlyList<string>)[];
         var watchContention = false;
@@ -446,13 +429,15 @@ public sealed class ActionFileParser(
 
         foreach (var (keyNode, valueNode) in mapping.Children)
         {
-            var key = KeyOf(keyNode, problems);
+            var key = KnownKeyOf(keyNode, StepKeys, "step key", problems);
+
+            if (key is null)
+            {
+                continue;
+            }
 
             switch (key)
             {
-                case null:
-                    break;
-
                 case "name":
                     name = RequireScalar(valueNode, "a step's name", problems);
                     break;
@@ -473,8 +458,6 @@ public sealed class ActionFileParser(
                     break;
 
                 case "workingDirectory":
-                    workingDirectoryNode = valueNode;
-                    workingDirectoryKey = key;
                     workingDirectory = ReadWorkingDirectory(valueNode, problems);
                     break;
 
@@ -508,8 +491,6 @@ public sealed class ActionFileParser(
                     break;
 
                 case "workingDirectoryRoot":
-                    workingDirectoryNode ??= valueNode;
-                    workingDirectoryKey ??= key;
                     workingDirectoryRoot = ReadWorkingDirectoryRoot(valueNode, problems);
                     break;
 
@@ -534,8 +515,7 @@ public sealed class ActionFileParser(
                     break;
 
                 default:
-                    problems.Add(Unknown(keyNode, key, "step key", StepKeys));
-                    break;
+                    throw Unread(key);
             }
         }
 
@@ -573,12 +553,6 @@ public sealed class ActionFileParser(
                 + "names it under 'needs'."));
         }
 
-        if (action != PredefinedAction.None && inputsNode is not null)
-        {
-            problems.Add(At(inputsNode, $"'inputs' applies only to a step's 'run' block; '{PredefinedActions.Spell(action)}' "
-                + "is performed by the harness rather than run as a program, so it reads none of its own."));
-        }
-
         // Witnessed like any other step, and more to the point than most: a step that runs only when a
         // run names it is the one whose green line is read as having done that work, so it may not pass
         // on an exit code alone.
@@ -594,16 +568,17 @@ public sealed class ActionFileParser(
             problems.Add(At(referenceNode ?? node, $"'ref' applies only to '{PredefinedActions.Checkout}'."));
         }
 
-        // A predefined action is performed by the harness, not started as a child process, so it has
-        // no working directory to run in. Accepted silently, these would be a rule nobody applied:
-        // the file would read as though the action ran somewhere chosen, and it never did.
-        if (action != PredefinedAction.None && workingDirectoryNode is not null)
+        // A predefined action is performed by the harness, not started as a child process, so nothing
+        // reads what only a run block reads: where it runs, its environment, its witness and bounds,
+        // its outputs and inputs of its own. Accepted silently, these would be a rule nobody applied:
+        // the file would read as though the action ran under them, and it never did.
+        if (action != PredefinedAction.None)
         {
-            problems.Add(At(
-                workingDirectoryNode,
-                $"'{workingDirectoryKey}' applies only to a step's 'run' block; "
-                + $"'{PredefinedActions.Spell(action)}' is performed by the harness rather than run "
-                + "as a program, so it has no working directory."));
+            foreach (var keyNode in mapping.Children.Keys.OfType<YamlScalarNode>().Where(key => key.Value is { } read && RunBlockKeys.Contains(read, StringComparer.Ordinal)))
+            {
+                problems.Add(At(keyNode, $"'{keyNode.Value}' applies only to a step's 'run' block; '{PredefinedActions.Spell(action)}' "
+                    + "is performed by the harness rather than run as a program, so nothing reads it."));
+            }
         }
 
         return new ActionStep
@@ -1155,8 +1130,29 @@ public sealed class ActionFileParser(
         return null;
     }
 
-    private static string Unknown(YamlNode node, string key, string what, IReadOnlyList<string> known)
-        => At(node, $"'{key}' is not a {what}. Known: '{string.Join("', '", known)}'.");
+    /// <summary>
+    /// The key <paramref name="node"/> names, when <paramref name="known"/> lists it. Any other is a
+    /// problem added here, before a reader looks at it.
+    /// </summary>
+    private static string? KnownKeyOf(YamlNode node, IReadOnlyList<string> known, string what, List<string> problems)
+    {
+        var key = KeyOf(node, problems);
+
+        if (key is null || known.Contains(key, StringComparer.Ordinal))
+        {
+            return key;
+        }
+
+        problems.Add(At(node, $"'{key}' is not a {what}. Known: '{string.Join("', '", known)}'."));
+        return null;
+    }
+
+    /// <summary>
+    /// A key <see cref="ActionFileKeys"/> lists that nothing here reads: a defect in this tool, never
+    /// a problem in the file, since a key read by nothing would be one the file sets and nothing obeys.
+    /// </summary>
+    private static UnreachableException Unread(string key)
+        => new($"'{key}' is a key action files take, and nothing reads it.");
 
     private static string At(YamlNode node, string message)
         => $"line {node.Start.Line}, column {node.Start.Column}: {message}";

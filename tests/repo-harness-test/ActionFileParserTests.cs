@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.RegularExpressions;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
@@ -1118,6 +1120,127 @@ public sealed class ActionFileParserTests
             """);
 
         Assert.Contains("key of step 'bench' inputs.size", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every key the list of an action file's keys names is one the parser reads, at every level: a
+    /// key listed and read by nothing would be one a file sets and nothing obeys, which the parser
+    /// reports as its own defect. Each value here may well be refused; what matters is that the key
+    /// was read.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ListedKeys))]
+    public void EveryListedKey_IsRead(string where, string key)
+    {
+        var listed = Record.Exception(() => Parse(WithKey(where, key)));
+        var unlisted = Record.Exception(() => Parse(WithKey(where, "unlisted")));
+
+        // Checked against a key that is refused as unknown, so a change to the words it is refused in
+        // fails here, rather than letting every listed key pass whether it was read or not.
+        Assert.True(RefusedAsUnknown(unlisted, "unlisted"), $"an unlisted key was not refused as one: {unlisted?.Message}");
+        Assert.IsNotType<UnreachableException>(listed);
+        Assert.False(RefusedAsUnknown(listed, key), $"'{key}' is listed and was refused as unknown: {listed?.Message}");
+    }
+
+    /// <summary>
+    /// Whether <paramref name="failure"/> refuses <paramref name="key"/> as no key of the file's, which
+    /// names every key that is: a value refused for its shape says it is not a mapping, and no more.
+    /// </summary>
+    private static bool RefusedAsUnknown(Exception? failure, string key)
+        => failure is not null && Regex.IsMatch(failure.Message, $"'{Regex.Escape(key)}' is not a [^.]+\\. Known: '");
+
+    /// <summary>
+    /// A file holding <paramref name="key"/> where <paramref name="where"/> says, with a value it may well
+    /// refuse: what matters is whether the key was read.
+    /// </summary>
+    private static string WithKey(string where, string key)
+    {
+        const string Steps = "steps:\n  - name: build\n    run: cmake --build build\n";
+
+        return (where, key) switch
+        {
+            ("file", "steps") => Steps,
+            ("file", _) => $"{key}: x\n{Steps}",
+            ("input", _) => $"inputs:\n  size:\n    {key}: x\n{Steps}",
+            ("step", "name") => "steps:\n  - name: x\n    run: cmake --build build\n",
+            ("step", "run") => "steps:\n  - name: build\n    run: x\n",
+            _ => $"steps:\n  - name: build\n    run: cmake --build build\n    {key}: x\n",
+        };
+    }
+
+    /// <summary>
+    /// A step that performs a predefined action runs no program, so each key only a run block reads is
+    /// refused on it, by name: accepted, it would be a rule nobody applied.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(RunBlockKeys))]
+    public void AStepThatUsesAPredefinedAction_IsRefusedWithAKeyOnlyARunBlockReads(string key)
+    {
+        var exception = Refused($"steps:\n  - name: fetch\n    uses: harness/checkout\n    ref: main\n    {key}: x\n");
+
+        Assert.Contains($"'{key}' applies only to a step's 'run' block; 'harness/checkout' is performed", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A step that performs a predefined action still takes what it reads: its name, action, ref, systems and needs.</summary>
+    [Fact]
+    public void AStepThatUsesAPredefinedAction_TakesWhatItReads()
+    {
+        var file = Parse("""
+            steps:
+              - name: build
+                run: cmake --build build
+              - name: fetch
+                uses: harness/checkout
+                ref: main
+                runOn: [linux]
+                needs: [build]
+            """);
+
+        var fetch = file.Steps[1];
+        Assert.Equal(PredefinedAction.Checkout, fetch.Uses);
+        Assert.Equal(["linux"], fetch.RunOn);
+        Assert.Equal(["build"], fetch.Needs);
+    }
+
+    /// <summary>Each key only a run block reads.</summary>
+    public static TheoryData<string> RunBlockKeys()
+    {
+        var data = new TheoryData<string>();
+
+        foreach (var key in ActionFileKeys.RunBlock)
+        {
+            data.Add(key.Name);
+        }
+
+        return data;
+    }
+
+    /// <summary>Each key an action file, a declared input and a step take, by where it is written.</summary>
+    public static TheoryData<string, string> ListedKeys()
+    {
+        var data = new TheoryData<string, string>();
+
+        foreach (var (where, keys) in new[] { ("file", ActionFileKeys.File), ("input", ActionFileKeys.Input), ("step", ActionFileKeys.Step) })
+        {
+            foreach (var key in keys)
+            {
+                data.Add(where, key.Name);
+            }
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// A value spelling half a character - an escape of a lone surrogate - is refused as the file, with
+    /// its line, as config.json refuses one: no text can hold it.
+    /// </summary>
+    [Fact]
+    public void AValueSpellingHalfACharacter_IsRefusedAsTheFile()
+    {
+        var exception = Refused("steps:\n  - name: \"b\\ud800\"\n    run: cmake --build build\n");
+
+        Assert.Contains("line 2, column 11: the file is not valid YAML", exception.Message, StringComparison.Ordinal);
     }
 
     private static ActionFileParser CreateParser()
