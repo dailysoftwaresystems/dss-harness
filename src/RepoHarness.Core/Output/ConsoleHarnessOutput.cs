@@ -1,17 +1,33 @@
+using RepoHarness.Core.Platform;
+
 namespace RepoHarness.Core.Output;
 
 /// <inheritdoc cref="IHarnessOutput"/>
-public sealed class ConsoleHarnessOutput(TextWriter standardOutput, TextWriter standardError, bool verbose)
+/// <param name="standardOutput">
+/// Where results go, and progress and a program's own output while no document is being written.
+/// </param>
+/// <param name="standardError">
+/// Where failures, warnings and a program's own error output go, and progress while a document is being written.
+/// </param>
+/// <param name="verbose">Whether detail is shown.</param>
+/// <param name="home">
+/// How the machine's home directory is written in every line of the harness's own: as <c>~</c> on a host
+/// answering another machine (see <see cref="HomeShorthand"/>), and as it is where this is left out.
+/// </param>
+public sealed class ConsoleHarnessOutput(TextWriter standardOutput, TextWriter standardError, bool verbose, HomeShorthand? home = null)
     : IHarnessOutput
 {
     private readonly TextWriter _out = standardOutput;
     private readonly TextWriter _error = standardError;
+    private readonly HomeShorthand _home = home ?? HomeShorthand.None;
     private readonly Lock _gate = new();
     private bool _dataOnly;
 
     /// <summary>Writes to the process console.</summary>
-    public ConsoleHarnessOutput(bool verbose)
-        : this(Console.Out, Console.Error, verbose)
+    /// <param name="verbose">Whether detail is shown.</param>
+    /// <param name="home">How the machine's home directory is written in every line of the harness's own.</param>
+    public ConsoleHarnessOutput(bool verbose, HomeShorthand? home = null)
+        : this(Console.Out, Console.Error, verbose, home)
     {
     }
 
@@ -28,19 +44,19 @@ public sealed class ConsoleHarnessOutput(TextWriter standardOutput, TextWriter s
         }
     }
 
-    public void Ok(string command, string message) => Write(Progress, $"{command}: OK - {message}");
+    public void Ok(string command, string message) => Write(Progress, $"{command}: OK - {Own(message)}");
 
-    public void Fail(string command, string message) => Write(_error, FailureLine.For(command, message));
+    public void Fail(string command, string message) => Write(_error, FailureLine.For(command, Own(message)));
 
-    public void Warn(string command, string message) => Write(_error, $"{command}: WARN - {message}");
+    public void Warn(string command, string message) => Write(_error, $"{command}: WARN - {Own(message)}");
 
-    public void Info(string command, string message) => Write(Progress, $"{command}: {message}");
+    public void Info(string command, string message) => Write(Progress, $"{command}: {Own(message)}");
 
     public void Detail(string command, string message)
     {
         if (IsVerbose)
         {
-            Write(Progress, $"{command}: {message}");
+            Write(Progress, $"{command}: {Own(message)}");
         }
     }
 
@@ -49,6 +65,8 @@ public sealed class ConsoleHarnessOutput(TextWriter standardOutput, TextWriter s
     public void Raw(string line) => Write(Progress, line);
 
     public void RawError(string line) => Write(_error, line);
+
+    public string Shown(string text) => _home.Shown(text);
 
     public IDisposable DataOnly()
     {
@@ -74,6 +92,12 @@ public sealed class ConsoleHarnessOutput(TextWriter standardOutput, TextWriter s
             }
         }
     }
+
+    /// <summary>
+    /// A line of the harness's own, as its reader is told it - except a row quoting what a program printed,
+    /// which is written as the program printed it.
+    /// </summary>
+    private string Own(string message) => QuotedLine.Is(message) ? message : _home.Shown(message);
 
     private void Write(TextWriter writer, string line)
     {

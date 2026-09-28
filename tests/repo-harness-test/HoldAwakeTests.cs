@@ -371,7 +371,8 @@ public sealed class HoldAwakeTests
             new LocalProgramResolver(platform, FilePermissionsFactory.Create()),
             new KeepAwake(new HeldProcesses(), new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false), store),
             store,
-            launcher);
+            launcher,
+            HomeShorthand.Of(platform, fileSystem));
     }
 
     private static async Task Until(Func<bool> done)

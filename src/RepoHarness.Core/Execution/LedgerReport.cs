@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Execution;
@@ -110,6 +111,9 @@ public sealed class LedgerReport
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
+
+    /// <summary>Tells each text as it was written: a document read on the machine that wrote it.</summary>
+    private static readonly Func<string, string> AsWritten = text => text;
 
     private LedgerReport(IReadOnlyList<LedgerLine> lines)
     {
@@ -232,7 +236,7 @@ public sealed class LedgerReport
     /// fail" are separate questions, and folding them into one boolean made a run where all eight
     /// legs ran and two failed report as incomplete — which reads as a run that did not finish,
     /// when it finished and found bugs. Interruption is not visible from the rows at all, so the
-    /// caller that can see it supplies it to <see cref="ExitCodeGiven"/> and <see cref="ToJson(bool, IReadOnlyList{string}, string)"/>.
+    /// caller that can see it supplies it to <see cref="ExitCodeGiven"/> and <see cref="ToJson(bool, IReadOnlyList{string}, string, Func{string, string})"/>.
     /// </remarks>
     public bool Complete => WithoutVerdict.Count == 0;
 
@@ -364,7 +368,7 @@ public sealed class LedgerReport
         {
             rows.Add(string.Empty);
             rows.Add(string.Create(CultureInfo.InvariantCulture, $"{line.Leg}: the last {line.LogTail.Count} line(s) its phase printed"));
-            rows.AddRange(line.LogTail.Select(text => "  | " + text));
+            rows.AddRange(line.LogTail.Select(QuotedLine.Of));
         }
 
         return rows;
@@ -419,8 +423,12 @@ public sealed class LedgerReport
     /// Where this run keeps its records, so a caller reading the document never has to work it out;
     /// <see langword="null"/> for a command that keeps none.
     /// </param>
-    public string ToJson(bool cancelled, IReadOnlyList<string> unfinished, string? runDirectory = null)
-        => Json(ExitCodeGiven(cancelled, unfinished), Summarize(cancelled, unfinished), cancelled, unfinished, stopped: false, runDirectory);
+    /// <param name="shown">
+    /// How the document's reader is told a path or a line of the harness's own, as
+    /// <see cref="IHarnessOutput.Shown"/> tells it; <see langword="null"/> to write each as it is.
+    /// </param>
+    public string ToJson(bool cancelled, IReadOnlyList<string> unfinished, string? runDirectory = null, Func<string, string>? shown = null)
+        => Json(ExitCodeGiven(cancelled, unfinished), Summarize(cancelled, unfinished), cancelled, unfinished, stopped: false, runDirectory, shown ?? AsWritten);
 
     /// <summary>
     /// The ledger as data for a run something other than its legs ended - a refusal of the whole run,
@@ -433,6 +441,10 @@ public sealed class LedgerReport
     /// Where the run keeps its records, when it got as far as having a directory; otherwise
     /// <see langword="null"/>.
     /// </param>
+    /// <param name="shown">
+    /// How the document's reader is told a path or a line of the harness's own, as
+    /// <see cref="IHarnessOutput.Shown"/> tells it; <see langword="null"/> to write each as it is.
+    /// </param>
     /// <remarks>
     /// Whatever ended the run, a reader who asked for data is answered with data: the machine that
     /// dispatched a leg reads a host's standard output as this document, and text there - a table, a
@@ -441,11 +453,11 @@ public sealed class LedgerReport
     /// the run itself: it neither passed nor completed, and reached no verdict of its own. An
     /// interruption is said as one, from the code it ends with, so a script never reads it as red.
     /// </remarks>
-    public string ToJson(int exitCode, string stoppedBecause, string? runDirectory = null)
+    public string ToJson(int exitCode, string stoppedBecause, string? runDirectory = null, Func<string, string>? shown = null)
     {
         ArgumentNullException.ThrowIfNull(stoppedBecause);
 
-        return Json(exitCode, stoppedBecause, cancelled: exitCode == HarnessExit.Cancelled, [], stopped: true, runDirectory);
+        return Json(exitCode, stoppedBecause, cancelled: exitCode == HarnessExit.Cancelled, [], stopped: true, runDirectory, shown ?? AsWritten);
     }
 
     /// <summary>
@@ -455,10 +467,22 @@ public sealed class LedgerReport
     /// </summary>
     /// <param name="exitCode">What the process exits with.</param>
     /// <param name="stoppedBecause">The line the command ends on.</param>
-    public static string Stopped(int exitCode, string stoppedBecause)
-        => From([], new HarnessDefaults().DurationWarningFactor).ToJson(exitCode, stoppedBecause);
+    /// <param name="shown">
+    /// How the document's reader is told a path or a line of the harness's own, as
+    /// <see cref="IHarnessOutput.Shown"/> tells it; <see langword="null"/> to write each as it is.
+    /// </param>
+    public static string Stopped(int exitCode, string stoppedBecause, Func<string, string>? shown = null)
+        => From([], new HarnessDefaults().DurationWarningFactor).ToJson(exitCode, stoppedBecause, shown: shown);
 
-    private string Json(int exitCode, string summary, bool cancelled, IReadOnlyList<string> unfinished, bool stopped, string? runDirectory) => JsonSerializer.Serialize(
+    /// <summary>The document, with every path and every line of the harness's own told as <paramref name="show"/> tells it.</summary>
+    /// <remarks>
+    /// A host answering another machine writes its home as <c>~</c> in what the harness wrote - where the
+    /// records are, why a leg ended as it did, what a timing pattern matched, a build directory and its room,
+    /// the developer environment it started in - as the same ledger's text form writes each of its rows. The
+    /// last lines a phase printed are that program's own lines, beneath the table as here, and stay as it
+    /// printed them.
+    /// </remarks>
+    private string Json(int exitCode, string summary, bool cancelled, IReadOnlyList<string> unfinished, bool stopped, string? runDirectory, Func<string, string> show) => JsonSerializer.Serialize(
         new
         {
             Verdict = stopped ? null : Verdicts.Display(Verdict),
@@ -466,11 +490,11 @@ public sealed class LedgerReport
 
             // The line the command ends on, beside the code it exits with, so a script reading the
             // document has what a reader of the terminal has.
-            Summary = summary,
+            Summary = show(summary),
 
             // Where the records are, as the text form's 'logs:' line says: a caller is told rather
             // than left to work out which tree a run wrote into.
-            RunDirectory = runDirectory,
+            RunDirectory = runDirectory is null ? null : show(runDirectory),
             Passed = !stopped && !cancelled && Passed,
             Cancelled = cancelled,
             Unfinished = unfinished,
@@ -488,9 +512,9 @@ public sealed class LedgerReport
                 DurationSeconds = Seconds(line.Duration),
                 CommandSeconds = Seconds(line.CommandTime),
                 OverheadSeconds = Seconds(line.Overhead),
-                line.Detail,
+                Detail = show(line.Detail),
                 line.TimingsSuspect,
-                TimingNotes = line.TimingNotes,
+                TimingNotes = line.TimingNotes.Select(show),
                 line.TestCount,
 
                 // What the count belongs to, carried from where it was made, so a ledger read back
@@ -498,10 +522,10 @@ public sealed class LedgerReport
                 line.Project,
                 line.TestSet,
                 line.TestCountDiffers,
-                line.TestCountNote,
+                TestCountNote = line.TestCountNote is null ? null : show(line.TestCountNote),
 
                 // Only for a leg another host ran, whose records are in that host's own run.
-                line.RunDirectory,
+                RunDirectory = line.RunDirectory is null ? null : show(line.RunDirectory),
 
                 // Only where a step was left out for the leg's operating system.
                 SkippedSteps = line.SkippedSteps.Count > 0 ? line.SkippedSteps : null,
@@ -522,18 +546,22 @@ public sealed class LedgerReport
                     : null,
 
                 // Only where the leg's toolchain names a developer environment and it was set up.
-                line.DeveloperEnvironment,
+                DeveloperEnvironment = line.DeveloperEnvironment is { } environment
+                    ? environment with { InstallationPath = show(environment.InstallationPath) }
+                    : null,
 
                 // Only where the command measured the leg's build directory: clean.
-                line.Space,
+                Space = line.Space is { } space
+                    ? space with { Directory = show(space.Directory), Disk = space.Disk is { } disk ? disk with { Filesystem = show(disk.Filesystem) } : null }
+                    : null,
 
                 // Only where a step kept something, each as sync --pull takes it.
                 KeptOutputs = line.KeptOutputs.Count > 0 ? line.KeptOutputs : null,
                 Timings = line.Timings.Select(timing => new
                 {
                     timing.Phase,
-                    timing.Text,
-                    timing.Value,
+                    Text = show(timing.Text),
+                    Value = show(timing.Value),
                 }),
             }),
         },

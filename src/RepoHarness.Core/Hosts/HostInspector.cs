@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -643,8 +644,10 @@ public sealed class HostInspector(
 
         // Reached only when dotnet was found and then would not run: a partial install, a broken
         // permission, or an architecture the host cannot execute. What it said is the whole diagnosis.
+        // Found off the PATH, it was found by listing POSIX paths: one in a directory from the home is spelt
+        // from the home the host said, which is written as ~.
         var where = dotnet.Found == ProgramFound.OffPath
-            ? $"'dotnet' is installed at '{dotnet.Path}', off the PATH of a command run without a login shell, and did not run from there"
+            ? $"'dotnet' is installed at '{HomeShorthand.For([connection.Home], PlatformNames.Linux).Shown(dotnet.Path ?? string.Empty)}', off the PATH of a command run without a login shell, and did not run from there"
             : "'dotnet' is on the PATH of a command run without a login shell there, and did not run";
 
         return sdks is null ? where : HostProbes.Failure(where, sdks, connection);

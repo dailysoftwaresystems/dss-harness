@@ -118,10 +118,11 @@ internal static class CommandRunner
 
         Stop(output, commandName, exitCode, message, ledger);
 
-        // A defect's stack trace is there under --verbose, where someone is actually diagnosing it.
+        // A defect's stack trace is there under --verbose, where someone is actually diagnosing it. It is the
+        // harness's own report, which repeats the message its failure line said, so it is told as that line is.
         if (defect && output.IsVerbose)
         {
-            output.RawError(exception.ToString());
+            output.RawError(output.Shown(exception.ToString()));
         }
 
         return exitCode;
@@ -165,7 +166,7 @@ internal static class CommandRunner
     {
         if (ledger)
         {
-            output.Data(LedgerReport.Stopped(exitCode, message));
+            output.Data(LedgerReport.Stopped(exitCode, message, output.Shown));
         }
 
         output.Fail(commandName, message);

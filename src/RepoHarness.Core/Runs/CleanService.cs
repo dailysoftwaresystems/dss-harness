@@ -140,7 +140,7 @@ public sealed class CleanService(
         var message = built.Summarize(execution.Cancelled, execution.Unfinished);
 
         return request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [built.ToJson(execution.Cancelled, execution.Unfinished)], Quiet = true }
+            ? new CommandOutcome(exitCode, message) { Data = [built.ToJson(execution.Cancelled, execution.Unfinished, shown: _output.Shown)], Quiet = true }
             : new CommandOutcome(exitCode, message, built.Render());
     }
 
@@ -269,7 +269,7 @@ public sealed class CleanService(
     /// What the command ends with when something other than its legs ended it, with the legs that had a line
     /// by then; asked for data, the ledger is still the whole of standard output.
     /// </summary>
-    private static CommandOutcome Stopped(
+    private CommandOutcome Stopped(
         CleanRequest request,
         int exitCode,
         string message,
@@ -277,6 +277,6 @@ public sealed class CleanService(
         double factor,
         IReadOnlyList<string> details)
         => request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message)] }
+            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, shown: _output.Shown)] }
             : CommandOutcome.Failed(exitCode, message, details);
 }

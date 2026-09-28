@@ -877,6 +877,16 @@ internal static class HelpCommand
         builder.AppendLine("PowerShell. host-exec runs in the host's copy of the tree it is typed in, which");
         builder.AppendLine($"'{ToolPackage.Command} sync' creates and keeps in step with that tree.");
         builder.AppendLine();
+        builder.AppendLine("A host answering this machine writes its home as ~: in every line of DssHarness's");
+        builder.AppendLine("own - a leg's reason, a lock or free-space message, a failure quoting git or the");
+        builder.AppendLine("system - and in the paths its ledger holds, runDirectory and space among them, so");
+        builder.AppendLine("this machine's 'logs of <leg> on <host>:' line names no account either. On a Windows");
+        builder.AppendLine("host the separator after it stays the host's own, as in ~\\src\\app. A program's own");
+        builder.AppendLine("lines, a phase's last lines among them, stay as it printed them; a command typed on");
+        builder.AppendLine("the host names its paths in full; and under host-exec a document other than a");
+        builder.AppendLine("ledger is written as the host prints it. A copy's path this machine builds from");
+        builder.AppendLine("repositoryPath is said as that is written: '~/src/app' keeps the account out of it.");
+        builder.AppendLine();
         builder.AppendLine("A host keeps a copy of each tree whose legs it runs: the main checkout's at its");
         builder.AppendLine($"repositoryPath, and each worktree's beside it, at <repositoryPath>{HostCopies.WorktreeSuffix}<name>,");
         builder.AppendLine("named for the worktree's directory. So worktrees do not share a copy on a host, or");
@@ -1250,8 +1260,9 @@ internal static class HelpCommand
         builder.AppendLine("run lock resolve back to the originating checkout. A run's records are the");
         builder.AppendLine("exception: they belong to the tree that ran it, so a run started inside a worktree");
         builder.AppendLine("writes them there, and build, test and run name the directory in their output and");
-        builder.AppendLine("as runDirectory in --json. Action files are tracked, so a worktree has its own and a");
-        builder.AppendLine("runner acts on the tree it was asked about.");
+        builder.AppendLine("as runDirectory in --json. A leg a host ran names that host's own directory, its home");
+        builder.AppendLine($"written as ~ (see '{ToolPackage.Command} help legs'). Action files are tracked, so a");
+        builder.AppendLine("worktree has its own and a runner acts on the tree it was asked about.");
 
         return builder.ToString();
     }

@@ -1,5 +1,8 @@
 using System.Text.Json;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -53,6 +56,56 @@ public sealed class LedgerReportTests
 
         Assert.False(legs[0].TryGetProperty("runDirectory", out _));
         Assert.Equal("/home/pi/repo/.harness-config/runs/r2", legs[1].GetProperty("runDirectory").GetString());
+    }
+
+    /// <summary>
+    /// The document tells every path and every line of the harness's own as its reader is told them - on a
+    /// host answering another machine, with the host's home as <c>~</c> - what a timing pattern matched among
+    /// them, as the text form's table does; and leaves a program's own lines, the last lines a phase printed, as
+    /// the program printed them. A path a leg kept is relative already.
+    /// </summary>
+    [Fact]
+    public void TheDocument_TellsTheHarnesssOwnWordsAsTheReaderIsTold_AndAProgramsAsItPrintedThem()
+    {
+        var home = HomeShorthand.For(["/home/alice"], PlatformNames.Linux);
+        var report = LedgerReport.From(
+        [
+            Entry("arm", LegVerdict.Failed, TimeSpan.FromSeconds(1), "another run owns '/home/alice/repo/build/arm'") with
+            {
+                TimingNotes = ["the clock stepped during /home/alice/repo"],
+                Timings = [new TimingMark("test", "/home/alice/repo/tests took 3.2 s", "/home/alice/3.2")],
+                LogTail = ["/home/alice/repo/main.c:4: error"],
+                KeptOutputs = ["out/report.txt"],
+                Space = new BuildSpace("/home/alice/repo/build/arm", 1, Removed: true, new DiskSpace(1, 2, "/home/alice")),
+                DeveloperEnvironment = new DeveloperEnvironmentFact("vs", "/home/alice/vs", "17.14", "14.44", "amd64"),
+            },
+            Entry("there", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty) with { RunDirectory = "/home/alice/other/.harness-config/runs/r2" },
+        ],
+        durationWarningFactor: 0);
+
+        using var ran = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], runDirectory: "/home/alice/repo/.harness-config/runs/r1", home.Shown));
+        using var stopped = JsonDocument.Parse(LedgerReport.Stopped(HarnessExit.Refused, "'/home/alice/repo' is not inside a git repository.", home.Shown));
+
+        Assert.Equal("~/repo/.harness-config/runs/r1", ran.RootElement.GetProperty("runDirectory").GetString());
+        Assert.Equal("'~/repo' is not inside a git repository.", stopped.RootElement.GetProperty("summary").GetString());
+
+        var legs = ran.RootElement.GetProperty("legs").EnumerateArray().ToList();
+
+        Assert.Equal("another run owns '~/repo/build/arm'", legs[0].GetProperty("detail").GetString());
+        Assert.Equal("the clock stepped during ~/repo", Assert.Single(legs[0].GetProperty("timingNotes").EnumerateArray()).GetString());
+        var timing = Assert.Single(legs[0].GetProperty("timings").EnumerateArray());
+        Assert.Equal("~/repo/tests took 3.2 s", timing.GetProperty("text").GetString());
+        Assert.Equal("~/3.2", timing.GetProperty("value").GetString());
+        Assert.Equal("~/repo/build/arm", legs[0].GetProperty("space").GetProperty("directory").GetString());
+        Assert.Equal("~", legs[0].GetProperty("space").GetProperty("disk").GetProperty("filesystem").GetString());
+        Assert.Equal("~/vs", legs[0].GetProperty("developerEnvironment").GetProperty("installationPath").GetString());
+        Assert.Equal("/home/alice/repo/main.c:4: error", Assert.Single(legs[0].GetProperty("logTail").EnumerateArray()).GetString());
+        Assert.Equal("out/report.txt", Assert.Single(legs[0].GetProperty("keptOutputs").EnumerateArray()).GetString());
+        Assert.Equal("~/other/.harness-config/runs/r2", legs[1].GetProperty("runDirectory").GetString());
+
+        // Asked for nothing to be told otherwise, the document writes each as it is.
+        using var asWritten = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], runDirectory: "/home/alice/repo/.harness-config/runs/r1"));
+        Assert.Equal("/home/alice/repo/.harness-config/runs/r1", asWritten.RootElement.GetProperty("runDirectory").GetString());
     }
 
     /// <summary>

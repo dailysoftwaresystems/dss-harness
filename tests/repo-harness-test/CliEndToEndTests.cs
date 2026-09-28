@@ -721,6 +721,104 @@ public sealed partial class CliEndToEndTests
         }
     }
 
+    /// <summary>
+    /// A command the real binary runs for another machine, as its host agent runs one, writes the host's home as
+    /// <c>~</c> in its failure line and in the ledger it answers with, which the machine that asked puts in its
+    /// own output; the same command typed there names the directory in full.
+    /// </summary>
+    [Fact]
+    public async Task ACommandAHostRunsForAnotherMachine_WritesItsHomeAsTilde_AndTypedThereNamesItInFull()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (environment, _) = OwnUserData(temp);
+
+        // The home the CLI reads: its HOME, and on Windows the account's own folder, which no environment moves -
+        // there the test's directories are under it only where the system keeps temporary files there.
+        var home = OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : environment["HOME"]!;
+        var work = OperatingSystem.IsWindows() ? temp.Combine("work") : Path.Combine(home, "work");
+        Directory.CreateDirectory(work);
+
+        Assert.SkipUnless(
+            PathContainment.IsStrictlyInside(home, work, StringComparison.OrdinalIgnoreCase),
+            $"this machine keeps temporary files outside its account's home, '{home}', which the CLI reads whatever its environment says");
+
+        const string Nonce = "0123456789abcdef0123456789abcdef";
+        var shown = "~" + work[home.Length..];
+        var request = JsonSerializer.Serialize(
+            new HostAgentRequest { Kind = HostAgentRequestKind.Run, Directory = work, Arguments = ["test", "--json"], Nonce = Nonce },
+            HostAgentProtocol.JsonOptions);
+
+        var served = await CliRunner.RunAsync(["host-agent"], token, standardInput: request + "\n", environment: environment);
+        var typed = await CliRunner.RunAsync(["test", "--json"], token, workingDirectory: work, environment: environment);
+
+        using var answer = JsonDocument.Parse(HostAgentProtocol.SinceServing(served.StandardOutput, Nonce));
+        var said = $"'{shown}' is not inside a git repository.";
+
+        Assert.Equal(HarnessExit.Refused, served.ExitCode);
+        Assert.Equal(said, answer.RootElement.GetProperty("summary").GetString());
+        Assert.Contains($"test: FAIL - {said}", served.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain(work, served.StandardError, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal(HarnessExit.Refused, typed.ExitCode);
+        Assert.Contains("work' is not inside a git repository.", typed.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("'~", typed.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A defect on a host answering another machine is reported with the host's home as <c>~</c> - its failure
+    /// line, and under <c>--verbose</c> its stack trace, which repeats the message and reaches the reason of
+    /// every leg the machine that asked reports.
+    /// </summary>
+    [Fact]
+    public async Task ADefectOnAHostAnsweringAnotherMachine_IsReportedWithItsHomeAsTilde_TraceIncluded()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (environment, _) = OwnUserData(temp);
+        var platform = new HostPlatform();
+
+        var home = OperatingSystem.IsWindows() ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) : environment["HOME"]!;
+        var named = OperatingSystem.IsWindows() ? temp.Combine("named") : Path.Combine(home, "named");
+
+        Assert.SkipUnless(
+            PathContainment.IsStrictlyInside(home, named, StringComparison.OrdinalIgnoreCase),
+            $"this machine keeps temporary files outside its account's home, '{home}', which the CLI reads whatever its environment says");
+
+        // A witness pattern config.json would refuse, which nothing on a host anticipates: it ends in the
+        // handler for defects, and the message the regular expression engine gives quotes the pattern.
+        var request = JsonSerializer.Serialize(
+            new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Info,
+                Emulators = new Dictionary<string, EmulatorConfig>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["broken"] = new EmulatorConfig
+                    {
+                        HostOs = platform.PlatformKey,
+                        HostProcessor = platform.Processor,
+                        Processor = "riscv64",
+                        Launcher = [TestHost.DotnetExecutable, "exec", TestHost.AssemblyPath],
+                        Env = { [TestHost.ChildModeVariable] = "echo-args" },
+                        Witness = new EmulatorWitness { Command = ["riscv64"], Pattern = "(" + named },
+                    },
+                },
+            },
+            HostAgentProtocol.JsonOptions);
+
+        var served = await CliRunner.RunAsync(
+            [HostAgentProtocol.CommandName, HostAgentProtocol.VerboseOption],
+            token,
+            standardInput: request + "\n",
+            environment: environment);
+
+        Assert.Equal(HarnessExit.InternalError, served.ExitCode);
+        Assert.StartsWith($"{HostAgentProtocol.CommandName}: FAIL - Unexpected ", served.StandardError, StringComparison.Ordinal);
+        Assert.Contains("   at ", served.StandardError, StringComparison.Ordinal);
+        Assert.Contains("(~" + named[home.Length..], served.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain(named, served.StandardError, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it never comes.</summary>
     private static async Task EventuallyAsync(Func<bool> done, CancellationToken cancellationToken)
     {

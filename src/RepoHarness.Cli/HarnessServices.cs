@@ -57,7 +57,13 @@ internal static class HarnessServices
             provider.GetRequiredService<IProcessRunner>()));
 
         services.AddSingleton<IProcessIdentity, ProcessIdentity>();
-        services.AddSingleton<IHarnessOutput>(_ => new ConsoleHarnessOutput(verbose));
+
+        // A host answering another machine writes its home as ~ in what it tells that machine; a command
+        // typed here writes its own paths as they are.
+        services.AddSingleton(provider => servesAnotherMachine
+            ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>, provider.GetRequiredService<IFileSystem>())
+            : HomeShorthand.None);
+        services.AddSingleton<IHarnessOutput>(provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>()));
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton<IGitClient, GitClient>();
