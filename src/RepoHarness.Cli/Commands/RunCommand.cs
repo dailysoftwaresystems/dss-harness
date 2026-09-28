@@ -250,6 +250,7 @@ internal static class RunCommand
                     // steps, and a runner a check starts runs its own steps.
                     Inputs = inputs,
                     ManualSteps = manualSteps,
+                    NamedOnCommandLine = true,
 
                     // One level deep by construction: the runner a check names carries no checks of
                     // its own, and this delegate reaches the service only for that one.

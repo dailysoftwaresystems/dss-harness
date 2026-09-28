@@ -344,6 +344,7 @@ public sealed class ActionFileParser(
             }
 
             RefuseShadowedInput(keyNode, inputName, problems);
+            RefuseUnwritableInput(keyNode, inputName, problems);
 
             yield return new ActionInput(inputName, fallback, required, inputDescription);
         }
@@ -723,6 +724,30 @@ public sealed class ActionFileParser(
     }
 
     /// <summary>
+    /// Records a problem for a declared input whose name a run line cannot write in braces.
+    /// </summary>
+    /// <param name="node">The input's own node, for the line number.</param>
+    /// <param name="name">The declared name.</param>
+    /// <param name="problems">Where problems are collected.</param>
+    /// <remarks>
+    /// Refused where it is declared, because nothing after could: a run line naming it would reach
+    /// its program as the braces it was written as, filled in by nothing and refused by nothing, and
+    /// the step would exit zero having used that text as the value, given one or not.
+    /// </remarks>
+    private static void RefuseUnwritableInput(YamlNode node, string name, List<string> problems)
+    {
+        if (LegPathNames.IsName(name))
+        {
+            return;
+        }
+
+        problems.Add(At(
+            node,
+            $"an input named '{name}' is not a name a run line can write in braces, so '{{{name}}}' would "
+            + $"reach its program as written: a name {LegPathNames.NameRule}. Give the input another name."));
+    }
+
+    /// <summary>
     /// A step's <c>runOn</c>: the operating systems it runs on, each once. An empty list is refused,
     /// since a step naming none would never run: leaving the key out is how a step says every one.
     /// </summary>
@@ -804,7 +829,7 @@ public sealed class ActionFileParser(
             {
                 problems.Add(At(
                     item,
-                    $"a step's output '{path}' is not a path inside the step's own directory; an "
+                    $"a step's output '{path}' is not a path inside the step's build directory, {{stepBuild}}; an "
                     + "output is something the step wrote where the harness put it, without '.' or "
                     + "'..' and never rooted."));
                 continue;

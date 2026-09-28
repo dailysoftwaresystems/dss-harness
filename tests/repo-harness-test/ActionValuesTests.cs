@@ -66,6 +66,45 @@ public sealed class ActionValuesTests
         Assert.Contains("'TOKEN' is defined in", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A plain value is one a run line can name, so one named like a name this tool fills in is refused,
+    /// as an input so named is: a run line naming it got this tool's value, or this one on a leg with
+    /// none there, while the environment held this one.
+    /// </summary>
+    [Theory]
+    [InlineData("product")]
+    [InlineData("buildDir")]
+    [InlineData("config")]
+    public async Task ReadAsync_Refuses_APlainValueNamedLikeANameThisToolFillsIn(string name)
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("env/a.env", $"{name}=mine\n");
+
+        var exception = await Assert.ThrowsAsync<HarnessException>(() => ReadAsync(temp));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, exception.ExitCode);
+        Assert.Contains($"defines '{name}', a name this tool already fills in", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(temp.Combine("env", "a.env"), exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only a plain value: a secret never fills a run line, so one so named is answered one way only,
+    /// by the environment. And only the name as this tool spells it, since a run line's names are
+    /// matched exactly.
+    /// </summary>
+    [Fact]
+    public async Task ReadAsync_Accepts_ASecretOrAnotherSpelling_NamedLikeOne()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("env/a.env", "PRODUCT=mine\n");
+        temp.WriteFile("secrets/a.env", "config=s3cret\n");
+
+        var values = await ReadAsync(temp);
+
+        Assert.Equal("mine", values.Values["PRODUCT"]);
+        Assert.Contains("config", values.SecretNames);
+    }
+
     [Fact]
     public async Task ReadAsync_Refuses_ALineThatDefinesNothing()
     {

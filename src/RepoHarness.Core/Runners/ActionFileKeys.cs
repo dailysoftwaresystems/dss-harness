@@ -18,7 +18,7 @@ public static class ActionFileKeys
     /// <summary>What one declared input takes, an action's or a step's.</summary>
     public static IReadOnlyList<KeyDescription> Input { get; } =
     [
-        new("default", $"its value when neither {CommandLineInputs.Option} nor the runner's values give one"),
+        new("default", $"its value when neither {CommandLineInputs.Option} nor the runner's .env gives one"),
         new("required", "refuse a run that gives it no value"),
         new("description", "what the value is for"),
     ];
@@ -37,7 +37,7 @@ public static class ActionFileKeys
         Phase("continueOnError"),
         Phase("watchContention"),
         Phase("requireInputsUnmoved"),
-        new("outputs", "files it writes, relative to its own directory"),
+        new("outputs", "what it writes, relative to its build directory, {stepBuild}"),
         new("persist", "keep its outputs when the action finishes"),
         new("inputs", "values this step alone reads, declared as the action's are") { Keys = Input },
     ];
@@ -45,7 +45,7 @@ public static class ActionFileKeys
     /// <summary>What one step takes: what any step does, then what only a <c>run</c> block reads.</summary>
     public static IReadOnlyList<KeyDescription> Step { get; } =
     [
-        new("name", "names its log file and its own directory") { Required = true },
+        new("name", "names its log file and its build directory, {stepBuild}") { Required = true },
         new("uses", $"{string.Join(" or ", PredefinedActions.All)}, in place of run"),
         new("ref", $"the commit or branch {PredefinedActions.Checkout} confirms the tree is at"),
         new("run", "its program lines, one per line; no shell"),

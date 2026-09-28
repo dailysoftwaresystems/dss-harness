@@ -31,11 +31,17 @@ public sealed record RunnerRunRequest
     public required RunnerConfig Runner { get; init; }
 
     /// <summary>
-    /// What <c>run --input</c> gave the action's inputs, by name: over the runner value directories
+    /// What <c>run --input</c> gave the action's inputs, by name: over the runner's <c>.env</c> values
     /// and each input's own default. Only the runner the command line named is given them; a runner
     /// a run check starts reads its own values.
     /// </summary>
     public IReadOnlyDictionary<string, string> Inputs { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether the command line named this runner, and so reaches it with <c>run --input</c>: false for
+    /// a runner a run check starts, whose refusals then never offer a value that way.
+    /// </summary>
+    public bool NamedOnCommandLine { get; init; }
 
     /// <summary>
     /// The manual steps <c>run --manual-step</c> named, which this run runs in place of the ones a run of
@@ -554,9 +560,11 @@ public sealed class RunnerRunService(
     /// The runner's steps, with every program it can start already vetted.
     /// </summary>
     /// <exception cref="HarnessException">
-    /// The runner declares neither steps nor an action, two steps share a name, or a program is
-    /// neither declared under <c>tools</c> nor shipped by the repository. Refused before the first
-    /// step runs, because the whole point of the check is that none of them did.
+    /// The runner declares neither steps nor an action; two steps share a name; no step runs on this
+    /// leg's operating system; a required input has no value; a step names an input this run gave no
+    /// value, or a name nothing supplies; or a program is neither declared under <c>tools</c> nor
+    /// shipped by the repository. Refused before the first step runs, because the whole point of the
+    /// check is that none of them did.
     /// </exception>
     private async Task<RunnerSteps> StepsAsync(
         HarnessConfig config,
@@ -627,10 +635,17 @@ public sealed class RunnerRunService(
 
             skipped = [.. left.Select(step => step.Name)];
             manual = [.. file.Steps.Where(step => step.Manual).Select(step => step.Name)];
-            (inputs, stepInputs) = ResolveInputs(file, values, request.Inputs);
+            (inputs, stepInputs) = ResolveInputs(file, values, request.Inputs, request.Layout.RunnerEnvDirectory);
 
-            var supplied = Supplied(values, inputs);
+            // What each step's lines can have filled in, and so what every check below judges them
+            // by: the one set the expansion fills them from.
+            IReadOnlyDictionary<string, string> SuppliedTo(ActionStep step)
+                => Supplied(values, WithStepInputs(inputs, stepInputs, step.Name));
+
             var scratch = ScratchFor(request, file.DirectoryName);
+
+            // Before the tool policy and before RefuseUnknownNames, for the reasons it gives.
+            RefuseInputsWithNoValue(file, step => SuppliedTo(step).Keys, values, request);
 
             // Before anything starts, and over the whole file rather than step by step: a file whose
             // last step names an undeclared program is refused with its first step not yet run. Each
@@ -646,7 +661,7 @@ public sealed class RunnerRunService(
                     command.Program,
                     step.WorkingPath(file.DirectoryName),
                     PathsFor(request, scratch, step.Name),
-                    Supplied(values, WithStepInputs(inputs, stepInputs, step.Name)),
+                    SuppliedTo(step),
                     step.Name),
                 values.Redact);
 
@@ -654,7 +669,7 @@ public sealed class RunnerRunService(
             // inputs alone this refused a run line naming a runner value directory's own value — the
             // same check-against-a-different-set defect as before, inverted. Each step's own inputs
             // are its alone: a run line naming another step's is refused as naming nothing.
-            RefuseUnknownNames(file, step => Supplied(values, WithStepInputs(inputs, stepInputs, step.Name)).Keys);
+            RefuseUnknownNames(file, step => SuppliedTo(step).Keys);
 
             // Performed before the first program starts: one settles what the steps read, the other
             // settles which tree they read it from, and a run that discovered either halfway through
@@ -764,14 +779,109 @@ public sealed class RunnerRunService(
     }
 
     /// <summary>
+    /// Refuses a step that names, in a run line or its working directory, an input the file declares -
+    /// the action's, or the step's own - to which this run gave no value, saying how it can have one.
+    /// </summary>
+    /// <param name="file">The steps this leg runs.</param>
+    /// <param name="fillable">The names each step's lines can have filled in.</param>
+    /// <param name="values">What the runner value directories hold, for what the refusal says of them.</param>
+    /// <param name="request">The run: where its values were read, and whether its command line reaches it.</param>
+    /// <exception cref="HarnessException">A step names a declared input this run gave no value.</exception>
+    /// <remarks>
+    /// Asked apart from <see cref="RefuseUnknownNames"/>, and before it: that check is given only the
+    /// names that have a value, so such an input was refused as a name nothing here can fill in, and
+    /// the names that refusal listed left it out, which read as an input nobody declared. Asked before
+    /// the tool policy as well: a program written as such an input is judged there as the braces it
+    /// was written as, and refused as a program nobody declared.
+    /// </remarks>
+    private static void RefuseInputsWithNoValue(
+        ActionFile file,
+        Func<ActionStep, IEnumerable<string>> fillable,
+        ActionValues values,
+        RunnerRunRequest request)
+    {
+        foreach (var step in file.Steps)
+        {
+            var unvalued = Unvalued(file, step, fillable(step));
+
+            foreach (var (text, setting) in Written(step))
+            {
+                if (LegPathNames.NamesIn(text).FirstOrDefault(name => unvalued.Contains(name)) is { } name)
+                {
+                    var owner = step.Inputs.Any(input => input.Name == name) ? "the step's own input" : "an input of the action";
+
+                    throw new HarnessException(
+                        HarnessExit.ConfigInvalid,
+                        $"{setting} names '{{{name}}}', {owner}, which has no value: {HowToGive(name, values, request)}");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// How the input <paramref name="name"/> can have a value on this run, as far as this run can say.
+    /// </summary>
+    /// <remarks>
+    /// Said from what the run read rather than as one sentence for every run, since that sentence was
+    /// wrong in each of these: a secret was offered the command line, where it would leak, and the
+    /// plain values, which refuse a name the secrets hold; a runner a run check starts was offered
+    /// <c>--input</c>, which reaches only the runner the command line names; a value written under
+    /// another spelling was asked for where it already was; and "the runner value directories" said
+    /// neither which of the two, nor on which machine.
+    /// </remarks>
+    private static string HowToGive(string name, ActionValues values, RunnerRunRequest request)
+    {
+        if (values.SecretNames.FirstOrDefault(secret => string.Equals(secret, name, StringComparison.OrdinalIgnoreCase)) is { } secret)
+        {
+            return $"'{secret}' is one of the runner's secrets, and a secret never fills a run line, where the "
+                + $"process table shows it to anything on the machine. Its step reads it from its environment, as {secret}.";
+        }
+
+        var directory = request.Layout.RunnerEnvDirectory;
+
+        var ways = request.NamedOnCommandLine
+            ? $"give it one with {CommandLineInputs.Option} {name}=<value> or in {directory}, or declare a default for it."
+            : $"give it one in {directory}, or declare a default for it. A run check started this runner, "
+                + $"and {CommandLineInputs.Option} reaches only the runner the command line names.";
+
+        // Matched exactly, as a run line's names are, so a value written under another spelling is
+        // there and not read.
+        return values.Values.Keys.FirstOrDefault(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase)) is { } spelled
+            ? $"{ways} That directory holds '{spelled}', which is not '{name}' as written."
+            : ways;
+    }
+
+    /// <summary>
+    /// The inputs <paramref name="step"/> may name - the action's, then its own - that this run gave no
+    /// value: those <paramref name="fillable"/> leaves out.
+    /// </summary>
+    private static IReadOnlyList<string> Unvalued(ActionFile file, ActionStep step, IEnumerable<string> fillable)
+        => [.. file.Inputs.Concat(step.Inputs).Select(input => input.Name).Except(fillable, StringComparer.Ordinal)];
+
+    /// <summary>
+    /// What <paramref name="step"/> writes that can name something - each run line's program and
+    /// arguments, then its working directory - with what a refusal calls each. Every check over a
+    /// step's names reads this one list, so none looks where another does not.
+    /// </summary>
+    private static IEnumerable<(string? Text, string Setting)> Written(ActionStep step)
+    {
+        foreach (var argument in step.Commands.SelectMany(command => command.Arguments))
+        {
+            yield return (argument, $"'{step.Name}' run line");
+        }
+
+        yield return (step.WorkingDirectory, $"'{step.Name}' workingDirectory");
+    }
+
+    /// <summary>
     /// Refuses a step naming something nothing can fill in, over the whole file and before its
     /// first program starts.
     /// </summary>
-    /// <param name="file">The action as it was read.</param>
+    /// <param name="file">The steps this leg runs.</param>
     /// <param name="fillable">
-    /// The names this run can supply a step beyond the built-in vocabulary: those the runner value
-    /// directories hold, the action's declared inputs and the step's own, already resolved, so the check
-    /// refuses exactly what the expansion would not fill in.
+    /// The names this run can supply a step beyond the built-in vocabulary: the runner's <c>.env</c>
+    /// values, the action's declared inputs and the step's own, already resolved, so the check refuses
+    /// exactly what the expansion would not fill in.
     /// </param>
     /// <exception cref="HarnessException">A step names a placeholder nothing supplies.</exception>
     /// <remarks>
@@ -790,16 +900,12 @@ public sealed class RunnerRunService(
         foreach (var step in file.Steps)
         {
             var declared = fillable(step).ToList();
+            var unvalued = Unvalued(file, step, declared);
 
-            foreach (var argument in step.Commands.SelectMany(command => command.Arguments))
+            foreach (var (text, setting) in Written(step))
             {
-                LegPathNames.RefuseUnknown(argument, $"'{step.Name}' run line", extra: declared);
+                LegPathNames.RefuseUnknown(text, setting, extra: declared, unvalued: unvalued);
             }
-
-            LegPathNames.RefuseUnknown(
-                step.WorkingDirectory,
-                $"'{step.Name}' workingDirectory",
-                extra: declared);
         }
     }
 
@@ -867,19 +973,7 @@ public sealed class RunnerRunService(
             _fileSystem.CreateDirectory(stepBuild);
         }
 
-        var supplied = Supplied(values, inputs);
-
-        var arguments = phase.Command
-            .Skip(1)
-            .Select(argument => LegPathNames.Expand(
-                argument,
-                paths,
-                $"'{phase.Name}' run line",
-                PlaceholderPolicy.LeaveAsWritten,
-                supplied))
-            .ToList();
-
-        var (program, working) = Started(request, phase.Command[0], phase.WorkingDirectory, paths, supplied, phase.Name);
+        var (program, arguments, working) = Starting(request, phase, paths, Supplied(values, inputs));
 
         var result = await _phaseRunner
             .RunAsync(
@@ -1135,20 +1229,21 @@ public sealed class RunnerRunService(
     /// <remarks>
     /// Checked over the whole runner rather than step by step, for the reason the tool policy is: a
     /// run that reaches its fourth step and then refuses has already changed the tree, and what it
-    /// did has to be understood before it can be repeated.
+    /// did has to be understood before it can be repeated. So each step is worked out exactly as it
+    /// will start, arguments and all: a name this leg has nothing for - <c>{product}</c> on a leg
+    /// without exactly one - was refused only when its own step began, after the ones before it ran.
     /// </remarks>
     /// <exception cref="HarnessException">
-    /// A step names no program, or puts a secret in its argument list. The argument list reaches
-    /// the log header, the machine's process table and every error that quotes the command; a
-    /// secret leaks by being convenient, and the leak that costs a credential is a failed command
-    /// echoing what it was asked to run.
+    /// A step names no program, starts nothing once its names are filled in, names something this
+    /// leg has nothing for, or puts a secret in its argument list. The argument list reaches the log
+    /// header, the machine's process table and every error that quotes the command; a secret leaks
+    /// by being convenient, and the leak that costs a credential is a failed command echoing what it
+    /// was asked to run.
     /// </exception>
     private static void Refuse(RunnerRunRequest request, RunnerSteps steps, ActionValues values, ActionScratch? scratch)
     {
         foreach (var phase in steps.Phases)
         {
-            var supplied = Supplied(values, steps.InputsFor(phase.StepName));
-
             if (phase.Command.Count == 0)
             {
                 throw new HarnessException(
@@ -1156,17 +1251,26 @@ public sealed class RunnerRunService(
                     $"Step '{phase.Name}' of runner '{request.RunnerName}' names no program.");
             }
 
-            // Worked out as the start works it out: a program filled in to nothing - an empty value
-            // in the runner's .env - starts nothing, and is refused before the first step rather
-            // than reaching the start as a program with no name, which read as a defect in this tool.
-            if (string.IsNullOrWhiteSpace(Started(request, phase.Command[0], phase.WorkingDirectory, PathsFor(request, scratch, phase.StepName), supplied, phase.Name).Program))
+            var (program, arguments, _) = Starting(
+                request,
+                phase,
+                PathsFor(request, scratch, phase.StepName),
+                Supplied(values, steps.InputsFor(phase.StepName)));
+
+            // A program filled in to nothing - an empty value in the runner's .env - starts nothing,
+            // and is refused before the first step rather than reaching the start as a program with
+            // no name, which read as a defect in this tool.
+            if (string.IsNullOrWhiteSpace(program))
             {
                 throw new HarnessException(
                     HarnessExit.ConfigInvalid,
                     $"Step '{phase.Name}' of runner '{request.RunnerName}' starts nothing once its names are filled in.");
             }
 
-            if (Carries(values, phase.Command))
+            // Judged as it will start rather than as written: a secret a name fills in - a value
+            // given with --input, or held in the runner's .env too - reaches the argument list all
+            // the same.
+            if (HoldsASecret(values, [program, .. arguments]))
             {
                 // Deliberately without quoting the argument: a refusal that named the value would
                 // be the leak it exists to prevent.
@@ -1179,8 +1283,8 @@ public sealed class RunnerRunService(
         }
     }
 
-    /// <summary>Whether any element of <paramref name="command"/> carries a secret value.</summary>
-    private static bool Carries(ActionValues values, IReadOnlyList<string> command)
+    /// <summary>Whether any element of <paramref name="command"/> holds a secret value.</summary>
+    private static bool HoldsASecret(ActionValues values, IReadOnlyList<string> command)
         => values.SecretNames.Count > 0
             && command.Any(argument => !string.Equals(values.Redact(argument), argument, StringComparison.Ordinal));
 
@@ -1650,8 +1754,41 @@ public sealed class RunnerRunService(
         return (string.IsNullOrWhiteSpace(filled) ? filled : ProcessRunner.Anchored(filled, working), working);
     }
 
+    /// <summary>
+    /// What <paramref name="phase"/> starts: its program and the directory it starts in, as
+    /// <see cref="Started"/> works them out, and its arguments with their names filled in. The one
+    /// reading both the start and the check before the first step use, so a step that check passed
+    /// is the step that starts.
+    /// </summary>
+    /// <param name="request">The leg's run.</param>
+    /// <param name="phase">The step, its command as written.</param>
+    /// <param name="paths">The directories the placeholders name.</param>
+    /// <param name="supplied">The values the placeholders are filled from.</param>
+    private static (string Program, IReadOnlyList<string> Arguments, string WorkingDirectory) Starting(
+        RunnerRunRequest request,
+        RunnerPhase phase,
+        LegPaths paths,
+        IReadOnlyDictionary<string, string> supplied)
+    {
+        IReadOnlyList<string> arguments =
+        [
+            .. phase.Command
+                .Skip(1)
+                .Select(argument => LegPathNames.Expand(
+                    argument,
+                    paths,
+                    $"'{phase.Name}' run line",
+                    PlaceholderPolicy.LeaveAsWritten,
+                    supplied)),
+        ];
+
+        var (program, working) = Started(request, phase.Command[0], phase.WorkingDirectory, paths, supplied, phase.Name);
+
+        return (program, arguments, working);
+    }
+
     /// <summary>What a run line may name: the runner's values, with the action's inputs over them.</summary>
-    /// <param name="values">What the runner value directories supply.</param>
+    /// <param name="values">The runner's plain values, from its <c>.env</c> directory.</param>
     /// <param name="inputs">The action's declared inputs, already resolved.</param>
     private static IReadOnlyDictionary<string, string> Namable(
         IReadOnlyDictionary<string, string> values,
@@ -1669,11 +1806,12 @@ public sealed class RunnerRunService(
 
     /// <summary>
     /// The value of every input the action declares: what <c>run --input</c> gave it, else what the
-    /// runner value directories supply under that name, else the input's own default.
+    /// runner's <c>.env</c> directory supplies under that name, else the input's own default.
     /// </summary>
     /// <param name="file">The action as it was read.</param>
     /// <param name="values">What the runner value directories hold.</param>
     /// <param name="given">What <c>run --input</c> gave, every name one the file declares.</param>
+    /// <param name="valuesDirectory">Where the runner's plain values were read, as a refusal names it.</param>
     /// <exception cref="HarnessException">A required input - the action's or a step's - has no value anywhere.</exception>
     /// <remarks>
     /// Resolved once, here, and handed to everything that needs it: the run lines that name an input
@@ -1690,7 +1828,8 @@ public sealed class RunnerRunService(
     private static (IReadOnlyDictionary<string, string> Action, IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Steps) ResolveInputs(
         ActionFile file,
         ActionValues values,
-        IReadOnlyDictionary<string, string> given)
+        IReadOnlyDictionary<string, string> given,
+        string valuesDirectory)
     {
         var missing = new List<string>();
         var resolved = Resolve(file.Inputs, values, given, missing, step: null);
@@ -1709,8 +1848,8 @@ public sealed class RunnerRunService(
             throw new HarnessException(
                 HarnessExit.ConfigInvalid,
                 $"'{file.Path}' requires input(s) {string.Join(", ", missing)}, and none was given with "
-                + $"{CommandLineInputs.Option}, found in the runner value directories or declared as a "
-                + "default, so its steps would run with nothing where a value belongs.");
+                + $"{CommandLineInputs.Option}, found in {valuesDirectory} or declared as a default, so its "
+                + "steps would run with nothing where a value belongs.");
         }
 
         return (resolved, steps);
@@ -1718,7 +1857,7 @@ public sealed class RunnerRunService(
 
     /// <summary>
     /// The value of every input in <paramref name="declared"/>: what <c>run --input</c> gave it, else what
-    /// the runner value directories supply under that name, else its default. A required one with none is
+    /// the runner's <c>.env</c> directory supplies under that name, else its default. A required one with none is
     /// added to <paramref name="missing"/>, named with its step where it is one.
     /// </summary>
     private static IReadOnlyDictionary<string, string> Resolve(

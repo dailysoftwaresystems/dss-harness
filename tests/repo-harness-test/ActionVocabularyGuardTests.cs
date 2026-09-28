@@ -86,6 +86,7 @@ public sealed class ActionVocabularyGuardTests
     [InlineData("{CORPUS_PATH}")]
     [InlineData("{corpus-path}")]
     [InlineData("{inputs.greeting}")]
+    [InlineData("{_JAVA_OPTIONS}")]
     public void ANameCarryingAnUnderscoreDotOrDash_IsSeenAndRefused_NotPassedThrough(string written)
     {
         var refusal = Assert.Throws<HarnessException>(
@@ -102,16 +103,66 @@ public sealed class ActionVocabularyGuardTests
         var supplied = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["CORPUS_PATH"] = "/data/corpus-2026",
+            ["_JAVA_OPTIONS"] = "-Xmx2g",
         };
 
         var expanded = LegPathNames.Expand(
-            "--corpus {CORPUS_PATH}",
+            "--corpus {CORPUS_PATH} {_JAVA_OPTIONS}",
             new LegPaths("/tree", "/tree/build/v"),
             "'probe' run line",
             PlaceholderPolicy.Refuse,
             supplied);
 
-        Assert.Equal("--corpus /data/corpus-2026", expanded);
+        Assert.Equal("--corpus /data/corpus-2026 -Xmx2g", expanded);
+    }
+
+    /// <summary>
+    /// The names a string asks to have filled in, in order: a doubled brace and another expander's
+    /// ${...} name none, so awk '{{print}}' is never refused as naming something.
+    /// </summary>
+    [Fact]
+    public void TheNamesAStringAsksFor_AreItsNamesInBraces_AndNothingElse()
+    {
+        Assert.Equal(["a", "b", "_c"], LegPathNames.NamesIn("{a} {{b}} ${b} {b} {_c}"));
+        Assert.Empty(LegPathNames.NamesIn(null));
+        Assert.Empty(LegPathNames.NamesIn("awk '{{print}}' ${HOME} {2d} {my name}"));
+
+        LegPathNames.RefuseUnknown("awk '{{print}}'", "'probe' run line");
+    }
+
+    /// <summary>
+    /// A name that is one of this tool's spelled in another case is refused as that, under either
+    /// policy: no other expander spells a name that differs from one of these only in case.
+    /// </summary>
+    [Theory]
+    [InlineData(PlaceholderPolicy.Refuse)]
+    [InlineData(PlaceholderPolicy.LeaveAsWritten)]
+    public void AMiscasedNameOfThisTools_IsRefusedAsThat(PlaceholderPolicy policy)
+    {
+        var refusal = Assert.Throws<HarnessException>(() => LegPathNames.RefuseUnknown("{builddir}", "'probe' run line", policy));
+
+        Assert.Contains("which is '{buildDir}' spelled differently", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A name nothing fills in is refused listing the names that can be, and the declared names with
+    /// no value this run apart from them: left out, the input a misspelt name meant read as one
+    /// nobody declared.
+    /// </summary>
+    [Fact]
+    public void ANameNothingFillsIn_IsRefused_ListingTheDeclaredNamesWithNoValueApart()
+    {
+        var refusal = Assert.Throws<HarnessException>(() => LegPathNames.RefuseUnknown(
+            "{onlyy}",
+            "'stage' run line",
+            extra: ["area"],
+            unvalued: ["only", "size"]));
+
+        Assert.Contains("{runArtifacts}, {area}; {only}, {size} are declared as well, with no value this run.", refusal.Message, StringComparison.Ordinal);
+
+        var one = Assert.Throws<HarnessException>(() => LegPathNames.RefuseUnknown("{onlyy}", "'stage' run line", unvalued: ["only"]));
+
+        Assert.Contains("{runArtifacts}; {only} is declared as well, with no value this run.", one.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -144,17 +195,85 @@ public sealed class ActionVocabularyGuardTests
         Assert.Contains("a name this tool already fills in", refusal.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>An ordinary input name is not refused, so the rule above is not simply "no inputs".</summary>
+    /// <summary>And a step's own input so named, which a run line of that step would name the same way.</summary>
     [Fact]
-    public void AnInputNamedForSomethingElse_IsAccepted()
+    public void AStepsOwnInputNamedForSomethingThisToolFillsIn_IsRefusedToo()
     {
         var factory = new HarnessFactory();
         var parser = new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform);
 
-        var file = parser.Parse("probe.yml", """
+        var refusal = Assert.Throws<HarnessException>(() => parser.Parse("probe.yml", """
+            name: probe
+            steps:
+              - name: measure
+                inputs:
+                  product:
+                    default: something
+                run: |
+                  git --version
+            """));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("a name this tool already fills in", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An input whose name a run line cannot write in braces is refused where it is declared, the
+    /// action's or a step's: nothing after could, since '{2d}' reaches the program as written, filled
+    /// in by nothing and refused by nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("2d", false)]
+    [InlineData("vers\u00e3o", false)]
+    [InlineData("'my input'", false)]
+    [InlineData("-x", true)]
+    [InlineData("'.x'", true)]
+    public void AnInputARunLineCannotWriteInBraces_IsRefusedWhenTheFileIsRead(string name, bool onStep)
+    {
+        var factory = new HarnessFactory();
+        var parser = new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform);
+
+        var refusal = Assert.Throws<HarnessException>(() => parser.Parse("probe.yml", onStep
+            ? $"""
+                name: probe
+                steps:
+                  - name: measure
+                    inputs:
+                      {name}:
+                        default: something
+                    run: |
+                      git --version
+                """
+            : $"""
+                name: probe
+                inputs:
+                  {name}:
+                    default: something
+                steps:
+                  - name: measure
+                    run: |
+                      git --version
+                """));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("is not a name a run line can write in braces", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(LegPathNames.NameRule, refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>An ordinary input name is not refused, so the rules above are not simply "no inputs".</summary>
+    [Theory]
+    [InlineData("corpusRoot")]
+    [InlineData("_area")]
+    [InlineData("corpus-path.v2")]
+    public void AnInputNamedForSomethingElse_IsAccepted(string name)
+    {
+        var factory = new HarnessFactory();
+        var parser = new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform);
+
+        var file = parser.Parse("probe.yml", $"""
             name: probe
             inputs:
-              corpusRoot:
+              {name}:
                 default: real-examples/c
             steps:
               - name: measure
@@ -162,7 +281,7 @@ public sealed class ActionVocabularyGuardTests
                   git --version
             """);
 
-        Assert.Equal("corpusRoot", Assert.Single(file.Inputs).Name);
+        Assert.Equal(name, Assert.Single(file.Inputs).Name);
     }
 
     /// <summary>

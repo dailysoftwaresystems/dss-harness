@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using RepoHarness.Core.Anchors;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
@@ -278,6 +279,21 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The runners topic says what a step's outputs are relative to, and what its name names, by the
+    /// name a run line uses for that directory, {stepBuild}: 'its own directory' read as the action's,
+    /// which workingDirectoryRoot names.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysAStepsOutputsAreRelativeToItsBuildDirectory()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var words = Words(result.StandardOutput);
+
+        Assert.Contains("outputs: [<path>, ...] what it writes, relative to its build directory, {stepBuild}", words, StringComparison.Ordinal);
+        Assert.Contains("name names its log file and its build directory, {stepBuild}; required", words, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task WorktreesTopic_QuotesTheLimitsFromTheCode()
     {
@@ -314,24 +330,54 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The runners topic says where an input's value comes from, in which order, what --input
-    /// refuses, and that a secret does not go there.
+    /// The runners topic says where an input's value comes from, in which order, that a secret never
+    /// gives it one, what becomes of one with none, what --input refuses, and that a secret does not
+    /// go there.
     /// </summary>
     [Fact]
     public async Task RunnersTopic_SaysWhereAnInputsValueComesFrom()
     {
         var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var words = Words(result.StandardOutput);
 
         foreach (var text in new[]
         {
-            "resolved from 'run --input <name>=<value>' first, the",
-            "runner value directories second and each input's own 'default' last",
+            "resolved from 'run --input <name>=<value>' first, .harness-config/runner/.env second and each "
+                + "input's own 'default' last; .secrets never gives one a value.",
+            "A required input with none of them is refused before the first step runs, and so is a step naming "
+                + "one that is not required and has none, naming the input and how it can have one.",
+            "default its value when neither --input nor the runner's .env gives one",
             "--input takes one name=value each time it is given",
             "an empty value and a name given twice",
             "a secret stays in",
         })
         {
-            Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains(text, words, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The runners topic says what a name in braces is made of, that the runner's .env values are
+    /// names too, that one this leg has nothing for is refused before the first program starts, and
+    /// which names an input or a value may not have.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysWhatANameIs_AndWhichNamesAreRefused()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var words = Words(result.StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "refused over the whole file before the first program starts, as is one this leg has nothing for.",
+            $"A name {LegPathNames.NameRule}.",
+            "<value name> any value the runner's .env holds, by its name",
+            "An input or a .env value named like a name above is refused, since a run line naming it would get "
+                + "this tool's value while the environment held its own; so is an input whose name a run line "
+                + "cannot write.",
+        })
+        {
+            Assert.Contains(text, words, StringComparison.Ordinal);
         }
     }
 
@@ -786,7 +832,7 @@ public sealed partial class HelpTests
     [GeneratedRegex(@"""legJobPattern"": (?<pattern>""(?:[^""\\]|\\.)*"")")]
     private static partial Regex ExamplePattern();
 
-    /// <summary>A step key shown as it is written, then what it does: '  outputs: [&lt;path&gt;, ...]  files it writes'.</summary>
+    /// <summary>A step key shown as it is written, then what it does: '  outputs: [&lt;path&gt;, ...]  what it writes'.</summary>
     [GeneratedRegex(@"^  (?<key>[A-Za-z]+): \S.*?  +(?<meaning>\S.*)$")]
     private static partial Regex SpeltKeyLine();
 }
