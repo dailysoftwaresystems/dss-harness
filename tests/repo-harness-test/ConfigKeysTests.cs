@@ -24,7 +24,7 @@ public sealed class ConfigKeysTests
 
     /// <summary>
     /// A runner's keys are the ones config.json reads it with, spelled as the file spells them, each
-    /// nested section's with its own, and required exactly where the file is refused without them.
+    /// nested section's with its own, and required exactly where the file must name them.
     /// </summary>
     [Fact]
     public void ARunnersKeys_AreTheOnesTheFileIsReadWith()
@@ -38,7 +38,7 @@ public sealed class ConfigKeysTests
 
         var expected = Section(runner, "expectedExceptions");
         Assert.Equal(
-            ["exceptionType", "message", "earnedOn", "earnedAt", "mechanism", "anchor"],
+            ["exceptionType", "messages", "message", "earnedOn", "earnedAt", "mechanism", "anchor"],
             expected.Where(key => key.Required).Select(key => key.Name));
 
         var checks = Section(expected, "runChecks");
@@ -47,8 +47,8 @@ public sealed class ConfigKeysTests
     }
 
     /// <summary>
-    /// A phase takes stepName, and neither outputs nor persist: those are checked and kept in an
-    /// action's own directories, which a runner of phases does not have.
+    /// A phase takes stepName, and neither outputs nor persist, for the reason
+    /// <see cref="RunnerPhase.Outputs"/> gives.
     /// </summary>
     [Fact]
     public void APhasesKeys_HoldStepName_AndNeitherOutputsNorPersist()
@@ -62,11 +62,11 @@ public sealed class ConfigKeysTests
     }
 
     /// <summary>
-    /// A key a step shares with a phase says what the phase's says: one sentence for one rule, read
-    /// from the phase's own key.
+    /// A key a step shares with a phase, where it means the same on both, says what the phase's says:
+    /// one sentence for one rule, read from the phase's own key.
     /// </summary>
     [Fact]
-    public void AKeyAStepSharesWithAPhase_SaysWhatThePhasesSays()
+    public void AKeyMeaningTheSameOnAStepAndAPhase_SaysWhatThePhasesSays()
     {
         var phase = ConfigKeys.Of<RunnerPhase>();
 
@@ -90,6 +90,23 @@ public sealed class ConfigKeysTests
         Assert.Same(ActionFileKeys.Input, Section(ActionFileKeys.Step, "inputs"));
         Assert.Equal(["steps"], ActionFileKeys.File.Where(key => key.Required).Select(key => key.Name));
         Assert.Equal(["name"], ActionFileKeys.Step.Where(key => key.Required).Select(key => key.Name));
+    }
+
+    /// <summary>
+    /// What only a run block reads is a step's own keys, and what a step that performs a predefined
+    /// action reads is what is left: its name, its action, the ref it checks out, the systems it runs
+    /// on and the steps it needs, beside the run block and manual that the parser refuses there by
+    /// rules of their own.
+    /// </summary>
+    [Fact]
+    public void WhatOnlyARunBlockReads_IsAStepsOwn_AndLeavesWhatAPredefinedActionReads()
+    {
+        var runBlock = KeyDescription.Names(ActionFileKeys.RunBlock);
+
+        Assert.All(runBlock, key => Assert.Contains(key, KeyDescription.Names(ActionFileKeys.Step)));
+        Assert.Equal(
+            ["name", "uses", "ref", "run", "runOn", "manual", "needs"],
+            KeyDescription.Names(ActionFileKeys.Step).Except(runBlock, StringComparer.Ordinal));
     }
 
     private static IReadOnlyList<KeyDescription> Section(IReadOnlyList<KeyDescription> keys, string name)

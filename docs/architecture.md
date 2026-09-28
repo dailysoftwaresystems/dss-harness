@@ -111,6 +111,10 @@ at once, with the line it concerns where the parser knows it:
 
 - An unknown key is an error. A misspelled setting that is silently dropped reverts to
   its default while the file plainly appears to set it.
+- A key written twice is an error, in any case: read, the file kept the last copy's value and
+  dropped the first's without a word.
+- A member the reader never reads, one marked `[JsonIgnore]`, is no key of the file's: a key naming
+  it is refused like any other. Left to the serializer, its value is skipped without a word.
 - `null` is refused wherever the model does not allow it, including inside lists and
   maps, which the serializer does not check on its own. Loaded, it would fail much later
   as a crash in whatever first read it.
@@ -998,8 +1002,9 @@ sync (when the host needs it)  →  build on buildCores  →  test on testCores
   runner - as the lowest layer, so everything more specific still says otherwise. From
   lowest to highest: for a build, the host's `env` then the variant's (its toolchain's,
   build config's, sanitizer's and project's); for a test, the host's then the test invocation's; for
-  a runner, the host's, then the runner's values and secrets, its own `env`, its action's
-  inputs as `INPUT_<NAME>`, and the phase's or step's. Names compare ignoring case on every platform, as they do on Windows: a value reaches
+  a runner, the host's, then the runner's values and secrets, its own `env`, the action's
+  inputs as `INPUT_<NAME>` where a `harness/read-inputs` step read them, and the phase's or
+  step's. Names compare ignoring case on every platform, as they do on Windows: a value reaches
   every spelling of its name the machine already has, and the one written, so `Path` written for
   a Linux host sets its `PATH`, and `http_proxy` reaches both the curl that reads it and the
   tools that read `HTTP_PROXY`.
@@ -1657,12 +1662,12 @@ eventually disagree, and nothing could say which one ran. Every field a phase ca
 `workingDirectory`, `env`, `successPattern`, `stallSeconds`, `continueOnError` — is a key on a
 step, so nothing the verdict contract depends on is lost by declaring one instead of the other.
 
-The reverse does not hold. What a step adds — a predefined action, `runOn`, `outputs` and
-`persist`, `manual`, `needs`, inputs of its own — belongs to a step, and `config.json` refuses it
-on a phase, naming the key and pointing to an action file. `outputs` are checked, and kept with
-`persist`, in the action's own `build` and `artifacts`, which a runner of phases does not have:
-accepted on a phase, they were a check nobody made, and the phase passed without it. A phase does
-take `stepName`, the step it is reported under in `ranSteps`.
+The reverse does not hold. A key a step takes and a phase does not — `uses`, `runOn`,
+`workingDirectoryRoot`, `outputs` and `persist` among them, all listed by `help runners` — belongs
+to a step, and `config.json` refuses it on a phase, naming the key and pointing to an action file.
+`outputs` are checked, and kept with `persist`, in the action's own `build` and `artifacts`, which a
+runner of phases does not have: accepted on a phase, they were a check nobody made, and the phase
+passed without it. A phase does take `stepName`, the step it is reported under in `ranSteps`.
 
 **Every key is listed.** `help runners` lists each key a runner, a phase, an action file, an input
 and a step take, with what it does, read from what the files are read with: a runner's from the
@@ -1768,6 +1773,10 @@ sibling directory whose name merely starts the same way is outside, not inside.
   an error message.
 - An unknown key, at the top level or on a step, is an error, as it is in `config.json`: a
   silently ignored key is a rule nobody applied.
+- A step that performs a predefined action runs no program, so a key only a run block reads —
+  where it runs, its environment, its witness and bounds, its outputs, inputs of its own — is an
+  error on it, for the same reason. `help runners` names them from the list the parser refuses
+  them by.
 
 ### Expected exceptions
 

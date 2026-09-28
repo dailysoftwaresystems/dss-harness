@@ -22,8 +22,8 @@ public sealed class ExpectedException
     /// Messages this entry recognises, each plain text or a regular expression. Any one matching
     /// is a match, because one confound reaches a reader through several wordings.
     /// </summary>
-    [Description("text or a regular expression its message or output shows")]
-    public List<string> Messages { get; init; } = [];
+    [Description("its message or output, as text or a regular expression")]
+    public required List<string> Messages { get; init; }
 
     /// <summary>Whether a run producing this failure is reported as a success.</summary>
     [Description("report a run that fails this way as passed")]
@@ -122,7 +122,7 @@ public sealed class RunCheckExpectation
     [Description("the result code it must report")]
     public int? ResultCode { get; init; }
 
-    /// <summary>Text the named runner's message must contain.</summary>
+    /// <summary>Text the named runner's message, or its steps' output, must contain.</summary>
     [Description("text its message or its steps' output must contain")]
     public string? Message { get; init; }
 }

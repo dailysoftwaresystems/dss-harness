@@ -5,7 +5,7 @@ namespace RepoHarness.Core.Configuration;
 /// <param name="Meaning">What it does, in one line.</param>
 public sealed record KeyDescription(string Name, string Meaning)
 {
-    /// <summary>Whether the file is refused without it.</summary>
+    /// <summary>Whether the file must name it.</summary>
     public bool Required { get; init; }
 
     /// <summary>The keys its value takes in turn, when that value is a section of its own; empty otherwise.</summary>

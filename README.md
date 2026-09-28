@@ -104,9 +104,9 @@ Three principles the implementation actually holds to:
 **Fail loud.** Zero always means success, and "the thing you asked about failed"
 never shares an exit code with "the harness could not run" — the remedies differ.
 Run `dssharness help exit-codes` for the full table, which is generated from the
-code rather than written by hand. A configuration file with an unknown key or a
-reference to something undeclared is rejected when it is read, with every problem
-listed at once.
+code rather than written by hand. A configuration file with an unknown key, a key
+written twice, or a reference to something undeclared is rejected when it is read, with
+every problem listed at once.
 
 **One behaviour everywhere.** Windows, macOS and Linux run the same code path. The
 operating system is observed in two tightly scoped places and nowhere else;

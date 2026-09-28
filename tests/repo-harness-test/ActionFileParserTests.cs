@@ -1133,15 +1133,14 @@ public sealed class ActionFileParserTests
     {
         const string Steps = "steps:\n  - name: build\n    run: cmake --build build\n";
 
-        var text = where switch
+        var text = (where, key) switch
         {
-            "file" => key == "steps" ? Steps : $"{key}: x\n{Steps}",
-            "input" => $"inputs:\n  size:\n    {key}: x\n{Steps}",
-            _ => "steps:\n  - " + string.Join(
-                "\n    ",
-                new[] { "name: build", "run: cmake --build build" }
-                    .Where(line => !line.StartsWith(key + ":", StringComparison.Ordinal))
-                    .Append($"{key}: x")) + "\n",
+            ("file", "steps") => Steps,
+            ("file", _) => $"{key}: x\n{Steps}",
+            ("input", _) => $"inputs:\n  size:\n    {key}: x\n{Steps}",
+            ("step", "name") => "steps:\n  - name: x\n    run: cmake --build build\n",
+            ("step", "run") => "steps:\n  - name: build\n    run: x\n",
+            _ => $"steps:\n  - name: build\n    run: cmake --build build\n    {key}: x\n",
         };
 
         var failure = Record.Exception(() => Parse(text));
@@ -1149,6 +1148,53 @@ public sealed class ActionFileParserTests
         // Refused as unknown, a key is named with every key that is known.
         Assert.IsNotType<UnreachableException>(failure);
         Assert.DoesNotContain("Known: '", failure?.Message ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step that performs a predefined action runs no program, so each key only a run block reads is
+    /// refused on it, by name: accepted, it would be a rule nobody applied.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(RunBlockKeys))]
+    public void AStepThatUsesAPredefinedAction_IsRefusedWithAKeyOnlyARunBlockReads(string key)
+    {
+        var exception = Refused($"steps:\n  - name: fetch\n    uses: harness/checkout\n    ref: main\n    {key}: x\n");
+
+        Assert.Contains($"'{key}' applies only to a step's 'run' block; 'harness/checkout' is performed", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A step that performs a predefined action still takes what it reads: its name, action, ref, systems and needs.</summary>
+    [Fact]
+    public void AStepThatUsesAPredefinedAction_TakesWhatItReads()
+    {
+        var file = Parse("""
+            steps:
+              - name: build
+                run: cmake --build build
+              - name: fetch
+                uses: harness/checkout
+                ref: main
+                runOn: [linux]
+                needs: [build]
+            """);
+
+        var fetch = file.Steps[1];
+        Assert.Equal(PredefinedAction.Checkout, fetch.Uses);
+        Assert.Equal(["linux"], fetch.RunOn);
+        Assert.Equal(["build"], fetch.Needs);
+    }
+
+    /// <summary>Each key only a run block reads.</summary>
+    public static TheoryData<string> RunBlockKeys()
+    {
+        var data = new TheoryData<string>();
+
+        foreach (var key in ActionFileKeys.RunBlock)
+        {
+            data.Add(key.Name);
+        }
+
+        return data;
     }
 
     /// <summary>Each key an action file, a declared input and a step take, by where it is written.</summary>

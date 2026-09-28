@@ -11,7 +11,7 @@ namespace RepoHarness.Core.Configuration;
 /// <remarks>
 /// Each is refused like any unknown key, because a key that loads is a key that is read. The refusal
 /// says where the key belongs: told only that it is unknown, a reader deletes the line and loses what
-/// it was there for, or goes on believing a phase checks what it declares.
+/// it was there for - a compiler cache's store, or a check of what a step makes.
 /// <para>
 /// Looked for in the file itself, before the serializer reads it. The serializer does refuse the
 /// key, but inside a map of named entries - the hosts under <c>wsl</c> and <c>ssh</c>, the runners
@@ -89,11 +89,6 @@ internal static class MisplacedKeys
             foreach (var phase in phases.EnumerateArray())
             {
                 position++;
-
-                if (phase.ValueKind != JsonValueKind.Object)
-                {
-                    continue;
-                }
 
                 var declared = stepOnly.Where(key => Property(phase, key) is not null).ToList();
 

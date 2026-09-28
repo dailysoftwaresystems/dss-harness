@@ -1767,6 +1767,7 @@ public sealed class RunnerRunServiceTests
     [InlineData(null, 1, 60, 1)]
     [InlineData(null, null, 1, 1)]
     [InlineData(0, 1, 1, null)]
+    [InlineData(null, 0, 1, null)]
     public async Task AStallBound_IsThePhasesOwn_ElseItsRunners_ElseTheDefault(int? phase, int? runner, int defaults, int? stoppedAt)
     {
         using var temp = new TempDirectory();
@@ -1791,6 +1792,76 @@ public sealed class RunnerRunServiceTests
         {
             Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
         }
+    }
+
+    /// <summary>
+    /// A runner's own phase that names a step is reported under that step in ranSteps, once however many
+    /// of its phases name it; one that names none is its own step.
+    /// </summary>
+    [Fact]
+    public async Task APhasesStepName_IsTheStepItIsReportedUnder()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("warm", "exit", ["0"]) with { StepName = "measure" },
+                Phase("time", "exit", ["0"]) with { StepName = "measure" },
+                Phase("go", "exit", ["0"]),
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["measure", "go"], result.Entry.RanSteps);
+    }
+
+    /// <summary>
+    /// An action's inputs, read by harness/read-inputs, reach its steps as INPUT_&lt;NAME&gt; over the
+    /// runner's own environment and beneath a step's: the order 'help config' gives.
+    /// </summary>
+    [Fact]
+    public async Task AnActionsInputs_ReachItsSteps_OverTheRunnersEnvironment_AndBeneathAStepsOwn()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            inputs:
+              size:
+                default: '7'
+            steps:
+              - name: read
+                uses: harness/read-inputs
+              - name: input
+                successPattern: '^7$'
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" INPUT_SIZE
+              - name: own
+                env:
+                  INPUT_SIZE: step
+                successPattern: '^step$'
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" INPUT_SIZE
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "print-env", ["INPUT_SIZE"] = "runner" },
+        };
+
+        var result = await Service(factory).RunAsync(config, Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["input", "own"], result.Entry.RanSteps);
     }
 
     private static LegIdentity Identity(string os)

@@ -1592,7 +1592,7 @@ public sealed class ConfigStoreTests
     /// <summary>
     /// A key only a step of an action file takes, written on a runner's phase, is refused naming the
     /// runner, the phase and the key, pointing to an action file's step, where it is read, and saying
-    /// what a phase does take. Accepted, outputs was a check nobody made: the phase passed without it.
+    /// what a phase does take; for outputs and persist, for the reason <see cref="RunnerPhase.Outputs"/> gives.
     /// </summary>
     [Theory]
     [InlineData("""{ "name": "go", "command": ["tool"], "outputs": ["result.txt"] }""", "phase 'go' declares 'outputs', which")]
@@ -1613,15 +1613,89 @@ public sealed class ConfigStoreTests
             StringComparison.Ordinal);
     }
 
-    /// <summary>A phase takes stepName, the step it is reported under in ranSteps.</summary>
+    /// <summary>A phase takes stepName; what it does is pinned where a run reports it.</summary>
     [Fact]
-    public void APhase_TakesTheStepItIsReportedUnder()
+    public void APhase_TakesStepName()
     {
         var config = LoadValid("""
             { "predefinedRunners": { "bench": { "phases": [ { "name": "go", "command": ["tool"], "stepName": "measure" } ] } } }
             """);
 
         Assert.Equal("measure", Assert.Single(config.PredefinedRunners["bench"].Phases).StepName);
+    }
+
+    /// <summary>
+    /// A step's key on a phase is refused naming it however the file is laid out: behind a runner of an
+    /// action and a phase that declares none, in any case, among comments and trailing commas, and on a
+    /// phase named only by its place.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "predefinedRunners": { "corpus": { "action": "corpus/corpus.yml" }, "bench": { "phases": [ { "name": "warm", "command": ["tool"] }, { "name": "go", "command": ["tool"], "outputs": ["r.txt"] } ] } } }""", "phase 'go' declares 'outputs'")]
+    [InlineData("""{ "PredefinedRunners": { "bench": { "Phases": [ { "name": "go", "command": ["tool"], "outputs": ["r.txt"] } ] } } }""", "phase 'go' declares 'outputs'")]
+    [InlineData("{ // hand edited\n \"predefinedRunners\": { \"bench\": { \"phases\": [ { \"name\": \"go\", \"command\": [\"tool\"], \"outputs\": [\"r.txt\"], }, ], }, }, }", "phase 'go' declares 'outputs'")]
+    [InlineData("""{ "predefinedRunners": { "bench": { "phases": [ 5, { "command": ["tool"], "runOn": ["linux"] } ] } } }""", "phase #2 declares 'runOn'")]
+    public void AStepsKeyOnAPhase_IsRefused_HoweverTheFileIsLaidOut(string json, string expected)
+        => Assert.Contains($"predefined runner 'bench' {expected}", LoadInvalid(json).Message, StringComparison.Ordinal);
+
+    /// <summary>
+    /// A key written twice is refused naming it, in any case and whatever it holds: read, the file kept
+    /// the last copy's value and dropped the first's without a word.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "sync": { "maxDeleteFraction": 0.5, "maxDeleteFraction": 0.1 } }""", "'maxDeleteFraction'")]
+    [InlineData("""{ "sync": { "maxDeleteFraction": 0.5, "MaxDeleteFraction": 0.1 } }""", "'maxDeleteFraction'")]
+    [InlineData("""{ "predefinedRunners": { "a": { "phases": [ { "name": "go", "command": ["tool"] } ] } }, "PredefinedRunners": { "b": { "phases": [ { "name": "go", "command": ["tool"] } ] } } }""", "'predefinedRunners'")]
+    [InlineData("""{ "predefinedRunners": { "a": { "legs": ["x"], "legs": ["y"], "phases": [ { "name": "go", "command": ["tool"] } ] } } }""", "'legs'")]
+    public void AKeyWrittenTwice_IsRefused_NamingIt(string json, string key)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains("Duplicate property", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(key, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step's key in the second copy of a section written twice is refused too, where the check that
+    /// points to an action file reads only the first: the reader refuses it, as any key nothing reads.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "predefinedRunners": {}, "PredefinedRunners": { "bench": { "phases": [ { "name": "go", "command": ["tool"], "outputs": ["r.txt"] } ] } } }""")]
+    [InlineData("""{ "predefinedRunners": { "bench": { "phases": [], "Phases": [ { "name": "go", "command": ["tool"], "outputs": ["r.txt"] } ] } } }""")]
+    public void AStepsKeyInASecondCopyOfASection_IsRefused(string json)
+        => Assert.Contains("'outputs'", LoadInvalid(json).Message, StringComparison.Ordinal);
+
+    /// <summary>
+    /// A key naming a member the reader never reads is refused like any other key nothing reads:
+    /// sync's computed effectiveNeverTransfer, and a phase's outputs read on its own, without the check
+    /// that says where it belongs.
+    /// </summary>
+    [Fact]
+    public void AKeyNamingAMemberTheReaderIgnores_IsRefusedLikeAnyUnknownKey()
+    {
+        Assert.Contains("effectiveNeverTransfer", LoadInvalid("""{ "sync": { "effectiveNeverTransfer": ["x"] } }""").Message, StringComparison.Ordinal);
+        Assert.Throws<System.Text.Json.JsonException>(() => System.Text.Json.JsonSerializer.Deserialize<RunnerPhase>(
+            """{ "name": "go", "command": ["tool"], "outputs": ["r.txt"] }""",
+            JsonConfigOptions.Default));
+    }
+
+    /// <summary>A runner section of the wrong shape is refused as the file, never reported as a defect in the tool.</summary>
+    [Theory]
+    [InlineData("""{ "predefinedRunners": [] }""")]
+    [InlineData("""{ "predefinedRunners": { "bench": null } }""")]
+    [InlineData("""{ "predefinedRunners": { "bench": { "phases": {} } } }""")]
+    public void AMisshapenRunnerSection_IsRefusedAsTheFile(string json) => LoadInvalid(json);
+
+    /// <summary>An expected exception that names no messages is refused as the file is read, saying which key.</summary>
+    [Fact]
+    public void AnExpectedExceptionNamingNoMessages_IsRefused()
+    {
+        var exception = LoadInvalid("""
+            { "predefinedRunners": { "bench": {
+                "phases": [ { "name": "go", "command": ["tool"] } ],
+                "expectedExceptions": [ { "exceptionType": "IOException", "message": "m", "earnedOn": "2026-01-01", "earnedAt": "a leg", "mechanism": "a lock", "anchor": "A-1" } ] } } }
+            """);
+
+        Assert.Contains("messages", exception.Message, StringComparison.Ordinal);
     }
 
     private static ConfigException LoadInvalid(string json)

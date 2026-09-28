@@ -9,8 +9,8 @@ namespace RepoHarness.Core.Configuration;
 /// configuration rather than in the tool.
 /// </summary>
 /// <remarks>
-/// Each key's <see cref="DescriptionAttribute"/> is what <c>help runners</c> says of it, read through
-/// <see cref="ConfigKeys"/>, so a key cannot be read here without being listed there.
+/// What <c>help runners</c> says of each key here, and of each section under it, is that key's
+/// <see cref="DescriptionAttribute"/>, listed through <see cref="ConfigKeys"/>.
 /// </remarks>
 public sealed class RunnerConfig
 {
@@ -114,7 +114,7 @@ public sealed record RunnerPhase
     public string? WorkingDirectory { get; init; }
 
     /// <summary>Environment for this phase.</summary>
-    [Description("its own variables, over the runner's ('help config')")]
+    [Description("its own variables ('help config' gives the order)")]
     public Dictionary<string, string> Env { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Pattern proving the phase ran, checked in addition to its exit code.</summary>
@@ -122,7 +122,7 @@ public sealed record RunnerPhase
     public string? SuccessPattern { get; init; }
 
     /// <summary>Seconds without output after which this phase is treated as hung.</summary>
-    [Description("its own stall bound in seconds, over the runner's")]
+    [Description("its own stall bound, in seconds")]
     public int? StallSeconds { get; init; }
 
     /// <summary>Whether a failure here ends the leg or is recorded and passed over.</summary>
@@ -149,8 +149,9 @@ public sealed record RunnerPhase
     public bool RequireInputsUnmoved { get; init; }
 
     /// <summary>
-    /// The step this phase belongs to, which names the directory its work goes in. Empty for a
-    /// phase a runner declared directly, which owns no action directory.
+    /// The step this phase is reported under in <c>ranSteps</c> and, for a step of an action file, the
+    /// directory its work goes in. Empty, the phase is its own step; a runner's own phase may name one,
+    /// and owns no action directory either way.
     /// </summary>
     [Description("the step it is reported under in ranSteps; absent, its name")]
     public string StepName { get; init; } = string.Empty;
@@ -159,8 +160,8 @@ public sealed record RunnerPhase
     /// <remarks>
     /// Never read from <c>config.json</c>: outputs are checked in the step's directory under its
     /// action's build, and kept in that action's artifacts, and a runner of phases owns neither.
-    /// Accepted there, it was a check nobody made: the phase passed without it. A step of an action
-    /// file takes it, and <see cref="MisplacedKeys"/> says so to a file that puts it on a phase.
+    /// Accepted there, it was a check nobody made: the phase passed without it. The file's reader
+    /// refuses it on a phase, and <see cref="MisplacedKeys"/> says a step of an action file takes it.
     /// </remarks>
     [JsonIgnore]
     public IReadOnlyList<string> Outputs { get; init; } = [];

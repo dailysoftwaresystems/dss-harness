@@ -4,9 +4,9 @@ using RepoHarness.Core.Processes;
 namespace RepoHarness.Tests;
 
 /// <summary>
-/// A runner that says one thing and then goes quiet, so a stall is what the bound sees rather
-/// than a machine that was busy. Runs <paramref name="life"/> out if nothing stops it, which is
-/// how a bound that never fires shows up as a failure rather than as a hang.
+/// A process runner that says one thing and then goes quiet, so a stall is what the bound sees rather
+/// than a machine that was busy. Runs <paramref name="life"/> out and exits 0 if nothing stops it, so a
+/// bound that never fires ends the test rather than hanging it, and the test says whether that passes.
 /// </summary>
 internal sealed class QuietProcessRunner(TimeSpan life, bool speaks = true) : IProcessRunner
 {

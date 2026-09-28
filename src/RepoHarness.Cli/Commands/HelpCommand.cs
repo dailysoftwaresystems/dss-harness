@@ -322,12 +322,16 @@ internal static class HelpCommand
         builder.AppendLine("'{dir}/tool' is inside the repository only where {dir} keeps it there. A line, or");
         builder.AppendLine("a step's directory, that fills in to nothing is refused the same way, naming it.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"A step that uses {string.Join(" or ", PredefinedActions.All)} runs no program, so it takes none of the "
+            + $"keys only a run block reads, and is refused with any of them: '{string.Join("', '", KeyDescription.Names(ActionFileKeys.RunBlock))}'.");
+        builder.AppendLine();
         builder.AppendLine("A step runs at the leg's tree root unless it says otherwise, which is what a step");
         builder.AppendLine("with neither key below has always done. The new layout reads as though a step ran");
         builder.AppendLine("beside its own file; it does not, unless it asks to:");
         builder.AppendLine();
-        builder.AppendLine($"  workingDirectoryRoot: {string.Join(" | ", WorkingDirectoryRoots.All)}   what the path below starts from");
-        builder.AppendLine("  workingDirectory: <path>            under that root; absent, the root itself");
+        AppendSpelt(builder, ("workingDirectoryRoot", "<root>"), ("workingDirectory", "<path>"));
         builder.AppendLine();
         builder.AppendLine($"  {WorkingDirectoryRoots.Tree,-8} the leg's worktree, or the repository. The default.");
         builder.AppendLine($"  {WorkingDirectoryRoots.Harness,-8} the tree's .harness-config directory.");
@@ -339,7 +343,7 @@ internal static class HelpCommand
         builder.AppendLine("step that builds or tests the repository says nothing and keeps the tree root, as");
         builder.AppendLine("every step written before this did.");
         builder.AppendLine();
-        builder.AppendLine($"  runOn: [{string.Join(", ", PlatformNames.OperatingSystems)}]   the operating systems the step runs on");
+        AppendSpelt(builder, ("runOn", "[<system>, ...]"));
         builder.AppendLine();
         builder.AppendLine("A step without runOn runs on every leg. A leg of another operating system skips a");
         builder.AppendLine("step that names runOn, says so as it runs, and lists it as skippedSteps on its line");
@@ -349,9 +353,7 @@ internal static class HelpCommand
         builder.AppendLine("run in which some leg would run no step at all is refused before anything starts,");
         builder.AppendLine("naming the leg: it would pass having run nothing.");
         builder.AppendLine();
-        builder.AppendLine("  manual: true              the step runs only where a run names it");
-        builder.AppendLine("  needs: [<step>, ...]      steps declared before it that run first whenever it does");
-        builder.AppendLine("  inputs: <name>: ...       values this step alone reads, declared as the action's are");
+        AppendSpelt(builder, ("manual", "true"), ("needs", "[<step>, ...]"), ("inputs", "<name>: ..."));
         builder.AppendLine();
         builder.AppendLine("A run that names no step runs every step that is not manual, and says of each manual");
         builder.AppendLine("one that it did not run it - as it goes, and as unselectedSteps on each leg's line in");
@@ -377,7 +379,7 @@ internal static class HelpCommand
         builder.AppendLine("names runs - it would run only what they need, and pass - are refused before a host");
         builder.AppendLine("is measured, naming the steps there are.");
         builder.AppendLine();
-        builder.AppendLine("  successPattern: <regular expression>   what the step's last line must print");
+        AppendSpelt(builder, ("successPattern", "<regular expression>"));
         builder.AppendLine();
         builder.AppendLine("A step passes when each of its lines exits 0; one that declares successPattern must");
         builder.AppendLine("also have its last line print something the pattern matches, since a program that");
@@ -409,11 +411,12 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine($"An action's 'inputs' are resolved from 'run {CommandLineInputs.Option} <name>=<value>' first, the");
         builder.AppendLine("runner value directories second and each input's own 'default' last. A required");
-        builder.AppendLine("input with none of them is refused before the first step runs. The same values");
-        builder.AppendLine("reach the steps as INPUT_<NAME> in the environment, which is how a secret is handed");
-        builder.AppendLine("over: a value spliced into a command line reaches the process table, where anything");
-        builder.AppendLine("on the machine can read it. A step's own inputs are resolved the same way and reach");
-        builder.AppendLine("only its own run lines, by name; the environment carries the action's alone.");
+        builder.AppendLine("input with none of them is refused before the first step runs. Where the action has");
+        builder.AppendLine($"a {PredefinedActions.ReadInputs} step, the same values reach every step as INPUT_<NAME> in the");
+        builder.AppendLine("environment, which is how a secret is handed over: a value spliced into a command");
+        builder.AppendLine("line reaches the process table, where anything on the machine can read it. A step's");
+        builder.AppendLine("own inputs are resolved the same way and reach only its own run lines, by name; the");
+        builder.AppendLine("environment holds the action's alone.");
         builder.AppendLine();
         builder.AppendLine($"{CommandLineInputs.Option} takes one name=value each time it is given, for an input the action");
         builder.AppendLine("declares or a step the run runs declares for itself, and only for the runner the");
@@ -428,8 +431,7 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("A step may say what it makes, and what it makes may outlive the run:");
         builder.AppendLine();
-        builder.AppendLine("  outputs: [<path>, ...]   files the step writes, relative to its own directory");
-        builder.AppendLine("  persist: true            keep them when the action finishes");
+        AppendSpelt(builder, ("outputs", "[<path>, ...]"), ("persist", "true"));
         builder.AppendLine();
         builder.AppendLine("  {stepBuild}         this step's own directory, created before it runs");
         builder.AppendLine("  {actionBuild}       this leg's directory for this run, holding one per step");
@@ -495,18 +497,17 @@ internal static class HelpCommand
         builder.AppendLine("steps has four gaps between them, and a file changed in a gap is the same moving");
         builder.AppendLine("tree as one changed inside a step.");
         builder.AppendLine();
-        builder.AppendLine("  watchContention: true       sample the process table against the leg's build");
-        builder.AppendLine("                              directory, so another run building there is reported");
-        builder.AppendLine("                              rather than silently shared with. Needs a leg: an");
-        builder.AppendLine("                              action run without one is refused, because a sample of");
-        builder.AppendLine("                              no directory reports a clean one.");
-        builder.AppendLine("  requireInputsUnmoved: true  fingerprint the tracked files before, during and after,");
-        builder.AppendLine("                              so a tree edited while the step ran is reported rather");
-        builder.AppendLine("                              than producing a result describing no tree that existed.");
+        AppendSpelt(builder, ("watchContention", "true"), ("requireInputsUnmoved", "true"));
+        builder.AppendLine();
+        builder.AppendLine("The first samples the process table against the leg's build directory, so another");
+        builder.AppendLine("run building there is reported rather than silently shared with. It needs a leg: an");
+        builder.AppendLine("action run without one is refused, because a sample of no directory reports a clean");
+        builder.AppendLine("one. The second fingerprints the tracked files before, during and after, so the result");
+        builder.AppendLine("never describes a tree that did not exist.");
         builder.AppendLine();
         builder.AppendLine("expectedExceptions names failures a runner may produce, with the outcome to");
-        builder.AppendLine("report instead. Every entry carries earnedOn, earnedAt, mechanism and anchor, and");
-        builder.AppendLine("is refused without them: an excusal nobody can audit stops being a record of a");
+        builder.AppendLine("report instead. Every entry names the keys marked required below, and is refused");
+        builder.AppendLine("without them: an excusal nobody can audit stops being a record of a");
         builder.AppendLine("measured confound and becomes a way to make a regression invisible. An entry");
         builder.AppendLine("naming no message, or one matching anything, is refused for the same reason.");
         builder.AppendLine();
@@ -539,22 +540,51 @@ internal static class HelpCommand
     /// that holds them, all meanings in one column.
     /// </summary>
     private static void AppendKeys(StringBuilder builder, IReadOnlyList<KeyDescription> keys)
-        => AppendKeys(builder, keys, depth: 0, KeyColumn(keys, depth: 0) + 2);
+        => AppendColumns(builder, [.. Indented(keys, "  ").Select(line => (line.Label, line.Key.Meaning + (line.Key.Required ? "; required" : string.Empty)))]);
 
-    private static void AppendKeys(StringBuilder builder, IReadOnlyList<KeyDescription> keys, int depth, int column)
+    /// <summary>Each key written after <paramref name="indent"/>, followed by its own section's keys one step further in.</summary>
+    private static IEnumerable<(string Label, KeyDescription Key)> Indented(IReadOnlyList<KeyDescription> keys, string indent)
+        => keys.SelectMany(key => Indented(key.Keys, indent + "  ").Prepend((indent + key.Name, key)));
+
+    /// <summary>
+    /// Writes how each step key in <paramref name="spellings"/> is written, beside what it does as
+    /// 'Every key' says it: one meaning, in one place, however many times help shows the key.
+    /// </summary>
+    private static void AppendSpelt(StringBuilder builder, params (string Key, string Value)[] spellings)
+        => AppendColumns(
+            builder,
+            [.. spellings.Select(spelt => ($"  {spelt.Key}: {spelt.Value}", ActionFileKeys.Step.Single(key => key.Name == spelt.Key).Meaning))]);
+
+    /// <summary>Writes each label with its text beside it, every text starting in one column.</summary>
+    private static void AppendColumns(StringBuilder builder, IReadOnlyList<(string Label, string Text)> lines)
     {
-        foreach (var key in keys)
+        var column = lines.Max(line => line.Label.Length) + 2;
+
+        foreach (var (label, text) in lines)
         {
-            builder.AppendLine($"{(KeyIndent(depth) + key.Name).PadRight(column)}{key.Meaning}{(key.Required ? "; required" : string.Empty)}");
-            AppendKeys(builder, key.Keys, depth + 1, column);
+            builder.AppendLine(label.PadRight(column) + text);
         }
     }
 
-    /// <summary>How wide the widest key in <paramref name="keys"/> is, indented, a nested section's included.</summary>
-    private static int KeyColumn(IReadOnlyList<KeyDescription> keys, int depth)
-        => keys.Count == 0 ? 0 : keys.Max(key => Math.Max(KeyIndent(depth).Length + key.Name.Length, KeyColumn(key.Keys, depth + 1)));
+    /// <summary>Writes <paramref name="text"/> as lines no wider than the rest of help, broken between words.</summary>
+    private static void AppendWrapped(StringBuilder builder, string text)
+    {
+        const int Width = 88;
+        var line = new StringBuilder();
 
-    private static string KeyIndent(int depth) => new(' ', 2 + (2 * depth));
+        foreach (var word in text.Split(' '))
+        {
+            if (line.Length > 0 && line.Length + 1 + word.Length > Width)
+            {
+                builder.AppendLine(line.ToString());
+                line.Clear();
+            }
+
+            line.Append(line.Length > 0 ? " " : string.Empty).Append(word);
+        }
+
+        builder.AppendLine(line.ToString());
+    }
 
     private static string RenderVerdicts()
     {
@@ -1375,7 +1405,8 @@ internal static class HelpCommand
         builder.AppendLine("           config, sanitizer, project)");
         builder.AppendLine("  test     host env, developer environment, then the test invocation's env");
         builder.AppendLine("  run      host env, developer environment, then the runner's values and secrets,");
-        builder.AppendLine("           its env, its action's inputs as INPUT_<NAME>, the phase's or step's");
+        builder.AppendLine($"           its env, the action's inputs as INPUT_<NAME> where a {PredefinedActions.ReadInputs}");
+        builder.AppendLine("           step read them, the phase's or step's");
         builder.AppendLine();
         builder.AppendLine("Names compare ignoring case, as on Windows. A PATH set in a host's env is where");
         builder.AppendLine("that host finds every one of those programs, which no survey can see: none of");
@@ -1467,11 +1498,11 @@ internal static class HelpCommand
         builder.AppendLine("args, or a preset's index, picks by position among the tests the others leave, so a");
         builder.AppendLine("filter, an exclusion or a label moves a fixed window onto other tests.");
         builder.AppendLine();
-        builder.AppendLine("The file is checked when it is read: unknown keys and references to undeclared");
-        builder.AppendLine("names are rejected, with every problem listed at once. Comments and trailing");
-        builder.AppendLine("commas are accepted, since the file is meant to be edited. A section whose");
-        builder.AppendLine("command is not implemented yet is still checked, but has no effect until that");
-        builder.AppendLine("command arrives.");
+        builder.AppendLine("The file is checked when it is read: unknown keys, a key written twice, and");
+        builder.AppendLine("references to undeclared names are rejected, with every problem listed at once.");
+        builder.AppendLine("Comments and trailing commas are accepted, since the file is meant to be edited.");
+        builder.AppendLine("A section whose command is not implemented yet is still checked, but has no effect");
+        builder.AppendLine("until that command arrives.");
 
         return builder.ToString();
     }
