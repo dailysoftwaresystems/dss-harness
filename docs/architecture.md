@@ -998,8 +998,8 @@ sync (when the host needs it)  →  build on buildCores  →  test on testCores
   runner - as the lowest layer, so everything more specific still says otherwise. From
   lowest to highest: for a build, the host's `env` then the variant's (its toolchain's,
   build config's, sanitizer's and project's); for a test, the host's then the test invocation's; for
-  a runner, the host's, then the runner's values and secrets, its own `env`, and the
-  step's. Names compare ignoring case on every platform, as they do on Windows: a value reaches
+  a runner, the host's, then the runner's values and secrets, its own `env`, its action's
+  inputs as `INPUT_<NAME>`, and the phase's or step's. Names compare ignoring case on every platform, as they do on Windows: a value reaches
   every spelling of its name the machine already has, and the one written, so `Path` written for
   a Linux host sets its `PATH`, and `http_proxy` reaches both the curl that reads it and the
   tools that read `HTTP_PROXY`.
@@ -1656,6 +1656,19 @@ A runner declares either `phases` or an `action` naming a YAML file under
 eventually disagree, and nothing could say which one ran. Every field a phase carries —
 `workingDirectory`, `env`, `successPattern`, `stallSeconds`, `continueOnError` — is a key on a
 step, so nothing the verdict contract depends on is lost by declaring one instead of the other.
+
+The reverse does not hold. What a step adds — a predefined action, `runOn`, `outputs` and
+`persist`, `manual`, `needs`, inputs of its own — belongs to a step, and `config.json` refuses it
+on a phase, naming the key and pointing to an action file. `outputs` are checked, and kept with
+`persist`, in the action's own `build` and `artifacts`, which a runner of phases does not have:
+accepted on a phase, they were a check nobody made, and the phase passed without it. A phase does
+take `stepName`, the step it is reported under in `ranSteps`.
+
+**Every key is listed.** `help runners` lists each key a runner, a phase, an action file, an input
+and a step take, with what it does, read from what the files are read with: a runner's from the
+contract `config.json` is read with, each meaning beside the member that reads it, and an action
+file's from the one list its parser reads, which refuses a key missing from it before looking at
+it. A key cannot be taken without being listed.
 
 **One directory per action.** An action lives at `actions/<name>/<name>.yml`, and everything its
 steps run — a program, a fixture, a data table — lives in that same directory. A `run` line is a

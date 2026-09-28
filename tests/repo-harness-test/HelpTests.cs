@@ -7,6 +7,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Runners;
 
 namespace RepoHarness.Tests;
 
@@ -176,6 +177,70 @@ public sealed partial class HelpTests
             Assert.Contains(text, words, StringComparison.Ordinal);
         }
     }
+
+    /// <summary>
+    /// The runners topic lists every key a runner and an action file take, each under the key that
+    /// holds it and with what it does, read from what the files are read with: a key cannot be taken
+    /// without being listed here.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_ListsEveryKeyARunnerAndAnActionFileTake()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var lines = result.StandardOutput.ReplaceLineEndings("\n").Split('\n');
+
+        foreach (var (key, depth) in Listed(ConfigKeys.Of<RunnerConfig>(), 0).Concat(Listed(ActionFileKeys.File, 0)))
+        {
+            var pattern = $"^ {{{2 + (2 * depth)}}}{Regex.Escape(key.Name)} +{Regex.Escape(key.Meaning)}{(key.Required ? "; required" : string.Empty)}$";
+
+            Assert.True(lines.Any(line => Regex.IsMatch(line, pattern)), $"'{key.Name}' is not listed as: {pattern}");
+        }
+    }
+
+    /// <summary>
+    /// The runners topic says which stall bound a phase or step runs under, and where the order its
+    /// environment is built in is given.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysWhichStallBoundApplies()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+        var words = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        foreach (var text in new[]
+        {
+            "The stall bound a phase or step runs under is its own stallSeconds, else its runner's, else "
+                + "defaults.stallSeconds: the first of them set, where 0 means none, as does setting none.",
+            "'help config' gives the order its environment is built in.",
+        })
+        {
+            Assert.Contains(text, words, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The config topic names the repository's own stall bound, and every layer a runner's phase or
+    /// step is given in order, its action's inputs among them.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_NamesTheDefaultStallBound_AndEveryLayerOfARunnersEnvironment()
+    {
+        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+        var words = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        foreach (var text in new[]
+        {
+            "stallSeconds, the stall bound nothing more specific replaces ('help runners')",
+            "run host env, developer environment, then the runner's values and secrets, its env, its action's "
+                + "inputs as INPUT_<NAME>, the phase's or step's",
+        })
+        {
+            Assert.Contains(text, words, StringComparison.Ordinal);
+        }
+    }
+
+    private static IEnumerable<(KeyDescription Key, int Depth)> Listed(IReadOnlyList<KeyDescription> keys, int depth)
+        => keys.SelectMany(key => Listed(key.Keys, depth + 1).Prepend((key, depth)));
 
     [Fact]
     public async Task WorktreesTopic_QuotesTheLimitsFromTheCode()

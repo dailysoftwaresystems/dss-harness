@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace RepoHarness.Core.Configuration;
 
 /// <summary>
@@ -13,42 +15,53 @@ namespace RepoHarness.Core.Configuration;
 public sealed class ExpectedException
 {
     /// <summary>The exception's class name, matched exactly.</summary>
+    [Description("the exception's class name, matched exactly")]
     public required string ExceptionType { get; init; }
 
     /// <summary>
     /// Messages this entry recognises, each plain text or a regular expression. Any one matching
     /// is a match, because one confound reaches a reader through several wordings.
     /// </summary>
+    [Description("text or a regular expression its message or output shows")]
     public List<string> Messages { get; init; } = [];
 
     /// <summary>Whether a run producing this failure is reported as a success.</summary>
+    [Description("report a run that fails this way as passed")]
     public bool Success { get; init; }
 
     /// <summary>Whether the outcome carries a warning, so an excused failure is still visible.</summary>
+    [Description("keep a warning on that outcome; true unless set false")]
     public bool Warning { get; init; } = true;
 
     /// <summary>Result code to report. Never negative: a negative code is not one a process can return.</summary>
+    [Description("the result code to report")]
     public int ResultCode { get; init; }
 
     /// <summary>What to report instead of the unexplained failure. Never blank.</summary>
+    [Description("what to report in place of the failure")]
     public required string Message { get; init; }
 
     /// <summary>The day this entry was earned, as <c>yyyy-MM-dd</c>.</summary>
+    [Description("the day it was earned, as yyyy-MM-dd")]
     public required string EarnedOn { get; init; }
 
     /// <summary>Where it was earned: the leg, host or run the measurement was taken on.</summary>
+    [Description("the leg, host or run it was measured on")]
     public required string EarnedAt { get; init; }
 
     /// <summary>The mechanism measured, in one sentence. Not a restatement of the message.</summary>
+    [Description("the mechanism measured, in one sentence")]
     public required string Mechanism { get; init; }
 
     /// <summary>The anchor id holding the evidence, so the claim can be read back.</summary>
+    [Description("the anchor id holding the evidence")]
     public required string Anchor { get; init; }
 
     /// <summary>
     /// Checks that must confirm the confound before this entry excuses anything. Unconfirmed, the
     /// failure stays genuine: an unconditional excusal hides the regression it was written to explain.
     /// </summary>
+    [Description("checks that must confirm it before it excuses anything")]
     public List<RunCheck> RunChecks { get; init; } = [];
 }
 
@@ -63,9 +76,11 @@ public sealed class ExpectedException
 public sealed class RunCheck
 {
     /// <summary>The predefined runner to invoke.</summary>
+    [Description("the runner to run")]
     public required string PredefinedRunner { get; init; }
 
     /// <summary>What that runner's outcome must be for this check to pass.</summary>
+    [Description("what that runner's outcome must be")]
     public RunCheckExpectation Expects { get; init; } = new();
 
     /// <summary>
@@ -78,9 +93,11 @@ public sealed class RunCheck
     /// measured quiet charged genuine-looking failures to the tool under test, and a quiet run measured
     /// loaded excused them, on the same day. Zero means the check does not look at steps at all.
     /// </remarks>
+    [Description("fewest minStepSeconds steps in the failing window; 0, none")]
     public int MinStepsInFailureWindow { get; init; }
 
     /// <summary>Shortest step that counts toward <see cref="MinStepsInFailureWindow"/>, in seconds.</summary>
+    [Description("the shortest step counted, in seconds")]
     public double MinStepSeconds { get; init; }
 }
 
@@ -94,14 +111,18 @@ public sealed class RunCheckExpectation
     /// Whether the named runner must produce the same success, warning, result code and message as
     /// the entry this check gates.
     /// </summary>
+    [Description("the same success, warning, result code and message")]
     public bool? SameException { get; init; }
 
     /// <summary>Whether the named runner must succeed.</summary>
+    [Description("whether it must succeed")]
     public bool? Success { get; init; }
 
     /// <summary>Result code the named runner must report.</summary>
+    [Description("the result code it must report")]
     public int? ResultCode { get; init; }
 
     /// <summary>Text the named runner's message must contain.</summary>
+    [Description("text its message or its steps' output must contain")]
     public string? Message { get; init; }
 }

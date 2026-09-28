@@ -1,3 +1,6 @@
+using System.ComponentModel;
+using System.Text.Json.Serialization;
+
 namespace RepoHarness.Core.Configuration;
 
 /// <summary>
@@ -5,12 +8,18 @@ namespace RepoHarness.Core.Configuration;
 /// Runners exist so that procedures specific to one repository live in
 /// configuration rather than in the tool.
 /// </summary>
+/// <remarks>
+/// Each key's <see cref="DescriptionAttribute"/> is what <c>help runners</c> says of it, read through
+/// <see cref="ConfigKeys"/>, so a key cannot be read here without being listed there.
+/// </remarks>
 public sealed class RunnerConfig
 {
     /// <summary>What this runner is for, shown in help and in the ledger.</summary>
+    [Description("what the runner is for, shown in help and in the ledger")]
     public string? Description { get; init; }
 
     /// <summary>Legs this runner executes against. Empty means the default set.</summary>
+    [Description("the legs it runs when --legs names none")]
     public List<string> Legs { get; init; } = [];
 
     /// <summary>Phases executed in order; a failing phase ends that leg.</summary>
@@ -18,6 +27,7 @@ public sealed class RunnerConfig
     /// A runner declares <see cref="Phases"/> or <see cref="Action"/>, never both. Two descriptions
     /// of what a runner does would eventually disagree, and nothing could say which one ran.
     /// </remarks>
+    [Description("what it runs, in order, when it names no action")]
     public List<RunnerPhase> Phases { get; init; } = [];
 
     /// <summary>
@@ -25,6 +35,7 @@ public sealed class RunnerConfig
     /// place of <see cref="Phases"/>. Every field a phase carries is a key on a step, so nothing the
     /// verdict contract depends on is lost by declaring one instead of the other.
     /// </summary>
+    [Description("its action file, '<name>/<name>.yml', in place of phases")]
     public string? Action { get; init; }
 
     /// <summary>
@@ -36,6 +47,7 @@ public sealed class RunnerConfig
     /// modules with - can be a runner of its own, with legs of its own, that a gate or CI names like any
     /// other. Checked against the action when it is read, before any leg's run has begun.
     /// </remarks>
+    [Description("the steps of its action it runs; absent, all but the manual")]
     public List<string>? Steps { get; init; }
 
     /// <summary>
@@ -48,6 +60,7 @@ public sealed class RunnerConfig
     /// action file from it — so the tree is put there whether or not anything is compiled. Use
     /// <c>--use-staged</c> to run against a copy already known to be current.
     /// </remarks>
+    [Description("build the leg before it runs")]
     public bool RequireBuild { get; init; }
 
     /// <summary>
@@ -55,12 +68,14 @@ public sealed class RunnerConfig
     /// <c>defaults.stallSeconds</c>. A stall bound rather than a time budget: output cadence stays
     /// stable even when total duration does not.
     /// </summary>
+    [Description("the stall bound of its phases and steps, in seconds")]
     public int? StallSeconds { get; init; }
 
     /// <summary>
     /// Failures this runner is allowed to produce, each with the outcome to report instead of an
     /// unexplained failure, and each gated on the checks that confirm it.
     /// </summary>
+    [Description("failures it may produce, and what to report instead")]
     public List<ExpectedException> ExpectedExceptions { get; init; } = [];
 
     /// <summary>
@@ -68,9 +83,11 @@ public sealed class RunnerConfig
     /// run and scratch directories, whose contents must never carry across runs.
     /// Build directories are deliberately not listed: they stay incremental.
     /// </summary>
+    [Description("directories in the leg's tree deleted before every run")]
     public List<string> CleanDirectories { get; init; } = [];
 
     /// <summary>Environment applied to every phase.</summary>
+    [Description("variables every phase and step gets")]
     public Dictionary<string, string> Env { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
@@ -85,24 +102,31 @@ public sealed class RunnerConfig
 public sealed record RunnerPhase
 {
     /// <summary>Name, used in progress output and to name this phase's log file.</summary>
+    [Description("names its progress lines and its log")]
     public required string Name { get; init; }
 
     /// <summary>Command and arguments, one element per argument; never a shell string.</summary>
+    [Description("the program and its arguments, one each; no shell")]
     public required List<string> Command { get; init; }
 
     /// <summary>Working directory, relative to the leg's work directory.</summary>
+    [Description("where it runs, relative to the leg's tree; absent, the tree")]
     public string? WorkingDirectory { get; init; }
 
     /// <summary>Environment for this phase.</summary>
+    [Description("its own variables, over the runner's ('help config')")]
     public Dictionary<string, string> Env { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Pattern proving the phase ran, checked in addition to its exit code.</summary>
+    [Description("what a line of its output must match, besides exiting 0")]
     public string? SuccessPattern { get; init; }
 
     /// <summary>Seconds without output after which this phase is treated as hung.</summary>
+    [Description("its own stall bound in seconds, over the runner's")]
     public int? StallSeconds { get; init; }
 
     /// <summary>Whether a failure here ends the leg or is recorded and passed over.</summary>
+    [Description("a failure here is recorded, and the leg goes on")]
     public bool ContinueOnError { get; init; }
 
     /// <summary>
@@ -114,24 +138,36 @@ public sealed record RunnerPhase
     /// that is refused when the action runs rather than passed over: a guard that watched nothing
     /// would report a clean directory without having looked at one.
     /// </remarks>
+    [Description("report another run building in the leg's build directory")]
     public bool WatchContention { get; init; }
 
     /// <summary>
     /// Whether the tracked files are fingerprinted before, during and after this, so a tree edited
     /// while it ran is reported rather than producing a result that describes no tree that existed.
     /// </summary>
+    [Description("report a tree edited while it ran")]
     public bool RequireInputsUnmoved { get; init; }
 
     /// <summary>
     /// The step this phase belongs to, which names the directory its work goes in. Empty for a
     /// phase a runner declared directly, which owns no action directory.
     /// </summary>
+    [Description("the step it is reported under in ranSteps; absent, its name")]
     public string StepName { get; init; } = string.Empty;
 
     /// <summary>What this phase must have produced, relative to its step's own build directory.</summary>
+    /// <remarks>
+    /// Never read from <c>config.json</c>: outputs are checked in the step's directory under its
+    /// action's build, and kept in that action's artifacts, and a runner of phases owns neither.
+    /// Accepted there, it was a check nobody made: the phase passed without it. A step of an action
+    /// file takes it, and <see cref="MisplacedKeys"/> says so to a file that puts it on a phase.
+    /// </remarks>
+    [JsonIgnore]
     public IReadOnlyList<string> Outputs { get; init; } = [];
 
     /// <summary>Whether this step's outputs survive the run.</summary>
+    /// <remarks>Never read from <c>config.json</c>, for the reason <see cref="Outputs"/> is not.</remarks>
+    [JsonIgnore]
     public bool Persist { get; init; }
 }
 

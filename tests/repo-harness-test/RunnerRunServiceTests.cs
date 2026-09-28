@@ -1,5 +1,6 @@
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
@@ -1753,12 +1754,51 @@ public sealed class RunnerRunServiceTests
         Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
     }
 
+    /// <summary>
+    /// The stall bound a phase runs under is its own stallSeconds, else its runner's, else the
+    /// repository's default, and 0 as the first of them set means none - as 'help runners' says. Pinned
+    /// by where a phase that goes quiet is stopped. One that must be stopped lives thirty times the
+    /// bound, as the phase runner's own stall tests allow, and every bound not meant to apply is longer
+    /// still, so one applied by mistake lets it run out and pass; one that must not be stopped lives three
+    /// times a bound applied by mistake, and passes only if none was.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 60, 60, 1)]
+    [InlineData(null, 1, 60, 1)]
+    [InlineData(null, null, 1, 1)]
+    [InlineData(0, 1, 1, null)]
+    public async Task AStallBound_IsThePhasesOwn_ElseItsRunners_ElseTheDefault(int? phase, int? runner, int defaults, int? stoppedAt)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { StallSeconds = defaults } };
+        var runnerConfig = new RunnerConfig
+        {
+            Phases = [Phase("measure", "exit", ["0"]) with { StallSeconds = phase }],
+            StallSeconds = runner,
+        };
+
+        var result = await Service(factory, new QuietProcessRunner(TimeSpan.FromSeconds(stoppedAt is null ? 3 : 30))).RunAsync(
+            config,
+            Request(temp, runnerConfig),
+            TestContext.Current.CancellationToken);
+
+        if (stoppedAt is { } seconds)
+        {
+            Assert.Contains($"hung: no output for {seconds}s", result.Verdict.Detail, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        }
+    }
+
     private static LegIdentity Identity(string os)
         => new(Leg, os, "x86_64", "gcc", "release", "gcc-release", "local", RunId);
 
-    private static RunnerRunService Service(HarnessFactory factory)
+    private static RunnerRunService Service(HarnessFactory factory, IProcessRunner? phases = null)
         => new(
-            new PhaseRunner(factory.ProcessRunner, factory.FileSystem, factory.Output),
+            new PhaseRunner(phases ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
             new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform),
             new ActionToolPolicy(factory.Platform),
             new ActionValuesReader(factory.FileSystem, factory.Output),

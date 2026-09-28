@@ -1589,6 +1589,41 @@ public sealed class ConfigStoreTests
         Assert.DoesNotContain("no longer read", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A key only a step of an action file takes, written on a runner's phase, is refused naming the
+    /// runner, the phase and the key, pointing to an action file's step, where it is read, and saying
+    /// what a phase does take. Accepted, outputs was a check nobody made: the phase passed without it.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "name": "go", "command": ["tool"], "outputs": ["result.txt"] }""", "phase 'go' declares 'outputs', which")]
+    [InlineData("""{ "name": "go", "command": ["tool"], "Persist": true }""", "phase 'go' declares 'persist', which")]
+    [InlineData("""{ "name": "go", "command": ["tool"], "outputs": ["result.txt"], "persist": true }""", "phase 'go' declares 'outputs', 'persist', which")]
+    [InlineData("""{ "command": ["tool"], "runOn": ["linux"] }""", "phase #1 declares 'runOn', which")]
+    public void APhase_DeclaringAKeyOnlyAStepTakes_IsRefused_PointingToAnActionFile(string phase, string expected)
+    {
+        var exception = LoadInvalid($$"""
+            { "predefinedRunners": { "bench": { "phases": [ {{phase}} ] } } }
+            """);
+
+        Assert.Contains($"predefined runner 'bench' {expected} only a step of an action file takes", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Declare the work as a step of an action file", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"A phase takes '{string.Join("', '", KeyDescription.Names(ConfigKeys.Of<RunnerPhase>()))}'.",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>A phase takes stepName, the step it is reported under in ranSteps.</summary>
+    [Fact]
+    public void APhase_TakesTheStepItIsReportedUnder()
+    {
+        var config = LoadValid("""
+            { "predefinedRunners": { "bench": { "phases": [ { "name": "go", "command": ["tool"], "stepName": "measure" } ] } } }
+            """);
+
+        Assert.Equal("measure", Assert.Single(config.PredefinedRunners["bench"].Phases).StepName);
+    }
+
     private static ConfigException LoadInvalid(string json)
     {
         using var temp = new TempDirectory();

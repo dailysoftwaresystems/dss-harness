@@ -266,7 +266,8 @@ internal static class HelpCommand
         builder.AppendLine("It runs across the legs it declares, with the same isolation, locking, stall");
         builder.AppendLine("bounds, witnesses and reporting build and test get.");
         builder.AppendLine();
-        builder.AppendLine("A runner declares phases, or an action file, never both.");
+        builder.AppendLine("A runner declares phases, or an action file, never both. Every key either takes");
+        builder.AppendLine("is listed at the end.");
         builder.AppendLine();
         builder.AppendLine("Each action owns one directory, and its file carries that directory's name, so a");
         builder.AppendLine("runner's 'action' is '<name>/<name>.yml'. Directories above that one group actions");
@@ -514,9 +515,46 @@ internal static class HelpCommand
         builder.AppendLine("verdict line, never a once-per-run sample: a sample was measured charging");
         builder.AppendLine("genuine-looking failures to the tool on a loaded machine and excusing them on a");
         builder.AppendLine("quiet one, the same day.");
+        builder.AppendLine();
+        builder.AppendLine("Every key");
+        builder.AppendLine();
+        builder.AppendLine("These are all of them: any other is refused when the file is read. A runner under");
+        builder.AppendLine("predefinedRunners in config.json takes:");
+        builder.AppendLine();
+        AppendKeys(builder, ConfigKeys.Of<RunnerConfig>());
+        builder.AppendLine();
+        builder.AppendLine("An action file takes:");
+        builder.AppendLine();
+        AppendKeys(builder, ActionFileKeys.File);
+        builder.AppendLine();
+        builder.AppendLine("The stall bound a phase or step runs under is its own stallSeconds, else its");
+        builder.AppendLine("runner's, else defaults.stallSeconds: the first of them set, where 0 means none,");
+        builder.AppendLine("as does setting none. 'help config' gives the order its environment is built in.");
 
         return builder.ToString();
     }
+
+    /// <summary>
+    /// Lists <paramref name="keys"/> one to a line, each nested section's keys indented beneath the key
+    /// that holds them, all meanings in one column.
+    /// </summary>
+    private static void AppendKeys(StringBuilder builder, IReadOnlyList<KeyDescription> keys)
+        => AppendKeys(builder, keys, depth: 0, KeyColumn(keys, depth: 0) + 2);
+
+    private static void AppendKeys(StringBuilder builder, IReadOnlyList<KeyDescription> keys, int depth, int column)
+    {
+        foreach (var key in keys)
+        {
+            builder.AppendLine($"{(KeyIndent(depth) + key.Name).PadRight(column)}{key.Meaning}{(key.Required ? "; required" : string.Empty)}");
+            AppendKeys(builder, key.Keys, depth + 1, column);
+        }
+    }
+
+    /// <summary>How wide the widest key in <paramref name="keys"/> is, indented, a nested section's included.</summary>
+    private static int KeyColumn(IReadOnlyList<KeyDescription> keys, int depth)
+        => keys.Count == 0 ? 0 : keys.Max(key => Math.Max(KeyIndent(depth).Length + key.Name.Length, KeyColumn(key.Keys, depth + 1)));
+
+    private static string KeyIndent(int depth) => new(' ', 2 + (2 * depth));
 
     private static string RenderVerdicts()
     {
@@ -1275,7 +1313,8 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine($"  defaults       buildCores and testCores ({HarnessDefaults.DefaultCores} each), maxParallelLegs (per");
         builder.AppendLine("                 machine) and maxParallelLegsTotal (the whole fleet), default project,");
-        builder.AppendLine("                 stall bound");
+        builder.AppendLine("                 stallSeconds, the stall bound nothing more specific replaces");
+        builder.AppendLine("                 ('help runners')");
         builder.AppendLine("  toolchains     compilers, as environment and cache variables (msvc, gcc, clang)");
         builder.AppendLine("  sanitizers     instrumentation overlays composed onto a build");
         builder.AppendLine("  buildConfigs   named configurations (debug, release, o1, o2)");
@@ -1336,7 +1375,7 @@ internal static class HelpCommand
         builder.AppendLine("           config, sanitizer, project)");
         builder.AppendLine("  test     host env, developer environment, then the test invocation's env");
         builder.AppendLine("  run      host env, developer environment, then the runner's values and secrets,");
-        builder.AppendLine("           its env, the step's");
+        builder.AppendLine("           its env, its action's inputs as INPUT_<NAME>, the phase's or step's");
         builder.AppendLine();
         builder.AppendLine("Names compare ignoring case, as on Windows. A PATH set in a host's env is where");
         builder.AppendLine("that host finds every one of those programs, which no survey can see: none of");

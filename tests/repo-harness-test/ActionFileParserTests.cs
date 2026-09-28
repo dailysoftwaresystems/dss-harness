@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
@@ -1118,6 +1119,52 @@ public sealed class ActionFileParserTests
             """);
 
         Assert.Contains("key of step 'bench' inputs.size", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every key the list of an action file's keys names is one the parser reads, at every level: a
+    /// key listed and read by nothing would be one a file sets and nothing obeys, which the parser
+    /// reports as its own defect. Each value here may well be refused; what matters is that the key
+    /// was read.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ListedKeys))]
+    public void EveryListedKey_IsRead(string where, string key)
+    {
+        const string Steps = "steps:\n  - name: build\n    run: cmake --build build\n";
+
+        var text = where switch
+        {
+            "file" => key == "steps" ? Steps : $"{key}: x\n{Steps}",
+            "input" => $"inputs:\n  size:\n    {key}: x\n{Steps}",
+            _ => "steps:\n  - " + string.Join(
+                "\n    ",
+                new[] { "name: build", "run: cmake --build build" }
+                    .Where(line => !line.StartsWith(key + ":", StringComparison.Ordinal))
+                    .Append($"{key}: x")) + "\n",
+        };
+
+        var failure = Record.Exception(() => Parse(text));
+
+        // Refused as unknown, a key is named with every key that is known.
+        Assert.IsNotType<UnreachableException>(failure);
+        Assert.DoesNotContain("Known: '", failure?.Message ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    /// <summary>Each key an action file, a declared input and a step take, by where it is written.</summary>
+    public static TheoryData<string, string> ListedKeys()
+    {
+        var data = new TheoryData<string, string>();
+
+        foreach (var (where, keys) in new[] { ("file", ActionFileKeys.File), ("input", ActionFileKeys.Input), ("step", ActionFileKeys.Step) })
+        {
+            foreach (var key in keys)
+            {
+                data.Add(where, key.Name);
+            }
+        }
+
+        return data;
     }
 
     private static ActionFileParser CreateParser()

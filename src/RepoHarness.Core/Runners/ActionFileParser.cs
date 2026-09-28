@@ -1,5 +1,7 @@
 using System.CommandLine.Parsing;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
@@ -67,34 +69,14 @@ public sealed class ActionFileParser(
     /// </summary>
     public static readonly TimeSpan PatternTimeout = TimeSpan.FromSeconds(1);
 
-    /// <summary>Top-level keys an action file may carry.</summary>
-    private static readonly string[] FileKeys = ["name", "description", "inputs", "steps"];
+    /// <summary>Top-level keys an action file may hold.</summary>
+    private static readonly IReadOnlyList<string> FileKeys = KeyDescription.Names(ActionFileKeys.File);
 
-    /// <summary>Keys one declared input may carry.</summary>
-    private static readonly string[] InputKeys = ["default", "required", "description"];
+    /// <summary>Keys one declared input may hold.</summary>
+    private static readonly IReadOnlyList<string> InputKeys = KeyDescription.Names(ActionFileKeys.Input);
 
-    /// <summary>Keys one step may carry.</summary>
-    private static readonly string[] StepKeys =
-    [
-        "name",
-        "uses",
-        "ref",
-        "run",
-        "workingDirectory",
-        "workingDirectoryRoot",
-        "runOn",
-        "env",
-        "successPattern",
-        "stallSeconds",
-        "continueOnError",
-        "watchContention",
-        "requireInputsUnmoved",
-        "outputs",
-        "persist",
-        "manual",
-        "needs",
-        "inputs",
-    ];
+    /// <summary>Keys one step may hold.</summary>
+    private static readonly IReadOnlyList<string> StepKeys = KeyDescription.Names(ActionFileKeys.Step);
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
@@ -155,6 +137,12 @@ public sealed class ActionFileParser(
                 continue;
             }
 
+            if (!FileKeys.Contains(key, StringComparer.Ordinal))
+            {
+                problems.Add(Unknown(keyNode, key, "top-level key", FileKeys));
+                continue;
+            }
+
             switch (key)
             {
                 case "name":
@@ -175,8 +163,7 @@ public sealed class ActionFileParser(
                     break;
 
                 default:
-                    problems.Add(Unknown(keyNode, key, "top-level key", FileKeys));
-                    break;
+                    throw Unread(key);
             }
         }
 
@@ -331,11 +318,19 @@ public sealed class ActionFileParser(
             {
                 var key = KeyOf(declarationKeyNode, problems);
 
+                if (key is null)
+                {
+                    continue;
+                }
+
+                if (!InputKeys.Contains(key, StringComparer.Ordinal))
+                {
+                    problems.Add(Unknown(declarationKeyNode, key, $"key of {Named(owner, inputName)}", InputKeys));
+                    continue;
+                }
+
                 switch (key)
                 {
-                    case null:
-                        break;
-
                     case "default":
                         fallback = RequireScalar(declarationValueNode, $"{owner}.{inputName}.default", problems);
                         break;
@@ -353,8 +348,7 @@ public sealed class ActionFileParser(
                         break;
 
                     default:
-                        problems.Add(Unknown(declarationKeyNode, key, $"key of {Named(owner, inputName)}", InputKeys));
-                        break;
+                        throw Unread(key);
                 }
             }
 
@@ -448,11 +442,19 @@ public sealed class ActionFileParser(
         {
             var key = KeyOf(keyNode, problems);
 
+            if (key is null)
+            {
+                continue;
+            }
+
+            if (!StepKeys.Contains(key, StringComparer.Ordinal))
+            {
+                problems.Add(Unknown(keyNode, key, "step key", StepKeys));
+                continue;
+            }
+
             switch (key)
             {
-                case null:
-                    break;
-
                 case "name":
                     name = RequireScalar(valueNode, "a step's name", problems);
                     break;
@@ -534,8 +536,7 @@ public sealed class ActionFileParser(
                     break;
 
                 default:
-                    problems.Add(Unknown(keyNode, key, "step key", StepKeys));
-                    break;
+                    throw Unread(key);
             }
         }
 
@@ -1157,6 +1158,13 @@ public sealed class ActionFileParser(
 
     private static string Unknown(YamlNode node, string key, string what, IReadOnlyList<string> known)
         => At(node, $"'{key}' is not a {what}. Known: '{string.Join("', '", known)}'.");
+
+    /// <summary>
+    /// A key <see cref="ActionFileKeys"/> lists that nothing here reads: a defect in this tool, never
+    /// a problem in the file, since a key read by nothing would be one the file sets and nothing obeys.
+    /// </summary>
+    private static UnreachableException Unread(string key)
+        => new($"'{key}' is a key action files take, and nothing reads it.");
 
     private static string At(YamlNode node, string message)
         => $"line {node.Start.Line}, column {node.Start.Column}: {message}";
