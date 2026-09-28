@@ -78,7 +78,7 @@ public static class PredefinedActions
 /// One value an action file declares it reads, so a file states its interface rather than failing
 /// part way through on a value nobody supplied.
 /// </summary>
-/// <param name="Name">The value's name, as the runner value directories spell it.</param>
+/// <param name="Name">The value's name, as a run line and the runner's <c>.env</c> directory spell it.</param>
 /// <param name="Default">What to use when nothing supplies it, or <see langword="null"/>.</param>
 /// <param name="Required">Whether the run is refused when nothing supplies it and there is no default.</param>
 /// <param name="Description">What the value is for, shown when it is missing.</param>

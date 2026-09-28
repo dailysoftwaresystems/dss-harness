@@ -1737,10 +1737,11 @@ sibling directory whose name merely starts the same way is outside, not inside.
   is not manual, a runner naming a step its action lacks, and a leg on whose system none of the
   steps a run names runs - it would run only what they need, and pass, with the step named run
   nowhere - are refused before any host is measured, naming the steps there are.
-- **An input's value comes from `run --input name=value` first**, the runner value directories
-  second and the input's own `default` last. A step may declare inputs of its own beside the
-  action's, resolved the same way and read by that step alone: another step naming one names
-  nothing, and a name the action already declares is refused, since one value could not mean both.
+- **An input's value comes from `run --input name=value` first**, the runner's `.env` directory
+  second and the input's own `default` last; `.secrets` never gives an input a value. A step may
+  declare inputs of its own beside the action's, resolved the same way and read by that step
+  alone: another step naming one names nothing, and a name the action already declares is
+  refused, since one value could not mean both.
   `--input` takes one pair each time it is given, for an input the action declares or a step the
   run runs declares, and only for the runner the command line names - a runner a run check
   starts reads its own values. Any other name, a runner of phases, an empty value and a name given
@@ -1768,6 +1769,17 @@ sibling directory whose name merely starts the same way is outside, not inside.
 - A line that fills in to nothing starts nothing, and is refused naming it; so is a step whose
   directory fills in to nothing, or whose names hold a character no path can. A runner's own
   steps are held to the same rule before the first one runs.
+- **Every name in braces a step writes is filled in, or refused, before the first step runs**,
+  arguments included: `{product}` on a leg without exactly one was refused only when its own step
+  began, after the ones before it had run. A name starts with a letter or `_` and holds only
+  letters, digits, `_`, `-` and `.`; one the pattern cannot see reaches the program as its own
+  text. So an input whose name a run line cannot write is refused where it is declared, and so
+  are an input and a `.env` value named like one of the tool's own names: a run line naming one
+  would get the tool's value while the environment held theirs.
+- A declared input the run gave no value is refused as that, saying how it can have one:
+  `--input` only for the runner the command line names, the `.env` directory the leg read, or a
+  default - and for a secret, the environment. The guard against a secret in an argument list
+  reads each argument as it will start, so a secret a name fills in is refused as one written out.
 - Values come from `.harness-config/runner/.env` and `.harness-config/runner/.secrets`, each a
   directory of files. A value that came from `.secrets` never reaches a log, an argument list or
   an error message.

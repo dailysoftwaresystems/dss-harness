@@ -167,7 +167,7 @@ public sealed class ActionArtifactsTests
             """));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
-        Assert.Contains("inside the step's own directory", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("inside the step's build directory, {stepBuild}", refusal.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Both new keys are read, and persistence is off unless the step asks for it.</summary>

@@ -393,10 +393,12 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("Names a run line may use");
         builder.AppendLine();
-        builder.AppendLine("A run line is written for this tool, so a name in braces it cannot fill in is");
-        builder.AppendLine("refused over the whole file before the first program starts. '${NAME}' belongs to");
-        builder.AppendLine("another expander and is never touched; a brace meant literally is doubled, so");
-        builder.AppendLine("awk '{{print}}' reaches awk as '{print}'.");
+        AppendWrapped(
+            builder,
+            "A run line is written for this tool, so a name in braces it cannot fill in is refused over the whole "
+            + "file before the first program starts, as is one this leg has nothing for. '${NAME}' belongs to "
+            + "another expander and is never touched; a brace meant literally is doubled, so awk '{{print}}' "
+            + $"reaches awk as '{{print}}'. A name {LegPathNames.NameRule}.");
         builder.AppendLine();
         builder.AppendLine("  {treeDir} {buildDir} {harnessDir}   the leg's tree, its variant-keyed build");
         builder.AppendLine("                                      directory, and the tree's .harness-config");
@@ -408,16 +410,26 @@ internal static class HelpCommand
         builder.AppendLine("                                      several, rather than guessing which");
         builder.AppendLine("  <input name>                        any input the action declares, or the step");
         builder.AppendLine("                                      declares for itself, by its name");
+        builder.AppendLine($"  <value name>                        any value the runner's {HarnessLayout.RunnerEnvDirectoryName} holds, by its name");
         builder.AppendLine();
-        builder.AppendLine($"An action's 'inputs' are resolved from 'run {CommandLineInputs.Option} <name>=<value>' first, the");
-        builder.AppendLine("runner value directories second and each input's own 'default' last. A required");
-        builder.AppendLine("input with none of them is refused before the first step runs; one that is not required");
-        builder.AppendLine("may have none, and a step naming it is then refused before anything runs, naming the");
-        builder.AppendLine($"input and how to give it a value. Where the action has a {PredefinedActions.ReadInputs} step,");
-        builder.AppendLine("the same values reach every step as INPUT_<NAME> in the environment, which is how a");
-        builder.AppendLine("secret is handed over: a value spliced into a command line reaches the process table,");
-        builder.AppendLine("where anything on the machine can read it. A step's own inputs are resolved the same");
-        builder.AppendLine("way and reach only its own run lines, by name; the environment holds the action's alone.");
+        AppendWrapped(
+            builder,
+            $"An input or a {HarnessLayout.RunnerEnvDirectoryName} value named like a name above is refused, since a run line "
+            + "naming it would get this tool's value while the environment held its own; so is an input whose "
+            + "name a run line cannot write.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"An action's 'inputs' are resolved from 'run {CommandLineInputs.Option} <name>=<value>' first, "
+            + $"{HarnessLayout.RunnerDirectoryRelative}/{HarnessLayout.RunnerEnvDirectoryName} second and each input's "
+            + $"own 'default' last; {HarnessLayout.RunnerSecretsDirectoryName} never gives one a value. A required input "
+            + "with none of them is refused before the first step runs, and so is a step naming one that is not "
+            + "required and has none, naming the input and how it can have one. Where the action has a "
+            + $"{PredefinedActions.ReadInputs} step, the same values reach every step as INPUT_<NAME> in the "
+            + "environment. The environment is how a secret is handed over, under its own name: a value spliced "
+            + "into a command line reaches the process table, where anything on the machine can read it. A step's "
+            + "own inputs are resolved the same way and reach only its own run lines, by name; the environment "
+            + "holds the action's alone.");
         builder.AppendLine();
         builder.AppendLine($"{CommandLineInputs.Option} takes one name=value each time it is given, for an input the action");
         builder.AppendLine("declares or a step the run runs declares for itself, and only for the runner the");

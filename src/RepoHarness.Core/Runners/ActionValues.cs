@@ -1,4 +1,5 @@
 using RepoHarness.Core.Secrets;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
@@ -196,6 +197,16 @@ public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput ou
 
         Merge(envDirectory, values, origins, problems, cancellationToken);
         Merge(secretsDirectory, secrets, origins, problems, cancellationToken);
+
+        // A plain value is one a run line can name, so one named like a name this tool fills in is
+        // refused, as an input so named is: a run line naming it got this tool's value, or this one
+        // on a leg with none there, while the environment held this one.
+        foreach (var name in values.Keys.Where(name => LegPathNames.All.Contains(name, StringComparer.Ordinal)))
+        {
+            problems.Add($"'{origins[name]}' defines '{name}', a name this tool already fills in, so a run line "
+                + $"naming '{{{name}}}' would get this tool's value, or this one on a leg with none, while the "
+                + "environment held this one. Give it another name.");
+        }
 
         if (problems.Count > 0)
         {

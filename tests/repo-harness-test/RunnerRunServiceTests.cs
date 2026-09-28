@@ -1365,6 +1365,7 @@ public sealed class RunnerRunServiceTests
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Contains("'build' run line", refusal.Message, StringComparison.Ordinal);
         Assert.Contains("{size}", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("which nothing here can fill in", refusal.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1712,7 +1713,11 @@ public sealed class RunnerRunServiceTests
             () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
-        Assert.Contains("requires input(s) runner, and none was given with --input", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            $"requires input(s) runner, and none was given with --input, found in {request.Layout.RunnerEnvDirectory} "
+            + "or declared as a default",
+            refusal.Message,
+            StringComparison.Ordinal);
         Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
     }
 
@@ -1866,13 +1871,22 @@ public sealed class RunnerRunServiceTests
 
     /// <summary>
     /// A step naming an input the file declares, to which the run gave no value, is refused naming that
-    /// input as declared - the step's own, or the action's - and how to give it one, before anything
-    /// runs. Refused as a name nothing fills in, it read as undeclared: the names offered left it out.
+    /// input as declared - the step's own, or the action's - and how it can have one, before the first
+    /// step runs, rather than as a name nothing fills in: RefuseInputsWithNoValue says why. A program
+    /// written as one is refused so too, not as a program nobody declared.
     /// </summary>
     [Theory]
-    [InlineData("run line", "'stage' run line names '{only}', the step's own input, which has no value")]
-    [InlineData("workingDirectory", "'stage' workingDirectory names '{area}', an input of the action, which has no value")]
-    public async Task AStepNamingADeclaredInputWithNoValue_IsRefused_SayingHowToGiveItOne(string where, string expected)
+    [InlineData(".", "dotnet {only}", "run line", "only", "the step's own input")]
+    [InlineData(".", "dotnet {area}", "run line", "area", "an input of the action")]
+    [InlineData("{only}", "dotnet --version", "workingDirectory", "only", "the step's own input")]
+    [InlineData("{area}", "dotnet --version", "workingDirectory", "area", "an input of the action")]
+    [InlineData(".", "{only} --version", "run line", "only", "the step's own input")]
+    public async Task AStepNamingADeclaredInputWithNoValue_IsRefused_SayingHowItCanHaveOne(
+        string workingDirectory,
+        string runLine,
+        string setting,
+        string name,
+        string owner)
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
@@ -1883,35 +1897,293 @@ public sealed class RunnerRunServiceTests
               area:
                 description: where the rows are staged
             steps:
+              - name: first
+                run: |
+                  dotnet --version
               - name: stage
-                manual: true
-                successPattern: '^staged$'
                 inputs:
                   only:
                     description: the one table to stage
-                {{(where == "workingDirectory" ? "workingDirectory: '{area}'" : "workingDirectory: .")}}
+                workingDirectory: '{{workingDirectory}}'
                 run: |
-                  "{{Child}}" "{{Exec}}" "{{Assembly}}" {{(where == "run line" ? "'{only}'" : "staged")}}
+                  {{runLine}}
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
 
-        var runner = new RunnerConfig
-        {
-            Action = "corpus/corpus.yml",
-            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "echo-args" },
-        };
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { NamedOnCommandLine = true };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            $"'stage' {setting} names '{{{name}}}', {owner}, which has no value: give it one with --input {name}=<value> "
+            + $"or in {request.Layout.RunnerEnvDirectory}, or declare a default for it.",
+            refusal.Message);
+
+        // Over the whole file, so the step before it never ran either.
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A runner a run check starts is given no --input, so its refusal of an input with no value offers
+    /// only what reaches it: following an offer of --input, the named runner's command line refuses the
+    /// name, or hands the value to the wrong runner.
+    /// </summary>
+    [Fact]
+    public async Task AnInputWithNoValue_OnARunnerARunCheckStarts_IsNotOfferedTheCommandLine()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                run: |
+                  dotnet {area}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "'stage' run line names '{area}', an input of the action, which has no value: give it one in "
+            + $"{request.Layout.RunnerEnvDirectory}, or declare a default for it. A run check started this runner, "
+            + "and --input reaches only the runner the command line names.",
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// An input named like one of the runner's secrets has no value from it, since a secret never fills a
+    /// run line. The refusal says so, and offers neither the command line, which would put the secret in
+    /// the process table, nor the plain values, which refuse a name the secrets hold.
+    /// </summary>
+    [Fact]
+    public async Task AnInputWithNoValue_NamedLikeASecret_IsToldASecretNeverFillsARunLine()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        WriteSecret(temp);
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              HARNESS_TOKEN:
+                description: the credential
+            steps:
+              - name: stage
+                run: |
+                  dotnet {HARNESS_TOKEN}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
             config,
-            Request(temp, runner) with { ManualSteps = ["stage"] },
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { NamedOnCommandLine = true },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            "'stage' run line names '{HARNESS_TOKEN}', an input of the action, which has no value: 'HARNESS_TOKEN' is "
+            + "one of the runner's secrets, and a secret never fills a run line, where the process table shows it to "
+            + "anything on the machine. Its step reads it from its environment, as HARNESS_TOKEN.",
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// A value the runner's .env holds under another spelling is not the input's, since a name is matched
+    /// exactly: the refusal says which spelling it found, rather than asking for a value already there.
+    /// </summary>
+    [Fact]
+    public async Task AnInputWithNoValue_SpeltOtherwiseInTheRunnersEnv_IsToldTheSpellingFound()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), "AREA=rows\n");
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                run: |
+                  dotnet {area}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { NamedOnCommandLine = true };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.EndsWith(
+            $"or in {request.Layout.RunnerEnvDirectory}, or declare a default for it. That directory holds 'AREA', "
+            + "which is not 'area' as written.",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only a step this leg runs is refused for naming an input with no value: a manual step the run did
+    /// not name and a step for another system never run here, so a run leaving them out owes them
+    /// nothing, and an input no step it runs names may have none.
+    /// </summary>
+    [Theory]
+    [InlineData("manual: true")]
+    [InlineData("runOn: [windows]")]
+    public async Task AStepThisLegDoesNotRun_NamingAnInputWithNoValue_IsNotRefused(string leftOut)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: build
+                run: |
+                  dotnet --version
+              - name: bench
+                {{leftOut}}
+                successPattern: '^done'
+                inputs:
+                  size:
+                    description: how many rows
+                run: |
+                  dotnet --info {size} {area}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { Identity = Identity("linux") },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["build"], result.Entry.RanSteps);
+    }
+
+    /// <summary>
+    /// A misspelt name is refused as one nothing fills in, and the refusal lists the declared inputs with
+    /// no value this run apart from the names it can fill: left out, the input the name meant read as
+    /// one nobody declared.
+    /// </summary>
+    [Fact]
+    public async Task AMisspeltName_IsRefused_SayingWhichDeclaredInputsHaveNoValue()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                inputs:
+                  only:
+                    description: the one table to stage
+                run: |
+                  dotnet {onlyy}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
             TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
-        Assert.Contains(expected, refusal.Message, StringComparison.Ordinal);
-        Assert.Contains("give it one with --input", refusal.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("nothing here can fill in", refusal.Message, StringComparison.Ordinal);
+        Assert.StartsWith("'stage' run line names '{onlyy}', which nothing here can fill in.", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("; {area}, {only} are declared as well, with no value this run.", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A name this leg has nothing for, in an argument of a later step - {product} on a leg with no
+    /// product - is refused before the first step runs: found only when its own step began, the steps
+    /// before it had already run.
+    /// </summary>
+    [Fact]
+    public async Task ANameThisLegHasNothingFor_InALaterStepsArgument_IsRefusedBeforeAnythingRuns()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("harmless", "echo-args", ["one"]),
+                Phase("late", "echo-args", ["--into", "{product}"]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal("'late' run line names '{product}', and this leg has no build product.", refusal.Message);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A secret a name fills in is refused as one written out, before the first step runs: the argument
+    /// list the log header and the process table hold is the filled-in one, and the guard read it as
+    /// written, where it held only the name.
+    /// </summary>
+    [Fact]
+    public async Task ASecretANameFillsIn_IsRefusedAsOneWrittenOut()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        WriteSecret(temp);
+        temp.WriteFile(Path.Combine(".harness-config", "runner", ".env", "ci.env"), $"DB_URL=https://reader:{Secret}@db\n");
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("harmless", "echo-args", ["one"]),
+                Phase("leak", "echo-args", ["{DB_URL}"]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("Step 'leak' of runner 'corpus' puts a secret in its argument list", refusal.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+        Assert.DoesNotContain(Secret, refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardError.ToString(), StringComparison.Ordinal);
     }
 
     private static LegIdentity Identity(string os)

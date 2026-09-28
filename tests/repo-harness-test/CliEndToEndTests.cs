@@ -552,6 +552,48 @@ public sealed partial class CliEndToEndTests
         Assert.Equal(begun, Directory.GetDirectories(runs).Length);
     }
 
+    /// <summary>
+    /// Through 'run', the runner the command line names is offered --input for an input with no value
+    /// that its step names: the command line reaches that runner, and only that one.
+    /// </summary>
+    [Fact]
+    public async Task ARunNamingAnInputWithNoValue_IsOfferedTheCommandLine()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Tools = { new ToolConfig { Name = "dotnet" } },
+            Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug" } },
+            PredefinedRunners = { ["probe"] = new RunnerConfig { Action = "probe/probe.yml" } },
+        });
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
+            """
+            name: probe
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                run: |
+                  dotnet {area}
+            """);
+
+        var result = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "-C", temp.Path], token);
+
+        Assert.NotEqual(HarnessExit.Success, result.ExitCode);
+        Assert.Contains(
+            "'stage' run line names '{area}', an input of the action, which has no value: give it one with --input area=<value>",
+            result.StandardOutput + result.StandardError,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ARunWhereEveryLegReported_IsStillReportedAsPassed()
     {

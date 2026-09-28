@@ -231,16 +231,38 @@ public static partial class LegPathNames
     /// Matched rather than searched for by name, so that a name nobody declared is found and refused
     /// instead of surviving into a command line.
     /// <para>
-    /// The name may carry <c>_</c>, <c>-</c> and <c>.</c>, because the things that get named here do:
-    /// a runner value directory holds <c>CORPUS_PATH</c>, and a name the pattern cannot see is a name
-    /// neither half of this can refuse — it reaches the program as its own text and the step exits
-    /// zero having done nothing, which is the failure this whole rule exists to end.
+    /// The name is <see cref="NamePattern"/>.
     /// </para>
     /// </remarks>
     [GeneratedRegex(
-        @"(?<doubled>\{\{|\}\})|(?<other>\$\{[^}]*\})|\{(?<name>[A-Za-z][A-Za-z0-9_.-]*)\}",
+        @"(?<doubled>\{\{|\}\})|(?<other>\$\{[^}]*\})|\{(?<name>" + NamePattern + @")\}",
         RegexOptions.CultureInvariant)]
     private static partial Regex Placeholder { get; }
+
+    /// <summary>
+    /// What a name in braces is made of: a letter or <c>_</c>, then letters, digits, <c>_</c>, <c>-</c>
+    /// and <c>.</c>.
+    /// </summary>
+    /// <remarks>
+    /// As wide as the things that get named here, because a name the pattern cannot see is a name
+    /// neither half of this can refuse: it reaches the program as its own text and the step exits
+    /// zero having done nothing, which is the failure this whole rule exists to end. A runner value
+    /// directory holds <c>CORPUS_PATH</c> and <c>_JAVA_OPTIONS</c>; an input the pattern cannot see
+    /// is refused where it is declared, by <see cref="IsName"/>.
+    /// </remarks>
+    private const string NamePattern = "[A-Za-z_][A-Za-z0-9_.-]*";
+
+    /// <summary>
+    /// What a name in braces is made of, as a refusal of one that is not says it.
+    /// </summary>
+    public const string NameRule = "starts with a letter or '_' and holds only letters, digits, '_', '-' and '.'";
+
+    [GeneratedRegex(@"\A" + NamePattern + @"\z", RegexOptions.CultureInvariant)]
+    private static partial Regex WholeName { get; }
+
+    /// <summary>Whether a configured string can name <paramref name="name"/> in braces, as <c>{name}</c>.</summary>
+    /// <param name="name">The name something declares.</param>
+    public static bool IsName(string name) => WholeName.IsMatch(name);
 
     /// <summary>
     /// <paramref name="value"/> with every placeholder this vocabulary owns replaced by what it
@@ -349,21 +371,27 @@ public static partial class LegPathNames
     /// <param name="setting">What to call the setting in a refusal.</param>
     /// <param name="policy">What to do with a brace group this vocabulary does not own.</param>
     /// <param name="extra">Names this caller will supply beyond the built-in ones.</param>
+    /// <param name="unvalued">
+    /// Names this caller declares and has no value for this time. A refusal lists them apart from the
+    /// names it can fill in: left out, a name meant as one of them read as one nobody declared.
+    /// </param>
     /// <exception cref="HarnessException">A placeholder names nothing this caller can fill in.</exception>
     /// <remarks>
     /// Called when the configuration is read, where no leg has been placed and no build directory
-    /// exists yet. A typo found there names the line to fix; found when the leg runs it has already
-    /// cost the build that preceded it.
+    /// exists yet, and over an action's steps before a leg's first step runs, with the names that run
+    /// supplies as <paramref name="extra"/>. A typo found when the configuration is read names the
+    /// line to fix; found when the leg runs it has already cost the build that preceded it.
     /// </remarks>
     public static void RefuseUnknown(
         string? value,
         string setting,
         PlaceholderPolicy policy = PlaceholderPolicy.Refuse,
-        IReadOnlyCollection<string>? extra = null)
+        IReadOnlyCollection<string>? extra = null,
+        IReadOnlyCollection<string>? unvalued = null)
     {
         foreach (var name in NamesIn(value).Where(name => !Known(name) && (extra is null || !extra.Contains(name))))
         {
-            Refuse(setting, name, policy, extra);
+            Refuse(setting, name, policy, extra, unvalued);
         }
     }
 
@@ -376,7 +404,7 @@ public static partial class LegPathNames
         => string.IsNullOrEmpty(value)
             ? []
             : Placeholder.Matches(value)
-                .Where(match => !match.Groups["doubled"].Success && !match.Groups["other"].Success)
+                .Where(match => match.Groups["name"].Success)
                 .Select(match => match.Groups["name"].Value);
 
     /// <summary>
@@ -429,7 +457,8 @@ public static partial class LegPathNames
         string setting,
         string name,
         PlaceholderPolicy policy,
-        IEnumerable<string>? extra)
+        IEnumerable<string>? extra,
+        IReadOnlyCollection<string>? unvalued = null)
     {
         // Refused under either policy, because no other vocabulary spells a name that differs from
         // one of these only in case. This is the typo a reader cannot see: '{builddir}' reaches a
@@ -449,7 +478,7 @@ public static partial class LegPathNames
             return;
         }
 
-        throw Unknown(setting, name, extra);
+        throw Unknown(setting, name, extra, unvalued);
     }
 
     /// <summary>Whether <paramref name="name"/> is one this vocabulary owns.</summary>
@@ -477,14 +506,23 @@ public static partial class LegPathNames
         _ => null,
     };
 
-    private static HarnessException Unknown(string setting, string name, IEnumerable<string>? extra)
+    private static HarnessException Unknown(
+        string setting,
+        string name,
+        IEnumerable<string>? extra,
+        IReadOnlyCollection<string>? unvalued)
     {
         var known = All.Concat(extra ?? []).Select(spelled => $"{{{spelled}}}");
+
+        var declared = unvalued is { Count: > 0 }
+            ? $"; {string.Join(", ", unvalued.Select(spelled => $"{{{spelled}}}"))} "
+                + $"{(unvalued.Count == 1 ? "is" : "are")} declared as well, with no value this run"
+            : string.Empty;
 
         return new HarnessException(
             HarnessExit.ConfigInvalid,
             $"{setting} names '{{{name}}}', which nothing here can fill in. "
-            + $"The names are {string.Join(", ", known)}. "
+            + $"The names are {string.Join(", ", known)}{declared}. "
             + "Write '{{' for a brace this tool should leave alone.");
     }
 }
