@@ -81,6 +81,17 @@ public sealed class RemoteSyncTransport(
                 $"{Host} did not answer whether it removed '{root}'.");
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Asked from the home directory, as a removal is: the directory the copies are kept in may be gone, and a
+    /// host with none there answers that it keeps none.
+    /// </remarks>
+    public async Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default)
+        => (await AskAsync<SyncCopiesAnswer>(repositoryPath, [SyncServe.ListCopies, repositoryPath], cancellationToken, HomeDirectory).ConfigureAwait(false))?.Copies
+            ?? throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{Host} did not answer which copies it keeps beside '{repositoryPath}'.");
+
+    /// <inheritdoc/>
     public async Task<SyncManifest> ReadManifestAsync(
         string root,
         IReadOnlyList<string> withheld,
@@ -377,13 +388,13 @@ public sealed class RemoteSyncTransport(
         return answer;
     }
 
+    /// <summary>The home directory, as the agent is asked to start in it.</summary>
+    private const string HomeDirectory = "~";
+
     /// <summary>
     /// The directory the agent starts in. A first sync creates the copy, so the agent cannot start
     /// inside it; its parent is where the operation is served from instead.
     /// </summary>
-    /// <summary>The home directory, as the agent is asked to start in it.</summary>
-    private const string HomeDirectory = "~";
-
     private static string ParentOf(string root)
     {
         var trimmed = root.Replace('\\', '/').TrimEnd('/');

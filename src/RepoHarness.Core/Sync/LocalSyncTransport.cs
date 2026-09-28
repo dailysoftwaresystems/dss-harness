@@ -257,6 +257,68 @@ public sealed class LocalSyncTransport(
         return Task.FromResult(removal);
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Told by name, as a sync names them: what follows the main copy's own directory name and
+    /// <see cref="HostCopies.WorktreeSuffix"/>. Each is weighed by its files, a link counted as itself and none
+    /// walked, and a marker that cannot be read is said as that copy's, rather than ending the listing.
+    /// </remarks>
+    public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+
+        var main = Path.TrimEndingDirectorySeparator(Home(repositoryPath));
+        var parent = Path.GetDirectoryName(main);
+        var prefix = Path.GetFileName(main) + HostCopies.WorktreeSuffix;
+        var found = new List<HostCopyFound>();
+
+        if (string.IsNullOrEmpty(parent) || !_fileSystem.DirectoryExists(parent))
+        {
+            return Task.FromResult<IReadOnlyList<HostCopyFound>>(found);
+        }
+
+        foreach (var directory in _fileSystem.EnumerateDirectories(parent))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
+
+            if (leaf.Length > prefix.Length && leaf.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                var name = leaf[prefix.Length..];
+                found.Add(Found(name, HostCopies.ForWorktree(repositoryPath, name), directory));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<HostCopyFound>>([.. found.OrderBy(copy => copy.Name, StringComparer.Ordinal)]);
+    }
+
+    /// <summary>What the copy at <paramref name="directory"/> is, as a listing says it.</summary>
+    /// <param name="name">The name it is kept under.</param>
+    /// <param name="path">Where it is, as the configuration spells it.</param>
+    /// <param name="directory">Where it is, as this machine spells it.</param>
+    private HostCopyFound Found(string name, string path, string directory)
+    {
+        var bytes = _fileSystem.DirectorySize(directory);
+
+        try
+        {
+            return Marker(directory) switch
+            {
+                null => new HostCopyFound(name, path, CopyOrigin.Unmarked, bytes),
+                var marker => new HostCopyFound(name, path, marker.Adopted ? CopyOrigin.TakenOver : CopyOrigin.Made, bytes)
+                {
+                    CreatedBy = marker.CreatedBy,
+                    CreatedUtc = marker.CreatedUtc,
+                },
+            };
+        }
+        catch (HarnessException ex)
+        {
+            return new HostCopyFound(name, path, CopyOrigin.Unreadable, bytes) { Problem = ex.Message };
+        }
+    }
+
     /// <summary>Whether <paramref name="directory"/> holds no file and no link, at any depth.</summary>
     /// <param name="directory">The directory.</param>
     private bool HoldsNothing(string directory)

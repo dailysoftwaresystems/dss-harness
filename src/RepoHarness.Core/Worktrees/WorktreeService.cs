@@ -67,6 +67,9 @@ public interface IWorktreeService
 /// </param>
 public sealed record WorktreeListing(string Name, string? BaseCommit)
 {
+    /// <summary>Where it is, links resolved, as git records it and as a sync records the tree a host's copy is of.</summary>
+    public string Path { get; init; } = string.Empty;
+
     /// <summary>The line <c>list-worktree</c> prints for this worktree.</summary>
     public override string ToString()
         => BaseCommit is null ? Name : $"{Name}  base {BaseCommit[..Math.Min(12, BaseCommit.Length)]}";
@@ -552,7 +555,7 @@ public sealed class WorktreeService(
             .Where(worktree => !worktree.IsMain)
             .ToList();
 
-        var names = new List<string>();
+        var names = new List<(string Name, string Path)>();
 
         foreach (var directory in _fileSystem.EnumerateDirectories(worktreesDirectory))
         {
@@ -567,7 +570,7 @@ public sealed class WorktreeService(
 
             if (registered.Any(worktree => PathsEqual(worktree.Path, resolved)))
             {
-                names.Add(name);
+                names.Add((name, resolved));
             }
             else if (_fileSystem.FileExists(Path.Combine(directory, ".git")) || _fileSystem.DirectoryExists(Path.Combine(directory, ".git")))
             {
@@ -591,11 +594,14 @@ public sealed class WorktreeService(
 
         var listings = new List<WorktreeListing>();
 
-        foreach (var name in names.Order(StringComparer.Ordinal))
+        foreach (var (name, path) in names.OrderBy(worktree => worktree.Name, StringComparer.Ordinal))
         {
             listings.Add(new WorktreeListing(
                 name,
-                await ReadBaseCommitAsync(context.Layout, name, cancellationToken).ConfigureAwait(false)));
+                await ReadBaseCommitAsync(context.Layout, name, cancellationToken).ConfigureAwait(false))
+            {
+                Path = path,
+            });
         }
 
         return listings;

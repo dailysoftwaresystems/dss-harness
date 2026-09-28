@@ -579,6 +579,30 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The worktrees topic says list-worktree shows the copies hosts keep and those a gone worktree left, what --hosts
+    /// asks the hosts, and what a host that cannot be asked does to the command.
+    /// </summary>
+    [Fact]
+    public async Task WorktreesTopic_SaysListWorktreeFindsTheCopiesAGoneWorktreeLeft()
+    {
+        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        foreach (var said in new[]
+        {
+            "list-worktree lists each worktree with the copies this machine records hosts keeping of it, and the copies "
+                + "left by worktrees that are gone - removed by hand, or by another tool - each with the delete-worktree "
+                + "that deals with them.",
+            "With --hosts it also asks each declared host which worktree copies it keeps beside its repositoryPath, and "
+                + "how large each is, and sets them against that record",
+            $"{HarnessExit.HostUnavailable} where a host cannot be reached. --json prints the listing as one JSON document.",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The config topic says a hold between commands runs the host's keepAwake, ends when a command's own starts,
     /// and needs keepAwake.
     /// </summary>

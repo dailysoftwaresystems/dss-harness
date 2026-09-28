@@ -159,6 +159,7 @@ internal static class HarnessServices
         services.AddSingleton<ISyncTransportFactory, SyncTransportFactory>();
         services.AddSingleton<ISyncService, SyncService>();
         services.AddSingleton<IHostCopyRemover, HostCopyRemover>();
+        services.AddSingleton<IHostCopyLister, HostCopyLister>();
 
         // Predefined runners and their action files.
         services.AddSingleton<IActionFileParser, ActionFileParser>();

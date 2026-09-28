@@ -4,7 +4,7 @@ One cross-platform CLI for a repository's worktrees, builds, tests and cross-hos
 work — configured entirely from a file in the repository, not compiled into the tool.
 
 ```bash
-dotnet tool install --global DssHarness
+dotnet tool install --global dssharness
 dssharness --help
 ```
 
@@ -53,7 +53,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `verify-git` | Check git is installed and this is a repository |
 | `create-worktree <name>` | Create a worktree (`--random` generates the name) |
 | `delete-worktree <name> [--force]` | Remove a worktree and everything under it, and its copies on hosts; refuses one holding work that would be lost, a locked one, or one whose evidence directories hold measurements, without `--force` |
-| `list-worktree` | List existing worktrees with the commit each was made from |
+| `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
 | `set-anchor <id>` | Change an anchor; changing its status moves it between registries |

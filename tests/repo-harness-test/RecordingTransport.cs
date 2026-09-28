@@ -183,4 +183,7 @@ internal sealed class RecordingTransport(
 
     public Task<CopyRemoval> RemoveCopyAsync(string root, CancellationToken cancellationToken = default)
         => inner.RemoveCopyAsync(root, cancellationToken);
+
+    public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default)
+        => inner.ListCopiesAsync(repositoryPath, cancellationToken);
 }

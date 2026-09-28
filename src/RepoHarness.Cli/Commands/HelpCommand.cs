@@ -664,7 +664,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {ToolPackage.Command} test                    Build and test every selected leg");
         builder.AppendLine($"  {ToolPackage.Command} run <runner>            Run a predefined runner across its legs");
         builder.AppendLine($"  {ToolPackage.Command} clean                   Remove selected legs' build directories where they run");
-        builder.AppendLine($"  {ToolPackage.Command} list-worktree           Show existing worktrees");
+        builder.AppendLine($"  {ToolPackage.Command} list-worktree           Show worktrees and the copies hosts keep of them");
         builder.AppendLine($"  {ToolPackage.Command} read-anchors            List the deferred work recorded as anchors");
         builder.AppendLine();
         builder.AppendLine("Every command accepts");
@@ -1165,6 +1165,18 @@ internal static class HelpCommand
         builder.AppendLine($"{HarnessExit.CommandFailed} where removing it failed there; or {HarnessExit.Cancelled} when interrupted. Running delete-worktree");
         builder.AppendLine("again removes what it left. For a name whose worktree is gone, it removes what any");
         builder.AppendLine("worktree of that name left, and never the copies of one that still exists.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{ListWorktreeCommand.Name} lists each worktree with the copies this machine records hosts keeping of it, and the "
+            + "copies left by worktrees that are gone - removed by hand, or by another tool - each with the "
+            + $"{DeleteWorktreeCommand.Name} that deals with them. With --hosts it also asks each declared host which worktree "
+            + "copies it keeps beside its repositoryPath, and how large each is, and sets them against that record: "
+            + "a copy of a worktree here, one left by a worktree that is gone, one the record does not hold - made "
+            + "from another checkout or machine, or forgotten here, which deleting a worktree never reaches - and one "
+            + "recorded that is not there. A host that cannot be asked is named, and the command fails with the "
+            + $"highest code among them, {HarnessExit.HostUnavailable} where a host cannot be reached. --json prints the "
+            + "listing as one JSON document.");
 
         return builder.ToString();
     }

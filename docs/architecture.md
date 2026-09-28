@@ -1312,7 +1312,13 @@ while a gate ran turned a green suite red, with four test processes live at once
   refused, 15 where its host is unreachable, 20 where the removal failed there - so whoever deleted
   it learns something of it is left; deleting the worktree again finishes the job, and for a name
   whose worktree is gone removes what any worktree of that name left, never the copies of one that
-  still exists. On a host a leg was sent to,
+  still exists. `list-worktree` shows that record: each worktree's copies, and the copies left by
+  worktrees that are gone - removed by a tool that ran plain `git worktree remove`, say - each with
+  the `delete-worktree` that deals with them. With `--hosts` it asks each declared host which
+  `<repositoryPath>.worktree-<name>` copies it keeps and how large each is, from its home directory
+  as a removal is, and sets them against the record, so a copy the record does not hold - made from
+  another checkout or machine, or forgotten here - is found, as is a recorded one that is gone. It
+  changes nothing on a host or in the record, so it takes no lock. On a host a leg was sent to,
   the copy it was sent to is its tree, whatever worktree the leg names. The working tree being tested
   is transferred into its copy file by file, compared by content hash, so what the host holds is this
   tree including its uncommitted changes. Nothing is pushed and it is never
