@@ -278,6 +278,18 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The runners topic says what a step's outputs are relative to by the name a run line uses for
+    /// it, {stepBuild}: 'its own directory' read as the action's, which workingDirectoryRoot names.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysAStepsOutputsAreRelativeToItsBuildDirectory()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+
+        Assert.Contains("outputs: [<path>, ...] files it writes, relative to its build directory, {stepBuild}", Words(result.StandardOutput), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task WorktreesTopic_QuotesTheLimitsFromTheCode()
     {
@@ -314,8 +326,8 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The runners topic says where an input's value comes from, in which order, what --input
-    /// refuses, and that a secret does not go there.
+    /// The runners topic says where an input's value comes from, in which order, what becomes of one
+    /// with none, what --input refuses, and that a secret does not go there.
     /// </summary>
     [Fact]
     public async Task RunnersTopic_SaysWhereAnInputsValueComesFrom()
@@ -333,6 +345,12 @@ public sealed partial class HelpTests
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
         }
+
+        Assert.Contains(
+            "one that is not required may have none, and a step naming it is then refused before anything runs, "
+                + "naming the input and how to give it a value.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
     }
 
     /// <summary>

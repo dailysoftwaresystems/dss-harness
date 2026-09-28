@@ -632,6 +632,11 @@ public sealed class RunnerRunService(
             var supplied = Supplied(values, inputs);
             var scratch = ScratchFor(request, file.DirectoryName);
 
+            // Before the policy reads a line as the program it starts, and before a name is refused as
+            // one nothing supplies: an input the file declares, which this run gave no value, is
+            // named as that, with how to give it one.
+            RefuseInputsWithNoValue(file, step => Supplied(values, WithStepInputs(inputs, stepInputs, step.Name)).Keys);
+
             // Before anything starts, and over the whole file rather than step by step: a file whose
             // last step names an undeclared program is refused with its first step not yet run. Each
             // line is judged by what it will start and where from, worked out exactly as the run
@@ -761,6 +766,40 @@ public sealed class RunnerRunService(
         return runs.Count == file.Steps.Count
             ? (file, [])
             : (file with { Steps = runs }, [.. file.Steps.Where(step => !step.RunsOn(os))]);
+    }
+
+    /// <summary>
+    /// Refuses a step that names, in a run line or its working directory, an input the file declares -
+    /// the action's, or the step's own - to which this run gave no value, saying how to give it one.
+    /// </summary>
+    /// <remarks>
+    /// Refused as a name nothing fills in, it read as a name nobody declared: the names that list offers
+    /// leave out the very input the step declares, because it has no value to fill in.
+    /// </remarks>
+    /// <param name="file">The steps this run runs.</param>
+    /// <param name="fillable">The names each step's lines can have filled in.</param>
+    private static void RefuseInputsWithNoValue(ActionFile file, Func<ActionStep, IEnumerable<string>> fillable)
+    {
+        foreach (var step in file.Steps)
+        {
+            var filled = fillable(step).ToHashSet(StringComparer.Ordinal);
+            var own = step.Inputs.Select(input => input.Name).ToHashSet(StringComparer.Ordinal);
+            var empty = file.Inputs.Select(input => input.Name).Concat(own).Where(name => !filled.Contains(name)).ToHashSet(StringComparer.Ordinal);
+
+            var named = step.Commands.SelectMany(command => command.Arguments).Select(text => (Text: (string?)text, Where: "run line"))
+                .Append((Text: step.WorkingDirectory, Where: "workingDirectory"))
+                .SelectMany(written => LegPathNames.NamesIn(written.Text).Where(empty.Contains).Select(name => (Name: name, written.Where)))
+                .FirstOrDefault();
+
+            if (named.Name is { } name)
+            {
+                throw new HarnessException(
+                    HarnessExit.ConfigInvalid,
+                    $"'{step.Name}' {named.Where} names '{{{name}}}', {(own.Contains(name) ? "the step's own input" : "an input of the action")}, "
+                    + $"which has no value: give it one with {CommandLineInputs.Option} {name}=<value> or in the runner value "
+                    + "directories, or declare a default for it.");
+            }
+        }
     }
 
     /// <summary>

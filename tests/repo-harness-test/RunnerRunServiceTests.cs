@@ -1864,6 +1864,56 @@ public sealed class RunnerRunServiceTests
         Assert.Equal(["input", "own"], result.Entry.RanSteps);
     }
 
+    /// <summary>
+    /// A step naming an input the file declares, to which the run gave no value, is refused naming that
+    /// input as declared - the step's own, or the action's - and how to give it one, before anything
+    /// runs. Refused as a name nothing fills in, it read as undeclared: the names offered left it out.
+    /// </summary>
+    [Theory]
+    [InlineData("run line", "'stage' run line names '{only}', the step's own input, which has no value")]
+    [InlineData("workingDirectory", "'stage' workingDirectory names '{area}', an input of the action, which has no value")]
+    public async Task AStepNamingADeclaredInputWithNoValue_IsRefused_SayingHowToGiveItOne(string where, string expected)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $$"""
+            name: corpus
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                manual: true
+                successPattern: '^staged$'
+                inputs:
+                  only:
+                    description: the one table to stage
+                {{(where == "workingDirectory" ? "workingDirectory: '{area}'" : "workingDirectory: .")}}
+                run: |
+                  "{{Child}}" "{{Exec}}" "{{Assembly}}" {{(where == "run line" ? "'{only}'" : "staged")}}
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+
+        var runner = new RunnerConfig
+        {
+            Action = "corpus/corpus.yml",
+            Env = new Dictionary<string, string> { [TestHost.ChildModeVariable] = "echo-args" },
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, runner) with { ManualSteps = ["stage"] },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains(expected, refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("give it one with --input", refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("nothing here can fill in", refusal.Message, StringComparison.Ordinal);
+    }
+
     private static LegIdentity Identity(string os)
         => new(Leg, os, "x86_64", "gcc", "release", "gcc-release", "local", RunId);
 

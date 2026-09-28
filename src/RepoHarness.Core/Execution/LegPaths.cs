@@ -361,28 +361,23 @@ public static partial class LegPathNames
         PlaceholderPolicy policy = PlaceholderPolicy.Refuse,
         IReadOnlyCollection<string>? extra = null)
     {
-        if (string.IsNullOrEmpty(value))
+        foreach (var name in NamesIn(value).Where(name => !Known(name) && (extra is null || !extra.Contains(name))))
         {
-            return;
-        }
-
-        foreach (Match match in Placeholder.Matches(value))
-        {
-            if (match.Groups["doubled"].Success || match.Groups["other"].Success)
-            {
-                continue;
-            }
-
-            var name = match.Groups["name"].Value;
-
-            if (Known(name) || (extra is not null && extra.Contains(name)))
-            {
-                continue;
-            }
-
             Refuse(setting, name, policy, extra);
         }
     }
+
+    /// <summary>
+    /// Every name <paramref name="value"/> asks to have filled in, in the order it names them: a
+    /// doubled brace, and a group another expander owns, name none.
+    /// </summary>
+    /// <param name="value">The configured string.</param>
+    public static IEnumerable<string> NamesIn(string? value)
+        => string.IsNullOrEmpty(value)
+            ? []
+            : Placeholder.Matches(value)
+                .Where(match => !match.Groups["doubled"].Success && !match.Groups["other"].Success)
+                .Select(match => match.Groups["name"].Value);
 
     /// <summary>
     /// Throws where the name is one of this vocabulary's but this leg has nothing to put there, so
