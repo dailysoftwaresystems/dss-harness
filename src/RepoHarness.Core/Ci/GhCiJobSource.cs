@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 
@@ -38,14 +39,18 @@ public interface ICiJobSource
 /// a leg reported red is a stop to read rather than something to retry until it passes.
 /// </para>
 /// <para>
-/// The forge's tool finds which repository to answer for by running git, so git's own steering
-/// variables are cleared before it starts, exactly as <see cref="Git.GitClient"/> clears them.
-/// Measured: with another repository's <c>GIT_DIR</c> exported, the tool answered for THAT
+/// The forge's tool finds which repository to answer for by running git, so every variable git reads a
+/// repository from is cleared before it starts, the same <see cref="GitLocalVariables"/> the git client
+/// clears. Measured: with another repository's <c>GIT_DIR</c> exported, the tool answered for THAT
 /// repository even when the branch was given explicitly -- a fix that cleaned only the harness's own
 /// git calls would have left this second channel open.
 /// </para>
 /// </remarks>
-public sealed class GhCiJobSource(IProcessRunner processRunner) : ICiJobSource
+/// <param name="processRunner">Runs the forge's tool.</param>
+/// <param name="localVariables">
+/// The variables it starts without; asked of git through <paramref name="processRunner"/> where none is given.
+/// </param>
+public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariables? localVariables = null) : ICiJobSource
 {
     /// <summary>The forge's command line. The one dependency, and there is no fallback to a second.</summary>
     private const string GhExecutable = "gh";
@@ -57,9 +62,8 @@ public sealed class GhCiJobSource(IProcessRunner processRunner) : ICiJobSource
     /// </summary>
     private const string RepositoryOverrideVariable = "GH_REPO";
 
-    private static readonly string[] InheritedGitEnvironment = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"];
-
     private readonly IProcessRunner _processRunner = processRunner;
+    private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
 
     public async Task<IReadOnlyList<long>> ListRunsAsync(
         string repositoryRoot,
@@ -247,11 +251,7 @@ public sealed class GhCiJobSource(IProcessRunner processRunner) : ICiJobSource
         }
 
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-
-        foreach (var variable in InheritedGitEnvironment)
-        {
-            environment[variable] = null;
-        }
+        await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
 
         var result = await _processRunner.RunAsync(
             new ProcessRequest

@@ -40,7 +40,7 @@ public sealed class HarnessFactory
         FileSystem = new PhysicalFileSystem(FilePermissions);
         ProcessRunner = new ProcessRunner(Platform, FilePermissions);
         ProcessTable = ProcessTableFactory.Create(Platform, ProcessRunner);
-        GitClient = new GitClient(ProcessRunner, Output);
+        GitClient = new GitClient(ProcessRunner, Output, localVariables: LocalVariables);
         RepositoryLocator = new RepositoryLocator(GitClient);
         ConfigStore = new JsonConfigStore(FileSystem);
         GitIgnoreManager = new GitIgnoreManager(FileSystem);
@@ -103,6 +103,15 @@ public sealed class HarnessFactory
     public IProcessTable ProcessTable { get; }
 
     public IGitClient GitClient { get; }
+
+    /// <summary>
+    /// Which variables git reads a repository from, asked of git once for the whole test run, as a command
+    /// asks once: a factory is made per test, and asking per factory would start a git process for each.
+    /// </summary>
+    public GitLocalVariables LocalVariables => SharedLocalVariables;
+
+    private static readonly GitLocalVariables SharedLocalVariables = new(
+        new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()));
 
     public IRepositoryLocator RepositoryLocator { get; }
 

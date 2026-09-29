@@ -155,6 +155,29 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     }
 
     /// <summary>
+    /// git's record of a worktree at <paramref name="path"/>, or <see langword="null"/> when git records none there:
+    /// found in git's own list, which names each worktree by the path it resolved, so the path is resolved the same
+    /// way first.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose list is read.</param>
+    /// <param name="path">Where the worktree is, or was.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">git's list could not be read (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public async Task<GitWorktree?> FindRecordAsync(string mainCheckoutRoot, string path, CancellationToken cancellationToken)
+    {
+        var resolved = ResolveLinks(path);
+        var worktrees = await _gitClient.ListWorktreesAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+
+        return RecordAt(worktrees, resolved);
+    }
+
+    /// <summary>The worktree among <paramref name="worktrees"/> recorded at <paramref name="resolvedPath"/>, never the main one.</summary>
+    /// <param name="worktrees">git's list.</param>
+    /// <param name="resolvedPath">A path with its links resolved, as git lists one.</param>
+    public GitWorktree? RecordAt(IEnumerable<GitWorktree> worktrees, string resolvedPath)
+        => worktrees.FirstOrDefault(worktree => !worktree.IsMain && PathsEqual(worktree.Path, resolvedPath));
+
+    /// <summary>
     /// Everything that stops clearing git's record of a worktree whose directory is already gone:
     /// commits only its HEAD names, work in the submodule repositories its git directory still holds,
     /// and a lock. Removing the record deletes those repositories, and git checks none of them.
@@ -597,11 +620,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         }
     }
 
-    private bool PathsEqual(string left, string right)
-        => string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            _platform.PathComparison);
+    private bool PathsEqual(string left, string right) => PathContainment.AreSame(left, right, _platform.PathComparison);
 
     /// <summary>A submodule repository the worktree's deletion would delete.</summary>
     /// <param name="Shown">How the submodule is named in a refusal.</param>

@@ -1,4 +1,5 @@
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Worktrees;
 
@@ -506,6 +507,58 @@ public sealed class WorktreeServiceTests
 
         Assert.True(forced.Succeeded, forced.Outcome.Message);
         Assert.False(Directory.Exists(path));
+    }
+
+    /// <summary>
+    /// A directory whose .git file and git's record are both gone - what a removal that stopped part way leaves - is
+    /// refused naming --force for once its contents are looked at, and never git worktree repair, which has no record
+    /// left to rebuild from.
+    /// </summary>
+    [Fact]
+    public async Task DeleteAsync_RefusesADirectoryWithNoGitAndNoRecord_NamingForce_NeverRepair()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.CommitAllAsync(temp.Path, "harness", cancellationToken);
+        var path = HarnessFactory.WorktreePath(temp.Path, "husk");
+        await harness.WorktreeService.CreateAsync(temp.Path, "husk", useRandomName: false, cancellationToken);
+        var gitDirectory = (await harness.RunGitAsync(path, ["rev-parse", "--absolute-git-dir"], cancellationToken)).StandardOutput.Trim();
+        File.Delete(Path.Combine(path, ".git"));
+        harness.FileSystem.DeleteDirectory(gitDirectory);
+
+        var refused = await harness.WorktreeService.DeleteAsync(temp.Path, "husk", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Equal(
+            $"'{path}' is not a worktree, so what it holds cannot be checked: it holds no .git of its own, and git records no worktree there. "
+            + "That is what a removal that stopped part way leaves, and what a directory made there by hand looks like, and git worktree repair "
+            + $"has no record to rebuild it from. Look at what it holds, and once nothing in it is needed, run '{ToolPackage.Command} delete-worktree husk --force' to delete it.",
+            refused.Outcome.Message);
+        Assert.True(Directory.Exists(path));
+    }
+
+    /// <summary>A directory whose .git file names a record git no longer has is told apart from one with no .git at all.</summary>
+    [Fact]
+    public async Task DeleteAsync_RefusesADirectoryWhoseGitNamesNoRecord_NamingForce_NeverRepair()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.CommitAllAsync(temp.Path, "harness", cancellationToken);
+        var path = HarnessFactory.WorktreePath(temp.Path, "stale");
+        await harness.WorktreeService.CreateAsync(temp.Path, "stale", useRandomName: false, cancellationToken);
+        var gitDirectory = (await harness.RunGitAsync(path, ["rev-parse", "--absolute-git-dir"], cancellationToken)).StandardOutput.Trim();
+        harness.FileSystem.DeleteDirectory(gitDirectory);
+
+        var refused = await harness.WorktreeService.DeleteAsync(temp.Path, "stale", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.StartsWith(
+            $"'{path}' is not a worktree, so what it holds cannot be checked: its .git names no worktree git records. ",
+            refused.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("worktree repair'", refused.Outcome.Message, StringComparison.Ordinal);
     }
 
     [Fact]

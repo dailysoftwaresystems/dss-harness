@@ -352,12 +352,18 @@ mistaken for somewhere work is kept: the deletion checks below read branches, ta
 remote-tracking refs, the newest stash and other worktrees' HEADs, and this record is none of them.
 It is removed when the worktree is, so it can never answer for a later worktree of the same name.
 
-Every git command the harness runs first clears `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE`
-from the child's environment. Each of the three silently outranks `-C <directory>`, and a git hook
-runs with all three set, so a harness command invoked from a hook — or from a shell someone left in
-another checkout — would otherwise read and write a repository nobody named. A caller that
-deliberately wants a different index still gets one: the inherited value is cleared first and the
-requested one set after.
+Every git command the harness runs, and the forge's command line, which runs git itself, starts
+without any variable git reads a repository from: every name `git rev-parse --local-env-vars`
+prints, asked of git once per command rather than written down here. They include `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and the two that hold
+`-c` settings, `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`. Each silently outranks
+`-C <directory>`, and a git hook runs with some of them set, so a harness command invoked from a
+hook — or from a shell someone left in another checkout — would otherwise read and write a
+repository nobody named: measured with `GIT_COMMON_DIR` naming another repository, deleting a
+worktree was refused and left it registered. Settings passed that way do not reach the harness's
+git either. A caller that deliberately wants a different index still gets one: the inherited value
+is cleared first and the requested one set after. An answer that does not name `GIT_DIR` is not
+taken, and the command fails without running git.
 
 ### What deleting one refuses
 
@@ -445,13 +451,27 @@ history of a repository nested inside one included.
   closed - older versions do, and filesystems other than NTFS - a handle sharing deletion still
   keeps its directory from going, and is not found. Linux and macOS need no look, since neither an
   open file nor a current directory stops a deletion there.
-- When git fails part way all the same, as on a file something opened after that look, its record
-  and some files may already be gone: the command deletes nothing more, exits 20 and says what is
-  left, and `delete-worktree <name> --force` finishes it, which is safe because every check passed
-  before removal began.
+- Checked, on Windows, every directory junction in the worktree is then removed, as the link it
+  is, never what it leads to. git for Windows leaves every junction when it removes a worktree,
+  and every directory above one, while reporting the worktree removed - its `.git` file and its
+  record already deleted - measured with git 2.55.0.windows.5; symbolic links it removes itself,
+  so they are left to it. A junction that cannot be removed stops the deletion before git runs,
+  exit 20, naming it, what Windows said and the junctions removed before it. A volume mounted on a
+  directory has a junction's tag and is never unmounted: it stops the deletion the same way.
+  A successful deletion names the junctions it removed.
+- When git fails part way all the same, as on a file something opened after that look, or when
+  it reports the worktree removed while its directory is still there, its record and some files
+  may already be gone: the command deletes nothing more, exits 20 and says what is left, and
+  `delete-worktree <name> --force` finishes it, which is safe because every check passed before
+  removal began. Run again without `--force`, the command names that same way for a directory
+  that holds no `.git` of its own and that git records no worktree at, which is what such a
+  removal leaves; `git worktree repair` is named only while git still records a worktree there,
+  since it rebuilds a lost `.git` file from that record and has nothing to rebuild from without
+  it.
 - Forced, it is `git worktree remove --force --force`, which overrides a lock. A directory git
-  leaves behind is deleted, and git is then asked again to clear its record, which it can once
-  the directory is gone. A file that cannot be deleted is reported with exit 20 and what to do
+  leaves behind is deleted, each junction in it first as a link - the runtime's own recursive
+  delete removes a junction and then reports it refused - and git is then asked again to clear
+  its record, which it can once the directory is gone. A file that cannot be deleted is reported with exit 20 and what to do
   next.
 - The record is confirmed gone by its administrative directory, found before removal, or, where
   git could not name that directory, by git's list. A record whose directory is already gone,

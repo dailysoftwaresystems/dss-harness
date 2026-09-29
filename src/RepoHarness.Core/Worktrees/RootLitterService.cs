@@ -83,7 +83,7 @@ public sealed class RootLitterService(
         var root = context.Layout.RepositoryRoot;
 
         // --ignored=matching, so a file an ignore rule covers is still reported. Asked through the
-        // git client, which clears GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE first: with any of
+        // git client, which first clears every variable git reads a repository from: with one of
         // them inherited this answers for a tree nobody named, which was measured convicting a
         // tracked file and, the other way round, calling a dirty root clean.
         // -z, so paths arrive NUL separated and exactly as they are on disk. Without it git applies

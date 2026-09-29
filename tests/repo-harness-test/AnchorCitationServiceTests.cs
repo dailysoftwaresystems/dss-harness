@@ -320,7 +320,7 @@ public sealed class AnchorCitationServiceTests
         var service = new AnchorCitationService(
             harness.ContextLoader,
             harness.AnchorRegistryService,
-            new GitClient(processes, harness.Output),
+            new GitClient(processes, harness.Output, localVariables: harness.LocalVariables),
             harness.FileSystem);
 
         var report = await service.CheckAsync(temp.Path, AnchorCitationSubject.CurrentCommit, cancellationToken);

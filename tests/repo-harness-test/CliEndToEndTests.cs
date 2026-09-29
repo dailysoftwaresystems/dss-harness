@@ -349,6 +349,45 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// A caller whose environment names another repository through any variable git reads one from:
+    /// with GIT_COMMON_DIR pointing elsewhere, the deletion was refused and the worktree left registered,
+    /// because only three of git's fifteen such variables were cleared. Malformed -c settings travel the
+    /// same way and are cleared with them.
+    /// </summary>
+    [Fact]
+    public async Task DeleteWorktree_IsNotSteered_ByTheCallersRepositoryVariables()
+    {
+        using var temp = new TempDirectory();
+        using var other = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await PrepareRepositoryAsync(temp);
+        await new HarnessFactory().InitializeGitRepositoryAsync(other.Path, cancellationToken);
+        var otherGit = Path.Combine(other.Path, ".git");
+
+        var created = await CliRunner.RunAsync(["create-worktree", "wt", "-C", temp.Path], cancellationToken);
+        Assert.Equal(HarnessExit.Success, created.ExitCode);
+
+        var deleted = await CliRunner.RunAsync(
+            ["delete-worktree", "wt", "-C", temp.Path],
+            cancellationToken,
+            environment: new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                ["GIT_DIR"] = otherGit,
+                ["GIT_WORK_TREE"] = other.Path,
+                ["GIT_INDEX_FILE"] = Path.Combine(otherGit, "index"),
+                ["GIT_COMMON_DIR"] = otherGit,
+                ["GIT_OBJECT_DIRECTORY"] = Path.Combine(otherGit, "objects"),
+                ["GIT_CONFIG_PARAMETERS"] = "'not a setting",
+                ["GIT_CONFIG_COUNT"] = "not a number",
+            });
+
+        Assert.Equal(HarnessExit.Success, deleted.ExitCode);
+        Assert.False(Directory.Exists(HarnessFactory.WorktreePath(temp.Path, "wt")));
+        var listed = await new HarnessFactory().GitClient.ListWorktreesAsync(temp.Path, cancellationToken);
+        Assert.Single(listed);
+    }
+
+    /// <summary>
     /// The defect that rode the layout change: a configuration one verb called valid and another
     /// refused. Both verbs read the same file through the same reader, so a spelling wrong enough
     /// for one is wrong for the other, and the run that finds out is never the first to say so.

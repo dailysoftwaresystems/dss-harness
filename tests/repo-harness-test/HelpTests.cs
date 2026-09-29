@@ -603,6 +603,30 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The worktrees topic says that on Windows each junction is removed as a link before git runs, what stops that,
+    /// and that git worktree repair is named only while git still records the worktree.
+    /// </summary>
+    [Fact]
+    public async Task WorktreesTopic_SaysJunctionsAreRemovedAsLinks_AndWhenRepairIsNamed()
+    {
+        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        foreach (var said in new[]
+        {
+            "On Windows, each directory junction in the worktree is removed first, as a link, never what it leads to: git leaves "
+                + "every junction, and the directories above it, while reporting the worktree removed.",
+            $"One that cannot be removed stops the deletion before git runs ({HarnessExit.CommandFailed}), and a volume mounted "
+                + "on a directory is never unmounted.",
+            "A directory under the root with no .git and no record of git's - what a removal that stopped part way leaves - is "
+                + $"refused ({HarnessExit.Refused}), naming --force; git worktree repair is named only while git still records a worktree there.",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The worktrees topic says that on Windows a worktree something holds part of is refused whole, with nothing
     /// removed, what holds one and what does not, what to do where it is the command's own current directory, and
     /// that --force does not look.

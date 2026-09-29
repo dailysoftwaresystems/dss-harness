@@ -14,21 +14,17 @@ namespace RepoHarness.Core.Git;
 /// Says whether a file has an execute bit, for the mode an index entry records; this platform's own
 /// where none is given.
 /// </param>
-public sealed class GitClient(IProcessRunner processRunner, IHarnessOutput output, IFilePermissions? filePermissions = null) : IGitClient
+/// <param name="localVariables">
+/// The variables every git command starts without; asked of git through <paramref name="processRunner"/>
+/// where none is given.
+/// </param>
+public sealed class GitClient(
+    IProcessRunner processRunner,
+    IHarnessOutput output,
+    IFilePermissions? filePermissions = null,
+    GitLocalVariables? localVariables = null) : IGitClient
 {
     private const string GitExecutable = "git";
-
-    /// <summary>
-    /// Variables a caller's environment may carry that would redirect git away from the directory
-    /// it was pointed at. Cleared before every git command this client runs.
-    /// </summary>
-    /// <remarks>
-    /// Each one silently outranks <c>-C &lt;directory&gt;</c>. A git hook runs with all three set, so
-    /// a harness command invoked from a hook — or from a shell someone left in another checkout —
-    /// reads and writes a repository nobody named.
-    /// </remarks>
-    private static readonly string[] InheritedGitEnvironment =
-        ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"];
 
     /// <summary>
     /// What the index a copy's staging builds is called, beside the index git reads. Nothing else writes
@@ -39,6 +35,7 @@ public sealed class GitClient(IProcessRunner processRunner, IHarnessOutput outpu
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IHarnessOutput _output = output;
     private readonly IFilePermissions _filePermissions = filePermissions ?? FilePermissionsFactory.Create();
+    private readonly GitLocalVariables _localVariables = localVariables ?? new GitLocalVariables(processRunner);
 
     public bool IsInstalled() => _processRunner.FindExecutable(GitExecutable) is not null;
 
@@ -1123,15 +1120,12 @@ public sealed class GitClient(IProcessRunner processRunner, IHarnessOutput outpu
             ["GIT_TERMINAL_PROMPT"] = "0",
         };
 
-        // Cleared before every question, not only before every change. These three override the
-        // repository, the working tree and the index that `-C <directory>` would otherwise select,
-        // so a hook, or a command started from another checkout, steers every answer git gives:
-        // the harness would then read one tree's status and act on another's. A caller that
-        // genuinely wants a different index passes it below, after the inherited one is gone.
-        foreach (var inherited in InheritedGitEnvironment)
-        {
-            environment[inherited] = null;
-        }
+        // Cleared before every question, not only before every change. Each outranks the repository,
+        // the working tree or the index that `-C <directory>` would otherwise select, so a hook, or a
+        // command started from another checkout, steers every answer git gives: the harness would then
+        // read one tree's status and act on another's. A caller that genuinely wants a different index
+        // passes it below, after the inherited one is gone.
+        await _localVariables.ClearAsync(environment, cancellationToken).ConfigureAwait(false);
 
         if (untranslated)
         {

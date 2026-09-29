@@ -38,7 +38,7 @@ public interface IFileSystem
 
     /// <summary>
     /// Deletes a directory and everything under it, including files git has marked
-    /// read only. No-op when absent.
+    /// read only, and never anything a link or junction under it leads to. No-op when absent.
     /// </summary>
     void DeleteDirectory(string path);
 
@@ -102,6 +102,23 @@ public interface IFileSystem
     /// </summary>
     /// <param name="path">The directory to look under.</param>
     IEnumerable<string> EnumerateDirectoryLinks(string path);
+
+    /// <summary>
+    /// Removes every directory junction anywhere under <paramref name="path"/>, each as the link it is, never what
+    /// it leads to: git for Windows leaves a junction when it removes the tree around it, and the runtime's
+    /// recursive delete reports one as refused. Symbolic links are left, as are directories reached only through a
+    /// link. Nothing on Linux and macOS, which have no junctions, and nothing where the directory is not there or is
+    /// itself a link.
+    /// </summary>
+    /// <param name="path">The directory to look under.</param>
+    /// <returns>The junctions removed, in the order they were.</returns>
+    /// <exception cref="JunctionRemovalException">
+    /// One could not be removed, or is a volume mounted on a directory, which is never unmounted; it names those
+    /// removed before it.
+    /// </exception>
+    /// <exception cref="IOException">A directory under it could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read a directory under it.</exception>
+    IReadOnlyList<string> RemoveJunctions(string path);
 
     /// <summary>
     /// What another program holds under <paramref name="path"/>, itself included, so that Windows would not delete

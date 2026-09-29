@@ -1156,6 +1156,15 @@ internal static class HelpCommand
         builder.AppendLine("the worktree where it is this command's own. A watcher on a directory, as an editor");
         builder.AppendLine("keeps, holds nothing; --force looks for nothing, and goes as far as it can.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "On Windows, each directory junction in the worktree is removed first, as a link, never what it leads to: "
+            + "git leaves every junction, and the directories above it, while reporting the worktree removed. One that "
+            + $"cannot be removed stops the deletion before git runs ({HarnessExit.CommandFailed}), and a volume mounted "
+            + "on a directory is never unmounted. A directory under the root with no .git and no record of git's - "
+            + $"what a removal that stopped part way leaves - is refused ({HarnessExit.Refused}), naming --force; git "
+            + "worktree repair is named only while git still records a worktree there.");
+        builder.AppendLine();
         builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform;");
         builder.AppendLine("running delete-worktree again with --force finishes it.");
         builder.AppendLine();

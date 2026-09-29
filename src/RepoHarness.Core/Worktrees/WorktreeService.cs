@@ -444,10 +444,7 @@ public sealed class WorktreeService(
             switch (identity.Membership)
             {
                 case WorktreeMembership.NotAWorktree:
-                    return Refused(
-                        $"'{Printable(path)}' is not a worktree git can find, so what it holds cannot be checked. "
-                        + $"Run 'git -C {Printable(layout.MainCheckoutRoot)} worktree repair', which helps only while git still has the worktree's record: "
-                        + "when it was moved or its .git file was lost; or pass --force to delete it anyway.");
+                    return await RefuseNotAWorktreeAsync(layout, worktreeName, path, inspector, cancellationToken).ConfigureAwait(false);
 
                 case WorktreeMembership.OfAnotherRepository:
                     return Refused(
@@ -659,6 +656,49 @@ public sealed class WorktreeService(
         return longest < 0 ? 0 : Build.VariantKey.BuildRootName.Length + longest + 2;
     }
 
+    /// <summary>
+    /// The refusal for a directory under the root that is not a worktree git can find, which names the way back only
+    /// where there is one: <c>git worktree repair</c> rebuilds a lost .git file or a moved worktree from git's record,
+    /// and has nothing to rebuild from once the record is gone too - which is what a removal that stopped part way
+    /// leaves, git having deleted both first.
+    /// </summary>
+    private async Task<WorktreeOutcome> RefuseNotAWorktreeAsync(
+        HarnessLayout layout,
+        string name,
+        string path,
+        WorktreeInspector inspector,
+        CancellationToken cancellationToken)
+    {
+        GitWorktree? record;
+
+        try
+        {
+            record = await inspector.FindRecordAsync(layout.MainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return Unchecked(name, ex.Message);
+        }
+
+        if (record is not null)
+        {
+            return Refused(
+                $"'{Printable(path)}' is not a worktree git can find, so what it holds cannot be checked, though git still records a worktree there. "
+                + $"Run 'git -C {Printable(layout.MainCheckoutRoot)} worktree repair', which rebuilds its .git file from that record, as after it was moved or its .git file was lost; "
+                + "or pass --force to delete it anyway.");
+        }
+
+        var dotGit = Path.Combine(path, ".git");
+        var what = _fileSystem.FileExists(dotGit) || _fileSystem.DirectoryExists(dotGit)
+            ? "its .git names no worktree git records"
+            : "it holds no .git of its own, and git records no worktree there";
+
+        return Refused(
+            $"'{Printable(path)}' is not a worktree, so what it holds cannot be checked: {what}. That is what a removal that stopped part way leaves, "
+            + "and what a directory made there by hand looks like, and git worktree repair has no record to rebuild it from. "
+            + $"Look at what it holds, and once nothing in it is needed, run '{ToolPackage.Command} {DeleteCommand} {name} --force' to delete it.");
+    }
+
     private static WorktreeOutcome Usage(string message)
         => WorktreeOutcome.Failed(CommandOutcome.Failed(HarnessExit.UsageError, message));
 
@@ -735,6 +775,33 @@ public sealed class WorktreeService(
         bool discardsChanges,
         CancellationToken stopping)
     {
+        // git for Windows leaves every directory junction when it removes a worktree, and every directory above one,
+        // reporting the worktree removed with its .git file and its record already gone. So each junction is removed
+        // first, as the link it is, never what it leads to: one that cannot be removed stops the deletion here, before
+        // git has touched anything. Not interrupted part way: the links go together, before git starts.
+        IReadOnlyList<string> unlinked;
+
+        try
+        {
+            unlinked = _fileSystem.RemoveJunctions(path);
+        }
+        catch (JunctionRemovalException ex)
+        {
+            var before = ex.Removed.Count == 0
+                ? "Nothing of it was removed"
+                : $"Only the {ex.Removed.Count} junction(s) before it were removed, as links, and what each led to is untouched: {Listed(ex.Removed)}";
+
+            return Failed(
+                $"Worktree '{name}' was not deleted: its directory junction {ex.Message.TrimEnd('.')}. {before}; git was not run. "
+                + $"Deal with that junction, then run '{ToolPackage.Command} {DeleteCommand} {name}' again.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Failed(
+                $"Worktree '{name}' was not deleted: '{Printable(path)}' could not be looked through for its directory junctions, "
+                + $"which git would leave: {ex.Message.TrimEnd('.')}. Nothing of it was removed; git was not run.");
+        }
+
         string[] arguments = holdsSubmodules || discardsChanges
             ? ["worktree", "remove", "--force", path]
             : ["worktree", "remove", path];
@@ -743,21 +810,39 @@ public sealed class WorktreeService(
             .RunAsync(layout.MainCheckoutRoot, arguments, cancellationToken: stopping)
             .ConfigureAwait(false);
 
+        var junctions = unlinked.Count == 0
+            ? string.Empty
+            : $" Its {unlinked.Count} directory junction(s) had been removed first, as links: {Listed(unlinked)}.";
+
         // Nothing more is deleted here when git fails: git's refusal is the second check, and
         // deleting past it would undo the point of running it.
         if (!removal.Succeeded)
         {
             return Failed(
                 $"git could not remove worktree '{name}': {removal.FailureMessage.TrimEnd('.')}. "
-                + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true));
+                + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true)
+                + junctions);
         }
 
         if (_fileSystem.DirectoryExists(path))
         {
-            return Failed($"git reported worktree '{name}' removed, but '{path}' still exists.");
+            return Failed(
+                $"git reported worktree '{name}' removed, but '{path}' still exists. "
+                + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true)
+                + junctions);
         }
 
-        return Verified(name, path, administrativeDirectory, gitFailure: null);
+        var verified = Verified(name, path, administrativeDirectory, gitFailure: null);
+
+        return unlinked.Count == 0 || !verified.Succeeded
+            ? verified
+            : verified with
+            {
+                Outcome = verified.Outcome with
+                {
+                    Details = [.. verified.Outcome.Details ?? [], $"removed {unlinked.Count} directory junction(s) first, as links, never what they lead to: {Listed(unlinked)}"],
+                },
+            };
     }
 
     /// <summary>
@@ -880,11 +965,8 @@ public sealed class WorktreeService(
 
         try
         {
-            // With no directory to ask in, git's list is the only place the record can be found. git
-            // lists it by the path it resolved, so the path is resolved the same way to match it.
-            var resolved = inspector.ResolveLinks(path);
-            var worktrees = await _gitClient.ListWorktreesAsync(layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
-            record = worktrees.FirstOrDefault(worktree => !worktree.IsMain && PathsEqual(worktree.Path, resolved));
+            // With no directory to ask in, git's list is the only place the record can be found.
+            record = await inspector.FindRecordAsync(layout.MainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
 
             if (record is not null && !force)
             {
@@ -1030,22 +1112,18 @@ public sealed class WorktreeService(
         string? gitFailure,
         WorktreeInspector inspector)
     {
-        IReadOnlyList<GitWorktree> remaining;
-        string resolved;
+        GitWorktree? remaining;
 
         try
         {
-            // git lists a worktree by the path it resolved, links followed, so the path is resolved
-            // the same way before the two are compared.
-            resolved = inspector.ResolveLinks(path);
-            remaining = await _gitClient.ListWorktreesAsync(layout.MainCheckoutRoot, CancellationToken.None).ConfigureAwait(false);
+            remaining = await inspector.FindRecordAsync(layout.MainCheckoutRoot, path, CancellationToken.None).ConfigureAwait(false);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
         {
             return Failed($"Worktree '{name}' is deleted, but whether git still has it registered could not be confirmed: {ex.Message}");
         }
 
-        return remaining.Any(worktree => !worktree.IsMain && PathsEqual(worktree.Path, resolved))
+        return remaining is not null
             ? StillRegistered(name, path, gitFailure)
             : Removed(name, path);
     }
@@ -1288,9 +1366,5 @@ public sealed class WorktreeService(
         }
     }
 
-    private bool PathsEqual(string left, string right)
-        => string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            _platform.PathComparison);
+    private bool PathsEqual(string left, string right) => PathContainment.AreSame(left, right, _platform.PathComparison);
 }

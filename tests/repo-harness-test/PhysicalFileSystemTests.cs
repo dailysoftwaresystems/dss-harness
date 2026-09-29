@@ -283,7 +283,7 @@ public sealed class PhysicalFileSystemTests
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows reads a path this way.");
 
-        Assert.Equal(expected, WindowsHolds.Extended(path));
+        Assert.Equal(expected, Win32Files.Extended(path));
     }
 
     /// <summary>On Windows, an interruption stops the looking between one entry and the next, rather than after the walk.</summary>
@@ -299,6 +299,103 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>On Linux and macOS nothing an open file or a current directory does stops a deletion, so nothing is held.</summary>
+    /// <summary>
+    /// On Windows, every junction under a tree is removed as the link it is - one leading out of the tree and one
+    /// leading back into it - and nothing either leads to; a symbolic link, which git removes itself, is left.
+    /// </summary>
+    [Fact]
+    public void RemoveJunctions_RemovesEachJunctionAsALink_NeverWhatItLeadsTo()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has directory junctions.");
+
+        using var temp = new TempDirectory();
+        var tree = temp.Combine("tree");
+        var outside = temp.WriteFile(Path.Combine("outside", "canary.txt"), "kept");
+        var inside = temp.WriteFile(Path.Combine("tree", "real", "inner.txt"), "kept too");
+        Directory.CreateDirectory(Path.Combine(tree, "build"));
+        Junction(Path.Combine(tree, "build", "out"), temp.Combine("outside"));
+        Junction(Path.Combine(tree, "back"), Path.Combine(tree, "real"));
+        var symbolic = TrySymbolicLink(Path.Combine(tree, "linked"), temp.Combine("outside"));
+
+        var removed = Create().RemoveJunctions(tree);
+
+        Assert.Equal(
+            [Path.Combine(tree, "back"), Path.Combine(tree, "build", "out")],
+            removed.Order(StringComparer.OrdinalIgnoreCase));
+        Assert.False(Directory.Exists(Path.Combine(tree, "back")));
+        Assert.False(Directory.Exists(Path.Combine(tree, "build", "out")));
+        Assert.True(File.Exists(outside));
+        Assert.True(File.Exists(inside));
+        Assert.Equal(symbolic, Directory.Exists(Path.Combine(tree, "linked")));
+    }
+
+    /// <summary>
+    /// A tree holding a junction is deleted whole and nothing the junction leads to goes with it: the runtime's own
+    /// recursive delete removes a junction and then reports it refused, leaving every directory above it.
+    /// </summary>
+    [Fact]
+    public void DeleteDirectory_DeletesATreeHoldingAJunction_AndNothingItLeadsTo()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has directory junctions.");
+
+        using var temp = new TempDirectory();
+        var tree = temp.Combine("tree");
+        var outside = temp.WriteFile(Path.Combine("outside", "canary.txt"), "kept");
+        Directory.CreateDirectory(Path.Combine(tree, "a", "b"));
+        Junction(Path.Combine(tree, "a", "b", "out"), temp.Combine("outside"));
+
+        Create().DeleteDirectory(tree);
+
+        Assert.False(Directory.Exists(tree));
+        Assert.True(File.Exists(outside));
+    }
+
+    /// <summary>A tree that is itself a junction is not walked, so nothing behind it is looked at or removed.</summary>
+    [Fact]
+    public void RemoveJunctions_OnATreeThatIsItselfAJunction_TouchesNothingBehindIt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has directory junctions.");
+
+        using var temp = new TempDirectory();
+        var behind = temp.Combine("behind");
+        Directory.CreateDirectory(Path.Combine(behind, "deeper"));
+        Junction(Path.Combine(behind, "deeper", "inner"), temp.Combine("behind"));
+        Junction(temp.Combine("tree"), behind);
+
+        Assert.Empty(Create().RemoveJunctions(temp.Combine("tree")));
+        Assert.True(Directory.Exists(Path.Combine(behind, "deeper", "inner")));
+    }
+
+    /// <summary>A volume mounted on a directory has a junction's tag, and is told apart by the volume its target names.</summary>
+    [Theory]
+    [SupportedOSPlatform("windows")]
+    [InlineData(@"\\?\Volume{0c1d3a5e-0000-0000-0000-100000000000}\", true)]
+    [InlineData(@"\??\Volume{0c1d3a5e-0000-0000-0000-100000000000}\", true)]
+    [InlineData(@"Volume{0c1d3a5e-0000-0000-0000-100000000000}\", true)]
+    [InlineData(@"C:\Users\someone\Volume{x}", false)]
+    [InlineData(@"C:\target", false)]
+    [InlineData(null, false)]
+    public void NamesAVolume_TellsAMountedVolumeFromAJunction(string? target, bool volume)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows mounts a volume on a directory.");
+
+        Assert.Equal(volume, WindowsJunctions.NamesAVolume(target));
+    }
+
+    /// <summary>Linux and macOS have no junctions, and nothing is removed there.</summary>
+    [Fact]
+    public void RemoveJunctions_RemovesNothing_OnLinuxAndMacOs()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows has directory junctions; see those tests.");
+
+        using var temp = new TempDirectory();
+        temp.WriteFile(Path.Combine("tree", "a.txt"), "x");
+        TrySymbolicLink(temp.Combine(Path.Combine("tree", "linked")), temp.Combine("tree"));
+
+        Assert.Empty(Create().RemoveJunctions(temp.Combine("tree")));
+        Assert.True(File.Exists(temp.Combine(Path.Combine("tree", "a.txt"))));
+    }
+
     [Fact]
     public void FindHeld_FindsNothing_OnLinuxAndMacOs()
     {
@@ -683,6 +780,20 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>Makes <paramref name="link"/> a junction leading to <paramref name="target"/>, which needs no privilege.</summary>
+    /// <summary>A symbolic link to a directory, where this machine allows one; whether it was made.</summary>
+    private static bool TrySymbolicLink(string link, string target)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     private static void Junction(string link, string target)
     {
         using var mklink = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))

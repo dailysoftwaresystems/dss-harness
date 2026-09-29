@@ -104,6 +104,10 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
             return;
         }
 
+        // Each junction first, as a link: the runtime's recursive delete removes one and then reports it refused,
+        // leaving every directory above it, and only the retry below used to finish the job.
+        RemoveJunctions(path);
+
         try
         {
             Directory.Delete(path, recursive: true);
@@ -307,6 +311,41 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 
     public IEnumerable<string> EnumerateDirectoryLinks(string path)
         => Walk(path, recursive: true, (ref FileSystemEntry entry) => entry.IsDirectory && IsLink(ref entry), (ref FileSystemEntry entry) => entry.ToSpecifiedFullPath());
+
+    public IReadOnlyList<string> RemoveJunctions(string path)
+    {
+        // A root that is itself a link is not walked: listing it would list what it leads to.
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(path) || IsLink(path))
+        {
+            return [];
+        }
+
+        // Every junction is found before any is removed, so the walk never meets a directory it just changed.
+        var removed = new List<string>();
+
+        foreach (var link in EnumerateDirectoryLinks(path).ToList())
+        {
+            try
+            {
+                switch (WindowsJunctions.KindOf(link))
+                {
+                    case JunctionKind.Junction:
+                        WindowsJunctions.Remove(link);
+                        removed.Add(link);
+                        break;
+
+                    case JunctionKind.MountedVolume:
+                        throw new JunctionRemovalException(link, "a volume is mounted there, and it is never unmounted here", [.. removed]);
+                }
+            }
+            catch (IOException ex) when (ex is not JunctionRemovalException)
+            {
+                throw new JunctionRemovalException(link, ex.Message, [.. removed]);
+            }
+        }
+
+        return removed;
+    }
 
     public IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default)
     {

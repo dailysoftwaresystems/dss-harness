@@ -66,6 +66,10 @@ internal static class HarnessServices
         services.AddSingleton<IHarnessOutput>(provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>()));
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+
+        // One answer per command to which variables git reads a repository from, shared by every child
+        // that runs git: the git client's and the forge's command line's.
+        services.AddSingleton<GitLocalVariables>();
         services.AddSingleton<IGitClient, GitClient>();
         services.AddSingleton<IRepositoryLocator, RepositoryLocator>();
         services.AddSingleton<IConfigStore, JsonConfigStore>();

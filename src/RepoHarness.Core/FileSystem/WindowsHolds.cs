@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using Microsoft.Win32.SafeHandles;
 
 namespace RepoHarness.Core.FileSystem;
 
@@ -34,18 +33,6 @@ internal static class WindowsHolds
     /// <summary>FILE_WRITE_DATA, which the file a program is running from refuses.</summary>
     private const uint WriteDataAccess = 0x00000002;
 
-    /// <summary>FILE_SHARE_READ, FILE_SHARE_WRITE and FILE_SHARE_DELETE: this handle refuses nothing another does.</summary>
-    private const uint ShareAll = 0x00000007;
-
-    /// <summary>OPEN_EXISTING.</summary>
-    private const uint OpenExisting = 3;
-
-    /// <summary>FILE_FLAG_BACKUP_SEMANTICS, without which a directory cannot be opened.</summary>
-    private const uint BackupSemantics = 0x02000000;
-
-    /// <summary>FILE_FLAG_OPEN_REPARSE_POINT: a link is opened as itself, which is what a deletion removes.</summary>
-    private const uint OpenReparsePoint = 0x00200000;
-
     /// <summary>ERROR_ACCESS_DENIED.</summary>
     private const int AccessDenied = 5;
 
@@ -61,7 +48,7 @@ internal static class WindowsHolds
     public static HeldEntry? Held(string path, bool isDirectory)
     {
         var error = isDirectory
-            ? Open(path, DeleteAccess, BackupSemantics)
+            ? Open(path, DeleteAccess, Win32Files.BackupSemantics)
             : Open(path, DeleteAccess | WriteDataAccess, flags: 0);
 
         // A read-only file, or one this user may not write, refuses the writing alone, which is no hold: it is asked
@@ -74,33 +61,14 @@ internal static class WindowsHolds
         return error == SharingViolation ? new HeldEntry(path, SharingViolationMessage) : null;
     }
 
-    /// <summary>Opens <paramref name="path"/> sharing everything, and closes it; the error that refused it, or zero.</summary>
+    /// <summary>
+    /// Opens <paramref name="path"/> as a deletion opens it - a link as the link, which is what a deletion removes -
+    /// sharing everything, and closes it; the error that refused it, or zero.
+    /// </summary>
     private static int Open(string path, uint access, uint flags)
     {
-        using var handle = CreateFileW(Extended(path), access, ShareAll, IntPtr.Zero, OpenExisting, flags | OpenReparsePoint, IntPtr.Zero);
+        using var handle = Win32Files.Open(path, access, flags);
 
         return handle.IsInvalid ? Marshal.GetLastPInvokeError() : 0;
     }
-
-    /// <summary>
-    /// <paramref name="path"/> as Windows reads it past 260 characters, as the runtime's own calls write it: a
-    /// worktree's build directory holds paths that long. A drive path and a UNC path are given the prefix each
-    /// takes; a path that already names a device, as either prefix does, is left as it is.
-    /// </summary>
-    /// <param name="path">A fully qualified path.</param>
-    internal static string Extended(string path)
-        => path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal) ? path
-            : path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..]
-            : @"\\?\" + path;
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
-    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
-    private static extern SafeFileHandle CreateFileW(
-        string fileName,
-        uint desiredAccess,
-        uint shareMode,
-        IntPtr securityAttributes,
-        uint creationDisposition,
-        uint flagsAndAttributes,
-        IntPtr templateFile);
 }

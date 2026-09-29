@@ -549,7 +549,7 @@ public sealed class GitClientTests
         var head = await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken);
         var processes = new CountingProcesses(harness.ProcessRunner);
 
-        var read = await new GitClient(processes, harness.Output).ReadFilesAtCommitAsync(
+        var read = await new GitClient(processes, harness.Output, localVariables: harness.LocalVariables).ReadFilesAtCommitAsync(
             temp.Path,
             head!,
             ["docs/notes.md", "src/naïve name.txt", "bom.txt", "data.bin", "wide.txt"],
@@ -585,7 +585,7 @@ public sealed class GitClientTests
         var head = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
         var processes = new CountingProcesses(harness.ProcessRunner);
 
-        var read = await new GitClient(processes, harness.Output).ReadFilesAtCommitAsync(
+        var read = await new GitClient(processes, harness.Output, localVariables: harness.LocalVariables).ReadFilesAtCommitAsync(
             temp.Path,
             head,
             ["docs/notes.md", "docs/absent.md", "docs", "sub"],
@@ -929,22 +929,40 @@ public sealed class GitClientProtocolTests
     }
 
     [Fact]
-    public async Task EveryCommand_ClearsTheVariablesThatWouldPointGitAtAnotherTree()
+    public async Task EveryCommand_ClearsEveryVariableGitReadsARepositoryFrom()
     {
-        // GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE each outrank `-C <directory>`. A git hook runs
-        // with all three set, so a harness command invoked from a hook, or from a shell left in
-        // another checkout, would read and write a repository nobody named.
+        // Each outranks `-C <directory>`. A git hook runs with some of them set, so a harness command
+        // invoked from a hook, or from a shell left in another checkout, would read and write a
+        // repository nobody named: with GIT_COMMON_DIR naming another repository, deleting a worktree
+        // was refused and left it registered. Every name the list gives is cleared, not three of them.
         var (git, requests) = Scripted(Exited(0));
 
         await git.RunAsync("/repo", ["status"], cancellationToken: TestContext.Current.CancellationToken);
 
         var environment = Assert.Single(requests).Environment;
 
-        foreach (var name in (string[])["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"])
+        foreach (var name in LocalNames)
         {
             Assert.True(environment.ContainsKey(name), $"{name} was not cleared.");
             Assert.Null(environment[name]);
         }
+    }
+
+    [Fact]
+    public async Task AnIndexACallerAsksFor_IsSetAfterTheInheritedOneIsCleared()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        var processes = new CountingProcesses(harness.ProcessRunner);
+
+        await new GitClient(processes, harness.Output, localVariables: harness.LocalVariables)
+            .IndexExactlyAsync(temp.Path, ["README.md"], cancellationToken);
+
+        var indexed = processes.Started.Where(request => request.Environment.TryGetValue("GIT_INDEX_FILE", out var index) && index is not null).ToList();
+        Assert.NotEmpty(indexed);
+        Assert.All(indexed, request => Assert.Null(request.Environment["GIT_COMMON_DIR"]));
     }
 
     [Fact]
@@ -1104,8 +1122,19 @@ public sealed class GitClientProtocolTests
         runner.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(result);
         runner.FindExecutable("git").Returns("git");
 
-        return (new GitClient(runner, Substitute.For<IHarnessOutput>()), requests);
+        return (new GitClient(runner, Substitute.For<IHarnessOutput>(), localVariables: GitLocalVariables.Fixed(LocalNames)), requests);
     }
+
+    /// <summary>
+    /// The names git gives, handed to a client whose runner answers every request alike: asked through it,
+    /// the question would be answered as if it were the command under test.
+    /// </summary>
+    private static readonly string[] LocalNames =
+    [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+    ];
 
     private static ProcessResult Exited(int exitCode, string standardOutput = "", string stderr = "", bool timedOut = false)
         => new(exitCode, standardOutput, stderr, TimeSpan.Zero, timedOut);
