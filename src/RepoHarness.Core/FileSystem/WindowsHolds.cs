@@ -23,6 +23,10 @@ namespace RepoHarness.Core.FileSystem;
 /// other than NTFS - a handle sharing deletion still keeps the directory it is in from going, and is not found:
 /// git then stops part way, as it did before anything was looked for.
 /// </para>
+/// <para>
+/// While a look is open - a moment - it refuses what a deletion refuses: a program starting in a directory in that
+/// moment is refused the directory as its own and runs holding nothing there, so no later look finds it.
+/// </para>
 /// </remarks>
 [SupportedOSPlatform("windows")]
 internal static class WindowsHolds

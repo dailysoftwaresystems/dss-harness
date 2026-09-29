@@ -20,6 +20,9 @@ public sealed class PhysicalFileSystemTests
     /// <summary>ERROR_SHARING_VIOLATION, which Windows answers an entry another program holds with.</summary>
     private const int SharingViolation = 32;
 
+    /// <summary>DELETE, which a look opens an entry with, as a deletion does.</summary>
+    private const uint DeleteAccess = 0x00010000;
+
     /// <summary>
     /// A directory's size is what its files hold, below it at any depth, walking no directory link:
     /// what a link points at is not this directory's to free. A directory that is not there holds nothing.
@@ -219,20 +222,20 @@ public sealed class PhysicalFileSystemTests
 
         foreach (var current in new[] { tree, directory })
         {
-            using (Waiting.Start(Ping, current))
+            using (Waiting.In(current))
             {
-                PathAssert.Same(current, Assert.Single(HeldUntil(tree, found => found > 0)).Path);
+                PathAssert.Same(current, Assert.Single(Create().FindHeld(tree, TestContext.Current.CancellationToken)).Path);
             }
 
-            Assert.Empty(HeldUntil(tree, found => found == 0));
+            Assert.Empty(HeldOnceLetGo(tree));
         }
 
-        using (Waiting.Start(program, temp.Path))
+        using (Waiting.Running(program, temp.Path))
         {
-            PathAssert.Same(program, Assert.Single(HeldUntil(tree, found => found > 0)).Path);
+            PathAssert.Same(program, Assert.Single(Create().FindHeld(tree, TestContext.Current.CancellationToken)).Path);
         }
 
-        Assert.Empty(HeldUntil(tree, found => found == 0));
+        Assert.Empty(HeldOnceLetGo(tree));
     }
 
     /// <summary>
@@ -251,12 +254,41 @@ public sealed class PhysicalFileSystemTests
         Directory.CreateDirectory(tree);
         TestLinks.Junction(Path.Combine(tree, "out"), outside);
 
-        using (Waiting.Start(Ping, outside))
+        using (Waiting.In(outside))
         using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            // Held where it leads, as the process there has set itself up, and nothing of it through the link.
-            Assert.Equal(2, HeldUntil(outside, found => found == 2).Count);
+            // Held where it leads, and nothing of it through the link.
+            Assert.Equal(2, Create().FindHeld(outside, TestContext.Current.CancellationToken).Count);
             Assert.Empty(Create().FindHeld(tree, TestContext.Current.CancellationToken));
+        }
+    }
+
+    /// <summary>
+    /// On Windows, a program starting in a directory while the directory is looked at is refused it as its own, and
+    /// runs holding nothing there, so no later look finds it.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void FindHeld_FindsNothingOfAProgramStartedInADirectoryWhileItWasLookedAt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete what another program holds.");
+
+        using var temp = new TempDirectory();
+        var directory = temp.Combine("tree");
+        Directory.CreateDirectory(directory);
+
+        Waiting started;
+
+        // Opened as a look opens it, and let go once the program has set itself up.
+        using (var look = Win32Files.Open(directory, DeleteAccess, Win32Files.BackupSemantics))
+        {
+            Assert.False(look.IsInvalid);
+            started = Waiting.In(directory);
+        }
+
+        using (started)
+        {
+            Assert.Empty(Create().FindHeld(directory, TestContext.Current.CancellationToken));
         }
     }
 
@@ -788,14 +820,14 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
-    /// What is held under <paramref name="tree"/>, looked at until <paramref name="until"/> accepts how many: what a
-    /// process sets up as it starts, and lets go of as it ends, is waited for rather than guessed at.
+    /// What is held under <paramref name="tree"/> once what held it has ended, looked at until nothing is: what a
+    /// process lets go of as it ends is waited for rather than guessed at.
     /// </summary>
-    private static IReadOnlyList<HeldEntry> HeldUntil(string tree, Func<int, bool> until)
+    private static IReadOnlyList<HeldEntry> HeldOnceLetGo(string tree)
     {
         IReadOnlyList<HeldEntry> held = [];
 
-        SpinWait.SpinUntil(() => until((held = Create().FindHeld(tree, TestContext.Current.CancellationToken)).Count), TimeSpan.FromSeconds(10));
+        SpinWait.SpinUntil(() => (held = Create().FindHeld(tree, TestContext.Current.CancellationToken)).Count == 0, TimeSpan.FromSeconds(10));
 
         return held;
     }
@@ -810,12 +842,40 @@ public sealed class PhysicalFileSystemTests
 
         private Waiting(Process process) => _process = process;
 
-        /// <summary>Starts <paramref name="program"/> - a copy of ping - waiting a minute in <paramref name="workingDirectory"/>.</summary>
-        public static Waiting Start(string program, string workingDirectory)
+        /// <summary>
+        /// Starts ping waiting a minute in <paramref name="directory"/>, and returns once it has written its first
+        /// line, by which it has opened that directory as its own.
+        /// </summary>
+        /// <remarks>
+        /// Nothing may be looked at before: a program opening its directory while it is looked at holds nothing there
+        /// (<see cref="FindHeld_FindsNothingOfAProgramStartedInADirectoryWhileItWasLookedAt"/>), so looking again and
+        /// again until it held its directory sometimes waited for what would never come.
+        /// </remarks>
+        public static Waiting In(string directory)
+        {
+            var waiting = Start(Ping, directory);
+
+            if (waiting._process.StandardOutput.ReadLine() is null)
+            {
+                waiting.Dispose();
+                throw new InvalidOperationException($"'{Ping}' ended before it wrote anything.");
+            }
+
+            return waiting;
+        }
+
+        /// <summary>
+        /// Starts <paramref name="program"/>, a copy of ping, waiting a minute in <paramref name="directory"/>: the
+        /// file it runs from is held from the moment it is started. A copy writes nothing to wait for - the words it
+        /// prints are kept beside the original.
+        /// </summary>
+        public static Waiting Running(string program, string directory) => Start(program, directory);
+
+        private static Waiting Start(string program, string directory)
             => new(Process.Start(new ProcessStartInfo(program)
             {
                 ArgumentList = { "-n", "60", "127.0.0.1" },
-                WorkingDirectory = workingDirectory,
+                WorkingDirectory = directory,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
