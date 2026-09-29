@@ -603,6 +603,34 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The worktrees topic says that on Windows a worktree something holds part of is refused whole, with nothing
+    /// removed, what holds one and what does not, what to do where it is the command's own current directory, and
+    /// that --force does not look.
+    /// </summary>
+    [Fact]
+    public async Task WorktreesTopic_SaysAWorktreeSomethingHoldsIsRefusedWholeOnWindows()
+    {
+        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        foreach (var said in new[]
+        {
+            $"On Windows, without --force, a worktree something holds part of is refused ({HarnessExit.Refused}) whole once "
+                + "every check has passed, with nothing removed, naming what is held: a directory that is a process's current "
+                + "directory, this command's own among them, a file open without sharing its deletion, or one a program is "
+                + "running from.",
+            "git's removal would stop there part way, with the worktree's .git file and git's record of it already gone.",
+            "Close what holds it and run delete-worktree again, from outside the worktree where it is this command's own.",
+            "A watcher on a directory, as an editor keeps, holds nothing; --force looks for nothing, and goes as far as it can.",
+            "or, on Windows, a directory in it cannot be looked through for what holds it, nothing is deleted and it exits "
+                + $"{HarnessExit.CommandFailed}.",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The config topic says a hold between commands runs the host's keepAwake, ends when a command's own starts,
     /// and needs keepAwake.
     /// </summary>

@@ -40,6 +40,9 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual IEnumerable<string> EnumerateDirectoryLinks(string path) => inner.EnumerateDirectoryLinks(path);
 
+    public virtual IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default)
+        => inner.FindHeld(path, cancellationToken);
+
     public virtual IEnumerable<string> EnumerateDirectories(string path) => inner.EnumerateDirectories(path);
 
     public virtual string ReadAllText(string path) => inner.ReadAllText(path);

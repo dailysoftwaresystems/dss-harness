@@ -1,4 +1,5 @@
 using System.IO.Enumeration;
+using System.Runtime.Versioning;
 using System.Text;
 using RepoHarness.Core.Platform;
 
@@ -306,6 +307,39 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 
     public IEnumerable<string> EnumerateDirectoryLinks(string path)
         => Walk(path, recursive: true, (ref FileSystemEntry entry) => entry.IsDirectory && IsLink(ref entry), (ref FileSystemEntry entry) => entry.ToSpecifiedFullPath());
+
+    public IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default)
+    {
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(path))
+        {
+            return [];
+        }
+
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var held = new List<HeldEntry>();
+
+        // The directory itself first, then everything under it, as a deletion reaches each. The directory is looked
+        // at before the walk is made, which opens it to list it: an interruption then leaves nothing open.
+        Look(root, isDirectory: true);
+
+        foreach (var (entryPath, isDirectory) in Walk(root, recursive: true, static (ref FileSystemEntry _) => true, (ref FileSystemEntry entry) => (entry.ToSpecifiedFullPath(), entry.IsDirectory)))
+        {
+            Look(entryPath, isDirectory);
+        }
+
+        return held;
+
+        [SupportedOSPlatform("windows")]
+        void Look(string entryPath, bool isDirectory)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (WindowsHolds.Held(entryPath, isDirectory) is { } found)
+            {
+                held.Add(found);
+            }
+        }
+    }
 
     /// <summary>The time the runtime gives an entry it could not stat.</summary>
     private static readonly DateTime Unstatted = DateTime.FromFileTimeUtc(0);

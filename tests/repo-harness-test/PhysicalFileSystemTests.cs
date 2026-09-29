@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
@@ -11,6 +13,12 @@ namespace RepoHarness.Tests;
 public sealed class PhysicalFileSystemTests
 {
     private static PhysicalFileSystem Create() => new(FilePermissionsFactory.Create());
+
+    /// <summary>A program that waits, sending nothing anywhere but this machine, while a test looks at what it holds.</summary>
+    private static string Ping => Path.Combine(Environment.SystemDirectory, "PING.EXE");
+
+    /// <summary>ERROR_SHARING_VIOLATION, which Windows answers an entry another program holds with.</summary>
+    private const int SharingViolation = 32;
 
     /// <summary>
     /// A directory's size is what its files hold, below it at any depth, walking no directory link:
@@ -129,6 +137,180 @@ public sealed class PhysicalFileSystemTests
 
         Assert.False(Directory.Exists(temp.Combine("from")));
         Assert.True(File.Exists(temp.Combine(Path.Combine("to", "sub", "file.txt"))));
+    }
+
+    /// <summary>
+    /// On Windows, what holds an entry against its deletion is found, and what a deletion goes through is not: a
+    /// file open without sharing its deletion is held, though it shares writing, and so is a read-only one; a file
+    /// open sharing its deletion, a watcher on a directory and a read-only file nobody has open are not. Nothing
+    /// held is nothing found, and neither is a directory that is not there.
+    /// </summary>
+    [Fact]
+    public void FindHeld_FindsAFileOpenWithoutSharingItsDeletion_AndNothingADeletionGoesThrough()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete what another program holds.");
+
+        using var temp = new TempDirectory();
+        var held = temp.WriteFile(Path.Combine("tree", "sub", "held.txt"), "x");
+        var shared = temp.WriteFile(Path.Combine("tree", "sub", "shared.txt"), "x");
+        var readOnly = temp.WriteFile(Path.Combine("tree", "read-only.txt"), "x");
+        File.SetAttributes(readOnly, FileAttributes.ReadOnly);
+        var tree = temp.Combine("tree");
+
+        try
+        {
+            Assert.Empty(Create().FindHeld(tree, TestContext.Current.CancellationToken));
+            Assert.Empty(Create().FindHeld(temp.Combine("absent"), TestContext.Current.CancellationToken));
+
+            using (new FileStream(shared, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (new FileSystemWatcher(Path.Combine(tree, "sub")) { EnableRaisingEvents = true })
+            {
+                Assert.Empty(Create().FindHeld(tree, TestContext.Current.CancellationToken));
+
+                using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                {
+                    var found = Assert.Single(Create().FindHeld(tree, TestContext.Current.CancellationToken));
+
+                    PathAssert.Same(held, found.Path);
+                    Assert.Equal(new Win32Exception(SharingViolation).Message, found.Reason);
+                }
+
+                // A read-only file refuses writing to anyone, which is no hold; open without sharing its deletion, it is.
+                using (new FileStream(readOnly, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    PathAssert.Same(readOnly, Assert.Single(Create().FindHeld(tree, TestContext.Current.CancellationToken)).Path);
+                }
+            }
+        }
+        finally
+        {
+            File.SetAttributes(readOnly, FileAttributes.Normal);
+        }
+    }
+
+    /// <summary>
+    /// On Windows, a directory that is another process's current directory is held - the one looked through, or one
+    /// under it - and so is a file a program is running from, though it shares its deletion; none once the process
+    /// has ended.
+    /// </summary>
+    [Fact]
+    public void FindHeld_FindsADirectoryAProcessRunsIn_AndAProgramRunningFromTheTree()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete what another program holds.");
+
+        using var temp = new TempDirectory();
+        temp.WriteFile(Path.Combine("tree", "cwd", "file.txt"), "x");
+        var tree = temp.Combine("tree");
+        var directory = Path.Combine(tree, "cwd");
+        var program = Path.Combine(tree, "bin", "waits.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(program)!);
+        File.Copy(Ping, program);
+
+        foreach (var current in new[] { tree, directory })
+        {
+            using (Waiting.Start(Ping, current))
+            {
+                PathAssert.Same(current, Assert.Single(HeldUntil(tree, found => found > 0)).Path);
+            }
+
+            Assert.Empty(HeldUntil(tree, found => found == 0));
+        }
+
+        using (Waiting.Start(program, temp.Path))
+        {
+            PathAssert.Same(program, Assert.Single(HeldUntil(tree, found => found > 0)).Path);
+        }
+
+        Assert.Empty(HeldUntil(tree, found => found == 0));
+    }
+
+    /// <summary>
+    /// On Windows, a link in the tree is asked about as itself, which is what a deletion removes, and never through:
+    /// where it leads, another process's current directory holding a file open, is no part of the tree.
+    /// </summary>
+    [Fact]
+    public void FindHeld_AsksALinkAboutItself_NeverWhereItLeads()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete what another program holds.");
+
+        using var temp = new TempDirectory();
+        var tree = temp.Combine("tree");
+        var outside = temp.Combine("outside");
+        var held = temp.WriteFile(Path.Combine("outside", "held.txt"), "x");
+        Directory.CreateDirectory(tree);
+        Junction(Path.Combine(tree, "out"), outside);
+
+        using (Waiting.Start(Ping, outside))
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            // Held where it leads, as the process there has set itself up, and nothing of it through the link.
+            Assert.Equal(2, HeldUntil(outside, found => found == 2).Count);
+            Assert.Empty(Create().FindHeld(tree, TestContext.Current.CancellationToken));
+        }
+    }
+
+    /// <summary>On Windows, a file held deeper than the 260 characters a path is read to without a prefix is found.</summary>
+    [Fact]
+    public void FindHeld_FindsAFileHeldDeeperThanTheShortPathLimit()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete what another program holds.");
+
+        using var temp = new TempDirectory();
+        var tree = temp.Combine("tree");
+        var held = Path.Combine([tree, .. Enumerable.Repeat(new string('d', 50), 6), "held.txt"]);
+        Directory.CreateDirectory(Path.GetDirectoryName(held)!);
+        File.WriteAllText(held, "x");
+
+        Assert.True(held.Length > 260, $"'{held}' is not deeper than the short path limit.");
+
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            PathAssert.Same(held, Assert.Single(Create().FindHeld(tree, TestContext.Current.CancellationToken)).Path);
+        }
+    }
+
+    /// <summary>
+    /// A path is written as Windows reads it past 260 characters: a drive path and a UNC path each with the prefix it
+    /// takes, and a path that already names a device left as it is.
+    /// </summary>
+    [Theory]
+    [SupportedOSPlatform("windows")]
+    [InlineData(@"C:\repo\.worktrees\a", @"\\?\C:\repo\.worktrees\a")]
+    [InlineData(@"\\server\share\repo", @"\\?\UNC\server\share\repo")]
+    [InlineData(@"\\?\C:\repo", @"\\?\C:\repo")]
+    [InlineData(@"\\.\C:\repo", @"\\.\C:\repo")]
+    public void Extended_WritesAPathAsWindowsReadsItPastTheShortLimit(string path, string expected)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows reads a path this way.");
+
+        Assert.Equal(expected, WindowsHolds.Extended(path));
+    }
+
+    /// <summary>On Windows, an interruption stops the looking between one entry and the next, rather than after the walk.</summary>
+    [Fact]
+    public void FindHeld_StopsForAnInterruption()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete what another program holds.");
+
+        using var temp = new TempDirectory();
+        temp.WriteFile(Path.Combine("tree", "file.txt"), "x");
+
+        Assert.ThrowsAny<OperationCanceledException>(() => Create().FindHeld(temp.Combine("tree"), new CancellationToken(canceled: true)));
+    }
+
+    /// <summary>On Linux and macOS nothing an open file or a current directory does stops a deletion, so nothing is held.</summary>
+    [Fact]
+    public void FindHeld_FindsNothing_OnLinuxAndMacOs()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows refuses to delete what another program holds; see those tests.");
+
+        using var temp = new TempDirectory();
+        var held = temp.WriteFile(Path.Combine("tree", "held.txt"), "x");
+
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Empty(Create().FindHeld(temp.Combine("tree"), TestContext.Current.CancellationToken));
+        }
     }
 
     /// <summary>
@@ -485,5 +667,69 @@ public sealed class PhysicalFileSystemTests
         using var temp = new TempDirectory();
 
         Assert.False(FilePermissionsFactory.Create().IsExecutable(temp.Combine("absent")));
+    }
+
+    /// <summary>
+    /// What is held under <paramref name="tree"/>, looked at until <paramref name="until"/> accepts how many: what a
+    /// process sets up as it starts, and lets go of as it ends, is waited for rather than guessed at.
+    /// </summary>
+    private static IReadOnlyList<HeldEntry> HeldUntil(string tree, Func<int, bool> until)
+    {
+        IReadOnlyList<HeldEntry> held = [];
+
+        SpinWait.SpinUntil(() => until((held = Create().FindHeld(tree, TestContext.Current.CancellationToken)).Count), TimeSpan.FromSeconds(10));
+
+        return held;
+    }
+
+    /// <summary>Makes <paramref name="link"/> a junction leading to <paramref name="target"/>, which needs no privilege.</summary>
+    private static void Junction(string link, string target)
+    {
+        using var mklink = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
+        {
+            ArgumentList = { "/c", "mklink", "/J", link, target },
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+
+        var error = mklink.StandardError.ReadToEnd();
+        mklink.WaitForExit();
+
+        Assert.True(mklink.ExitCode == 0, $"mklink /J failed: {error}");
+    }
+
+    /// <summary>
+    /// A program left waiting in a directory of the test's choosing, ended when it is disposed, however the test
+    /// ends: one left running would hold the test's directory after it.
+    /// </summary>
+    private sealed class Waiting : IDisposable
+    {
+        private readonly Process _process;
+
+        private Waiting(Process process) => _process = process;
+
+        /// <summary>Starts <paramref name="program"/> - a copy of ping - waiting a minute in <paramref name="workingDirectory"/>.</summary>
+        public static Waiting Start(string program, string workingDirectory)
+            => new(Process.Start(new ProcessStartInfo(program)
+            {
+                ArgumentList = { "-n", "60", "127.0.0.1" },
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+            })!);
+
+        public void Dispose()
+        {
+            if (!_process.HasExited)
+            {
+                _process.Kill(entireProcessTree: true);
+            }
+
+            _process.WaitForExit();
+            _process.Dispose();
+        }
     }
 }

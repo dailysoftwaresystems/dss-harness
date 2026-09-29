@@ -1134,9 +1134,9 @@ internal static class HelpCommand
         builder.AppendLine("everything it found, on one line. A tag made inside a submodule counts as kept,");
         builder.AppendLine("and is lost with the submodule's repository.");
         builder.AppendLine();
-        builder.AppendLine("Without --force, when the check cannot be finished, because git cannot answer or");
-        builder.AppendLine("a record cannot be read or its directory found, nothing is deleted and it");
-        builder.AppendLine($"exits {HarnessExit.CommandFailed}.");
+        builder.AppendLine("Without --force, when the check cannot be finished, because git cannot answer, a");
+        builder.AppendLine("record cannot be read or its directory found, or, on Windows, a directory in it");
+        builder.AppendLine($"cannot be looked through for what holds it, nothing is deleted and it exits {HarnessExit.CommandFailed}.");
         builder.AppendLine("Ignored files outside a declared evidenceRoots directory are deleted unchecked,");
         builder.AppendLine("even ones no build makes again, such as .env, and so are ignored directories");
         builder.AppendLine("with everything in them, the history of a repository nested inside one and the");
@@ -1146,6 +1146,15 @@ internal static class HelpCommand
         builder.AppendLine("--discard-uncommitted for uncommitted changes, which it deletes with the");
         builder.AppendLine("worktree, saying how many and naming a few. --force skips every check and");
         builder.AppendLine("overrides a lock; whatever the worktree held is lost.");
+        builder.AppendLine();
+        builder.AppendLine($"On Windows, without --force, a worktree something holds part of is refused ({HarnessExit.Refused})");
+        builder.AppendLine("whole once every check has passed, with nothing removed, naming what is held: a");
+        builder.AppendLine("directory that is a process's current directory, this command's own among them,");
+        builder.AppendLine("a file open without sharing its deletion, or one a program is running from. git's");
+        builder.AppendLine("removal would stop there part way, with the worktree's .git file and git's record");
+        builder.AppendLine("of it already gone. Close what holds it and run delete-worktree again, from outside");
+        builder.AppendLine("the worktree where it is this command's own. A watcher on a directory, as an editor");
+        builder.AppendLine("keeps, holds nothing; --force looks for nothing, and goes as far as it can.");
         builder.AppendLine();
         builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform;");
         builder.AppendLine("running delete-worktree again with --force finishes it.");

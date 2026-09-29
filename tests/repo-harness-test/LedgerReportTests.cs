@@ -316,6 +316,14 @@ public sealed class LedgerReportTests
         Assert.Equal(verdictColumn, rows[3].IndexOf("skipped-unavailable", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A ledger no leg has a row in renders nothing: the heading alone, above the line saying why the
+    /// command stopped, read as a table whose rows had gone missing.
+    /// </summary>
+    [Fact]
+    public void ALedgerWithNoRows_RendersNoTable()
+        => Assert.Empty(LedgerReport.From([], durationWarningFactor: 0).Render());
+
     [Theory]
     [InlineData(134, "2m14s")]
     [InlineData(362, "6m02s")]

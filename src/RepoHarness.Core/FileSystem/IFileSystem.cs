@@ -103,6 +103,19 @@ public interface IFileSystem
     /// <param name="path">The directory to look under.</param>
     IEnumerable<string> EnumerateDirectoryLinks(string path);
 
+    /// <summary>
+    /// What another program holds under <paramref name="path"/>, itself included, so that Windows would not delete
+    /// it: a directory that is a process's current directory, a file or directory open without sharing its
+    /// deletion, and a file a program is running from. Each entry is opened as a deletion opens it and let go at
+    /// once, and nothing is changed; a link is asked about as itself and never walked. Empty on Linux and macOS,
+    /// where none of these stops a deletion, and empty where the directory is not there.
+    /// </summary>
+    /// <param name="path">The directory to look through.</param>
+    /// <param name="cancellationToken">Stops the looking, between one entry and the next.</param>
+    /// <exception cref="IOException">A directory under it could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read a directory under it.</exception>
+    IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default);
+
     /// <summary>Enumerates immediate subdirectories of <paramref name="path"/>.</summary>
     IEnumerable<string> EnumerateDirectories(string path);
 
