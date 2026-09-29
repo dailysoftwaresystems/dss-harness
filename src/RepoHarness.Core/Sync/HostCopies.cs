@@ -7,6 +7,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Sync;
 
@@ -41,9 +42,21 @@ public static partial class HostCopies
     /// <param name="layout">The repository the tree belongs to.</param>
     /// <param name="treeRoot">The tree: the main checkout, or one of its worktrees.</param>
     /// <param name="comparison">How this machine compares paths.</param>
+    /// <param name="worktreesDirectory">The worktrees root; the configured one, where none is given.</param>
     /// <exception cref="HarnessException">The host declares no repositoryPath.</exception>
-    public static string Of(HarnessConfig config, HostId host, HarnessLayout layout, string treeRoot, StringComparison comparison)
-        => For(RepositoryPathOf(config, host), layout, treeRoot, comparison);
+    public static string Of(
+        HarnessConfig config,
+        HostId host,
+        HarnessLayout layout,
+        string treeRoot,
+        StringComparison comparison,
+        string? worktreesDirectory = null)
+        => For(
+            RepositoryPathOf(config, host),
+            layout,
+            treeRoot,
+            worktreesDirectory ?? layout.WorktreesDirectoryUnder(config.Worktrees.Root),
+            comparison);
 
     /// <summary>
     /// Where a host whose main copy is at <paramref name="repositoryPath"/> keeps the copy of
@@ -52,8 +65,9 @@ public static partial class HostCopies
     /// <param name="repositoryPath">Where the host keeps the main checkout's copy.</param>
     /// <param name="layout">The repository the tree belongs to.</param>
     /// <param name="treeRoot">The tree: the main checkout, or one of its worktrees.</param>
+    /// <param name="worktreesDirectory">The worktrees root.</param>
     /// <param name="comparison">How this machine compares paths.</param>
-    public static string For(string repositoryPath, HarnessLayout layout, string treeRoot, StringComparison comparison)
+    public static string For(string repositoryPath, HarnessLayout layout, string treeRoot, string worktreesDirectory, StringComparison comparison)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
         ArgumentNullException.ThrowIfNull(layout);
@@ -61,7 +75,7 @@ public static partial class HostCopies
 
         return string.Equals(Whole(treeRoot), Whole(layout.MainCheckoutRoot), comparison)
             ? repositoryPath
-            : ForWorktree(repositoryPath, NameOf(treeRoot));
+            : ForWorktree(repositoryPath, NameOf(worktreesDirectory, treeRoot, comparison));
     }
 
     /// <summary>The copy a worktree kept under <paramref name="name"/> has beside the main copy at <paramref name="repositoryPath"/>.</summary>
@@ -76,18 +90,46 @@ public static partial class HostCopies
     }
 
     /// <summary>
-    /// The name a tree's copies are kept under: its directory's, spelt as a worktree's name is - lower-case letters
-    /// and digits, and a hyphen for each run of anything else - so a worktree create-worktree made keeps its own.
+    /// The name a tree's copies are kept under. A worktree under the root keeps its address's
+    /// (<see cref="WorktreeAddress.CopyName"/>): its own name, or its orchestrator's and its own joined by two hyphens, so
+    /// two orchestrators' agents of one name keep copies apart. Any other tree keeps its directory's, spelt as a
+    /// worktree's name is - lower-case letters and digits, and a hyphen for each run of anything else.
     /// </summary>
-    /// <param name="treeRoot">The tree.</param>
-    public static string NameOf(string treeRoot)
+    /// <param name="worktreesDirectory">The worktrees root, as configured.</param>
+    /// <param name="treeRoot">The tree, as written or with its links resolved, as git names one.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    /// <remarks>
+    /// A root kept on another disk through a link is tried where it leads too: git names a tree by where it resolved,
+    /// and a leg by the path it was configured with, and the two must name one copy alike.
+    /// </remarks>
+    public static string NameOf(string worktreesDirectory, string treeRoot, StringComparison comparison)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreesDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(treeRoot);
+
+        if ((WorktreeAddress.OfTree(worktreesDirectory, treeRoot, comparison)
+                ?? (LinkTargetOf(worktreesDirectory) is { } target ? WorktreeAddress.OfTree(target, treeRoot, comparison) : null)) is { } address)
+        {
+            return address.CopyName;
+        }
 
         var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(treeRoot));
         var name = NotANameCharacter().Replace(leaf.ToLowerInvariant(), "-").Trim('-');
 
         return name.Length > 0 ? name : "worktree";
+    }
+
+    /// <summary>Where <paramref name="directory"/> leads, when it is itself a link or a junction; otherwise <see langword="null"/>.</summary>
+    private static string? LinkTargetOf(string directory)
+    {
+        try
+        {
+            return new DirectoryInfo(directory).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Where a host keeps the main checkout's copy, as the configuration declares it.</summary>

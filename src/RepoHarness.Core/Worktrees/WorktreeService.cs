@@ -25,6 +25,17 @@ public interface IWorktreeService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Creates the worktree at <paramref name="address"/>: a plain one, or an orchestrator's agent's, below the
+    /// directory named for its orchestrator. Each name is held to worktrees.maxNameLength, and the whole path to the
+    /// path budget, as create-worktree holds a plain one.
+    /// </summary>
+    /// <exception cref="HarnessException">As for <see cref="CreateAsync"/>.</exception>
+    Task<WorktreeOutcome> CreateAtAsync(
+        string startDirectory,
+        WorktreeAddress address,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Removes a worktree, everything under it and git's record of it. Unless
     /// <paramref name="force"/> is set, it is refused and left untouched when deleting it would lose
     /// uncommitted changes, edits status cannot see, commits on no branch, tag, remote-tracking ref,
@@ -40,6 +51,11 @@ public interface IWorktreeService
     /// where git's removal would stop part way on it.
     /// <paramref name="force"/> skips every check, and that look, and overrides a lock.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="name"/> is an address: a plain worktree's name, or <c>orchestrator/agent</c>. A directory under
+    /// the root that holds worktrees below it - an orchestrator's, holding its agents' - is refused even with
+    /// <paramref name="force"/>, since deleting it would delete each of them.
+    /// </remarks>
     /// <exception cref="HarnessException">
     /// As for <see cref="CreateAsync"/>, or the path resolved outside the worktrees directory.
     /// </exception>
@@ -59,7 +75,10 @@ public interface IWorktreeService
 }
 
 /// <summary>One existing worktree.</summary>
-/// <param name="Name">The worktree's name, which is its directory name under the worktrees root.</param>
+/// <param name="Name">
+/// The worktree's address: its directory's name under the worktrees root, or, for an orchestrator's agent,
+/// <c>orchestrator/agent</c>.
+/// </param>
 /// <param name="BaseCommit">
 /// The commit it was made from, or <see langword="null"/> when none was recorded — a worktree made
 /// before the record existed, or one whose record could not be written. Reported so the tree a
@@ -88,6 +107,12 @@ public sealed record WorktreeOutcome(CommandOutcome Outcome, string Name, string
 {
     /// <summary>Whether the command succeeded.</summary>
     public bool Succeeded => Outcome.Succeeded;
+
+    /// <summary>
+    /// The commit a worktree just created was made from, as read from it: <see langword="null"/> when it could not be
+    /// read, and for anything but a creation.
+    /// </summary>
+    public string? BaseCommit { get; init; }
 
     /// <summary>A failure carrying no worktree.</summary>
     public static WorktreeOutcome Failed(CommandOutcome outcome)
@@ -163,6 +188,13 @@ public sealed class WorktreeService(
 
         if (!useRandomName)
         {
+            // An agent's worktree is made with its records by create-agent, never on its own: one made here would be an
+            // agent no orchestrator knows.
+            if (WorktreeAddress.TryParse(name, out var address, out _) && address!.IsNested)
+            {
+                return Usage($"'{name}' names an orchestrator's agent, whose worktree create-agent makes with its records; create-worktree makes a plain one.");
+            }
+
             if (!WorktreeName.ValidateFormat(name).TryGetName(out _, out var formatError))
             {
                 return Usage(formatError);
@@ -198,12 +230,64 @@ public sealed class WorktreeService(
             worktreeName = accepted;
         }
 
-        var path = layout.WorktreePathUnder(settings.Root, worktreeName);
+        // Plain worktrees and orchestrators share the names under the root: an orchestrator's agents' worktrees are made
+        // in the directory named for it there.
+        if (_fileSystem.DirectoryExists(Path.Combine(layout.OrchestratorsDirectory, worktreeName)))
+        {
+            return WorktreeOutcome.Failed(CommandOutcome.Refused(
+                $"'{worktreeName}' is an orchestrator's name, and its agents' worktrees are made under '{Printable(layout.WorktreePathUnder(settings.Root, worktreeName))}'; choose another name."));
+        }
+
+        return await CreateAtCoreAsync(context, WorktreeAddress.Plain(worktreeName), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<WorktreeOutcome> CreateAtAsync(
+        string startDirectory,
+        WorktreeAddress address,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+
+        var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
+
+        foreach (var segment in address.Segments)
+        {
+            if (!WorktreeName.Validate(segment, context.Config.Worktrees.MaxNameLength).TryGetName(out _, out var error))
+            {
+                return Usage(error);
+            }
+        }
+
+        return await CreateAtCoreAsync(context, address, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Creates the worktree at <paramref name="address"/>, whose names were checked already.</summary>
+    private async Task<WorktreeOutcome> CreateAtCoreAsync(
+        HarnessContext context,
+        WorktreeAddress address,
+        CancellationToken cancellationToken)
+    {
+        var layout = context.Layout;
+        var settings = context.Config.Worktrees;
+        var worktreesDirectory = layout.WorktreesDirectoryUnder(settings.Root);
+        var worktreeName = address.Name;
+        var path = address.PathUnder(worktreesDirectory);
 
         if (_fileSystem.DirectoryExists(path))
         {
             return WorktreeOutcome.Failed(
                 CommandOutcome.Refused($"A worktree named '{worktreeName}' already exists."));
+        }
+
+        // An agent's worktree sits in the directory named for its orchestrator, which is no worktree of its own: one
+        // made inside a worktree would be taken for part of it, by git there and by every tool that asks git.
+        var parent = Path.GetDirectoryName(path)!;
+
+        if (address.IsNested
+            && (_fileSystem.FileExists(Path.Combine(parent, ".git")) || _fileSystem.DirectoryExists(Path.Combine(parent, ".git"))))
+        {
+            return WorktreeOutcome.Failed(CommandOutcome.Refused(
+                $"'{Printable(parent)}' is a worktree, and an orchestrator's agents' worktrees cannot be made inside one; delete it, or name the orchestrator otherwise."));
         }
 
         var budget = _pathBudget.Check(
@@ -217,7 +301,7 @@ public sealed class WorktreeService(
             return WorktreeOutcome.Failed(CommandOutcome.Refused(budget.Describe(path)));
         }
 
-        _fileSystem.CreateDirectory(layout.WorktreesDirectoryUnder(settings.Root));
+        _fileSystem.CreateDirectory(parent);
 
         // Worktrees are always created from the main checkout, so running this from
         // inside a worktree adds a sibling rather than nesting one.
@@ -254,7 +338,10 @@ public sealed class WorktreeService(
         return new WorktreeOutcome(
             CommandOutcome.Ok($"created worktree '{worktreeName}'", details),
             worktreeName,
-            path);
+            path)
+        {
+            BaseCommit = baseCommit,
+        };
     }
 
     /// <summary>
@@ -365,16 +452,17 @@ public sealed class WorktreeService(
     {
         // Only the shape is checked, not the length: a worktree created under a longer
         // limit must stay deletable after the limit is lowered.
-        if (!WorktreeName.ValidateFormat(name).TryGetName(out var worktreeName, out var error))
+        if (!WorktreeAddress.TryParse(name, out var address, out var error))
         {
             return Usage(error);
         }
 
+        var worktreeName = address!.Name;
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
         var layout = context.Layout;
         var settings = context.Config.Worktrees;
         var worktreesDirectory = layout.WorktreesDirectoryUnder(settings.Root);
-        var path = layout.WorktreePathUnder(settings.Root, worktreeName);
+        var path = address.PathUnder(worktreesDirectory);
 
         // Guards the one recursive delete this command performs, and comes before anything is
         // touched, so this refusal can never follow a deletion.
@@ -387,6 +475,20 @@ public sealed class WorktreeService(
 
         var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
 
+        // A directory holding worktrees below it - an orchestrator's, holding its agents' - is never deleted as one,
+        // --force or not: deleting it would delete each of them, with everything they hold and git's records left
+        // naming directories that are gone. Only a directory with no .git of its own is one: a worktree's submodules
+        // and nested repositories are its own contents, which the checks below weigh.
+        if (_fileSystem.DirectoryExists(path)
+            && !_fileSystem.FileExists(Path.Combine(path, ".git"))
+            && !_fileSystem.DirectoryExists(Path.Combine(path, ".git"))
+            && await inspector.FindWorktreesBelowAsync(layout.MainCheckoutRoot, worktreesDirectory, path, cancellationToken).ConfigureAwait(false) is { Count: > 0 } below)
+        {
+            return Refused(
+                $"'{Printable(path)}' is not deleted, --force or not: it holds worktrees below it - {Listed(below)} - and deleting it would delete "
+                + $"each of them. Delete each on its own, with '{ToolPackage.Command} {DeleteCommand} <address>' or, for an orchestrator's agent, delete-agent.");
+        }
+
         if (!_fileSystem.DirectoryExists(path))
         {
             var cleared = await ClearRecordAsync(layout, worktreeName, path, force, inspector, cancellationToken)
@@ -397,13 +499,13 @@ public sealed class WorktreeService(
             // them again is what deleting it again is for.
             if (cleared is null)
             {
-                return await AndItsHostCopiesAsync(context, worktreeName, path, treeConfig: null, deleted: null, cancellationToken).ConfigureAwait(false);
+                return await AndItsHostCopiesAsync(context, address, path, treeConfig: null, deleted: null, cancellationToken).ConfigureAwait(false);
             }
 
             if (cleared.Succeeded)
             {
                 await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
-                return await AndItsHostCopiesAsync(context, worktreeName, path, treeConfig: null, cleared, cancellationToken).ConfigureAwait(false);
+                return await AndItsHostCopiesAsync(context, address, path, treeConfig: null, cleared, cancellationToken).ConfigureAwait(false);
             }
 
             return cleared;
@@ -552,7 +654,7 @@ public sealed class WorktreeService(
         // worktree a failed removal left in place. Not cancelled: the removal is past its point of
         // no return, and a record left behind would answer for a later worktree of the same name.
         await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
-        return await AndItsHostCopiesAsync(context, worktreeName, path, treeConfig, outcome, cancellationToken).ConfigureAwait(false);
+        return await AndItsHostCopiesAsync(context, address, path, treeConfig, outcome, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<WorktreeListing>> ListAsync(
@@ -583,35 +685,61 @@ public sealed class WorktreeService(
         {
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
-            if (string.IsNullOrEmpty(name))
+            if (string.IsNullOrEmpty(name) || TakeListed(directory, name, orchestrator: null))
             {
                 continue;
             }
 
+            // A directory that is no worktree may be an orchestrator's, holding its agents' worktrees, each listed by
+            // both names; one holding none is said to be no worktree, as any other directory there is.
+            var agents = 0;
+
+            foreach (var child in _fileSystem.EnumerateDirectories(directory))
+            {
+                var agent = Path.GetFileName(Path.TrimEndingDirectorySeparator(child));
+
+                if (!string.IsNullOrEmpty(agent) && TakeListed(child, agent, orchestrator: name))
+                {
+                    agents++;
+                }
+            }
+
+            if (agents == 0)
+            {
+                _output.Detail(
+                    ListCommand,
+                    $"'{name}' is under the worktrees root and is not a worktree git records, so it is not listed");
+            }
+        }
+
+        // Whether the directory is a worktree git records, listed under its address; one holding a .git entry git does
+        // not record is said, and taken as dealt with, since it is nobody's orchestrator.
+        bool TakeListed(string directory, string name, string? orchestrator)
+        {
+            var address = orchestrator is null ? name : $"{orchestrator}{WorktreeAddress.Separator}{name}";
             var resolved = _fileSystem.ResolveLinks(directory);
 
             if (registered.Any(worktree => PathsEqual(worktree.Path, resolved)))
             {
-                names.Add((name, resolved));
+                names.Add((address, resolved));
+                return true;
             }
-            else if (_fileSystem.FileExists(Path.Combine(directory, ".git")) || _fileSystem.DirectoryExists(Path.Combine(directory, ".git")))
+
+            if (_fileSystem.FileExists(Path.Combine(directory, ".git")) || _fileSystem.DirectoryExists(Path.Combine(directory, ".git")))
             {
                 // Said without being asked. A directory holding a .git entry that git no longer
                 // records is what a removal leaves when git's record went and a file in use did not,
                 // and its name stays taken: dropped from the listing silently, it looks free.
                 _output.Warn(
                     ListCommand,
-                    $"'{name}' holds a .git entry, and git records no worktree there: what a removal leaves "
+                    $"'{address}' holds a .git entry, and git records no worktree there: what a removal leaves "
                     + "when git's record goes and something in the directory could not. It is not listed, "
                     + "and a new worktree cannot take its name until it is gone; look inside for anything "
                     + $"wanted, then delete '{directory}'.");
+                return true;
             }
-            else
-            {
-                _output.Detail(
-                    ListCommand,
-                    $"'{name}' is under the worktrees root and is not a worktree git records, so it is not listed");
-            }
+
+            return false;
         }
 
         var listings = new List<WorktreeListing>();
@@ -1019,11 +1147,11 @@ public sealed class WorktreeService(
     }
 
     /// <summary>
-    /// Asks each host holding a copy of worktree <paramref name="name"/> to remove it, as the last part of deleting
-    /// it, and adds what they did to <paramref name="deleted"/>.
+    /// Asks each host holding a copy of the worktree at <paramref name="address"/> to remove it, as the last part of
+    /// deleting it, and adds what they did to <paramref name="deleted"/>.
     /// </summary>
     /// <param name="context">The repository.</param>
-    /// <param name="name">The worktree.</param>
+    /// <param name="address">The worktree, whose copies are kept under its <see cref="WorktreeAddress.CopyName"/>.</param>
     /// <param name="path">The worktree's directory, whose copies these are.</param>
     /// <param name="treeConfig">The configuration it ran on, read before it was deleted, where it could be.</param>
     /// <param name="deleted">What deleting it here did, or <see langword="null"/> when it was gone already.</param>
@@ -1035,12 +1163,13 @@ public sealed class WorktreeService(
     /// </remarks>
     private async Task<WorktreeOutcome> AndItsHostCopiesAsync(
         HarnessContext context,
-        string name,
+        WorktreeAddress address,
         string path,
         HarnessConfig? treeConfig,
         WorktreeOutcome? deleted,
         CancellationToken cancellationToken)
     {
+        var name = address.Name;
         var done = deleted is null ? $"Worktree '{name}' is gone already" : $"Worktree '{name}' was deleted";
         var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
         IReadOnlyList<string> before = deleted?.Outcome.Details ?? [];
@@ -1048,7 +1177,7 @@ public sealed class WorktreeService(
 
         try
         {
-            removal = await _hostCopies.RemoveAsync(context, name, path, treeConfig, cancellationToken).ConfigureAwait(false);
+            removal = await _hostCopies.RemoveAsync(context, address.CopyName, path, treeConfig, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -1333,7 +1462,8 @@ public sealed class WorktreeService(
         {
             var candidate = WorktreeName.Generate(length);
 
-            if (!_fileSystem.DirectoryExists(layout.WorktreePathUnder(root, candidate)))
+            if (!_fileSystem.DirectoryExists(layout.WorktreePathUnder(root, candidate))
+                && !_fileSystem.DirectoryExists(Path.Combine(layout.OrchestratorsDirectory, candidate)))
             {
                 return candidate;
             }

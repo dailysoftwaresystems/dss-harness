@@ -130,7 +130,7 @@ public sealed class HostExecService(
             new HostAgentRequest
             {
                 Kind = HostAgentRequestKind.Run,
-                Directory = HostCopies.For(target.RepositoryPath, context.Layout, context.Layout.RepositoryRoot, _platform.PathComparison),
+                Directory = HostCopies.For(target.RepositoryPath, context.Layout, context.Layout.RepositoryRoot, context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), _platform.PathComparison),
                 Arguments = [.. arguments],
 
                 // As a sync's own requests carry it: a command run here is the host's work for as long as it

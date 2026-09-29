@@ -560,7 +560,10 @@ public sealed class SyncService(
         // worktree is deleted, and forgotten.
         if (!options.DryRun && context.Layout.IsWorktree(_platform) && transport.Host.Kind != Hosts.HostKind.Local)
         {
-            var name = HostCopies.NameOf(context.Layout.RepositoryRoot);
+            var name = HostCopies.NameOf(
+                context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root),
+                context.Layout.RepositoryRoot,
+                _platform.PathComparison);
             var claim = new HostCopyEntry(name, transport.Host.ToString(), destinationRoot, Path.GetFullPath(context.Layout.RepositoryRoot));
 
             if (new HostCopyRecord(_fileSystem, _platform.PathComparison).Claim(context.Layout, claim) is { } holder)

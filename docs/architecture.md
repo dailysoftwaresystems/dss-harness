@@ -364,6 +364,18 @@ git either. A caller that deliberately wants a different index still gets one: t
 is cleared first and the requested one set after. An answer that does not name `GIT_DIR` is not
 taken, and the command fails without running git.
 
+An orchestrator's agents' worktrees sit below the directory named for it,
+`<root>/<orchestrator>/<agent>`, and are made by `create-agent` with the agent's records, never by
+`create-worktree`, which makes plain worktrees only. Each is named by its address,
+`orchestrator/agent`, wherever a person reads or types it: `list-worktree` lists it so,
+`delete-worktree` takes it, and the commit it was made from is recorded at
+`refs/harness/worktree-base/<orchestrator>/<agent>`. Plain worktrees and orchestrators share the
+names under the root, so a plain worktree cannot take an orchestrator's name, and an agent's worktree
+is never made inside a plain one, where git would take it for part of it. A directory with no `.git`
+of its own that holds worktrees below it - an orchestrator's, holding its agents' - is never deleted
+as one, `--force` or not: deleting it would delete each of them. A worktree's submodules and nested
+repositories are its own contents, and do not make it such a directory.
+
 ### What deleting one refuses
 
 Without `--force`, every check runs before anything is touched. A refusal deletes nothing,
@@ -1326,7 +1338,9 @@ while a gate ran turned a green suite red, with four test processes live at once
   hangs a leg indefinitely, with no output and no verdict.
 - A host's copy of a tree is a git repository sync creates: the main checkout's at the host's
   `repositoryPath`, and each worktree's beside it, at `<repositoryPath>.worktree-<name>`, named for
-  the worktree's directory as a worktree's name is spelt. One copy per host had every worktree whose
+  the worktree's directory as a worktree's name is spelt - an orchestrator's agent's for both its
+  orchestrator's name and its own, joined by two hyphens, which no worktree's name can hold, so two
+  orchestrators' agents of one name keep their copies apart. One copy per host had every worktree whose
   legs reached a host wait for every other's, under one lock, each sync replacing the tree the one
   before had put there. Beside the main copy rather than inside it, because the agent a sync starts
   begins in the copy's parent, which must already be there, and a copy inside another would be taken

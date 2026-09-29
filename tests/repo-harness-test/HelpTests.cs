@@ -627,6 +627,26 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The worktrees topic says where an orchestrator's agents' worktrees sit, that they are named by their address, that
+    /// a directory holding worktrees is never deleted as one, and how their copies are named apart.
+    /// </summary>
+    [Fact]
+    public async Task WorktreesTopic_SaysAgentsWorktreesAreNamedByTheirAddress()
+    {
+        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Contains(
+            "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, made by "
+            + "create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, and delete-worktree "
+            + $"takes that address. A directory holding worktrees below it is never deleted as one, --force or not ({HarnessExit.Refused}), "
+            + "and a plain worktree cannot take an orchestrator's name. An agent's copies on hosts are kept under orchestrator--agent, so "
+            + "two orchestrators' agents of one name keep theirs apart.",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The worktrees topic says that on Windows each junction is removed as a link before git runs, what stops that,
     /// and that git worktree repair is named only while git still records the worktree.
     /// </summary>

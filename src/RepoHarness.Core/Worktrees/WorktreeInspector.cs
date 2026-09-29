@@ -171,6 +171,55 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         return RecordAt(worktrees, resolved);
     }
 
+    /// <summary>
+    /// The addresses of the worktrees below <paramref name="path"/>, which is not one itself: each git records strictly
+    /// inside it, and each directory directly in it holding a .git entry of its own, whether git still records it or
+    /// not - an orchestrator's directory holds its agents'. Asked of git and of the directory both, so neither a record
+    /// git lost nor a list git cannot give hides one; git's list failing leaves the directory's answer.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose list is read.</param>
+    /// <param name="worktreesDirectory">The worktrees root, which the addresses are relative to.</param>
+    /// <param name="path">A directory under the root.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    public async Task<IReadOnlyList<string>> FindWorktreesBelowAsync(
+        string mainCheckoutRoot,
+        string worktreesDirectory,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        var found = new SortedSet<string>(StringComparer.Ordinal);
+        var resolved = ResolveLinks(path);
+
+        foreach (var child in _fileSystem.EnumerateDirectories(path))
+        {
+            if (_fileSystem.FileExists(Path.Combine(child, ".git")) || _fileSystem.DirectoryExists(Path.Combine(child, ".git")))
+            {
+                found.Add(AddressOf(worktreesDirectory, child));
+            }
+        }
+
+        try
+        {
+            foreach (var worktree in await _gitClient.ListWorktreesAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false))
+            {
+                if (!worktree.IsMain && PathContainment.IsStrictlyInside(resolved, worktree.Path, _platform.PathComparison))
+                {
+                    found.Add(AddressOf(ResolveLinks(worktreesDirectory), worktree.Path));
+                }
+            }
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            // The directory's own answer stands: git's list adds only what lost its .git entry.
+        }
+
+        return [.. found];
+
+        string AddressOf(string root, string tree)
+            => WorktreeAddress.OfTree(root, tree, _platform.PathComparison)?.Name
+                ?? Path.GetRelativePath(root, tree).Replace(Path.DirectorySeparatorChar, WorktreeAddress.Separator);
+    }
+
     /// <summary>The worktree among <paramref name="worktrees"/> recorded at <paramref name="resolvedPath"/>, never the main one.</summary>
     /// <param name="worktrees">git's list.</param>
     /// <param name="resolvedPath">A path with its links resolved, as git lists one.</param>

@@ -54,7 +54,7 @@ internal static class DeleteWorktreeCommand
 
     private static readonly Argument<string> NameArgument = new("name")
     {
-        Description = "Worktree to remove.",
+        Description = "Worktree to remove: its name, or orchestrator/agent for an orchestrator's agent's.",
     };
 
     private static readonly Option<bool> ForceOption = new("--force")

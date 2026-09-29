@@ -1119,6 +1119,14 @@ internal static class HelpCommand
         builder.AppendLine("harness removes nothing. Another generator, or a ninja before 1.10, is measured as");
         builder.AppendLine("before.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, "
+            + "made by create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, "
+            + "and delete-worktree takes that address. A directory holding worktrees below it is never deleted as one, --force "
+            + $"or not ({HarnessExit.Refused}), and a plain worktree cannot take an orchestrator's name. An agent's copies on hosts "
+            + "are kept under orchestrator--agent, so two orchestrators' agents of one name keep theirs apart.");
+        builder.AppendLine();
         builder.AppendLine("Worktrees always belong to the main checkout, so running create-worktree from");
         builder.AppendLine("inside a worktree adds a sibling rather than nesting one.");
         builder.AppendLine();
