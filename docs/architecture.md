@@ -496,6 +496,89 @@ before the two minutes are up, git is stopped and the command says what is left.
 can be left partly done on any platform, and on Linux and macOS the interruption reaches git
 itself; running `delete-worktree <name> --force` then finishes it.
 
+## Orchestrators and agents
+
+An orchestrator is a session that runs agents side by side, each in a worktree of its own. Everything it and its
+agents keep is in the main checkout under `.orchestrators/<orchestrator>/` - records, logs, plans, scratch, the rows
+an agent files, its kept evidence and transcripts - never in a worktree, and init keeps the directory in git by its
+placeholder and everything made in it out; sync withholds it from every host by name. A session taking the work
+over, on another account or after the last one ended, reads it there. `OrchestratorLayout` spells every path once;
+`OrchestrationStore` reads and writes the records strictly - a record that does not read as exactly what it must be
+is refused, never guessed at - and `OrchestrationLog` appends one JSON line for each run that changed an orchestrator or
+one of its agents, or tried to: create-orchestrator, create-agent, seed-agent and every `--apply`, refusals included. A
+log that cannot take a line never replaces what the command did; the command says so instead.
+
+An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
+and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
+orchestrator under the root is shared with plain worktrees' names, so create-worktree refuses an orchestrator's
+name and create-orchestrator a worktree's, and delete-worktree never deletes a directory holding worktrees below
+it, forced or not, nor one with no `.git` of its own while git cannot list its worktrees. delete-orchestrator
+removes the record last, so a removal that stops part way (exit 21) leaves what names the orchestrator, and run
+again it finishes.
+
+### Seeding and folding
+
+The seed is the main tree's uncommitted state copied into the agent's worktree when it is made - every path
+git status lists, less `TreeFloor`: `.git`, `.orchestrators` and the worktrees root, asserted where the copying
+happens rather than left to ignore rules a repository can edit away - with each copy's SHA-256 and, where the
+platform has one, its execute bit recorded in `seed.json`. A symbolic link is refused rather than handed over as
+the file it leads to, before the worktree is made, so the refusal leaves nothing behind. refresh-agent hands over
+the main tree's later changes under the paths it is given the same way, refused where the agent edited or deleted
+one of them.
+
+An agent's contribution is a measurement (`AgentFold`): its worktree's status, and every handed path whether its
+status lists it or not, less the handed paths left as they were. Each path goes in exactly one list - its own,
+deleted, inherited, already in the main tree, settled - or is refused, and one refusal refuses the whole fold
+before anything is written. A handed path is compared with what it was handed; any other with the blob at the
+agent's own base - never the main tree's HEAD, which a sibling's committed fold moves back to the main tree's
+bytes - through the clean filters git compares a working file through (`hash-object` on the main tree's file,
+`cat-file --batch-check` at the base, one process each), so a line-ending conversion is not taken for a change. A
+refusal of a changed main-tree path says whether a commit or an uncommitted edit changed it, since the two are
+reconciled differently. A deletion needs the same baseline proof a copy does. A path reached through a link in
+either tree, a directory - a submodule, a repository of the agent's own - and a HEAD moved past the base are
+refused. `--settled` is the one way out of an all-or-nothing refusal, asked before the deletion branch so a
+deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. A path the main
+tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
+cannot look at is never read as absent, which would take the agent's file for its deletion: the fold fails before
+anything is written. A file that changed after it was weighed is never written (`VerifiedFileCopy` refuses a
+source that no longer holds the SHA-256 weighed), and the fold stops there, exit 21, for a run again to weigh it
+anew.
+
+The rows an agent files (`AgentRows`) are read strictly - a directory for each anchor, a file for each cell, read
+as write-anchor reads a cell file - and applied through `IAnchorRegistryService.ApplyAsync`, which composes each
+row exactly as write-anchor or set-anchor does, one after another under the registries' one lock: every row is
+checked and every refusal named before any is written, a row already as declared is left alone, a change names
+only the cells that differ, a row moving between the registries is written destination first, and a write that
+fails, or rows that do not read back as declared, put both registries back byte for byte.
+
+### Deleting an agent
+
+delete-agent measures everything first, under the run lock on the main tree and on the agent's worktree: the
+fold and the rows, or with `--discard-uncommitted` what the agent changed. It writes the fold and the rows, proves
+nothing is left to fold - the removal's discard of uncommitted work is built from that measurement alone - copies
+the agent's Claude transcripts by session id (`ClaudeTranscripts`; found by file name alone, since Claude Code's
+format is its own; one not found is said, and one found and not kept stops the deletion before the agent is
+closed), and keeps the evidence roots' files, over the roots named before the fold and after it, in the agent's
+directory, every copy read back (`AgentEvidence`, which finds files as a removal reaches them through
+`WorktreeEvidence`, the walk delete-worktree's evidence check makes: never through a link, and a root that is or
+passes through one neither kept nor counted). Only then does it record the agent closed: which git worktree it was
+(`WorktreeStamp`, the creation and write times of `commondir` in its git directory, which a new worktree at the
+same path does not share) and every path it held with its digest. It deletes the evidence originals still holding
+what was kept - one that cannot be deleted is named and left, and stops the removal - and asks delete-worktree for
+the removal - never forced, its evidence check kept, so a file written after the copy was read back stops it rather
+than going with it - then proves the removal: directory gone, git's record gone, no copy recorded on a host. A
+question it cannot answer is named as that, never read as nothing left. An agent made under a worktrees root the
+configuration no longer names is refused with nothing touched, since delete-worktree looks under the root the
+configuration names.
+
+A closed agent is never folded, seeded or refreshed again. delete-agent run again compares its worktree with what
+closing recorded, never with the main tree, which later agents go on changing: a file changed or new since is
+work, left for a person (exit 21); a file gone since is the debris of a removal that stopped part way; a path the
+main tree ignores is never work, asked of the main tree with its index, since the removal may have deleted the
+worktree's own ignore rules first. A directory with no `.git` of its own is never read - git would answer for the
+main checkout - and never forced: its evidence is kept again, and the forced removal is named for a person. A
+worktree made at the path since is another, and not the agent's to remove.
+
 ## Anchor registries
 
 An anchor is a named piece of deferred work, kept as one row of a markdown registry. Two
@@ -1940,7 +2023,7 @@ with "the harness could not run", because the remedies differ.
 | 14 | A required tool is missing, or could not be started |
 | 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
 | 20 | The wrapped command ran and failed |
-| 21 | Ran with nothing failing, but a leg reached no verdict; it is not a pass |
+| 21 | Ran with nothing failing, but a leg reached no verdict, or a deletion stopped part way; it is not a pass |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 

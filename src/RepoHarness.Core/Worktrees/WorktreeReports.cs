@@ -1,8 +1,8 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
 
@@ -11,14 +11,7 @@ namespace RepoHarness.Core.Worktrees;
 /// <summary>What <c>list-worktree</c> reports: the worktrees, and the copies hosts keep of them and of those that are gone.</summary>
 public static class WorktreeReports
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-
-        // Paths hold backslashes and names any text; escaping them would make the document unreadable to a person
-        // for no benefit to a parser.
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
     /// <summary>The command that deletes a worktree, and deals with the copies left under its name.</summary>
     private static string Delete(string name) => $"{ToolPackage.Command} {WorktreeService.DeleteCommand} {Shown(name)}";

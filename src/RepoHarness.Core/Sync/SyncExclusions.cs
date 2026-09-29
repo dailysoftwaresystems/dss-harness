@@ -60,7 +60,7 @@ public sealed class SyncExclusions
             .Distinct(StringComparer.Ordinal)];
 
         _withheld = [.. sync.EffectiveNeverTransfer
-            .Concat([worktreesRoot])
+            .Concat(TreeFloor.Of(worktreesRoot))
             .Concat(gitIgnored ?? [])
             .Select(Normalize)
             .Where(path => path.Length > 0)

@@ -479,12 +479,7 @@ public sealed class LocalSyncTransport(
 
         try
         {
-            await using var stream = _fileSystem.OpenRead(path);
-            using var buffer = new MemoryStream();
-
-            await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-
-            return buffer.ToArray();
+            return await _fileSystem.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {

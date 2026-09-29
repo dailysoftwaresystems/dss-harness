@@ -77,6 +77,20 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
 
+    /// <summary>
+    /// Whether <paramref name="directory"/> holds a <c>.git</c> of its own - a worktree's file or a repository's directory -
+    /// rather than being answered for by whatever repository encloses it.
+    /// </summary>
+    /// <param name="fileSystem">Looks.</param>
+    /// <param name="directory">The directory.</param>
+    public static bool HoldsOwnGit(IFileSystem fileSystem, string directory)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        var git = Path.Combine(directory, ".git");
+        return fileSystem.FileExists(git) || fileSystem.DirectoryExists(git);
+    }
+
     /// <summary>What git makes of <paramref name="path"/>, compared with the main checkout's repository.</summary>
     public async Task<WorktreeIdentity> IdentifyAsync(
         string mainCheckoutRoot,
@@ -192,25 +206,19 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
         foreach (var child in _fileSystem.EnumerateDirectories(path))
         {
-            if (_fileSystem.FileExists(Path.Combine(child, ".git")) || _fileSystem.DirectoryExists(Path.Combine(child, ".git")))
+            if (HoldsOwnGit(_fileSystem, child))
             {
                 found.Add(AddressOf(worktreesDirectory, child));
             }
         }
 
-        try
+        // A list git could not give is not an empty one: raised, never read as no worktree below.
+        foreach (var worktree in await _gitClient.ListWorktreesAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false))
         {
-            foreach (var worktree in await _gitClient.ListWorktreesAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false))
+            if (!worktree.IsMain && PathContainment.IsStrictlyInside(resolved, worktree.Path, _platform.PathComparison))
             {
-                if (!worktree.IsMain && PathContainment.IsStrictlyInside(resolved, worktree.Path, _platform.PathComparison))
-                {
-                    found.Add(AddressOf(ResolveLinks(worktreesDirectory), worktree.Path));
-                }
+                found.Add(AddressOf(ResolveLinks(worktreesDirectory), worktree.Path));
             }
-        }
-        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
-        {
-            // The directory's own answer stands: git's list adds only what lost its .git entry.
         }
 
         return [.. found];

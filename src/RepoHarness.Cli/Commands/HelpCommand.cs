@@ -7,6 +7,7 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -28,15 +29,36 @@ internal static class HelpCommand
     /// <summary>Opening words of the unrecognised-topic message.</summary>
     internal const string UnknownTopicPrefix = "Unknown topic";
 
+    /// <summary>
+    /// Every topic, in the order the overview lists them: the one list the overview, the topic argument, the answer to an
+    /// unknown topic and the rendering all read, so no topic is ever advertised by one and missing from another.
+    /// </summary>
+    private static readonly IReadOnlyList<HelpTopic> Topics =
+    [
+        new("exit-codes", ["exit"], "What each exit code means", RenderExitCodes),
+        new("config", ["configuration"], "What config.json declares", RenderConfig),
+        new("legs", ["hosts", "emulators"], "Hosts, emulators, and how a leg finds where it runs", RenderLegs),
+        new("space", ["disk", "clean"], "Freeing a full disk, and the room a build needs", RenderSpace),
+        new("worktrees", ["worktree"], "Naming rules, the path budget, and when deleting refuses", RenderWorktrees),
+        new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
+        new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
+        new("layout", [], "What init creates, and what git tracks", RenderLayout),
+        new("secrets", ["hosts-secrets"], "Where each host's connection data lives", RenderSecrets),
+        new("tools", [], "What install-missing-tools installs, and where", RenderTools),
+        new("runners", ["runner", "actions"], "Predefined runners, action files and excused failures", RenderRunners),
+        new("verdicts", ["verdict"], "What each leg verdict means, and what to do about it", RenderVerdicts),
+        new("ci", ["check-ci-legs"], "How check-ci-legs finds a workflow's legs and budgets", RenderCi),
+    ];
+
     private static readonly Argument<string?> TopicArgument = new("topic")
     {
-        Description = "Topic to explain: exit-codes, config, legs, space, worktrees, anchors, layout, secrets, tools, runners, verdicts. Omit for an overview.",
+        Description = $"Topic to explain: {string.Join(", ", Topics.Select(topic => topic.Name))}. Omit for an overview.",
         Arity = ArgumentArity.ZeroOrOne,
     };
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Explain exit codes, configuration, legs and hosts, worktrees, anchors, layout, connection data, tools, runners and leg verdicts.");
+        var command = new Command(Name, $"Explain what the answers mean, one topic at a time: {string.Join(", ", Topics.Select(topic => topic.Name))}.");
         command.Arguments.Add(TopicArgument);
         GlobalOptions.AddTo(command);
 
@@ -67,24 +89,19 @@ internal static class HelpCommand
     }
 
     /// <summary>Renders one topic. Separated from the command so it is directly testable.</summary>
-    internal static string Render(string? topic) => (topic?.ToLowerInvariant()) switch
+    internal static string Render(string? topic)
     {
-        "exit-codes" or "exit" => RenderExitCodes(),
-        "config" or "configuration" => RenderConfig(),
-        "legs" or "hosts" or "emulators" => RenderLegs(),
-        "worktrees" or "worktree" => RenderWorktrees(),
-        "anchors" or "anchor" => RenderAnchors(),
-        "layout" => RenderLayout(),
-        "secrets" or "hosts-secrets" => RenderSecrets(),
-        "tools" => RenderTools(),
-        "runners" or "runner" or "actions" => RenderRunners(),
-        "verdicts" or "verdict" => RenderVerdicts(),
-        "ci" or "check-ci-legs" => RenderCi(),
-        "space" or "disk" or "clean" => RenderSpace(),
-        null or "" => RenderOverview(),
-        _ => $"{UnknownTopicPrefix} '{topic}'. Try: exit-codes, config, legs, space, worktrees, anchors, layout, "
-            + $"secrets, tools, runners, verdicts, ci.{Environment.NewLine}",
-    };
+        if (string.IsNullOrEmpty(topic))
+        {
+            return RenderOverview();
+        }
+
+        var asked = topic.ToLowerInvariant();
+
+        return Topics.FirstOrDefault(known => known.Name == asked || known.Aliases.Contains(asked, StringComparer.Ordinal)) is { } found
+            ? found.Render()
+            : $"{UnknownTopicPrefix} '{topic}'. Try: {string.Join(", ", Topics.Select(known => known.Name))}.{Environment.NewLine}";
+    }
 
     private static string RenderTools()
     {
@@ -665,6 +682,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {ToolPackage.Command} run <runner>            Run a predefined runner across its legs");
         builder.AppendLine($"  {ToolPackage.Command} clean                   Remove selected legs' build directories where they run");
         builder.AppendLine($"  {ToolPackage.Command} list-worktree           Show worktrees and the copies hosts keep of them");
+        builder.AppendLine($"  {ToolPackage.Command} list-orchestrator       Show orchestrators and where each agent stands");
         builder.AppendLine($"  {ToolPackage.Command} read-anchors            List the deferred work recorded as anchors");
         builder.AppendLine();
         builder.AppendLine("Every command accepts");
@@ -672,18 +690,11 @@ internal static class HelpCommand
         builder.AppendLine("  -v, --verbose                      Show per-phase detail and child process output");
         builder.AppendLine();
         builder.AppendLine("Topics");
-        builder.AppendLine($"  {ToolPackage.Command} help exit-codes         What each exit code means");
-        builder.AppendLine($"  {ToolPackage.Command} help config             What config.json declares");
-        builder.AppendLine($"  {ToolPackage.Command} help legs               Hosts, emulators, and how a leg finds where it runs");
-        builder.AppendLine($"  {ToolPackage.Command} help space              Freeing a full disk, and the room a build needs");
-        builder.AppendLine($"  {ToolPackage.Command} help worktrees          Naming rules, the path budget, and when deleting refuses");
-        builder.AppendLine($"  {ToolPackage.Command} help anchors            Anchor registries and the commands that change them");
-        builder.AppendLine($"  {ToolPackage.Command} help layout             What init creates, and what git tracks");
-        builder.AppendLine($"  {ToolPackage.Command} help secrets            Where each host's connection data lives");
-        builder.AppendLine($"  {ToolPackage.Command} help tools              What install-missing-tools installs, and where");
-        builder.AppendLine($"  {ToolPackage.Command} help runners            Predefined runners, action files and excused failures");
-        builder.AppendLine($"  {ToolPackage.Command} help verdicts           What each leg verdict means, and what to do about it");
-        builder.AppendLine($"  {ToolPackage.Command} help ci                 How check-ci-legs finds a workflow's legs and budgets");
+
+        foreach (var topic in Topics)
+        {
+            builder.AppendLine($"  {ToolPackage.Command} help {topic.Name,-19}{topic.Summary}");
+        }
         builder.AppendLine();
         builder.AppendLine($"Use '{ToolPackage.Command} <command> --help' for a command's own options.");
 
@@ -1124,7 +1135,8 @@ internal static class HelpCommand
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, "
             + "made by create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, "
             + "and delete-worktree takes that address. A directory holding worktrees below it is never deleted as one, --force "
-            + $"or not ({HarnessExit.Refused}), and a plain worktree cannot take an orchestrator's name. An agent's copies on hosts "
+            + $"or not ({HarnessExit.Refused}), nor one with no .git of its own while git cannot list its worktrees "
+            + $"({HarnessExit.CommandFailed}), and a plain worktree cannot take an orchestrator's name. An agent's copies on hosts "
             + "are kept under orchestrator--agent, so two orchestrators' agents of one name keep theirs apart.");
         builder.AppendLine();
         builder.AppendLine("Worktrees always belong to the main checkout, so running create-worktree from");
@@ -1318,6 +1330,116 @@ internal static class HelpCommand
         return builder.ToString();
     }
 
+    private static string RenderOrchestrators()
+    {
+        var builder = new StringBuilder();
+        var command = ToolPackage.Command;
+
+        builder.AppendLine("Orchestrators and their agents");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "An orchestrator is a session that runs agents side by side, each in a worktree of its own. Everything it and its "
+            + $"agents keep is in the main checkout, under {HarnessLayout.OrchestratorsDirectoryName}/<orchestrator>/, never in a "
+            + "worktree, so another session - on another account, or after this one ends - takes the work over by reading it:");
+        builder.AppendLine();
+        AppendColumns(
+            builder,
+            [
+                ($"  {OrchestratorLayout.RecordFileName}", "its record: name, model, createdAt, parallel, session"),
+                ($"  {OrchestratorLayout.LogsDirectoryName}/<name>{OrchestratorLayout.LogExtension}", "a JSON line for each run that changed it or one agent"),
+                ($"  {OrchestratorLayout.LogsDirectoryName}/<agent>/", "the agent's Claude transcripts, kept when it is deleted"),
+                ($"  {OrchestratorLayout.WorkDirectoryName}/<agent>/", "the agent's scratch and task files"),
+                ($"  {OrchestratorLayout.PlansDirectoryName}/<name>/", "plans: its own, and a directory for each agent"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.RecordFileName}", "the agent's record: name, model, createdAt, base, state"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SeedFileName}", "what it was handed, each path with its SHA-256"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.RowsDirectoryName}/<ID>/", "an anchor row it files, a file for each cell"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.EvidenceDirectoryName}/", "its evidence roots' files, kept when it is deleted"),
+            ]);
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"A row's cells are {string.Join(", ", AgentRows.RequiredCells.Select(cell => cell + AgentRows.CellExtension))}, and "
+            + $"{AgentRows.PriorityCell}{AgentRows.CellExtension} where it declares one, each read as write-anchor reads a cell file. "
+            + "An agent's worktree is <worktrees.root>/<orchestrator>/<agent>, which list-worktree and delete-worktree name "
+            + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. Agents write their handoffs, pause "
+            + "and stop points as .md files in their own directory.");
+        builder.AppendLine();
+        builder.AppendLine("Commands");
+        builder.AppendLine($"  {command} {OrchestratorService.CreateCommand} <o> --model <id> [--parallel <n>] [--session <id>]");
+        builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
+        builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
+        builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>...] [--apply]");
+        builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] [--settled <path>]...");
+        builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] [--settled <path>]... [--discard-uncommitted]");
+        builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--json]");
+        builder.AppendLine($"  {command} {OrchestratorService.DeleteCommand} <o> [--delete-evidence]");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most agents with a worktree at once: create-agent "
+            + "refuses the next, naming those that have one. Run again, create-orchestrator changes only the limit and the session, "
+            + "and create-agent records only the session; for an agent whose making stopped part way, it says so and names what "
+            + "finishes it. An agent's name is never used twice: a deleted agent's directory stays as its history.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Seeding. create-agent hands the agent the main tree's uncommitted state - every path git status lists, off the "
+            + "worktrees root, .git and .orchestrators - and records each path's digest; --empty hands it nothing. A symbolic link "
+            + "among it is refused before the worktree is made, so nothing is left behind. seed-agent does it again, refused over "
+            + "changes of the agent's own unless --force. refresh-agent copies the main tree's changes under the paths given - the "
+            + "anchor registries' directory where none are - into a live agent, a dry run until --apply, refused where the agent "
+            + "edited or deleted one, and records them as handed to it, so its fold leaves them out.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Folding. fold-agent writes an agent's own work into the main tree, a dry run until --apply, and never removes its "
+            + "worktree. Every path its status lists and every path it was handed goes in one list: its own, written; deleted, "
+            + "removed with the directories that leaves empty; inherited, handed to it and unchanged; already in the main tree; or "
+            + "settled. A handed path is compared with what it was handed, any other with the blob at the agent's own base "
+            + "through git's clean filters, so a line-ending conversion is no change and a sibling's committed fold is never "
+            + "written over. The whole fold is refused, and nothing written, where the main tree changed one of its paths since - "
+            + "by a commit, or by an uncommitted edit, the message says which - where a commit was made inside the agent, and for "
+            + "a link, a directory, or a path leading out of the main tree. --settled <path> leaves out a path you reconciled by "
+            + "hand, so the rest goes in; it is not a --force. A path this process cannot look at is never read as absent: the "
+            + "fold fails, nothing written. A file that changed after it was weighed is never written: the fold stops there, "
+            + $"exit {HarnessExit.Incomplete}, and run again weighs it anew. Then the rows it filed are applied, all or nothing: a new id written "
+            + "as write-anchor writes one, an existing row changed in the cells that differ, and one already as declared left "
+            + "alone; a write that fails puts both registries back byte for byte.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Deleting. delete-agent folds what is left and applies the rows, proves nothing is left to fold, copies the agent's "
+            + $"Claude transcripts, found by session id under {ClaudeTranscripts.ConfigDirectoryVariable} or ~/.claude, into "
+            + $"{OrchestratorLayout.LogsDirectoryName}/<agent>/ - one not found is said, and one found and not kept stops it before "
+            + "anything is closed - and keeps what the evidence roots named before the fold and after it hold, reading each file "
+            + "back; a root that is or passes through a link is neither kept nor counted. It then records the agent closed, "
+            + "deletes the evidence files still holding what was kept - one that cannot be deleted is named and left, and stops "
+            + "the removal - and removes the worktree and its copies on hosts through delete-worktree - never forced, and its "
+            + "evidence check kept, so a file written late stops it. It says "
+            + "deleted only once the directory, git's record of it and every recorded copy are gone. --discard-uncommitted "
+            + "abandons an agent: nothing folded and no rows applied, its evidence and transcripts still kept.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A closed agent is never folded again. Run again, delete-agent compares its worktree with what closing it recorded, "
+            + $"never with the main tree: a file changed or new since is work, left for you, and it exits {HarnessExit.Incomplete}; "
+            + "a file gone since is the debris of a removal that stopped part way. A directory at its path with no .git of its "
+            + "own is never forced: its evidence is kept again, and the delete-worktree --force that removes it is named for you. "
+            + "A worktree made at its path since is not its to remove.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Every command that writes the main tree holds it, as a sync holds a copy, and delete-agent holds the agent's "
+            + "worktree too, so no leg builds in either meanwhile. delete-agent refuses to run from inside the worktree it removes, "
+            + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
+            + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
+            + "directory, and the evidence and transcripts its agents kept only with --delete-evidence; it removes the record "
+            + "last, so one that stops part way finishes when run again.");
+
+        return builder.ToString();
+    }
+
     private static string RenderLayout()
     {
         var builder = new StringBuilder();
@@ -1338,6 +1460,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {HarnessLayout.OrchestratorsDirectoryName}/                    contents ignored, .gitkeep tracked; what each");
         builder.AppendLine("                                     orchestrator and its agents keep, in the main");
         builder.AppendLine("                                     checkout, and never sent to a host by sync");
+        builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
         builder.AppendLine("  .harness-config/runs/              ignored; one directory of records per run, in");
         builder.AppendLine("                                     the tree that ran it");
         builder.AppendLine("  .harness-config/lock.json          ignored; records in-progress runs");
@@ -1563,4 +1686,11 @@ internal static class HelpCommand
 
         return builder.ToString();
     }
+
+    /// <summary>One reference topic.</summary>
+    /// <param name="Name">The name it is asked for by, and advertised under.</param>
+    /// <param name="Aliases">The other names it answers to.</param>
+    /// <param name="Summary">What the overview says of it.</param>
+    /// <param name="Render">What renders it.</param>
+    private sealed record HelpTopic(string Name, IReadOnlyList<string> Aliases, string Summary, Func<string> Render);
 }

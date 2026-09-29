@@ -1,4 +1,3 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
@@ -132,21 +131,10 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
     /// </summary>
     private static readonly TimeSpan UpdateWindow = TimeSpan.FromSeconds(10);
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        Converters = { new JsonStringEnumConverter() },
-
-        // A shape this build does not recognise is a hard failure rather than silent data loss, as
-        // it is wherever this tool reads JSON that decides something: the configuration, the owner
-        // file, the sync marker and the host protocol. The one field an older build wrote and this
-        // one no longer uses is declared on the holder, so upgrading reads its own lock file rather
-        // than refusing it.
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-    };
+    // Every state file's rules (JsonStateFile): a shape this build does not recognise is refused. The one field an older
+    // build wrote and this one no longer uses is declared on the holder, so upgrading reads its own lock file rather than
+    // refusing it.
+    private static readonly JsonSerializerOptions JsonOptions = JsonStateFile.Options;
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;

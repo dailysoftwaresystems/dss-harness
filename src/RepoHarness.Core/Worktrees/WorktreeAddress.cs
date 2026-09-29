@@ -100,6 +100,17 @@ public sealed record WorktreeAddress
         return true;
     }
 
+    /// <summary>
+    /// The agent's name, where <paramref name="name"/> is the address of an agent of <paramref name="orchestrator"/>;
+    /// null for a plain worktree's, another orchestrator's agent's, or text that is no address.
+    /// </summary>
+    /// <param name="orchestrator">The orchestrator.</param>
+    /// <param name="name">An address, as a listing names a worktree.</param>
+    public static string? AgentOf(string orchestrator, string name)
+        => TryParse(name, out var address, out _) && address!.IsNested && string.Equals(address.Segments[0], orchestrator, StringComparison.Ordinal)
+            ? address.Segments[1]
+            : null;
+
     /// <summary>The worktree's directory under <paramref name="worktreesDirectory"/>.</summary>
     /// <param name="worktreesDirectory">The worktrees root, as a full path.</param>
     public string PathUnder(string worktreesDirectory)

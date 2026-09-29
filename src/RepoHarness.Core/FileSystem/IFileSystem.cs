@@ -14,6 +14,17 @@ public interface IFileSystem
     bool DirectoryExists(string path);
 
     /// <summary>
+    /// What is at <paramref name="path"/> itself - a file, a directory, a link or junction, or nothing - raised where
+    /// that cannot be told. <see cref="FileExists"/> and <see cref="DirectoryExists"/> answer false for a path this process
+    /// may not look at, and a caller deciding from that what may be deleted, or skipped as empty, reads "cannot tell" as
+    /// "nothing there".
+    /// </summary>
+    /// <param name="path">The path to look at.</param>
+    /// <exception cref="IOException">What is there could not be asked.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not ask.</exception>
+    PathKind KindOf(string path);
+
+    /// <summary>
     /// <paramref name="path"/> as an absolute path with every symbolic link and junction along it
     /// followed, the form git reports paths in. The part of the path that does not exist is kept
     /// as spelled.
@@ -24,7 +35,7 @@ public interface IFileSystem
     /// <summary>Creates a directory and any missing parents. No-op when it exists.</summary>
     void CreateDirectory(string path);
 
-    /// <summary>Deletes a file. No-op when it is already absent.</summary>
+    /// <summary>Deletes a file, one git or anyone else marked read only included. No-op when it is already absent.</summary>
     void DeleteFile(string path);
 
     /// <summary>Copies a file to a new file in the temporary directory, and returns the copy's path.</summary>
@@ -35,6 +46,15 @@ public interface IFileSystem
     /// <param name="destination">Where the copy goes. Its directory must exist.</param>
     /// <param name="overwrite">Whether an existing file there is replaced.</param>
     void CopyFile(string source, string destination, bool overwrite = false);
+
+    /// <summary>
+    /// Puts the file at <paramref name="source"/> in place of <paramref name="destination"/> in one step - a rename over
+    /// whatever is there - so a reader never sees a file half written. Windows refusing for a moment, while another
+    /// process holds the destination, is tried again a few times before it is reported.
+    /// </summary>
+    /// <param name="source">A file written beside the destination, on the same volume.</param>
+    /// <param name="destination">The file it replaces, or where it goes.</param>
+    void ReplaceFile(string source, string destination);
 
     /// <summary>
     /// Deletes a directory and everything under it, including files git has marked
@@ -138,6 +158,15 @@ public interface IFileSystem
 
     /// <summary>Reads a whole file as UTF-8 text.</summary>
     string ReadAllText(string path);
+
+    /// <summary>Reads a whole file's bytes, as they are.</summary>
+    /// <param name="path">The file.</param>
+    byte[] ReadAllBytes(string path);
+
+    /// <summary>Reads a whole file's bytes, as they are, stopping between one block and the next when asked.</summary>
+    /// <param name="path">The file.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a file for reading its bytes. Streamed rather than read whole, because a tree sync

@@ -1,7 +1,7 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 
@@ -230,7 +230,7 @@ public sealed class AnchorCitationService(
 
                 return new AnchorCitationSelection(
                     changed,
-                    $"what this branch changed against {branch} ({Short(commit)})",
+                    $"what this branch changed against {branch} ({ReportText.Commit(commit)})",
                     null);
             }
 
@@ -245,7 +245,7 @@ public sealed class AnchorCitationService(
                 // no file here, and every file listed is one git must then be able to read.
                 var listed = await _gitClient.ListFilesAtCommitAsync(root, commit, cancellationToken).ConfigureAwait(false);
 
-                return new AnchorCitationSelection(listed, $"the files at HEAD ({Short(commit)})", commit);
+                return new AnchorCitationSelection(listed, $"the files at HEAD ({ReportText.Commit(commit)})", commit);
             }
         }
     }
@@ -307,8 +307,6 @@ public sealed class AnchorCitationService(
         return result.StandardOutput;
     }
 
-    private static string Short(string commit) => commit.Length > 12 ? commit[..12] : commit;
-
     /// <summary>
     /// The files a subject covers, how to describe it, and the commit to read them from when the
     /// subject is a commit rather than the disk.
@@ -323,8 +321,6 @@ public sealed class AnchorCitationService(
 /// </remarks>
 public static class AnchorCitationReports
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     /// <summary>What check-anchor-citations reports.</summary>
     /// <param name="report">What was measured.</param>
     /// <param name="json">Whether to write the findings as JSON instead of as lines.</param>
@@ -397,6 +393,6 @@ public static class AnchorCitationReports
             })]),
         };
 
-        return node.ToJsonString(JsonOptions);
+        return node.ToJsonString(ReportJson.Options);
     }
 }

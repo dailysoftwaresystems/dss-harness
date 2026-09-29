@@ -74,14 +74,7 @@ public sealed class HostCopiesTests
         var target = Directory.CreateDirectory(temp.Combine("elsewhere", "trees", "o1", "api")).Parent!.Parent!.FullName;
         var root = temp.Combine(".worktrees");
 
-        try
-        {
-            Directory.CreateSymbolicLink(root, target);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(root, target));
 
         Assert.Equal("o1--api", HostCopies.NameOf(root, Path.Combine(root, "o1", "api"), StringComparison.OrdinalIgnoreCase));
         Assert.Equal("o1--api", HostCopies.NameOf(root, Path.Combine(target, "o1", "api"), StringComparison.OrdinalIgnoreCase));

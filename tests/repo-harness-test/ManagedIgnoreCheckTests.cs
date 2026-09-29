@@ -845,14 +845,7 @@ public sealed class ManagedIgnoreCheckTests
     /// <summary>A symbolic link at <paramref name="path"/> to the directory <paramref name="target"/>, or the test skipped where this machine allows none.</summary>
     private static void Link(string path, string target)
     {
-        try
-        {
-            Directory.CreateSymbolicLink(path, target);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(path, target));
     }
 
     /// <summary>

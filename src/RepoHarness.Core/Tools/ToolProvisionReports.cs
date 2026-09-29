@@ -1,6 +1,6 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Tools;
@@ -12,13 +12,7 @@ namespace RepoHarness.Core.Tools;
 /// </remarks>
 public static class ToolProvisionReports
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
     /// <summary>What <c>install-missing-tools</c> reports.</summary>
     /// <param name="report">What provisioning found.</param>

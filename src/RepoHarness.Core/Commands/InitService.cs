@@ -242,7 +242,7 @@ public sealed class InitService(
 
         // The worktrees root and the orchestrators directory too, at the top of the tree. One kept on another disk
         // through a link is named and left: git keeps nothing behind a link, and a placeholder written through one
-        // would land on that disk, where no clone would find it.
+        // would be written to that disk, where no clone would find it.
         foreach (var slot in HarnessLayout.RootSlots(config.Worktrees.Root))
         {
             var directory = Path.Combine(root, slot);

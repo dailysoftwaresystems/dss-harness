@@ -37,7 +37,7 @@ public sealed class WorktreeRemovalTests
         var harness = await PrepareAsync(temp);
         var worktrees = Path.GetDirectoryName(HarnessFactory.WorktreePath(temp.Path, "linked"))!;
         harness.FileSystem.DeleteDirectory(worktrees);
-        await LinkDirectoryAsync(harness, worktrees, elsewhere.Path);
+        TestLinks.DirectoryLink(worktrees, elsewhere.Path);
 
         var created = await harness.WorktreeService.CreateAsync(temp.Path, "linked", useRandomName: false, cancellationToken);
         Assert.True(created.Succeeded, created.Outcome.Message);
@@ -308,8 +308,8 @@ public sealed class WorktreeRemovalTests
         var path = await CreateAsync(harness, temp, "joined");
         var canary = outside.WriteFile("canary.txt", "kept");
         Directory.CreateDirectory(Path.Combine(path, "build"));
-        await LinkDirectoryAsync(harness, Path.Combine(path, "build", "out"), outside.Path);
-        await LinkDirectoryAsync(harness, Path.Combine(path, "linkdir"), outside.Path);
+        TestLinks.DirectoryLink(Path.Combine(path, "build", "out"), outside.Path);
+        TestLinks.DirectoryLink(Path.Combine(path, "linkdir"), outside.Path);
 
         var outcome = await harness.WorktreeService.DeleteAsync(
             temp.Path, "joined", force: false, deleteEvidence: false, discardUncommitted: true, cancellationToken: cancellationToken);
@@ -729,7 +729,32 @@ public sealed class WorktreeRemovalTests
         var harness = await PrepareAsync(temp);
         var path = await CreateAsync(harness, temp, "unlisted");
 
-        // Without its .git file, git cannot name the record's directory, so git's list is asked.
+        // Without its .git file, git cannot name the record's directory, so git's list is asked, and fails once the
+        // directory is gone.
+        File.Delete(Path.Combine(path, ".git"));
+        var git = new InterceptingGitClient(harness.GitClient)
+        {
+            ListWorktreesFailure = new HarnessException(HarnessExit.CommandFailed, "Could not list the worktrees: simulated failure"),
+            ListWorktreesFailsWhen = () => !Directory.Exists(path),
+        };
+
+        var outcome = await Service(harness, git).DeleteAsync(temp.Path, "unlisted", force: true, deleteEvidence: false, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.Outcome.ExitCode);
+        Assert.StartsWith("Worktree 'unlisted' is deleted, but whether git still has it registered could not be confirmed", outcome.Outcome.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(path));
+    }
+
+    /// <summary>
+    /// A directory with no .git of its own may hold worktrees below it, which git's list names: where git cannot give
+    /// it, nothing is deleted, --force or not, since deleting the directory could delete them.
+    /// </summary>
+    [Fact]
+    public async Task AListingThatFailsBeforeTheDeletion_OfADirectoryWithNoGit_DeletesNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "unlisted");
         File.Delete(Path.Combine(path, ".git"));
         var git = new InterceptingGitClient(harness.GitClient)
         {
@@ -739,8 +764,9 @@ public sealed class WorktreeRemovalTests
         var outcome = await Service(harness, git).DeleteAsync(temp.Path, "unlisted", force: true, deleteEvidence: false, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.CommandFailed, outcome.Outcome.ExitCode);
-        Assert.StartsWith("Worktree 'unlisted' is deleted, but whether git still has it registered could not be confirmed", outcome.Outcome.Message, StringComparison.Ordinal);
-        Assert.False(Directory.Exists(path));
+        Assert.StartsWith("Could not list the worktrees: simulated failure Nothing was deleted: whether", outcome.Outcome.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("--force", outcome.Outcome.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(path));
     }
 
     [Fact]
@@ -875,9 +901,9 @@ public sealed class WorktreeRemovalTests
         // Each link leads to the other. A junction is made to a directory that exists, so the loop
         // is closed only once both links are there.
         Directory.CreateDirectory(loop);
-        await LinkDirectoryAsync(harness, worktrees, loop);
+        TestLinks.DirectoryLink(worktrees, loop);
         Directory.Delete(loop);
-        await LinkDirectoryAsync(harness, loop, worktrees);
+        TestLinks.DirectoryLink(loop, worktrees);
 
         var outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "looped", force: false, deleteEvidence: false, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -1045,7 +1071,7 @@ public sealed class WorktreeRemovalTests
     {
         var worktrees = Path.GetDirectoryName(HarnessFactory.WorktreePath(temp.Path, "any"))!;
         harness.FileSystem.DeleteDirectory(worktrees);
-        await LinkDirectoryAsync(harness, worktrees, target.Path);
+        TestLinks.DirectoryLink(worktrees, target.Path);
     }
 
     private static WorktreeService Service(HarnessFactory harness, IGitClient git, IFileSystem? fileSystem = null)
@@ -1072,24 +1098,6 @@ public sealed class WorktreeRemovalTests
         return HarnessFactory.WorktreePath(temp.Path, name);
     }
 
-    /// <summary>
-    /// Makes <paramref name="link"/> lead to <paramref name="target"/>: a junction on Windows, which
-    /// needs no privilege there, and a symbolic link elsewhere.
-    /// </summary>
-    private static async Task LinkDirectoryAsync(HarnessFactory harness, string link, string target)
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            Directory.CreateSymbolicLink(link, target);
-            return;
-        }
-
-        var result = await harness.ProcessRunner.RunAsync(
-            new ProcessRequest { FileName = "cmd", Arguments = ["/c", "mklink", "/J", link, target] },
-            TestContext.Current.CancellationToken);
-
-        Assert.True(result.ExitCode == 0, $"mklink /J failed: {result.StandardError}{result.StandardOutput}");
-    }
 }
 
 /// <summary>The real file system, except that a directory cannot be deleted, as while another program holds a file in it open.</summary>
@@ -1122,8 +1130,11 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// <summary>Whether calls reach git with their cancellation taken away.</summary>
     public bool IgnoreCancellation { get; init; }
 
-    /// <summary>A failure every worktree listing throws instead of asking git.</summary>
+    /// <summary>A failure a worktree listing throws instead of asking git: every listing, or each <see cref="ListWorktreesFailsWhen"/> picks.</summary>
     public HarnessException? ListWorktreesFailure { get; init; }
+
+    /// <summary>Whether a listing throws <see cref="ListWorktreesFailure"/>, asked at each; every one does where it is not given.</summary>
+    public Func<bool>? ListWorktreesFailsWhen { get; init; }
 
     /// <summary>Replaces what git said decides each path, once it has said it, given the directory asked in.</summary>
     public Func<string, IReadOnlyList<IgnoreDecision>, IReadOnlyList<IgnoreDecision>>? AfterExplainIgnored { get; init; }
@@ -1166,8 +1177,17 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlyList<string>> GetStatusAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.GetStatusAsync(directory, Token(cancellationToken)));
 
+    public Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default)
+        => Call(() => inner.ReadStatusAsync(directory, Token(cancellationToken)));
+
+    public Task<IReadOnlyDictionary<string, string>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.HashWorkingFilesAsync(directory, paths, Token(cancellationToken)));
+
+    public Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.BlobIdsAtAsync(directory, commit, paths, Token(cancellationToken)));
+
     public Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(string directory, CancellationToken cancellationToken = default)
-        => ListWorktreesFailure is { } failure
+        => ListWorktreesFailure is { } failure && (ListWorktreesFailsWhen?.Invoke() ?? true)
             ? Task.FromException<IReadOnlyList<GitWorktree>>(failure)
             : Call(() => inner.ListWorktreesAsync(directory, Token(cancellationToken)));
 
@@ -1216,6 +1236,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
 
             return AfterExplainIgnored is { } replace ? replace(directory, decisions) : decisions;
         });
+
+    public Task<IReadOnlySet<string>> FindIgnoredAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.FindIgnoredAsync(directory, paths, Token(cancellationToken)));
 
     public Task<string?> ResolveCommitAsync(string directory, string reference, CancellationToken cancellationToken = default)
         => Call(() => inner.ResolveCommitAsync(directory, reference, Token(cancellationToken)));

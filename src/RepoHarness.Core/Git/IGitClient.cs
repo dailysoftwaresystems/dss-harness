@@ -56,6 +56,37 @@ public interface IGitClient
     /// <exception cref="HarnessException">git could not read the status.</exception>
     Task<IReadOnlyList<string>> GetStatusAsync(string directory, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Every path the work tree at <paramref name="directory"/> changes, as git names it: modified, staged or deleted;
+    /// each file of an untracked directory, git's ignore rules followed - which a walk of the directory would not
+    /// follow; and both the new and the old path of a rename or a copy. Asked with <c>-z</c>, so no path is ever
+    /// quoted, and without git's optional locks, so asking writes nothing.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not read the status.</exception>
+    Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The id of the blob git would store for each working file of <paramref name="paths"/> under
+    /// <paramref name="directory"/>, made through the clean filters its own path selects - line-ending conversion among
+    /// them - which is the comparison git status makes. Nothing is written.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not read one of them.</exception>
+    Task<IReadOnlyDictionary<string, string>> HashWorkingFilesAsync(
+        string directory,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The id of the blob <paramref name="commit"/> holds at each of <paramref name="paths"/>, or <see langword="null"/>
+    /// where it holds no file there - nothing, a directory, or a submodule's entry. One git process for them all.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not read the commit, or answer for every path.</exception>
+    Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(
+        string directory,
+        string commit,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Lists every worktree attached to the repository, the main worktree first.</summary>
     Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(string directory, CancellationToken cancellationToken = default);
 
@@ -165,6 +196,19 @@ public interface IGitClient
     /// exists - never a link to one.
     /// </remarks>
     Task<IReadOnlyList<IgnoreDecision>> ExplainIgnoredAsync(
+        string directory,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Which of <paramref name="paths"/> git ignores in the work tree at <paramref name="directory"/>, as <c>git add</c>
+    /// judges them, whether or not a file is there: a file git tracks is never ignored, whatever the rules say.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="paths">Paths relative to that root, with forward separators.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">git could not answer for every path: an unknown answer is never "nothing ignored".</exception>
+    Task<IReadOnlySet<string>> FindIgnoredAsync(
         string directory,
         IReadOnlyList<string> paths,
         CancellationToken cancellationToken = default);

@@ -13,6 +13,8 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual bool DirectoryExists(string path) => inner.DirectoryExists(path);
 
+    public virtual PathKind KindOf(string path) => inner.KindOf(path);
+
     public virtual string ResolveLinks(string path) => inner.ResolveLinks(path);
 
     public virtual void CreateDirectory(string path) => inner.CreateDirectory(path);
@@ -23,6 +25,8 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual void CopyFile(string source, string destination, bool overwrite = false)
         => inner.CopyFile(source, destination, overwrite);
+
+    public virtual void ReplaceFile(string source, string destination) => inner.ReplaceFile(source, destination);
 
     public virtual void DeleteDirectory(string path) => inner.DeleteDirectory(path);
 
@@ -48,6 +52,11 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
     public virtual IEnumerable<string> EnumerateDirectories(string path) => inner.EnumerateDirectories(path);
 
     public virtual string ReadAllText(string path) => inner.ReadAllText(path);
+
+    public virtual byte[] ReadAllBytes(string path) => inner.ReadAllBytes(path);
+
+    public virtual Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
+        => inner.ReadAllBytesAsync(path, cancellationToken);
 
     public virtual Stream OpenRead(string path) => inner.OpenRead(path);
 

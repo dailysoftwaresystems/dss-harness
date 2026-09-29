@@ -1,7 +1,7 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 
@@ -389,8 +389,6 @@ public sealed class LineEndingService(
 /// <summary>Turns a line-ending report into what fix-line-endings prints.</summary>
 public static class LineEndingReports
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     /// <summary>What fix-line-endings reports.</summary>
     /// <param name="report">What was measured.</param>
     /// <param name="json">Whether to write the result as JSON instead of as lines.</param>
@@ -452,6 +450,6 @@ public static class LineEndingReports
             })]),
         };
 
-        return node.ToJsonString(JsonOptions);
+        return node.ToJsonString(ReportJson.Options);
     }
 }

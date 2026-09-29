@@ -5,6 +5,7 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -83,7 +84,42 @@ public sealed class HarnessFactory
             GitClient,
             new ManagedIgnoreCheck(GitClient, FileSystem, Platform, Output),
             Platform);
+
+        RunLock = new RunLock(FileSystem, Output, Identity);
+        OrchestrationStore = new OrchestrationStore(FileSystem);
+        OrchestrationLog = new OrchestrationLog(FileSystem, TimeProvider.System);
+        Transcripts = TranscriptsOver(FileSystem);
+        OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, TimeProvider.System);
+        AgentService = Agents(FileSystem, AnchorRegistryService);
     }
+
+    /// <summary>The agent service over <paramref name="fileSystem"/> and <paramref name="anchors"/>, for a test that changes what one of them does.</summary>
+    /// <param name="fileSystem">
+    /// Reads and writes everything the service keeps on disk: both trees, the run lock, the orchestrator's records and
+    /// log, and the transcripts it keeps.
+    /// </param>
+    /// <param name="anchors">Applies an agent's rows.</param>
+    public AgentService Agents(IFileSystem fileSystem, IAnchorRegistryService anchors)
+        => new(
+            ContextLoader,
+            GitClient,
+            fileSystem,
+            Platform,
+            Output,
+            FilePermissions,
+            new WorktreeService(ContextLoader, GitClient, fileSystem, PathBudget, Platform, Output, HostCopies),
+            new RunLock(fileSystem, Output, Identity),
+            AnchorRegistryLocator,
+            anchors,
+            TranscriptsOver(fileSystem),
+            new OrchestrationStore(fileSystem),
+            new OrchestrationLog(fileSystem, TimeProvider.System),
+            TimeProvider.System,
+            () => CurrentDirectory ?? Directory.GetCurrentDirectory());
+
+    /// <summary>Claude Code's transcripts over <paramref name="fileSystem"/>, in <see cref="ClaudeConfigDirectory"/> where a test sets it.</summary>
+    private ClaudeTranscripts TranscriptsOver(IFileSystem fileSystem)
+        => new(fileSystem, Platform, name => name == ClaudeTranscripts.ConfigDirectoryVariable ? ClaudeConfigDirectory : Environment.GetEnvironmentVariable(name));
 
     public StringWriter StandardOutput { get; } = new();
 
@@ -156,6 +192,31 @@ public sealed class HarnessFactory
 
     /// <summary>The tool provisioning init calls, a double so no test reaches a host.</summary>
     public IToolProvisionService ToolProvisionService { get; }
+
+    /// <summary>The run lock, in the main checkout of whichever repository a test makes.</summary>
+    public RunLock RunLock { get; }
+
+    /// <summary>Orchestrators' and agents' records.</summary>
+    public OrchestrationStore OrchestrationStore { get; }
+
+    /// <summary>Orchestrators' logs.</summary>
+    public OrchestrationLog OrchestrationLog { get; }
+
+    /// <summary>
+    /// Where Claude Code's configuration is taken to be: a directory no test makes unless it says, so no test ever reads
+    /// this machine's own transcripts.
+    /// </summary>
+    public string ClaudeConfigDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "repo-harness-no-claude-" + Guid.NewGuid().ToString("N"));
+
+    /// <summary>This process's working directory as the agent service sees it; the process's own where a test sets none.</summary>
+    public string? CurrentDirectory { get; set; }
+
+    /// <summary>Finds and keeps agents' Claude transcripts, under <see cref="ClaudeConfigDirectory"/>.</summary>
+    public ClaudeTranscripts Transcripts { get; }
+
+    public IOrchestratorService OrchestratorService { get; }
+
+    public AgentService AgentService { get; }
 
     /// <summary>Creates a git repository with one commit, so worktrees can be added.</summary>
     public async Task InitializeGitRepositoryAsync(string path, CancellationToken cancellationToken)

@@ -155,14 +155,7 @@ public sealed class GitClientTests
         await harness.InitializeGitRepositoryAsync(real, cancellationToken);
 
         var link = temp.Combine("link");
-        try
-        {
-            Directory.CreateSymbolicLink(link, real);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(link, real));
 
         var root = await harness.GitClient.GetRepositoryRootAsync(link, cancellationToken);
         var main = await harness.GitClient.GetMainWorktreeAsync(link, cancellationToken);
@@ -869,14 +862,7 @@ public sealed class GitClientTests
         await harness.InitializeGitRepositoryAsync(temp.Path, token);
         temp.WriteFile(".gitignore", "*.log\n");
 
-        try
-        {
-            Directory.CreateSymbolicLink(temp.Combine("linked"), elsewhere.Path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("linked"), elsewhere.Path));
 
         var decisions = await harness.GitClient.ExplainIgnoredAsync(temp.Path, ["linked/a.log", "a.log", "src/main.c"], token);
 

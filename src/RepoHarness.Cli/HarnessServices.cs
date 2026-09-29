@@ -10,6 +10,7 @@ using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.LineEndings;
+using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -87,6 +88,12 @@ internal static class HarnessServices
             NamedMutexAnchorRegistryLock.DefaultTimeout));
         services.AddSingleton<IAnchorRegistryService, AnchorRegistryService>();
         services.AddSingleton<IAnchorBalanceService, AnchorBalanceService>();
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<OrchestrationStore>();
+        services.AddSingleton<OrchestrationLog>();
+        services.AddSingleton<ClaudeTranscripts>();
+        services.AddSingleton<IOrchestratorService, OrchestratorService>();
+        services.AddSingleton<IAgentService, AgentService>();
 
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();

@@ -1,9 +1,9 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Legs;
@@ -15,13 +15,7 @@ namespace RepoHarness.Core.Legs;
 /// </remarks>
 public static class LegsReports
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
     /// <summary>What <c>legs</c> reports.</summary>
     public static CommandOutcome Render(LegsReport report, bool json, bool verbose = false)

@@ -41,10 +41,46 @@ internal static class Win32Files
     /// takes; a path that already names a device, as either prefix does, is left as it is.
     /// </summary>
     /// <param name="path">A fully qualified path.</param>
+    /// <remarks>
+    /// The prefix turns off everything Windows would otherwise do to a path, so what it would have done is done here
+    /// first: a <c>.</c> or <c>..</c> part is resolved and a forward slash made a backslash. Left in, a path spelt
+    /// with <c>..</c> - a sibling of a tree, named from inside it - is refused as a name that is not one. Nothing
+    /// else is changed, a name ending in a dot or a space among it, which only the prefix reaches.
+    /// </remarks>
     internal static string Extended(string path)
-        => path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal) ? path
-            : path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..]
-            : @"\\?\" + path;
+    {
+        if (path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        var root = Path.GetPathRoot(path) ?? string.Empty;
+        var parts = new List<string>();
+
+        foreach (var part in path[root.Length..].Split('\\', '/'))
+        {
+            if (part is "" or ".")
+            {
+                continue;
+            }
+
+            if (part == "..")
+            {
+                if (parts.Count > 0)
+                {
+                    parts.RemoveAt(parts.Count - 1);
+                }
+
+                continue;
+            }
+
+            parts.Add(part);
+        }
+
+        var whole = root.Replace('/', '\\').TrimEnd('\\') + '\\' + string.Join('\\', parts);
+
+        return whole.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + whole[2..] : @"\\?\" + whole;
+    }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]

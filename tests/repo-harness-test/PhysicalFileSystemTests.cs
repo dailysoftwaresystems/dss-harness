@@ -36,14 +36,7 @@ public sealed class PhysicalFileSystemTests
         Assert.Equal(1024, Create().DirectorySize(tree));
         Assert.Equal(0, Create().DirectorySize(temp.Combine("absent")));
 
-        try
-        {
-            Directory.CreateSymbolicLink(Path.Combine(tree, "out"), temp.Combine("outside"));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(Path.Combine(tree, "out"), temp.Combine("outside")));
 
         Assert.Equal(1024, Create().DirectorySize(tree));
     }
@@ -238,7 +231,7 @@ public sealed class PhysicalFileSystemTests
         var outside = temp.Combine("outside");
         var held = temp.WriteFile(Path.Combine("outside", "held.txt"), "x");
         Directory.CreateDirectory(tree);
-        Junction(Path.Combine(tree, "out"), outside);
+        TestLinks.Junction(Path.Combine(tree, "out"), outside);
 
         using (Waiting.Start(Ping, outside))
         using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -271,11 +264,17 @@ public sealed class PhysicalFileSystemTests
 
     /// <summary>
     /// A path is written as Windows reads it past 260 characters: a drive path and a UNC path each with the prefix it
-    /// takes, and a path that already names a device left as it is.
+    /// takes, and a path that already names a device left as it is. The prefix turns off Windows' own tidying of a
+    /// path, so a '.' or '..' part is resolved, and a forward slash made a backslash, first - and a name ending in a dot,
+    /// which only the prefix reaches, is kept.
     /// </summary>
     [Theory]
     [SupportedOSPlatform("windows")]
     [InlineData(@"C:\repo\.worktrees\a", @"\\?\C:\repo\.worktrees\a")]
+    [InlineData(@"C:\repo\tree\..\copy-1\data", @"\\?\C:\repo\copy-1\data")]
+    [InlineData(@"C:/repo/./tree/", @"\\?\C:\repo\tree")]
+    [InlineData(@"C:\repo\name.", @"\\?\C:\repo\name.")]
+    [InlineData(@"\\server\share\repo\..\other", @"\\?\UNC\server\share\other")]
     [InlineData(@"\\server\share\repo", @"\\?\UNC\server\share\repo")]
     [InlineData(@"\\?\C:\repo", @"\\?\C:\repo")]
     [InlineData(@"\\.\C:\repo", @"\\.\C:\repo")]
@@ -298,7 +297,6 @@ public sealed class PhysicalFileSystemTests
         Assert.ThrowsAny<OperationCanceledException>(() => Create().FindHeld(temp.Combine("tree"), new CancellationToken(canceled: true)));
     }
 
-    /// <summary>On Linux and macOS nothing an open file or a current directory does stops a deletion, so nothing is held.</summary>
     /// <summary>
     /// On Windows, every junction under a tree is removed as the link it is - one leading out of the tree and one
     /// leading back into it - and nothing either leads to; a symbolic link, which git removes itself, is left.
@@ -313,9 +311,9 @@ public sealed class PhysicalFileSystemTests
         var outside = temp.WriteFile(Path.Combine("outside", "canary.txt"), "kept");
         var inside = temp.WriteFile(Path.Combine("tree", "real", "inner.txt"), "kept too");
         Directory.CreateDirectory(Path.Combine(tree, "build"));
-        Junction(Path.Combine(tree, "build", "out"), temp.Combine("outside"));
-        Junction(Path.Combine(tree, "back"), Path.Combine(tree, "real"));
-        var symbolic = TrySymbolicLink(Path.Combine(tree, "linked"), temp.Combine("outside"));
+        TestLinks.Junction(Path.Combine(tree, "build", "out"), temp.Combine("outside"));
+        TestLinks.Junction(Path.Combine(tree, "back"), Path.Combine(tree, "real"));
+        var symbolic = TestLinks.Try(() => Directory.CreateSymbolicLink(Path.Combine(tree, "linked"), temp.Combine("outside")));
 
         var removed = Create().RemoveJunctions(tree);
 
@@ -327,6 +325,32 @@ public sealed class PhysicalFileSystemTests
         Assert.True(File.Exists(outside));
         Assert.True(File.Exists(inside));
         Assert.Equal(symbolic, Directory.Exists(Path.Combine(tree, "linked")));
+    }
+
+    /// <summary>
+    /// A tree named through a '..' part - a sibling of another tree, named from inside it - has its junctions removed as
+    /// any tree's are: the name Windows is handed is resolved first, never refused as one that is not a name.
+    /// </summary>
+    [Fact]
+    public void RemoveJunctions_OnATreeNamedThroughDotDot_RemovesItsJunctions()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has directory junctions.");
+
+        using var temp = new TempDirectory();
+        temp.WriteFile(Path.Combine("outside", "canary.txt"), "kept");
+        Directory.CreateDirectory(temp.Combine("tree"));
+        Directory.CreateDirectory(temp.Combine("sibling"));
+        TestLinks.Junction(temp.Combine("sibling", "data"), temp.Combine("outside"));
+
+        var named = Path.Combine(temp.Path, "tree", "..", "sibling");
+        var removed = Create().RemoveJunctions(named);
+
+        Assert.Single(removed);
+        Assert.False(Directory.Exists(temp.Combine("sibling", "data")));
+        Assert.True(File.Exists(temp.Combine("outside", "canary.txt")));
+
+        Create().DeleteDirectory(named);
+        Assert.False(Directory.Exists(temp.Combine("sibling")));
     }
 
     /// <summary>
@@ -342,7 +366,7 @@ public sealed class PhysicalFileSystemTests
         var tree = temp.Combine("tree");
         var outside = temp.WriteFile(Path.Combine("outside", "canary.txt"), "kept");
         Directory.CreateDirectory(Path.Combine(tree, "a", "b"));
-        Junction(Path.Combine(tree, "a", "b", "out"), temp.Combine("outside"));
+        TestLinks.Junction(Path.Combine(tree, "a", "b", "out"), temp.Combine("outside"));
 
         Create().DeleteDirectory(tree);
 
@@ -359,8 +383,8 @@ public sealed class PhysicalFileSystemTests
         using var temp = new TempDirectory();
         var behind = temp.Combine("behind");
         Directory.CreateDirectory(Path.Combine(behind, "deeper"));
-        Junction(Path.Combine(behind, "deeper", "inner"), temp.Combine("behind"));
-        Junction(temp.Combine("tree"), behind);
+        TestLinks.Junction(Path.Combine(behind, "deeper", "inner"), temp.Combine("behind"));
+        TestLinks.Junction(temp.Combine("tree"), behind);
 
         Assert.Empty(Create().RemoveJunctions(temp.Combine("tree")));
         Assert.True(Directory.Exists(Path.Combine(behind, "deeper", "inner")));
@@ -390,12 +414,13 @@ public sealed class PhysicalFileSystemTests
 
         using var temp = new TempDirectory();
         temp.WriteFile(Path.Combine("tree", "a.txt"), "x");
-        TrySymbolicLink(temp.Combine(Path.Combine("tree", "linked")), temp.Combine("tree"));
+        TestLinks.Try(() => Directory.CreateSymbolicLink(temp.Combine(Path.Combine("tree", "linked")), temp.Combine("tree")));
 
         Assert.Empty(Create().RemoveJunctions(temp.Combine("tree")));
         Assert.True(File.Exists(temp.Combine(Path.Combine("tree", "a.txt"))));
     }
 
+    /// <summary>On Linux and macOS nothing an open file or a current directory does stops a deletion, so nothing is held.</summary>
     [Fact]
     public void FindHeld_FindsNothing_OnLinuxAndMacOs()
     {
@@ -420,14 +445,7 @@ public sealed class PhysicalFileSystemTests
         using var temp = new TempDirectory();
         temp.WriteFile(Path.Combine("target", "sub", "file.txt"), "x");
 
-        try
-        {
-            Directory.CreateSymbolicLink(temp.Combine("link"), temp.Combine("target"));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("link"), temp.Combine("target")));
 
         Assert.True(Create().IsLink(temp.Combine("link")));
         Assert.False(Create().IsLink(temp.Combine("target")));
@@ -522,15 +540,11 @@ public sealed class PhysicalFileSystemTests
         var own = temp.WriteFile(Path.Combine("tree", "sub", "own.txt"), "x");
         var tree = temp.Combine("tree");
 
-        try
+        TestLinks.OrSkip(() =>
         {
             Directory.CreateSymbolicLink(Path.Combine(tree, "out"), temp.Combine("outside"));
             Directory.CreateSymbolicLink(Path.Combine(tree, "sub", "loop"), tree);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        });
 
         var files = Create().EnumerateFiles(tree, recursive: true).ToList();
         var links = Create().EnumerateDirectoryLinks(tree).Order(StringComparer.Ordinal).ToList();
@@ -556,15 +570,11 @@ public sealed class PhysicalFileSystemTests
         File.SetLastWriteTimeUtc(own, ownTime);
         File.SetLastWriteTimeUtc(target, DateTime.UtcNow.AddDays(1));
 
-        try
+        TestLinks.OrSkip(() =>
         {
             Directory.CreateSymbolicLink(Path.Combine(tree, "out"), temp.Combine("outside"));
             File.CreateSymbolicLink(Path.Combine(tree, "linked.txt"), target);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        });
 
         var written = Create().EnumerateWrittenFiles(tree).OrderBy(file => file.Path, StringComparer.Ordinal).ToList();
 
@@ -676,14 +686,7 @@ public sealed class PhysicalFileSystemTests
         var locked = temp.WriteFile(Path.Combine("tree", "locked.txt"), "x");
         File.SetAttributes(locked, File.GetAttributes(locked) | FileAttributes.ReadOnly);
 
-        try
-        {
-            Directory.CreateSymbolicLink(Path.Combine(tree, "link"), temp.Combine("outside"));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(Path.Combine(tree, "link"), temp.Combine("outside")));
 
         Create().DeleteDirectory(tree);
 
@@ -777,38 +780,6 @@ public sealed class PhysicalFileSystemTests
         SpinWait.SpinUntil(() => until((held = Create().FindHeld(tree, TestContext.Current.CancellationToken)).Count), TimeSpan.FromSeconds(10));
 
         return held;
-    }
-
-    /// <summary>Makes <paramref name="link"/> a junction leading to <paramref name="target"/>, which needs no privilege.</summary>
-    /// <summary>A symbolic link to a directory, where this machine allows one; whether it was made.</summary>
-    private static bool TrySymbolicLink(string link, string target)
-    {
-        try
-        {
-            Directory.CreateSymbolicLink(link, target);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return false;
-        }
-    }
-
-    private static void Junction(string link, string target)
-    {
-        using var mklink = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
-        {
-            ArgumentList = { "/c", "mklink", "/J", link, target },
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        })!;
-
-        var error = mklink.StandardError.ReadToEnd();
-        mklink.WaitForExit();
-
-        Assert.True(mklink.ExitCode == 0, $"mklink /J failed: {error}");
     }
 
     /// <summary>

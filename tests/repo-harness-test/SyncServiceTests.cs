@@ -985,14 +985,7 @@ public sealed class SyncServiceTests
         {
             await File.WriteAllTextAsync(outside, "a credential\n", cancellationToken);
 
-            try
-            {
-                File.CreateSymbolicLink(Path.Combine(temp.Path, "src", "linked.c"), outside);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-            }
+            TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(temp.Path, "src", "linked.c"), outside));
 
             var result = await service.SyncAsync(
                 temp.Path, Transport(harness), copy, new SyncOptions(), cancellationToken);

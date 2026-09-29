@@ -1,11 +1,11 @@
 using System.Globalization;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -465,8 +465,6 @@ public sealed class CiLegsService(
 /// <summary>Turns a CI legs report into what check-ci-legs prints.</summary>
 public static class CiLegsReports
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     /// <summary>What check-ci-legs reports.</summary>
     /// <param name="report">What was measured.</param>
     /// <param name="json">Whether to write the per-leg document as JSON instead of as lines.</param>
@@ -574,6 +572,6 @@ public static class CiLegsReports
             })]),
         };
 
-        return node.ToJsonString(JsonOptions);
+        return node.ToJsonString(ReportJson.Options);
     }
 }

@@ -601,14 +601,7 @@ public sealed class ActionFileParserTests
 
         Directory.CreateDirectory(Path.Combine(actions, "probe"));
 
-        try
-        {
-            File.CreateSymbolicLink(Path.Combine(actions, "probe", "probe.yml"), outside);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(actions, "probe", "probe.yml"), outside));
 
         var exception = await Assert.ThrowsAsync<HarnessException>(
             () => CreateParser().LoadAsync(
@@ -635,14 +628,7 @@ public sealed class ActionFileParserTests
 
         Directory.CreateDirectory(temp.Combine("actions", "probe"));
 
-        try
-        {
-            File.CreateSymbolicLink(temp.Combine("actions", "probe", "probe.yml"), outside);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(temp.Combine("actions", "probe", "probe.yml"), outside));
 
         var exception = await Assert.ThrowsAsync<HarnessException>(
             () => CreateParser().LoadAsync(

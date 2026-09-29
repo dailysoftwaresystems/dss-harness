@@ -29,6 +29,10 @@ public sealed record CommandOutcome(int ExitCode, string Message, IReadOnlyList<
     public static CommandOutcome Ok(string message, IReadOnlyList<string>? details = null)
         => new(HarnessExit.Success, message, details);
 
+    /// <summary>A usage error: the arguments do not make a request that can be done, and nothing was looked at.</summary>
+    public static CommandOutcome Usage(string message, IReadOnlyList<string>? details = null)
+        => new(HarnessExit.UsageError, message, details);
+
     /// <summary>A refusal: a precondition was not met, nothing was changed.</summary>
     public static CommandOutcome Refused(string message, IReadOnlyList<string>? details = null)
         => new(HarnessExit.Refused, message, details);

@@ -1,7 +1,7 @@
 using System.Globalization;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Anchors;
@@ -16,14 +16,7 @@ public static class AnchorReports
 {
     private const int ValueWidth = 60;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-
-        // Statuses carry emoji and cells carry any text; escaping them would make the JSON unreadable
-        // to a person for no benefit to a parser.
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
     /// <summary>What write-anchor or set-anchor reports.</summary>
     public static CommandOutcome Change(AnchorChange change)
@@ -228,7 +221,7 @@ public static class AnchorReports
 
     private static List<string> BalanceText(AnchorBalanceReport report)
     {
-        var shortCommit = report.Commit.Length > 12 ? report.Commit[..12] : report.Commit;
+        var shortCommit = ReportText.Commit(report.Commit);
         var created = report.Opened.Count - report.Disclosed;
 
         var lines = new List<string>

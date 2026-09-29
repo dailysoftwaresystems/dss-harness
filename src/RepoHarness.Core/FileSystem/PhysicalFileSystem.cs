@@ -70,10 +70,41 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 
     public void DeleteFile(string path)
     {
-        if (File.Exists(path))
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        try
         {
             File.Delete(path);
         }
+        catch (UnauthorizedAccessException) when ((File.GetAttributes(path) & FileAttributes.ReadOnly) != 0)
+        {
+            // Windows refuses to delete a read-only file, as git marks the ones under .git/objects; cleared only once
+            // the delete refuses, as DeleteDirectory clears them.
+            File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+            File.Delete(path);
+        }
+    }
+
+    public PathKind KindOf(string path)
+    {
+        FileAttributes attributes;
+
+        try
+        {
+            attributes = File.GetAttributes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return PathKind.None;
+        }
+
+        // A reparse point that is no link - a file a cloud or deduplication service keeps - is what it looks like.
+        return (attributes & FileAttributes.ReparsePoint) != 0 && IsLink(path) ? PathKind.Link
+            : (attributes & FileAttributes.Directory) != 0 ? PathKind.Directory
+            : PathKind.File;
     }
 
     public string CopyToTemporaryFile(string path)
@@ -125,6 +156,8 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     }
 
     public void MoveDirectory(string source, string destination) => Directory.Move(source, destination);
+
+    public void ReplaceFile(string source, string destination) => ReplaceWith(source, destination);
 
     public bool IsLink(string path) => new FileInfo(path).LinkTarget is not null;
 
@@ -420,6 +453,11 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     public IEnumerable<string> EnumerateDirectories(string path) => Directory.EnumerateDirectories(path);
 
     public string ReadAllText(string path) => File.ReadAllText(path);
+
+    public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
+
+    public Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
+        => File.ReadAllBytesAsync(path, cancellationToken);
 
     public void WriteAllTextAtomic(string path, string contents)
     {

@@ -17,6 +17,14 @@ root.Subcommands.Add(VerifyGitCommand.Create());
 root.Subcommands.Add(CreateWorktreeCommand.Create());
 root.Subcommands.Add(DeleteWorktreeCommand.Create());
 root.Subcommands.Add(ListWorktreeCommand.Create());
+root.Subcommands.Add(CreateOrchestratorCommand.Create());
+root.Subcommands.Add(DeleteOrchestratorCommand.Create());
+root.Subcommands.Add(ListOrchestratorCommand.Create());
+root.Subcommands.Add(CreateAgentCommand.Create());
+root.Subcommands.Add(SeedAgentCommand.Create());
+root.Subcommands.Add(RefreshAgentCommand.Create());
+root.Subcommands.Add(FoldAgentCommand.Create());
+root.Subcommands.Add(DeleteAgentCommand.Create());
 root.Subcommands.Add(WriteAnchorCommand.Create());
 root.Subcommands.Add(SetAnchorCommand.Create());
 root.Subcommands.Add(ReadAnchorCommand.Create());
@@ -68,11 +76,16 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
     }
 
     // A deletion past its point of no return goes on after Ctrl+C, and a host agent can be running
-    // one for another machine, so those two wait for their action as long as the deletion expects.
-    // No other command is any slower to stop.
+    // one for another machine; a fold writing the main tree is never left half written. Those wait
+    // for their action as long as a deletion expects. No other command is any slower to stop.
     var invocation = new InvocationConfiguration();
 
-    if (parseResult.CommandResult.Command.Name is DeleteWorktreeCommand.Name or HostAgentProtocol.CommandName)
+    if (parseResult.CommandResult.Command.Name
+        is DeleteWorktreeCommand.Name
+        or DeleteAgentCommand.Name
+        or FoldAgentCommand.Name
+        or DeleteOrchestratorCommand.Name
+        or HostAgentProtocol.CommandName)
     {
         invocation.ProcessTerminationTimeout = WorktreeService.DefaultInterruptionGrace;
     }

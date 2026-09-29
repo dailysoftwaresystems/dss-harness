@@ -208,12 +208,7 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
     /// <summary>How long a change waits for another process changing the record.</summary>
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
 
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-    };
+    private static readonly JsonSerializerOptions Options = JsonStateFile.Options;
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly StringComparison _pathComparison = pathComparison;
