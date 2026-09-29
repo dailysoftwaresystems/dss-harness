@@ -80,6 +80,20 @@ public sealed class HostCopiesTests
         Assert.Equal("o1--api", HostCopies.NameOf(root, Path.Combine(target, "o1", "api"), StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>A root reached through a link above it - not itself one - names an agent's copies by the agent's address all the same.</summary>
+    [Fact]
+    public void AnAgentsCopy_IsNamedForItsAddress_ThroughALinkAboveTheRoot()
+    {
+        using var temp = new TempDirectory();
+        var target = Directory.CreateDirectory(temp.Combine("real-out", "wt", "o1", "api")).Parent!.Parent!.Parent!.FullName;
+        var linked = temp.Combine("out");
+
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(linked, target));
+
+        var root = Path.Combine(linked, "wt");
+        Assert.Equal("o1--api", HostCopies.NameOf(root, Path.Combine(target, "wt", "o1", "api"), StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public void AHostDeclaringNoRepositoryPath_HasNowhereToKeepACopy()
     {

@@ -618,10 +618,11 @@ public sealed partial class HelpTests
         Assert.Contains(
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, made by "
             + "create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, and delete-worktree "
-            + $"takes that address. A directory holding worktrees below it is never deleted as one, --force or not ({HarnessExit.Refused}), "
-            + $"nor one with no .git of its own while git cannot list its worktrees ({HarnessExit.CommandFailed}), "
-            + "and a plain worktree cannot take an orchestrator's name. An agent's copies on hosts are kept under orchestrator--agent, so "
-            + "two orchestrators' agents of one name keep theirs apart.",
+            + $"takes that address. The directory named for an orchestrator is never deleted as one while worktrees are below it, --force "
+            + $"or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git cannot list its worktrees "
+            + $"({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. A plain worktree cannot take an "
+            + "orchestrator's name. An agent's copies on hosts are kept under orchestrator--agent, so two orchestrators' agents of one name "
+            + "keep theirs apart.",
             text,
             StringComparison.Ordinal);
     }

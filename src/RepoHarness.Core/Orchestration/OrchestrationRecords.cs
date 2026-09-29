@@ -1,10 +1,14 @@
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Orchestration;
 
-/// <summary>The states an agent's record passes through, in order.</summary>
+/// <summary>
+/// The states an agent's record can be in, in the order it can reach them: live, then closed, then deleted - or live
+/// then deleted straight away, where its worktree was gone or never made and there was nothing to close.
+/// </summary>
 public static class AgentStates
 {
     /// <summary>Working: its worktree is there, and folding it or deleting it are open.</summary>
@@ -100,14 +104,28 @@ public sealed record AgentRecord
     /// <summary>One of <see cref="AgentStates"/>.</summary>
     public required string State { get; init; }
 
-    /// <summary>What deleting it recorded before its worktree's removal began; present exactly while it is closed.</summary>
+    /// <summary>
+    /// What deleting it recorded before its worktree's removal began: present from its closing on, kept as its history
+    /// once it is deleted; absent where it was deleted with no worktree left to close.
+    /// </summary>
     public AgentClosing? Closing { get; init; }
 
     /// <summary>When it was deleted; present exactly once it is.</summary>
     public DateTimeOffset? DeletedAt { get; init; }
 
-    /// <summary>Whether it was abandoned rather than folded; present exactly once it is deleted.</summary>
+    /// <summary>Whether it was abandoned rather than folded; present exactly once it is closed or deleted.</summary>
     public bool? Abandoned { get; init; }
+
+    /// <summary>
+    /// Where its worktree is in the repository at <paramref name="layout"/>: under the worktrees root it was made under,
+    /// whatever the configuration names now.
+    /// </summary>
+    /// <param name="layout">The repository.</param>
+    public string WorktreePath(Repository.HarnessLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        return WorktreeAddress.Nested(Orchestrator, Name).PathUnder(layout.WorktreesDirectoryUnder(WorktreesRoot));
+    }
 
     /// <summary>What is wrong with this record, kept in <paramref name="directoryName"/> under <paramref name="orchestrator"/>; null when nothing is.</summary>
     /// <param name="orchestrator">The orchestrator it is kept under.</param>
@@ -150,10 +168,10 @@ public sealed record AgentRecord
         return State switch
         {
             AgentStates.Live when Closing is not null || DeletedAt is not null || Abandoned is not null => "it is live, and records a closing or a deletion",
-            AgentStates.Closed when Closing is null || DeletedAt is not null || Abandoned is not null => "it is closed, and records no closing, or records a deletion",
-            AgentStates.Closed => Closing!.Problem(),
-            AgentStates.Deleted when DeletedAt is null || Abandoned is null || Closing is not null => "it is deleted, and records no deletion, or still records a closing",
-            AgentStates.Live or AgentStates.Deleted => null,
+            AgentStates.Closed when Closing is null || Abandoned is null || DeletedAt is not null => "it is closed, and records no closing, or records a deletion",
+            AgentStates.Deleted when DeletedAt is null || Abandoned is null => "it is deleted, and records no deletion",
+            AgentStates.Closed or AgentStates.Deleted => Closing?.Problem(),
+            AgentStates.Live => null,
             _ => $"its state is '{State}', and an agent's is one of {string.Join(", ", AgentStates.All)}",
         };
     }
@@ -167,9 +185,6 @@ public sealed record AgentClosing
 {
     /// <summary>When it was closed.</summary>
     public required DateTimeOffset At { get; init; }
-
-    /// <summary>Whether it was abandoned rather than folded.</summary>
-    public required bool Abandoned { get; init; }
 
     /// <summary>Where its evidence was kept, relative to the agent's directory; empty when its evidence roots held nothing.</summary>
     public required string Evidence { get; init; }
@@ -189,33 +204,64 @@ public sealed record AgentClosing
 }
 
 /// <summary>
-/// What an agent was handed when it began, or was re-seeded: every path copied into its worktree from the main tree's
-/// uncommitted state, with the digest of the agent's copy. What a fold subtracts, since those paths are not the agent's
-/// own work until the agent changes them.
+/// What an agent shares with the main tree, path by path: every path handed to it from the main tree's uncommitted
+/// state - when it began, was seeded again or was refreshed - and every path a fold of it wrote or removed since, each
+/// with what both trees then held. What a fold subtracts, since such a path is the agent's own work only once the agent
+/// changes it, and what it weighs the main tree against, since the main tree held the same.
 /// </summary>
 public sealed record SeedRecord
 {
     /// <summary>When it was seeded.</summary>
     public required DateTimeOffset SeededAt { get; init; }
 
-    /// <summary>Whether it was handed nothing, as asked, rather than finding nothing to hand it.</summary>
+    /// <summary>Whether it was handed nothing, as asked, rather than finding nothing to hand it; never once it shares a path.</summary>
     public required bool Empty { get; init; }
 
-    /// <summary>Every path handed to it, with the digest of its copy.</summary>
+    /// <summary>Every path both trees held a file at, with the digest of that file.</summary>
     public required Dictionary<string, string> Paths { get; init; }
 
     /// <summary>
-    /// The paths handed to it whose copy could be run - its execute bit set - where the platform has such a bit; absent
-    /// on Windows, which has none. A mode is part of what a file is, and the fold compares it with the content.
+    /// The paths of <see cref="Paths"/> whose file could be run - its execute bit set - where the platform has such a bit;
+    /// absent on Windows, which has none. A mode is part of what a file is, and the fold compares it with the content.
     /// </summary>
     public List<string>? Executable { get; init; }
 
+    /// <summary>
+    /// The paths both trees were left without: a deletion in the main tree's uncommitted state, made in the agent's worktree
+    /// too when it was handed over, or a path a fold of it removed from the main tree. Weighed against that absence as a
+    /// path of <see cref="Paths"/> is weighed against its file.
+    /// </summary>
+    public List<string>? Absent { get; init; }
+
+    /// <summary>Every path it shares with the main tree: each a fold weighs whatever the agent's status says.</summary>
+    [JsonIgnore]
+    public IEnumerable<string> Weighed => Paths.Keys.Concat(Absent ?? []);
+
     /// <summary>What is wrong with it; null when nothing is.</summary>
     public string? Problem()
-        => Empty && Paths.Count > 0 ? "it was handed nothing, and names paths it was handed"
-            : Executable?.FirstOrDefault(path => !Paths.ContainsKey(path)) is { } stray ? $"'{stray}' is named executable, and was not handed to it"
-            : Paths.Select(pair => OrchestrationRules.RelativePathProblem(pair.Key, "a path it was handed") ?? OrchestrationRules.DigestProblem(pair.Value, pair.Key, allowNone: false))
+        => Empty && (Paths.Count > 0 || Absent is { Count: > 0 }) ? "it was handed nothing, and names paths it shares"
+            : Executable?.FirstOrDefault(path => !Paths.ContainsKey(path)) is { } stray ? $"'{stray}' is named executable, and it holds no file there"
+            : Absent?.FirstOrDefault(Paths.ContainsKey) is { } both ? $"'{both}' is named both as a file and as absent"
+            : Absent?.Count != Absent?.Distinct(StringComparer.Ordinal).Count() ? "it names a path absent twice"
+            : Paths.Select(pair => OrchestrationRules.RelativePathProblem(pair.Key, "a path it shares") ?? OrchestrationRules.DigestProblem(pair.Value, pair.Key, allowNone: false))
+                .Concat((Absent ?? []).Select(path => OrchestrationRules.RelativePathProblem(path, "a path it shares")))
                 .FirstOrDefault(problem => problem is not null);
+}
+
+/// <summary>
+/// The anchor rows an agent's folds applied, each as it declared it when it was applied: what a later fold weighs its rows
+/// against, so a row it has not declared anew since is never applied again over a change the registries took meanwhile.
+/// </summary>
+public sealed record AppliedRowsRecord
+{
+    /// <summary>Every row applied, as declared then, one for each id.</summary>
+    public required List<Anchors.AnchorRowDeclaration> Rows { get; init; }
+
+    /// <summary>What is wrong with it; null when nothing is.</summary>
+    public string? Problem()
+        => Rows.GroupBy(row => row.Id, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice
+            ? $"it names row '{twice.Key}' {twice.Count()} times"
+            : null;
 }
 
 /// <summary>The rules every orchestration record's values are held to, each spelt once.</summary>
@@ -233,6 +279,21 @@ public static partial class OrchestrationRules
         => string.Equals(orchestrator, agent, StringComparison.Ordinal)
             ? $"'{agent}' names the orchestrator itself: an agent is never named as its orchestrator, whose log and plans it would share"
             : null;
+
+    /// <summary>
+    /// The agents of <paramref name="orchestrator"/> that count against its limit, by name: every one not deleted - a closed
+    /// agent's worktree may still be there - and every one whose worktree git lists, record or not.
+    /// </summary>
+    /// <param name="orchestrator">The orchestrator's name.</param>
+    /// <param name="agents">Its agents' directories, each with its record where it reads.</param>
+    /// <param name="worktrees">The worktrees git lists, by address.</param>
+    public static IReadOnlyList<string> OpenAgents(string orchestrator, IEnumerable<AgentEntry> agents, IEnumerable<string> worktrees)
+        => [.. agents
+            .Where(entry => entry.Record is not { State: AgentStates.Deleted })
+            .Select(entry => entry.Name)
+            .Concat(worktrees.Select(worktree => WorktreeAddress.AgentOf(orchestrator, worktree)).OfType<string>())
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
 
     /// <summary>What is wrong with the most agents an orchestrator allows with a worktree at once: at least one.</summary>
     /// <param name="parallel">The number, or null where none is given.</param>
@@ -282,19 +343,20 @@ public static partial class OrchestrationRules
     /// <param name="what">What it is, for the reason.</param>
     public static string? RelativePathProblem(string path, string what)
         => string.IsNullOrEmpty(path) || path.Contains('\0', StringComparison.Ordinal) || PlatformPaths.IsRootedOnAnyPlatform(path)
-            || path.Split('/', '\\').Any(part => part is "" or "." or "..")
+            || PlatformPaths.ClimbsOut(path)
+            || path.Split('/', '\\').Any(part => part is "" or ".")
             ? $"{what}, '{path}', is not a path relative to the tree, spelt with forward slashes"
             : null;
 
-    [GeneratedRegex(@"^[\x21-\x7E]{1,200}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[\x21-\x7E]{1,200}\z", RegexOptions.CultureInvariant)]
     private static partial Regex ModelPattern();
 
-    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\z", RegexOptions.CultureInvariant)]
     private static partial Regex SessionPattern();
 
-    [GeneratedRegex("^[0-9a-f]{40}([0-9a-f]{24})?$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[0-9a-f]{40}([0-9a-f]{24})?\z", RegexOptions.CultureInvariant)]
     private static partial Regex CommitPattern();
 
-    [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[0-9a-f]{64}\z", RegexOptions.CultureInvariant)]
     private static partial Regex DigestPattern();
 }

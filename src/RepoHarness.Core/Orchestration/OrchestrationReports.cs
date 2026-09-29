@@ -29,9 +29,8 @@ public static class OrchestrationReports
         foreach (var orchestrator in orchestrators)
         {
             var record = orchestrator.Record;
-            var live = orchestrator.Agents.Count(agent => agent.Entry.Record?.State == AgentStates.Live);
 
-            yield return $"{record.Name}  model {record.Model}, at most {record.Parallel} agent(s) at once, {live} live{Session(record.Session)}";
+            yield return $"{record.Name}  model {record.Model}, {orchestrator.Open.Count} of at most {record.Parallel} agent(s) open{Session(record.Session)}";
 
             foreach (var agent in orchestrator.Agents)
             {
@@ -56,12 +55,14 @@ public static class OrchestrationReports
             ? string.Empty
             : $"; kept {agent.Evidence.Count} evidence set(s), {agent.Transcripts} transcript file(s)";
 
+        var abandoned = record.Abandoned is true ? ", abandoned" : string.Empty;
+
         return record.State switch
         {
-            AgentStates.Live when agent.Worktree is null => $"{record.Name}  live, and its worktree is gone from '{agent.WorktreePath}'{kept}",
+            AgentStates.Live when !agent.WorktreeExists => $"{record.Name}  live, and its worktree is gone from '{agent.WorktreePath}'{kept}",
             AgentStates.Live => $"{record.Name}  live at '{agent.WorktreePath}', base {Base(record.Base)}{Session(record.Session)}{kept}",
-            AgentStates.Closed => $"{record.Name}  closed at {Moment(record.Closing!.At)}, and its removal did not finish{(agent.Worktree is null ? string.Empty : $": its worktree is still at '{agent.WorktreePath}'")}{kept}",
-            _ => $"{record.Name}  deleted at {Moment(record.DeletedAt!.Value)}{(record.Abandoned is true ? ", abandoned" : string.Empty)}{kept}",
+            AgentStates.Closed => $"{record.Name}  closed at {Moment(record.Closing!.At)}{abandoned}, and its removal did not finish{(agent.WorktreeExists ? $": its worktree is still at '{agent.WorktreePath}'" : string.Empty)}{kept}",
+            _ => $"{record.Name}  deleted at {Moment(record.DeletedAt!.Value)}{abandoned}{kept}",
         };
     }
 
@@ -92,6 +93,7 @@ public static class OrchestrationReports
                 ["model"] = record.Model,
                 ["createdAt"] = Moment(record.CreatedAt),
                 ["parallel"] = record.Parallel,
+                ["open"] = new JsonArray([.. orchestrator.Open.Select(name => (JsonNode?)name)]),
                 ["session"] = record.Session,
                 ["directory"] = orchestrator.Layout.Directory,
                 ["log"] = orchestrator.Layout.LogFile(record.Name),
@@ -128,13 +130,15 @@ public static class OrchestrationReports
             ["createdAt"] = Moment(record.CreatedAt),
             ["worktree"] = record.Worktree,
             ["path"] = agent.WorktreePath,
-            ["worktreeExists"] = agent.Worktree is not null,
+            ["worktreeExists"] = agent.WorktreeExists,
             ["baseCommit"] = record.Base,
             ["session"] = record.Session,
             ["closedAt"] = record.Closing is { } closing ? Moment(closing.At) : null,
             ["deletedAt"] = record.DeletedAt is { } deleted ? Moment(deleted) : null,
-            ["abandoned"] = record.Abandoned ?? record.Closing?.Abandoned,
+            ["abandoned"] = record.Abandoned,
             ["record"] = layout.AgentRecordFile(name),
+            ["seed"] = layout.SeedFile(name),
+            ["appliedRows"] = layout.AppliedRowsFile(name),
             ["log"] = layout.LogFile(name),
             ["plans"] = layout.PlansDirectory(name),
             ["work"] = layout.WorkDirectory(name),
@@ -164,16 +168,16 @@ public static class OrchestrationReports
         {
             int Of(IReadOnlyList<string> list) => list.Count(plan.Seeded.Contains);
 
-            yield return $"{plan.Seeded.Count} path(s) handed to it: {Of(plan.Written)} its own, {Of(plan.Inherited)} inherited, "
-                + $"{Of(plan.AlreadyIn)} already in the main tree, {Of(plan.Deleted)} deleted, {Of(plan.Settled)} settled";
+            yield return $"{plan.Seeded.Count} path(s) it shares with the main tree, handed to it or folded before: {Of(plan.Written)} its own, "
+                + $"{Of(plan.Inherited)} inherited, {Of(plan.AlreadyIn)} already in the main tree, {Of(plan.Deleted)} deleted, {Of(plan.Settled)} settled";
         }
 
         yield return $"{plan.Inherited.Count} inherited path(s) left out; {plan.Written.Count} path(s) are its own:";
 
         foreach (var path in plan.Written)
         {
-            // Whether it was handed over, not whether the file is new: a file no agent was handed may be tracked all along.
-            yield return plan.Seeded.Contains(path) ? $"  {path}" : $"  {path}   (not handed to it)";
+            // Whether it was shared before, not whether the file is new: a file no agent was handed may be tracked all along.
+            yield return plan.Seeded.Contains(path) ? $"  {path}" : $"  {path}   (not handed to it, nor folded before)";
         }
 
         if (plan.Deleted.Count > 0)
@@ -217,6 +221,54 @@ public static class OrchestrationReports
             + "--settled says you reconciled the path yourself; it is not a --force, and nothing is written for it.";
     }
 
+    /// <summary>
+    /// What a fold writes, removes and leaves out - or, where <paramref name="plan"/> is null, nothing of it - then the
+    /// rows filed in <paramref name="rowsDirectory"/>: the one report of both, every command that folds an agent giving it.
+    /// </summary>
+    /// <param name="plan">The fold, with no refusal; null where nothing is folded.</param>
+    /// <param name="rows">The rows applied, or planned.</param>
+    /// <param name="rowsDirectory">Where the agent files its rows.</param>
+    public static IEnumerable<string> FoldAndRowLines(FoldPlan? plan, AgentRowsPlan rows, string rowsDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+
+        return (plan is null ? [] : FoldLines(plan)).Concat(RowReport(rows, rowsDirectory));
+    }
+
+    /// <summary>Why a fold is refused, and its rows' problems where they have any: the one report of a refused measure.</summary>
+    /// <param name="plan">The fold measured.</param>
+    /// <param name="rows">The rows planned.</param>
+    /// <param name="rowsDirectory">Where the agent files its rows.</param>
+    public static IEnumerable<string> RefusalLines(FoldPlan plan, AgentRowsPlan rows, string rowsDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(rows);
+
+        return (plan.Refusals.Count > 0 ? FoldRefusalLines(plan) : FoldLines(plan)).Concat(rows.Batch.Succeeded ? [] : RowReport(rows, rowsDirectory));
+    }
+
+    private static IEnumerable<string> RowReport(AgentRowsPlan rows, string rowsDirectory)
+    {
+        var batch = rows.Batch;
+
+        if (batch.Rows.Count == 0 && batch.Problems.Count == 0 && batch.Failure is null && rows.Unchanged.Count == 0)
+        {
+            yield break;
+        }
+
+        yield return $"rows filed in '{rowsDirectory}':";
+
+        foreach (var line in RowLines(batch))
+        {
+            yield return line;
+        }
+
+        foreach (var id in rows.Unchanged)
+        {
+            yield return $"  {id}: applied by an earlier fold and not declared anew since, so the registries keep what they hold now";
+        }
+    }
+
     /// <summary>What applying an agent's rows does, or did: each row, and where it goes.</summary>
     /// <param name="batch">The rows applied, or planned.</param>
     public static IEnumerable<string> RowLines(AnchorBatch batch)
@@ -241,11 +293,20 @@ public static class OrchestrationReports
         if (batch.Failure is { } failure)
         {
             yield return $"  {failure}";
-            yield return batch.Restored.Count > 0 ? $"  put back byte for byte: {string.Join(", ", batch.Restored)}" : "  nothing was left written";
+
+            if (batch.Restored.Count > 0)
+            {
+                yield return $"  put back byte for byte: {string.Join(", ", batch.Restored)}";
+            }
 
             if (batch.RestoreFailed.Count > 0)
             {
                 yield return $"  NOT put back, and not as they were: {string.Join(", ", batch.RestoreFailed)}: read them before anything else";
+            }
+
+            if (batch.Restored.Count == 0 && batch.RestoreFailed.Count == 0)
+            {
+                yield return "  nothing was left written";
             }
         }
     }
@@ -253,14 +314,20 @@ public static class OrchestrationReports
     /// <summary>What is said of an orchestrator that does not exist, with how to make one.</summary>
     /// <param name="name">The orchestrator's name, as it was asked for.</param>
     internal static string NoOrchestrator(string name)
-        => $"No orchestrator named '{name}'. Create it with '{ToolPackage.Command} {OrchestratorService.CreateCommand} {name} --model <model>'.";
+        => $"No orchestrator named '{name}'. Create it with {Line(OrchestratorService.CreateCommand, name, "--model", "<model>")}.";
 
     /// <summary>The delete-agent command line a message names for an agent, quoted.</summary>
     /// <param name="orchestrator">The agent's orchestrator.</param>
     /// <param name="agent">The agent.</param>
     /// <param name="options">What to run it with.</param>
     internal static string DeleteAgentLine(string orchestrator, string agent, string options = "--apply")
-        => $"'{ToolPackage.Command} {AgentService.DeleteCommand} {orchestrator} {agent} {options}'";
+        => Line(AgentService.DeleteCommand, orchestrator, agent, options);
+
+    /// <summary>A command line a message names, quoted: the tool, the command, and its arguments as given.</summary>
+    /// <param name="command">The command.</param>
+    /// <param name="arguments">Its arguments, each already spelt as the line reads.</param>
+    internal static string Line(string command, params string[] arguments)
+        => $"'{string.Join(' ', [ToolPackage.Command, command, .. arguments.Where(argument => argument.Length > 0)])}'";
 
     /// <summary>An agent's base as reports name it, where none may be recorded.</summary>
     /// <param name="commit">The commit, or null where none is recorded.</param>
@@ -269,6 +336,22 @@ public static class OrchestrationReports
     /// <summary>A moment as orchestration messages and listings spell one: UTC, to the second.</summary>
     /// <param name="moment">The moment.</param>
     internal static string Moment(DateTimeOffset moment) => moment.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+
+    /// <summary>How the registries' row differs from a declaration applied before, as a dry run of that declaration answers.</summary>
+    /// <param name="outcome">What applying the earlier declaration again would do.</param>
+    internal static string Since(AnchorRowOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+
+        if (outcome.Action == AnchorRowAction.New)
+        {
+            return "it is in neither registry now";
+        }
+
+        var change = outcome.Change;
+        var fields = change.Fields.Count == 0 ? "its cells differ" : $"its {string.Join(", ", change.Fields.Select(field => field.Field))} differ";
+        return change.Moved && change.From is { } from ? $"{fields}, and it is in the {from.Name} registry" : fields;
+    }
 
     private static string Changed(AnchorChange change)
     {

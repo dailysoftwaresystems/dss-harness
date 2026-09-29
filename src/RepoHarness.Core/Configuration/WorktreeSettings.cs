@@ -11,7 +11,7 @@ public sealed class WorktreeSettings
 
     /// <summary>
     /// The worktrees root init writes into a configuration it makes: at the top of the tree, beside the directory
-    /// orchestrators keep what they hold in, and 16 characters of the Windows path budget shorter than
+    /// orchestrators keep what they hold in, and 15 characters of the Windows path budget shorter than
     /// <see cref="DefaultRoot"/>. A configuration that names no root keeps <see cref="DefaultRoot"/>, so worktrees
     /// made before stay where they are.
     /// </summary>

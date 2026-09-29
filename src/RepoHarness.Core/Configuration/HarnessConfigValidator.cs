@@ -174,7 +174,7 @@ public static partial class HarnessConfigValidator
         // them. Compared ignoring case: on Windows and macOS the two spellings are one directory.
         var root = Repository.PathPatterns.Normalize(worktrees.Root);
 
-        foreach (var kept in new[] { ".git", Repository.HarnessLayout.OrchestratorsDirectoryName })
+        foreach (var kept in SyncConfig.NeverTransferFloor)
         {
             if (string.Equals(root, kept, StringComparison.OrdinalIgnoreCase) || root.StartsWith(kept + "/", StringComparison.OrdinalIgnoreCase))
             {
@@ -224,7 +224,7 @@ public static partial class HarnessConfigValidator
                 + "an anchor moves it from one to the other, so they must differ");
         }
 
-        if (!Regex.IsMatch(anchors.IdPrefix, "^[A-Za-z][A-Za-z0-9]*$", RegexOptions.CultureInvariant))
+        if (!Regex.IsMatch(anchors.IdPrefix, @"^[A-Za-z][A-Za-z0-9]*\z", RegexOptions.CultureInvariant))
         {
             problems.Add($"anchors.idPrefix '{anchors.IdPrefix}' must be letters and digits, starting with a letter");
         }
@@ -1388,7 +1388,7 @@ public static partial class HarnessConfigValidator
 
         foreach (var (name, variable) in commit.Variables)
         {
-            if (!Regex.IsMatch(name, "^[A-Za-z][A-Za-z0-9_-]*$", RegexOptions.CultureInvariant))
+            if (!Regex.IsMatch(name, @"^[A-Za-z][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant))
             {
                 problems.Add(
                     $"commit.variables '{name}' must be letters, digits, hyphens and underscores, starting with a letter");
@@ -1698,7 +1698,7 @@ public static partial class HarnessConfigValidator
     /// </summary>
     private static void CheckHostName(string name, string owner, List<string> problems)
     {
-        if (!Regex.IsMatch(name, "^[A-Za-z0-9_][A-Za-z0-9._-]*$", RegexOptions.CultureInvariant))
+        if (!Regex.IsMatch(name, @"^[A-Za-z0-9_][A-Za-z0-9._-]*\z", RegexOptions.CultureInvariant))
         {
             problems.Add(
                 $"{owner} is not a usable name: use letters, digits, dots, hyphens and underscores, "
@@ -1755,7 +1755,7 @@ public static partial class HarnessConfigValidator
         {
             var escapes = string.IsNullOrWhiteSpace(path)
                 || PlatformPaths.IsRootedOnAnyPlatform(path)
-                || path.Split('/', '\\').Any(segment => segment == "..");
+                || PlatformPaths.ClimbsOut(path);
 
             if (escapes)
             {
@@ -1765,7 +1765,7 @@ public static partial class HarnessConfigValidator
     }
 
     /// <summary>A CMake language name, such as <c>C</c>, <c>CXX</c> or <c>Fortran</c>.</summary>
-    [GeneratedRegex("^[A-Za-z][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[A-Za-z][A-Za-z0-9_]*\z", RegexOptions.CultureInvariant)]
     private static partial Regex CMakeLanguagePattern();
 
     /// <summary>Refuses each name in one of a tool's scopes that names nothing declared.</summary>

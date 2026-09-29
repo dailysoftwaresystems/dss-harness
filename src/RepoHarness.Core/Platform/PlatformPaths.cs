@@ -47,6 +47,18 @@ public static class PlatformPaths
     }
 
     /// <summary>
+    /// Whether <paramref name="path"/> climbs out of the directory it is relative to: a <c>..</c> part, whichever slash
+    /// separates it. The one test, which every setting and record naming a place inside a tree asks, on whichever machine
+    /// reads it.
+    /// </summary>
+    /// <param name="path">The path as it is spelt.</param>
+    public static bool ClimbsOut(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return path.Split('/', '\\').Any(part => part == "..");
+    }
+
+    /// <summary>
     /// Whether <paramref name="path"/> starts from the home directory of whoever reads it: <c>~/</c>,
     /// which each machine expands against its own.
     /// </summary>

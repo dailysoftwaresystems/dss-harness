@@ -55,7 +55,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `delete-worktree <name> [--force]` | Remove a worktree and everything under it, and its copies on hosts; refuses one holding work that would be lost, a locked one, or one whose evidence directories hold measurements, without `--force` |
 | `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is |
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
-| `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state |
+| `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
 | `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again; refused over changes of its own without `--force` |
 | `refresh-agent <o> <a> [<path>...] [--apply]` | Copy the main tree's changes under the paths - the anchor registries' directory by default - into a live agent, recorded as handed to it |
 | `fold-agent <o> <a> [--apply] [--settled <path>]` | Fold an agent's own work into the main tree and apply the rows it filed, all or nothing; its worktree is kept |
@@ -156,10 +156,10 @@ in `config.json`.
 .worktrees/                                  contents ignored, .gitkeep tracked; the worktrees
 .orchestrators/                              contents ignored, .gitkeep tracked; orchestrators and their agents
 .orchestrators/<o>/agent.json                ignored; the orchestrator's record
-.orchestrators/<o>/logs/<name>.jsonl         ignored; a line for each run that changed it or one agent, or tried to
+.orchestrators/<o>/logs/<name>.jsonl         ignored; a line for each run that reached it or one agent, refusals included
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
-.orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, rows, kept evidence
+.orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, rows, the rows applied, kept evidence
 .harness-config/runs/                        ignored; one directory of logs per run
 .harness-config/lock.json                    ignored; records in-progress runs
 .plans/_deferred-anchor-registry.md          tracked; live anchors

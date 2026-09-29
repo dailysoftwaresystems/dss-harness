@@ -1,6 +1,6 @@
-using System.Globalization;
 using System.Text.Json;
 using RepoHarness.Core.Anchors;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
@@ -19,38 +19,39 @@ public interface IAgentService
 {
     /// <summary>
     /// Creates an agent of an orchestrator: its record, its worktree below the directory named for the orchestrator,
-    /// and its seed - the main tree's uncommitted state copied into the worktree, each path's digest recorded - unless
-    /// <paramref name="empty"/>. Refused past the orchestrator's limit of agents with a worktree. Run again for an agent
-    /// that exists, it records only the session.
+    /// and its seed - the main tree's uncommitted state handed to it, each changed file copied into the worktree and each
+    /// deletion made there, every path's digest recorded - unless <paramref name="empty"/>. Refused past the orchestrator's
+    /// limit of open agents. Run again for an agent that exists, it records only the session.
     /// </summary>
     Task<CommandOutcome> CreateAsync(string startDirectory, string orchestrator, string agent, string model, bool empty, string? session, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Seeds a live agent again: refused where its worktree holds changes of its own, unless <paramref name="force"/>;
-    /// <paramref name="empty"/> records an empty seed and copies nothing.
+    /// <paramref name="empty"/> hands it nothing more, keeping what it was handed before.
     /// </summary>
     Task<CommandOutcome> SeedAsync(string startDirectory, string orchestrator, string agent, bool empty, bool force, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Copies into a live agent the main tree's changed files under <paramref name="paths"/> - the anchor registries'
-    /// directory where none are given - that it has not changed, and records them as handed to it, so its fold leaves
-    /// them out. A dry run until <paramref name="apply"/>.
+    /// Hands a live agent the main tree's changes under <paramref name="paths"/> - the anchor registries' directory where
+    /// none are given - and records them as handed to it, so its fold leaves them out; refused, copying nothing, where the
+    /// agent changed or deleted one of them. A dry run until <paramref name="apply"/>.
     /// </summary>
     Task<CommandOutcome> RefreshAsync(string startDirectory, string orchestrator, string agent, IReadOnlyList<string> paths, bool apply, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Folds a live agent's work into the main tree, then applies the anchor rows it filed: every path it changed or was
-    /// handed is measured first, and nothing is written while any is refused. A dry run until <paramref name="apply"/>.
-    /// Its worktree is never removed: a review can still send it back.
+    /// Folds a live agent's work into the main tree, then applies the anchor rows it declared anew: every path it changed
+    /// or shares with the main tree is measured first, and nothing is written while any is refused. A dry run until
+    /// <paramref name="apply"/>. Its worktree is never removed, and what the fold wrote is recorded as shared: a review can
+    /// still send it back.
     /// </summary>
     Task<CommandOutcome> FoldAsync(string startDirectory, string orchestrator, string agent, IReadOnlyList<string> settled, bool apply, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Deletes an agent: folds what is left of its work and applies its rows - or, where
-    /// <paramref name="discardUncommitted"/>, abandons it with nothing folded - keeps its evidence and its Claude transcripts
-    /// in its directory, each read back, closes it, and removes its worktree and the copies hosts keep of it, never
-    /// forced; its directory stays as its history. Run again for a closed agent, it folds nothing and finishes the
-    /// removal. A dry run until <paramref name="apply"/>.
+    /// <paramref name="discardUncommitted"/>, abandons it with nothing folded - keeps its Claude transcripts in its
+    /// orchestrator's logs directory and its evidence in its own directory, each proved, closes it, and removes its
+    /// worktree and the copies hosts keep of it, never forced; its directory stays as its history. Run again for a closed
+    /// agent, it folds nothing and finishes the removal. A dry run until <paramref name="apply"/>.
     /// </summary>
     Task<CommandOutcome> DeleteAsync(
         string startDirectory,
@@ -64,9 +65,11 @@ public interface IAgentService
 
 /// <inheritdoc cref="IAgentService"/>
 /// <remarks>
-/// Once a command has written anything - the main tree, or an agent's record - it is no longer interrupted, and whatever it
-/// meets from there on is answered as a change begun and not finished (<see cref="HarnessExit.Incomplete"/>), saying what is
-/// in and how running it again goes on: never as a refusal, which says nothing changed.
+/// Once a command has written anything - the main tree, an agent's worktree, or an agent's record - it is no longer
+/// interrupted, and whatever it meets from there on is answered as a change begun and not finished
+/// (<see cref="HarnessExit.Incomplete"/>), saying what is in and how running it again goes on: never as a refusal, which
+/// says nothing changed. Each run that reaches an agent's record, or makes one, is a line in its log, refusals included;
+/// a dry run is not.
 /// </remarks>
 /// <param name="contextLoader">Finds the repository and its configuration.</param>
 /// <param name="gitClient">Reads both trees' state from git.</param>
@@ -146,7 +149,7 @@ public sealed class AgentService(
             return CommandOutcome.Usage(shape);
         }
 
-        var (context, layout, record) = await OrchestratorAsync(startDirectory, orchestrator, cancellationToken).ConfigureAwait(false);
+        var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, cancellationToken).ConfigureAwait(false);
 
         if (!WorktreeName.Validate(agent, context.Config.Worktrees.MaxNameLength).TryGetName(out _, out var length))
         {
@@ -163,29 +166,28 @@ public sealed class AgentService(
         var listed = await _worktrees.ListAsync(main, cancellationToken).ConfigureAwait(false);
         var now = _clock.GetUtcNow();
 
-        // Counted and taken in one step, under the orchestrator's own lock, so two agents made together can never both
-        // take its last place.
+        // Counted and taken in one step, under the orchestrator's own lock, from its record as it is then: two agents made
+        // together can never both take its last place, and an orchestrator deleted meanwhile is never given an agent.
         var refused = _store.Exclusively(layout, () =>
         {
+            if (_store.ReadOrchestrator(layout) is not { } current)
+            {
+                return CommandOutcome.Refused(OrchestrationReports.NoOrchestrator(orchestrator));
+            }
+
             if (_fileSystem.DirectoryExists(layout.AgentDirectory(agent)))
             {
                 return CommandOutcome.Refused($"'{layout.AgentDirectory(agent)}' is there already, and no record in it names an agent. Nothing was created.");
             }
 
-            var open = _store.Agents(layout)
-                .Where(entry => entry.Record is not { State: AgentStates.Deleted })
-                .Select(entry => entry.Name)
-                .Concat(listed.Select(worktree => WorktreeAddress.AgentOf(orchestrator, worktree.Name)).OfType<string>())
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)
-                .ToList();
+            var open = OrchestrationRules.OpenAgents(orchestrator, _store.Agents(layout), listed.Select(worktree => worktree.Name));
 
-            if (open.Count >= record.Parallel)
+            if (open.Count >= current.Parallel)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{orchestrator}' already has {open.Count} agent(s) with a worktree, its limit: {string.Join(", ", open)}. "
+                    $"Orchestrator '{orchestrator}' already has {open.Count} open agent(s), its limit: {string.Join(", ", open)}. "
                     + $"Delete one with {OrchestrationReports.DeleteAgentLine(orchestrator, "<agent>")}, or raise the limit with "
-                    + $"'{ToolPackage.Command} {OrchestratorService.CreateCommand} {orchestrator} --model {record.Model} --parallel <n>'. Nothing was created.");
+                    + $"{OrchestrationReports.Line(OrchestratorService.CreateCommand, orchestrator, "--model", current.Model, "--parallel", "<n>")}. Nothing was created.");
             }
 
             _store.WriteAgent(layout, new AgentRecord
@@ -206,90 +208,124 @@ public sealed class AgentService(
 
         if (refused is not null)
         {
-            return refused;
+            return _store.ReadOrchestrator(layout) is null ? refused : _log.Record(layout, orchestrator, CreateCommand, refused);
         }
 
-        // Until its worktree is made, the agent's directory holds only its place, which every way out before then gives back.
-        var placeOnly = true;
+        // Until its worktree is made, the agent's directory holds only its place, which every way out before then gives
+        // back - a refusal, an interruption, or a hand-over refused - and none after, when the worktree is there.
+        Hold hold;
+        Handable handable;
 
         try
         {
             // Seeding reads the main tree, which a fold writes: held while the worktree is made and handed what it is
             // handed, so the seed is one moment of it.
-            var hold = await HoldAsync(context.Layout, CreateCommand, cancellationToken, main).ConfigureAwait(false);
+            hold = await HoldAsync(context.Layout, CreateCommand, cancellationToken, main).ConfigureAwait(false);
 
             if (hold.Refusal is { } held)
             {
-                return held;
+                return _log.Record(layout, orchestrator, CreateCommand, GiveBack(layout, agent, held));
             }
 
-            await using (hold.Handles)
+            try
             {
                 // What it is to be handed is checked before its worktree is made: a hand-over refused leaves nothing behind.
-                var handable = empty ? [] : await _fold.HandableAsync(main, Floor(context), within: null, cancellationToken).ConfigureAwait(false);
-                var created = await _worktrees.CreateAtAsync(main, address, cancellationToken).ConfigureAwait(false);
-
-                if (!created.Succeeded)
-                {
-                    return created.Outcome with { Message = $"{created.Outcome.Message.TrimEnd('.')}. No agent was created." };
-                }
-
-                placeOnly = false;
-
-                return _log.Record(layout, agent, CreateCommand, await FinishMakingAsync(context, layout, agent, created, handable, empty).ConfigureAwait(false));
+                handable = empty ? new Handable([], [], []) : await _fold.HandableAsync(main, Floor(context), within: null, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                await hold.Handles.DisposeAsync().ConfigureAwait(false);
+                throw;
             }
         }
-        finally
+        catch
         {
-            if (placeOnly)
+            if (GiveBack(layout, agent) is { } left)
             {
-                _fileSystem.DeleteDirectory(layout.AgentDirectory(agent));
+                _output.Warn(CreateCommand, left);
             }
+
+            throw;
+        }
+
+        await using (hold.Handles)
+        {
+            // Never interrupted from here: git killed part way through making a worktree leaves one half made, still
+            // registered, and never cleaned up after.
+            var created = await _worktrees.CreateAtAsync(main, address, CancellationToken.None).ConfigureAwait(false);
+
+            if (!created.Succeeded)
+            {
+                return _log.Record(layout, orchestrator, CreateCommand, GiveBack(layout, agent, created.Outcome with { Message = $"{created.Outcome.Message.TrimEnd('.')}. No agent was created." }));
+            }
+
+            return _log.Record(layout, agent, CreateCommand, await FinishMakingAsync(context, layout, agent, created, handable, empty).ConfigureAwait(false));
+        }
+    }
+
+    /// <summary>Gives back the place taken for an agent whose worktree was never made; why it could not be, beside <paramref name="outcome"/>.</summary>
+    private CommandOutcome GiveBack(OrchestratorLayout layout, string agent, CommandOutcome outcome)
+        => GiveBack(layout, agent) is { } left ? outcome with { Details = [.. outcome.Details ?? [], left] } : outcome;
+
+    /// <summary>Gives back the place taken for an agent whose worktree was never made; why it could not be, or null.</summary>
+    private string? GiveBack(OrchestratorLayout layout, string agent)
+    {
+        try
+        {
+            _fileSystem.DeleteDirectory(layout.AgentDirectory(agent));
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"the place taken for agent '{agent}', '{layout.AgentDirectory(agent)}', could not be given back: {ex.Message.TrimEnd('.')}. Delete it by hand.";
         }
     }
 
     /// <summary>
     /// What makes an agent whose worktree now exists whole: its base, its directories and its seed - never interrupted, and
-    /// never stopping part way without saying what it made and how to finish.
+    /// never stopping part way without saying what it made, where its records are, and how to finish.
     /// </summary>
     private async Task<CommandOutcome> FinishMakingAsync(
         HarnessContext context,
         OrchestratorLayout layout,
         string agent,
         WorktreeOutcome created,
-        IReadOnlyList<string> handable,
+        Handable handable,
         bool empty)
     {
         var orchestrator = layout.Name;
-        var remedy = $"'{ToolPackage.Command} {SeedCommand} {orchestrator} {agent} --force' finishes it once that is dealt with, and "
-            + $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent, "--apply --discard-uncommitted")} drops it.";
+        var what = $"Agent '{agent}' of '{orchestrator}' was created at '{created.Path}'";
+        var records = new List<string> { $"record {layout.AgentRecordFile(agent)}" };
+        var based = false;
 
         try
         {
-            var baseCommit = created.BaseCommit ?? await _gitClient.ResolveCommitAsync(created.Path, "HEAD", CancellationToken.None).ConfigureAwait(false);
-
-            if (baseCommit is null)
+            if (created.BaseCommit is not { } baseCommit)
             {
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
-                    $"Agent '{agent}' of '{orchestrator}' was created at '{created.Path}', and the commit its worktree was made from cannot be read, so "
-                    + $"nothing of it can be measured. {OrchestrationReports.DeleteAgentLine(orchestrator, agent, "--apply --discard-uncommitted")} drops it.");
+                    $"{what}, and the commit its worktree was made from cannot be read, so nothing of it can be measured. "
+                    + $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent, "--apply --discard-uncommitted")} drops it.",
+                    records);
             }
 
             _store.UpdateAgent(layout, agent, current => current with { Base = baseCommit });
+            based = true;
             _fileSystem.CreateDirectory(layout.WorkDirectory(agent));
             _fileSystem.CreateDirectory(layout.PlansDirectory(agent));
 
             var start = new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = empty, Paths = [] };
             var (seed, handed, stopped) = await _fold.HandAsync(context.Layout.MainCheckoutRoot, created.Path, handable, start, CancellationToken.None).ConfigureAwait(false);
             _store.WriteSeed(layout, agent, seed);
+            records.Add($"seed {layout.SeedFile(agent)}");
 
             if (stopped is not null)
             {
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
-                    $"Agent '{agent}' of '{orchestrator}' was created at '{created.Path}', and handing it the main tree's uncommitted state stopped after "
-                    + $"{handed} of {handable.Count} path(s): {stopped}. Its seed records the {handed} it was handed. {remedy}");
+                    $"{what}, and handing it the main tree's uncommitted state stopped after {handed} of {handable.Count} path(s): {stopped}. "
+                    + $"Its seed records the {handed} it was handed. {Remedy(orchestrator, agent, based)}",
+                    records);
             }
 
             return CommandOutcome.Ok(
@@ -297,8 +333,9 @@ public sealed class AgentService(
                 [
                     created.Path,
                     $"base {OrchestrationReports.Base(baseCommit)}",
-                    seed.Empty ? "handed nothing, as asked" : $"handed {seed.Paths.Count} path(s) of the main tree's uncommitted state",
-                    $"record {layout.AgentRecordFile(agent)}",
+                    seed.Empty ? "handed nothing, as asked" : $"handed {handed} path(s) of the main tree's uncommitted state",
+                    .. NotHanded(handable),
+                    .. records,
                     $"plans {layout.PlansDirectory(agent)}",
                     $"work {layout.WorkDirectory(agent)}",
                     $"rows {layout.RowsDirectory(agent)}",
@@ -308,9 +345,18 @@ public sealed class AgentService(
         {
             return CommandOutcome.Failed(
                 HarnessExit.Incomplete,
-                $"Agent '{agent}' of '{orchestrator}' was created at '{created.Path}', and making it did not finish: {ex.Message.TrimEnd('.')}. {remedy}");
+                $"{what}, and making it did not finish: {ex.Message.TrimEnd('.')}. {Remedy(orchestrator, agent, based)}",
+                records);
         }
     }
+
+    /// <summary>How an agent whose making stopped part way is finished, or dropped: seeding needs the base its worktree records.</summary>
+    private static string Remedy(string orchestrator, string agent, bool based)
+        => based
+            ? $"{OrchestrationReports.Line(SeedCommand, orchestrator, agent, "--force")} finishes it once that is dealt with, and "
+                + $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent, "--apply --discard-uncommitted")} drops it."
+            : $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent, "--apply --discard-uncommitted")} drops it; nothing else can finish it, "
+                + "since its record names no commit its worktree was made from.";
 
     /// <summary>What running create-agent again does: records the session, and nothing else.</summary>
     private CommandOutcome Again(OrchestratorLayout layout, AgentRecord existing, string model, bool empty, string? session)
@@ -326,28 +372,24 @@ public sealed class AgentService(
         {
             return CommandOutcome.Refused(
                 $"{Agent(existing)} exists, created for model '{existing.Model}'. Run again, create-agent records only a session (--session); "
-                + $"'{ToolPackage.Command} {SeedCommand}' seeds it again. Nothing was changed.");
+                + $"{OrchestrationReports.Line(SeedCommand, existing.Orchestrator, existing.Name)} seeds it again. Nothing was changed.");
         }
 
         // An agent whose making stopped part way is said to be one, never "already as asked".
-        if (existing.State == AgentStates.Live && (existing.Base is null || _store.ReadSeed(layout, existing.Name) is null))
+        if (existing.State == AgentStates.Live && MakingUnfinished(existing, _store.ReadSeed(layout, existing.Name)) is { } unfinished)
         {
-            return CommandOutcome.Refused(
-                $"{Agent(existing)} exists, and making it did not finish: "
-                + (existing.Base is null
-                    ? $"it records no commit its worktree was made from. {OrchestrationReports.DeleteAgentLine(existing.Orchestrator, existing.Name, "--apply --discard-uncommitted")} drops it."
-                    : $"it was never seeded. '{ToolPackage.Command} {SeedCommand} {existing.Orchestrator} {existing.Name}' seeds it, with --empty where it is to be handed nothing."));
+            return CommandOutcome.Refused($"{Agent(existing)} exists, and making it did not finish: {unfinished}.");
         }
 
         if (session is null || session == existing.Session)
         {
-            return CommandOutcome.Ok($"agent '{existing.Name}' of '{existing.Orchestrator}' is already as asked", [$"record {layout.AgentRecordFile(existing.Name)}"]);
+            return CommandOutcome.Ok($"{Lower(Agent(existing))} is already as asked", [$"record {layout.AgentRecordFile(existing.Name)}"]);
         }
 
         _store.UpdateAgent(layout, existing.Name, current => current with { Session = session });
 
         return _log.Record(layout, existing.Name, CreateCommand, CommandOutcome.Ok(
-            $"agent '{existing.Name}' of '{existing.Orchestrator}' now records session {session}",
+            $"{Lower(Agent(existing))} now records session {session}",
             [$"record {layout.AgentRecordFile(existing.Name)}"]));
     }
 
@@ -374,23 +416,37 @@ public sealed class AgentService(
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var main = context.Layout.MainCheckoutRoot;
+        var seedLine = $"seed {layout.SeedFile(record.Name)}";
+        var previous = _store.ReadSeed(layout, record.Name);
+        Handable handable;
 
-        // Seeding overwrites by path, and an agent never reads again a file it believes it owns: seeded while it works, it
-        // would go on over files replaced under it. So a worktree with changes of its own is refused, unless forced; an
-        // empty seed copies nothing, and replaces nothing.
-        if (!empty && !force)
+        try
         {
-            var own = await _fold.ChangedAsync(path, Floor(context), "what the agent changed cannot be told", within: null, cancellationToken).ConfigureAwait(false);
-
-            if (own.Count > 0)
+            // Seeding overwrites by path, and an agent never reads again a file it believes it owns: seeded while it works,
+            // it would go on over files replaced under it. So a worktree with changes of its own is refused, unless forced;
+            // a copy it was handed and left alone is not its own.
+            if (!empty && !force)
             {
-                return CommandOutcome.Refused(
-                    $"{Agent(record)} already holds {own.Count} changed path(s) of its own - {ReportText.Listed(own)} - and seeding it now would overwrite "
-                    + "them. Seed an agent before it starts; --empty records that it was handed nothing, and --force seeds it anyway.");
+                var own = await _fold.OwnAsync(path, previous, Floor(context), cancellationToken).ConfigureAwait(false);
+
+                if (own.Count > 0)
+                {
+                    return CommandOutcome.Refused(
+                        $"{Agent(record)} already holds {own.Count} changed path(s) of its own - {ReportText.Listed(own)} - and seeding it now would overwrite "
+                        + "them. Seed an agent before it starts; --empty hands it nothing more, and --force seeds it anyway.");
+                }
             }
+
+            // Every path is checked before any is copied.
+            handable = empty ? new Handable([], [], []) : await _fold.HandableAsync(main, Floor(context), within: null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not seeded: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was written.");
         }
 
-        var hold = await HoldAsync(context.Layout, SeedCommand, cancellationToken, main).ConfigureAwait(false);
+        // The agent's worktree is held too: a leg building in it would be building what is being replaced.
+        var hold = await HoldAsync(context.Layout, SeedCommand, cancellationToken, main, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -399,40 +455,69 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
-            if (empty)
+            // What it was handed before stays recorded until it is handed again; handed nothing more, it keeps all of it.
+            var start = (previous ?? new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = empty, Paths = [] }) with
             {
-                _store.WriteSeed(layout, record.Name, new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = true, Paths = [] });
-                return CommandOutcome.Ok($"seeded agent '{record.Name}' of '{record.Orchestrator}' with nothing, as asked", [$"seed {layout.SeedFile(record.Name)}"]);
-            }
+                SeededAt = _clock.GetUtcNow(),
+                Empty = empty && previous?.Weighed.Any() != true,
+            };
+            int handed;
+            string? stopped;
 
-            // Every path is checked before any is copied; what it was handed before stays recorded until it is handed again.
-            var handable = await _fold.HandableAsync(main, Floor(context), within: null, cancellationToken).ConfigureAwait(false);
-            var previous = _store.ReadSeed(layout, record.Name);
-            var start = (previous ?? new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = false, Paths = [] }) with { SeededAt = _clock.GetUtcNow(), Empty = false };
-            var (seed, handed, stopped) = await _fold.HandAsync(main, path, handable, start, CancellationToken.None).ConfigureAwait(false);
-            _store.WriteSeed(layout, record.Name, seed);
+            try
+            {
+                SeedRecord seed;
+                (seed, handed, stopped) = await _fold.HandAsync(main, path, handable, start, CancellationToken.None).ConfigureAwait(false);
+                _store.WriteSeed(layout, record.Name, seed);
+            }
+            catch (Exception ex) when (Unfinished(ex))
+            {
+                return CommandOutcome.Failed(
+                    HarnessExit.Incomplete,
+                    $"Seeding {Lower(Agent(record))} copied what it could and could not record it: {ex.Message.TrimEnd('.')}. Its worktree may hold "
+                    + $"copies its seed does not name; run {OrchestrationReports.Line(SeedCommand, record.Orchestrator, record.Name, "--force")} again once that is dealt with.",
+                    [seedLine]);
+            }
 
             if (stopped is not null)
             {
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
                     $"Seeding {Lower(Agent(record))} stopped after {handed} of {handable.Count} path(s): {stopped}. Its seed records what it was handed; "
-                    + $"run '{ToolPackage.Command} {SeedCommand} {record.Orchestrator} {record.Name} --force' again once that is dealt with.",
-                    [$"seed {layout.SeedFile(record.Name)}"]);
+                    + $"run {OrchestrationReports.Line(SeedCommand, record.Orchestrator, record.Name, "--force")} again once that is dealt with.",
+                    [seedLine]);
             }
 
-            var details = new List<string> { $"seed {layout.SeedFile(record.Name)}" };
-            var head = await _gitClient.ResolveCommitAsync(main, "HEAD", CancellationToken.None).ConfigureAwait(false);
-
-            // A path committed between the agent's base and the main tree's HEAD is in neither the seed nor the agent's base.
-            if (handed > 0 && head is not null && head != record.Base)
+            if (empty)
             {
-                details.Add(
-                    $"its base {OrchestrationReports.Base(record.Base)} is not the main tree's HEAD {OrchestrationReports.Base(head)}: a path committed "
-                    + "between the two is not handed to it, and a fold refuses any such path it changes");
+                return CommandOutcome.Ok(
+                    previous is { } before && before.Weighed.Any()
+                        ? $"seeded {Lower(Agent(record))} with nothing more, as asked: what it was handed before stays recorded"
+                        : $"seeded {Lower(Agent(record))} with nothing, as asked",
+                    [seedLine]);
             }
 
-            return CommandOutcome.Ok($"seeded agent '{record.Name}' of '{record.Orchestrator}' with {handed} path(s)", details);
+            var details = new List<string>(NotHanded(handable)) { seedLine };
+
+            // A path committed between the agent's base and the main tree's HEAD is in neither the seed nor the agent's base;
+            // said where it can be told, and never a failure where it cannot, since the seed is written.
+            try
+            {
+                var head = await _gitClient.ResolveCommitAsync(main, "HEAD", CancellationToken.None).ConfigureAwait(false);
+
+                if (handed > 0 && head is not null && head != record.Base)
+                {
+                    details.Add(
+                        $"its base {OrchestrationReports.Base(record.Base)} is not the main tree's HEAD {OrchestrationReports.Base(head)}: a path committed "
+                        + "between the two is not handed to it, and a fold refuses any such path it changes");
+                }
+            }
+            catch (HarnessException ex)
+            {
+                details.Add($"whether the main tree's HEAD is still its base cannot be told: {ex.Message.TrimEnd('.')}");
+            }
+
+            return CommandOutcome.Ok($"seeded {Lower(Agent(record))} with {handed} path(s)", details);
         }
     }
 
@@ -468,10 +553,11 @@ public sealed class AgentService(
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var floor = Floor(context);
         var main = context.Layout.MainCheckoutRoot;
+        var seedLine = $"seed {layout.SeedFile(record.Name)}";
 
         if (_store.ReadSeed(layout, record.Name) is not { } seed)
         {
-            return CommandOutcome.Refused($"{Agent(record)} was never seeded, so nothing it was handed can be refreshed.");
+            return CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed: null)}.");
         }
 
         var prefixes = paths.Count > 0 ? [.. paths.Select(PathPatterns.Normalize)] : await RegistryDirectoriesAsync(context, cancellationToken).ConfigureAwait(false);
@@ -481,18 +567,25 @@ public sealed class AgentService(
             return CommandOutcome.Usage($"'{floored}' is never handed to an agent: {string.Join(", ", floor)} stay in their own tree.");
         }
 
-        var moved = new List<string>();
+        Handable handable;
+        Handable moved;
+        IReadOnlyList<string> changed;
 
-        foreach (var relative in await _fold.HandableAsync(main, floor, prefixes, cancellationToken).ConfigureAwait(false))
+        try
         {
-            if (!await _fold.SameAsync(Path.Combine(main, relative), Path.Combine(path, relative), cancellationToken).ConfigureAwait(false))
-            {
-                moved.Add(relative);
-            }
-        }
+            handable = await _fold.HandableAsync(main, floor, prefixes, cancellationToken).ConfigureAwait(false);
+            moved = new Handable(
+                await OtherAsync(handable.Files).ConfigureAwait(false),
+                await OtherAsync(handable.Deletions).ConfigureAwait(false),
+                handable.Directories);
 
-        // Never over a change of the agent's own - an edit, or a deletion - handed to it or not.
-        var changed = await _fold.EditedAsync(path, record.Base!, seed, moved, cancellationToken).ConfigureAwait(false);
+            // Never over a change of the agent's own - an edit, or a deletion - handed to it or not.
+            changed = await _fold.EditedAsync(path, record.Base!, seed, [.. moved.Files, .. moved.Deletions], cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied.");
+        }
 
         if (changed.Count > 0)
         {
@@ -501,19 +594,24 @@ public sealed class AgentService(
                 + "changes. Nothing was copied.");
         }
 
-        if (moved.Count == 0)
+        var all = moved.Files.Concat(moved.Deletions).Order(StringComparer.Ordinal).ToList();
+
+        if (all.Count == 0)
         {
-            return CommandOutcome.Ok($"agent '{record.Name}' of '{record.Orchestrator}' holds the main tree's copy of every changed path under {string.Join(", ", prefixes)}");
+            return CommandOutcome.Ok(
+                $"{Lower(Agent(record))} holds the main tree's copy of every changed path under {string.Join(", ", prefixes)}",
+                [.. NotHanded(handable)]);
         }
 
         if (!apply)
         {
             return CommandOutcome.Ok(
-                $"dry run: {moved.Count} path(s) would be refreshed into agent '{record.Name}' of '{record.Orchestrator}'; pass --apply to copy them",
-                [.. moved.Select(relative => $"  {relative}")]);
+                $"dry run: {all.Count} path(s) would be refreshed into {Lower(Agent(record))}; pass --apply to hand them over",
+                [.. all.Select(relative => $"  {relative}"), .. NotHanded(handable)]);
         }
 
-        var hold = await HoldAsync(context.Layout, RefreshCommand, cancellationToken, main).ConfigureAwait(false);
+        // The agent's worktree is held too: a leg building in it would be building what is being replaced.
+        var hold = await HoldAsync(context.Layout, RefreshCommand, cancellationToken, main, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
 
         if (hold.Refusal is { } held)
         {
@@ -522,18 +620,49 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
-            var (updated, handed, stopped) = await _fold.HandAsync(main, path, moved, seed, CancellationToken.None).ConfigureAwait(false);
-            _store.WriteSeed(layout, record.Name, updated);
+            int handed;
+            string? stopped;
+
+            try
+            {
+                SeedRecord updated;
+                (updated, handed, stopped) = await _fold.HandAsync(main, path, moved, seed, CancellationToken.None).ConfigureAwait(false);
+                _store.WriteSeed(layout, record.Name, updated);
+            }
+            catch (Exception ex) when (Unfinished(ex))
+            {
+                return CommandOutcome.Failed(
+                    HarnessExit.Incomplete,
+                    $"Refreshing {Lower(Agent(record))} handed over what it could and could not record it: {ex.Message.TrimEnd('.')}. Run "
+                    + $"{OrchestrationReports.Line(RefreshCommand, record.Orchestrator, record.Name, "--apply")} again once that is dealt with.",
+                    [seedLine]);
+            }
 
             return stopped is not null
                 ? CommandOutcome.Failed(
                     HarnessExit.Incomplete,
-                    $"Refreshing {Lower(Agent(record))} stopped after {handed} of {moved.Count} path(s): {stopped}. Its seed records the {handed} copied; "
-                    + $"run '{ToolPackage.Command} {RefreshCommand} {record.Orchestrator} {record.Name} --apply' again once that is dealt with.",
-                    [$"seed {layout.SeedFile(record.Name)}"])
+                    $"Refreshing {Lower(Agent(record))} stopped after {handed} of {all.Count} path(s): {stopped}. Its seed records the {handed} handed; "
+                    + $"run {OrchestrationReports.Line(RefreshCommand, record.Orchestrator, record.Name, "--apply")} again once that is dealt with.",
+                    [seedLine])
                 : CommandOutcome.Ok(
-                    $"refreshed {moved.Count} path(s) into agent '{record.Name}' of '{record.Orchestrator}', recorded as handed to it, so its fold leaves them out",
-                    [.. moved.Select(relative => $"  {relative}"), $"seed {layout.SeedFile(record.Name)}"]);
+                    $"refreshed {all.Count} path(s) into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out",
+                    [.. all.Select(relative => $"  {relative}"), .. NotHanded(handable), seedLine]);
+        }
+
+        // The paths whose main-tree copy the agent does not hold already.
+        async Task<IReadOnlyList<string>> OtherAsync(IReadOnlyList<string> relatives)
+        {
+            var other = new List<string>();
+
+            foreach (var relative in relatives)
+            {
+                if (!await _fold.SameAsync(Path.Combine(main, relative), Path.Combine(path, relative), cancellationToken).ConfigureAwait(false))
+                {
+                    other.Add(relative);
+                }
+            }
+
+            return other;
         }
     }
 
@@ -567,22 +696,21 @@ public sealed class AgentService(
     private async Task<CommandOutcome> FoldLiveAsync(AgentAt at, IReadOnlyList<string> settled, bool apply, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
+        var (unfoldable, seed) = await UnfoldableAsync(layout, record, path, cancellationToken).ConfigureAwait(false);
 
-        if (await UnfoldableAsync(layout, record, path, cancellationToken).ConfigureAwait(false) is { } unfoldable)
+        if (unfoldable is not null)
         {
             return unfoldable;
         }
 
-        var seed = _store.ReadSeed(layout, record.Name)!;
-
         if (!apply)
         {
-            var measured = await MeasureAsync(context, layout, record, path, seed, settled, "folded", cancellationToken).ConfigureAwait(false);
+            var measured = await MeasureAsync(context, layout, record, path, seed!, settled, deleting: false, cancellationToken).ConfigureAwait(false);
 
             return measured.Refusal ?? CommandOutcome.Ok(
-                $"dry run: folding agent '{record.Name}' of '{record.Orchestrator}' writes {measured.Plan!.Written.Count} path(s) into the main tree, removes "
-                + $"{measured.Plan.Deleted.Count} and applies {Planned(measured.Rows)} row(s); pass --apply to write them",
-                [.. OrchestrationReports.FoldLines(measured.Plan), .. RowsHeading(measured.Rows, layout, record.Name), .. OrchestrationReports.RowLines(measured.Rows)]);
+                $"dry run: folding {Lower(Agent(record))} writes {measured.Plan!.Written.Count} path(s) into the main tree, removes "
+                + $"{measured.Plan.Deleted.Count} and applies {measured.Rows.Planned} row(s); pass --apply to write them",
+                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name))]);
         }
 
         // The agent's worktree is held too: a leg building in it would be writing what is being folded.
@@ -595,19 +723,20 @@ public sealed class AgentService(
 
         await using (hold.Handles)
         {
-            var measured = await MeasureAsync(context, layout, record, path, seed, settled, "folded", cancellationToken).ConfigureAwait(false);
+            var measured = await MeasureAsync(context, layout, record, path, seed!, settled, deleting: false, cancellationToken).ConfigureAwait(false);
 
             if (measured.Refusal is { } refused)
             {
                 return refused;
             }
 
-            var (failure, batch) = await WriteAsync(context, record, path, measured).ConfigureAwait(false);
+            var written = await WriteAsync(context, layout, record, path, seed!, measured).ConfigureAwait(false);
 
-            return failure ?? CommandOutcome.Ok(
-                $"folded agent '{record.Name}' of '{record.Orchestrator}': wrote {measured.Plan!.Written.Count} path(s) into the main tree, removed "
-                + $"{measured.Plan.Deleted.Count} and applied {Planned(batch)} row(s); its worktree is kept",
-                [.. OrchestrationReports.FoldLines(measured.Plan), .. RowsHeading(batch, layout, record.Name), .. OrchestrationReports.RowLines(batch)]);
+            return written.Failure ?? CommandOutcome.Ok(
+                $"folded {Lower(Agent(record))}: wrote {measured.Plan!.Written.Count} path(s) into the main tree, removed "
+                + $"{measured.Plan.Deleted.Count} and applied {written.Rows.Planned} row(s); its worktree is kept, and what the fold wrote is "
+                + "recorded as shared, so a fold after a review weighs the agent's change of it",
+                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, written.Rows, layout.RowsDirectory(record.Name)), .. Records(layout, record)]);
         }
     }
 
@@ -632,15 +761,15 @@ public sealed class AgentService(
             return CommandOutcome.Usage("--settled leaves paths out of a fold, and --discard-uncommitted folds nothing: give one or the other.");
         }
 
-        var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, cancellationToken).ConfigureAwait(false);
+        var found = await FindAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
 
-        if (_store.ReadAgent(layout, agent) is not { } record)
+        if (found.Refusal is { } refusal)
         {
-            return CommandOutcome.Refused($"Orchestrator '{orchestrator}' has no agent named '{agent}'.");
+            return refusal;
         }
 
-        var outcome = await DeleteFoundAsync(context, layout, record, settled, apply, discardUncommitted, cancellationToken).ConfigureAwait(false);
-        return apply ? _log.Record(layout, agent, DeleteCommand, outcome) : outcome;
+        var outcome = await DeleteFoundAsync(found.Context!, found.Layout!, found.Record!, settled, apply, discardUncommitted, cancellationToken).ConfigureAwait(false);
+        return apply ? _log.Record(found.Layout!, agent, DeleteCommand, outcome) : outcome;
     }
 
     /// <summary>Deleting an agent, once its record is found.</summary>
@@ -706,16 +835,18 @@ public sealed class AgentService(
                 return CommandOutcome.Refused(Unusable(record, path, target.Standing));
         }
 
-        SeedRecord? seed = null;
+        var seed = discard ? _store.ReadSeed(layout, record.Name) : null;
 
         if (!discard)
         {
-            if (await UnfoldableAsync(layout, record, path, cancellationToken).ConfigureAwait(false) is { } unfoldable)
+            var (unfoldable, found) = await UnfoldableAsync(layout, record, path, cancellationToken).ConfigureAwait(false);
+
+            if (unfoldable is not null)
             {
                 return unfoldable;
             }
 
-            seed = _store.ReadSeed(layout, record.Name)!;
+            seed = found;
         }
 
         if (!apply)
@@ -729,16 +860,16 @@ public sealed class AgentService(
 
             var evidence = dry.Evidence.Files.Count == 0
                 ? "its evidence roots hold nothing to keep"
-                : $"{dry.Evidence.Files.Count} evidence file(s), to be kept in a directory named for the moment in '{layout.EvidenceDirectory(record.Name)}'";
+                : $"{dry.Evidence.Files.Count} evidence file(s), to be kept in a directory named for the run in '{layout.EvidenceDirectory(record.Name)}'";
 
             return CommandOutcome.Ok(
                 $"dry run: deleting {Lower(Agent(record))} "
-                + (discard ? $"discards {dry.Discarded.Count} changed path(s), folding nothing" : $"folds {dry.Fold!.Plan!.Written.Count} path(s), removes {dry.Fold.Plan.Deleted.Count} and applies {Planned(dry.Fold.Rows)} row(s)")
+                + (discard ? $"discards {dry.Discarded.Count} changed path(s), folding nothing" : $"folds {dry.Fold!.Plan!.Written.Count} path(s), removes {dry.Fold.Plan.Deleted.Count} and applies {dry.Fold.Rows.Planned} row(s)")
                 + $", keeps its transcripts and {dry.Evidence.Files.Count} evidence file(s), then removes its worktree and its copies on hosts; pass --apply to do it",
                 [
                     .. discard
                         ? [$"{dry.Discarded.Count} changed path(s) discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
-                        : OrchestrationReports.FoldLines(dry.Fold!.Plan!).Concat(RowsHeading(dry.Fold.Rows, layout, record.Name)).Concat(OrchestrationReports.RowLines(dry.Fold.Rows)),
+                        : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name)),
                     evidence,
                     TranscriptsPlan(record),
                 ]);
@@ -778,20 +909,20 @@ public sealed class AgentService(
 
             var lines = new List<string>();
             var what = discard ? "Nothing of it was folded" : "Its fold and rows are in the main tree";
+            var again = OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, discard ? "--apply --discard-uncommitted" : "--apply");
 
             if (!discard)
             {
                 var fold = measured.Fold!;
-                var (failure, batch) = await WriteAsync(context, record, path, fold).ConfigureAwait(false);
+                var written = await WriteAsync(context, layout, record, path, seed!, fold).ConfigureAwait(false);
 
-                if (failure is not null)
+                if (written.Failure is { } failure)
                 {
                     return failure with { Message = $"{failure.Message} Nothing was removed." };
                 }
 
-                lines.AddRange(OrchestrationReports.FoldLines(fold.Plan!));
-                lines.AddRange(RowsHeading(batch, layout, record.Name));
-                lines.AddRange(OrchestrationReports.RowLines(batch));
+                seed = written.Seed;
+                lines.AddRange(OrchestrationReports.FoldAndRowLines(fold.Plan, written.Rows, layout.RowsDirectory(record.Name)));
             }
 
             // Until the closing is recorded, the agent is live: anything that stops it here says what is in, and a run again
@@ -812,7 +943,7 @@ public sealed class AgentService(
                             HarnessExit.Incomplete,
                             $"{Agent(record)} was not deleted: after its fold was written, it still differs from the main tree - "
                             + $"{ReportText.Listed([.. after.Written, .. after.Deleted, .. after.Refusals])}. {what}, and its worktree is kept; nothing was removed.",
-                            lines);
+                            [.. lines, .. Records(layout, record)]);
                     }
                 }
 
@@ -824,15 +955,16 @@ public sealed class AgentService(
                     return CommandOutcome.Failed(
                         stopped,
                         $"{Agent(record)} was not deleted, because its transcripts could not be kept: {lost}. {what}; its worktree is kept, and nothing "
-                        + $"was removed. Run {OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, discard ? "--apply --discard-uncommitted" : "--apply")} again once that is dealt with.",
-                        lines);
+                        + $"was removed. Run {again} again once that is dealt with.",
+                        [.. lines, .. Records(layout, record)]);
                 }
 
                 // The evidence roots named before the fold and after it: a fold can bring a change of worktrees.evidenceRoots into
                 // the main tree's configuration, and a root it dropped would go unkept.
                 var reloaded = await _contextLoader.LoadAsync(context.Layout.MainCheckoutRoot, CancellationToken.None).ConfigureAwait(false);
                 var roots = context.Config.Worktrees.EvidenceRoots.Concat(reloaded.Config.Worktrees.EvidenceRoots).Distinct(StringComparer.Ordinal).ToList();
-                var (destination, keeping) = FreshEvidence(layout, record.Name);
+                var keeping = OrchestratorLayout.KeptEvidence(hold.Run.ToString());
+                var destination = layout.KeptEvidence(record.Name, keeping);
                 kept = await _evidence.KeepAsync(path, roots, measured.Evidence.Files, destination, CancellationToken.None).ConfigureAwait(false);
 
                 if (kept.Problem is { } problem)
@@ -841,11 +973,11 @@ public sealed class AgentService(
                         stopped,
                         $"{Agent(record)} was not deleted, because its evidence could not be kept: {problem}. {what}; its worktree and its evidence are "
                         + "kept, and nothing was removed.",
-                        lines);
+                        [.. lines, .. Records(layout, record)]);
                 }
 
-                lines.Add(EvidenceLine(kept, destination, measured.Evidence.LinkedRoots));
-                var holding = await _fold.HeldAsync(path, seed?.Paths.Keys ?? Enumerable.Empty<string>(), Floor(context), CancellationToken.None).ConfigureAwait(false);
+                lines.Add(EvidenceLine(kept, destination));
+                var holding = await _fold.HeldAsync(path, seed, [], Floor(context), CancellationToken.None).ConfigureAwait(false);
                 target = target with { Record = Close(target, stamp, discard, kept.Kept.Count > 0 ? keeping : string.Empty, holding) };
             }
             catch (Exception ex) when (Unfinished(ex))
@@ -853,8 +985,8 @@ public sealed class AgentService(
                 return CommandOutcome.Failed(
                     stopped,
                     $"{Agent(record)} was not deleted: {ex.Message.TrimEnd('.')}. {what}; its worktree is kept, and nothing was removed. Run "
-                    + $"{OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, discard ? "--apply --discard-uncommitted" : "--apply")} again once that is dealt with.",
-                    lines);
+                    + $"{again} again once that is dealt with.",
+                    [.. lines, .. Records(layout, record)]);
             }
 
             return await AfterClosingAsync(target, kept.Kept, lines).ConfigureAwait(false);
@@ -871,7 +1003,8 @@ public sealed class AgentService(
         var closed = _store.UpdateAgent(target.Layout, target.Record.Name, current => current.State != AgentStates.Live ? null : current with
         {
             State = AgentStates.Closed,
-            Closing = new AgentClosing { At = _clock.GetUtcNow(), Abandoned = abandoned, Evidence = evidence, Stamp = stamp, Held = held },
+            Abandoned = abandoned,
+            Closing = new AgentClosing { At = _clock.GetUtcNow(), Evidence = evidence, Stamp = stamp, Held = held },
         });
 
         return closed.State == AgentStates.Closed
@@ -900,7 +1033,7 @@ public sealed class AgentService(
         }
         catch (Exception ex) when (Unfinished(ex))
         {
-            return Closed(target.Record, ex.Message.TrimEnd('.'), lines);
+            return Closed(target, ex.Message.TrimEnd('.'), lines);
         }
     }
 
@@ -921,10 +1054,10 @@ public sealed class AgentService(
         }
 
         var was = $"{Agent(record)} was closed at {OrchestrationReports.Moment(closing.At)} - "
-            + (closing.Abandoned ? "abandoned, with nothing folded" : "its fold and rows are in the main tree")
+            + (record.Abandoned is true ? "abandoned, with nothing folded" : "its fold and rows are in the main tree")
             + (closing.Evidence.Length > 0 ? $", its evidence kept in '{layout.KeptEvidence(record.Name, closing.Evidence)}'" : string.Empty)
             + " - and its worktree's removal did not finish";
-        var removal = $"'{ToolPackage.Command} {WorktreeService.DeleteCommand} {target.Address.Name}";
+        var removal = OrchestrationReports.Line(WorktreeService.DeleteCommand, target.Address.Name, "--discard-uncommitted", "--delete-evidence");
         var again = OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name);
 
         switch (target.Standing.Kind)
@@ -948,14 +1081,15 @@ public sealed class AgentService(
                     return CommandOutcome.Refused(
                         $"{was}. git names no '{WorktreeStamp.FileName}' in the git directory of '{path}', so whether it is the worktree closed then "
                         + $"or one made there since cannot be told. Nothing of it was read or removed: once what it holds is copied out, {removal} "
-                        + $"--discard-uncommitted --delete-evidence' removes it, and {again} then finishes this agent.");
+                        + $"removes it, and {again} then finishes this agent.");
                 }
 
                 if (stamp != closing.Stamp)
                 {
                     return CommandOutcome.Refused(
                         $"{was}. '{path}' is not the worktree closed then: git knows it as another, made there since. Nothing of it was read or removed, "
-                        + $"and it is not this agent's: {removal}' removes it once what it holds is kept, and {again} then finishes this agent.");
+                        + $"and it is not this agent's: {OrchestrationReports.Line(WorktreeService.DeleteCommand, target.Address.Name)} removes it once what "
+                        + $"it holds is kept, and {again} then finishes this agent.");
                 }
 
                 var changed = await _fold
@@ -967,9 +1101,9 @@ public sealed class AgentService(
                     return CommandOutcome.Failed(
                         HarnessExit.Incomplete,
                         $"{was}, and its worktree holds {changed.Count} file(s) its closing did not record, changed or new since: work done in an agent "
-                        + $"already closed, which nothing folds again and nothing discards unseen. Copy it out, then remove the worktree with {removal} "
-                        + $"--discard-uncommitted --delete-evidence', and {again} finishes this agent.",
-                        [.. changed.Select(relative => $"  {relative}")]);
+                        + $"already closed, which nothing folds again and nothing discards unseen. Copy it out, then remove the worktree with {removal}, "
+                        + $"and {again} finishes this agent.",
+                        [.. changed.Select(relative => $"  {relative}"), .. Records(layout, record)]);
                 }
 
                 break;
@@ -1011,7 +1145,7 @@ public sealed class AgentService(
 
                 if (transcripts.Failed is { } lost)
                 {
-                    return Closed(record, $"its transcripts could not be kept: {lost}", lines);
+                    return Closed(target, $"its transcripts could not be kept: {lost}", lines);
                 }
 
                 if (target.Standing.Kind == Standing.Gone)
@@ -1020,17 +1154,17 @@ public sealed class AgentService(
                 }
 
                 // Kept again, into a directory of its own: a run that held a file open when the removal stopped may have gone
-                // on writing it, and one directory for both would refuse every run after the first as a clash.
-                var (destination, _) = FreshEvidence(layout, record.Name);
-                var found = await _evidence.FindAsync(path, context.Config.Worktrees.EvidenceRoots, CancellationToken.None).ConfigureAwait(false);
-                var kept = await _evidence.KeepAsync(path, context.Config.Worktrees.EvidenceRoots, found.Files, destination, CancellationToken.None).ConfigureAwait(false);
+                // on writing it, and one directory for both would refuse every run after the first as a clash. Nothing was
+                // measured before, so nothing is compared with a measure.
+                var destination = layout.KeptEvidence(record.Name, OrchestratorLayout.KeptEvidence(hold.Run.ToString()));
+                var kept = await _evidence.KeepAsync(path, context.Config.Worktrees.EvidenceRoots, measured: null, destination, CancellationToken.None).ConfigureAwait(false);
 
                 if (kept.Problem is { } problem)
                 {
-                    return Closed(record, $"its evidence could not be kept again: {problem}", lines);
+                    return Closed(target, $"its evidence could not be kept again: {problem}", lines);
                 }
 
-                lines.Add(EvidenceLine(kept, destination, found.LinkedRoots));
+                lines.Add(EvidenceLine(kept, destination));
 
                 if (target.Standing.Kind == Standing.Husk)
                 {
@@ -1040,15 +1174,16 @@ public sealed class AgentService(
                         HarnessExit.Incomplete,
                         $"{was}. '{path}' is no longer a git worktree - it holds no .git of its own - which is what a removal that stopped part way "
                         + "leaves, or a directory made there since. Look at what else it holds; once nothing in it is needed, "
-                        + $"{removal} --force' removes it - nothing here forces it - and {again} then finishes this agent.",
-                        lines);
+                        + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, target.Address.Name, "--force")} removes it - nothing here forces it - "
+                        + $"and {again} then finishes this agent.",
+                        [.. lines, .. Records(layout, record)]);
                 }
 
                 return await AfterClosingAsync(target, kept.Kept, lines).ConfigureAwait(false);
             }
             catch (Exception ex) when (Unfinished(ex))
             {
-                return Closed(record, ex.Message.TrimEnd('.'), lines);
+                return Closed(target, ex.Message.TrimEnd('.'), lines);
             }
         }
     }
@@ -1084,7 +1219,7 @@ public sealed class AgentService(
                     HarnessExit.CommandFailed,
                     $"{Agent(record)} was not deleted, because its transcripts could not be kept: {lost}. Nothing was removed; run {again} again once "
                     + "that is dealt with.",
-                    [.. transcripts.Lines]);
+                    [.. transcripts.Lines, .. Records(layout, record)]);
             }
 
             try
@@ -1096,7 +1231,7 @@ public sealed class AgentService(
                 return CommandOutcome.Failed(
                     HarnessExit.CommandFailed,
                     $"{Agent(record)} was not deleted: {ex.Message.TrimEnd('.')}. Run {again} again once that is dealt with.",
-                    [.. transcripts.Lines]);
+                    [.. transcripts.Lines, .. Records(layout, record)]);
             }
         }
     }
@@ -1104,12 +1239,15 @@ public sealed class AgentService(
     /// <summary>
     /// Removes an agent's worktree and the copies hosts keep of it through delete-worktree - never forced, its evidence
     /// check kept - then proves it: the directory gone, git's record of it gone, and no copy of it recorded on a host. Only
-    /// then is the agent deleted; anything left makes the deletion incomplete, naming what is left.
+    /// then is the agent deleted, its closing kept as its history; anything left makes the deletion incomplete, naming
+    /// what is left.
     /// </summary>
     private async Task<CommandOutcome> RemoveAsync(Target target, List<string> lines)
     {
         var record = target.Record;
-        var abandoned = record.Closing?.Abandoned ?? true;
+
+        // Closed, it records whether it was abandoned; still live, its worktree is gone and nothing of it can be folded.
+        var abandoned = record.Abandoned ?? true;
         WorktreeOutcome? removal = null;
 
         // Nothing is asked of delete-worktree where nothing is left for it: it would answer that no such worktree exists.
@@ -1134,31 +1272,35 @@ public sealed class AgentService(
         if (left.Count > 0)
         {
             return record.State == AgentStates.Closed
-                ? Closed(record, string.Join("; ", left), lines)
+                ? Closed(target, string.Join("; ", left), lines)
                 : CommandOutcome.Failed(
                     HarnessExit.Incomplete,
                     $"{Agent(record)} is not deleted yet: {string.Join("; ", left)}. Deal with what is named, then run "
                     + $"{OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, "--apply --discard-uncommitted")} again.",
-                    lines);
+                    [.. lines, .. Records(target.Layout, record)]);
         }
 
-        _store.UpdateAgent(target.Layout, record.Name, current => current with { State = AgentStates.Deleted, Closing = null, DeletedAt = _clock.GetUtcNow(), Abandoned = abandoned });
+        _store.UpdateAgent(target.Layout, record.Name, current => current with { State = AgentStates.Deleted, DeletedAt = _clock.GetUtcNow(), Abandoned = abandoned });
 
         return CommandOutcome.Ok(
-            $"deleted agent '{record.Name}' of '{record.Orchestrator}': {(abandoned ? "abandoned, with nothing folded" : "its fold and rows are in the main tree")}, "
+            $"deleted {Lower(Agent(record))}: {(abandoned ? "abandoned, with nothing folded" : "its fold and rows are in the main tree")}, "
             + "and its worktree, git's record of it and every copy of it recorded on a host are gone; its directory is kept as its history",
-            [.. lines, $"record {target.Layout.AgentRecordFile(record.Name)}"]);
+            [.. lines, .. Records(target.Layout, record)]);
     }
 
     /// <summary>What is said of a closed agent whose removal stopped: what stopped it, what is in, and that running delete-agent again finishes it.</summary>
-    private static CommandOutcome Closed(AgentRecord record, string why, IReadOnlyList<string> lines)
-        => CommandOutcome.Failed(
+    private CommandOutcome Closed(Target target, string why, IReadOnlyList<string> lines)
+    {
+        var record = target.Record;
+
+        return CommandOutcome.Failed(
             HarnessExit.Incomplete,
             $"{Agent(record)} is closed and not deleted yet: {why}. "
-            + (record.Closing?.Abandoned ?? false ? "Nothing of it was folded" : "Its fold and rows are in the main tree")
+            + (record.Abandoned is true ? "Nothing of it was folded" : "Its fold and rows are in the main tree")
             + $", and it is closed, so nothing folds it again. Deal with what is named, then run {OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name)} "
             + "again: it folds nothing, and finishes the removal or names what stops it.",
-            lines);
+            [.. lines, .. Records(target.Layout, record)]);
+    }
 
     /// <summary>
     /// What is left of an agent's worktree: its directory, git's record of it, and copies recorded on hosts. A question that
@@ -1221,29 +1363,29 @@ public sealed class AgentService(
         Measured? fold = null;
         IReadOnlyList<string> discarded = [];
 
-        if (discard)
-        {
-            discarded = await _fold.ChangedAsync(path, Floor(context), "what the agent changed cannot be told", within: null, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            fold = await MeasureAsync(context, layout, record, path, seed!, settled, "deleted", cancellationToken).ConfigureAwait(false);
-
-            if (fold.Refusal is { } refusal)
-            {
-                return new ClosingMeasure(fold, discarded, none, refusal);
-            }
-        }
-
         try
         {
+            if (discard)
+            {
+                discarded = await _fold.ChangedAsync(path, Floor(context), "what the agent changed cannot be told", within: null, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                fold = await MeasureAsync(context, layout, record, path, seed!, settled, deleting: true, cancellationToken).ConfigureAwait(false);
+
+                if (fold.Refusal is { } refusal)
+                {
+                    return new ClosingMeasure(fold, discarded, none, refusal);
+                }
+            }
+
             return new ClosingMeasure(fold, discarded, await _evidence.FindAsync(path, context.Config.Worktrees.EvidenceRoots, cancellationToken).ConfigureAwait(false), null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return new ClosingMeasure(fold, discarded, none, CommandOutcome.Failed(
                 HarnessExit.CommandFailed,
-                $"{Agent(record)} was not deleted: {ex.Message.TrimEnd('.')}, and an unread evidence root is not an empty one. Nothing was written or removed."));
+                $"{Agent(record)} was not deleted: {ex.Message.TrimEnd('.')}, and what cannot be read is never taken for nothing there. Nothing was written or removed."));
         }
     }
 
@@ -1255,11 +1397,12 @@ public sealed class AgentService(
         string path,
         SeedRecord seed,
         IReadOnlyList<string> settled,
-        string verb,
+        bool deleting,
         CancellationToken cancellationToken)
     {
         var main = context.Layout.MainCheckoutRoot;
-        var nothing = verb == "deleted" ? "Nothing was written or removed." : "Nothing was written.";
+        var verb = deleting ? "deleted" : "folded";
+        var nothing = deleting ? "Nothing was written or removed." : "Nothing was written.";
         FoldPlan plan;
 
         try
@@ -1268,64 +1411,129 @@ public sealed class AgentService(
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return new Measured(null, [], new AnchorBatch([], [], Written: false), CommandOutcome.Failed(
+            return new Measured(null, [], [], new AgentRowsPlan(new AnchorBatch([], []), []), CommandOutcome.Failed(
                 HarnessExit.CommandFailed,
                 $"{Agent(record)} was not {verb}: what it changed cannot be read - {ex.Message.TrimEnd('.')}. {nothing}"));
         }
 
-        var (rows, problems) = AgentRows.Read(_fileSystem, layout.RowsDirectory(record.Name));
-        var batch = problems.Count > 0 ? new AnchorBatch([], problems, Written: false) : await _anchors.ApplyAsync(main, rows, dryRun: true, cancellationToken).ConfigureAwait(false);
+        var (rows, fresh, all) = await MeasureRowsAsync(main, layout, record, cancellationToken).ConfigureAwait(false);
 
-        if (plan.Refusals.Count == 0 && batch.Succeeded)
+        if (plan.Refusals.Count == 0 && rows.Batch.Succeeded)
         {
-            return new Measured(plan, rows, batch, null);
+            return new Measured(plan, fresh, all, rows, null);
         }
 
         var what = new List<string>();
-        var lines = new List<string>();
 
         if (plan.Refusals.Count > 0)
         {
             what.Add($"{plan.Refusals.Count} of its paths cannot be folded");
-            lines.AddRange(OrchestrationReports.FoldRefusalLines(plan));
-        }
-        else
-        {
-            lines.AddRange(OrchestrationReports.FoldLines(plan));
         }
 
-        if (!batch.Succeeded)
+        if (!rows.Batch.Succeeded)
         {
-            what.Add($"{batch.Problems.Count} problem(s) with its rows");
-            lines.AddRange(RowsHeading(batch, layout, record.Name));
-            lines.AddRange(OrchestrationReports.RowLines(batch));
+            what.Add($"{rows.Batch.Problems.Count} problem(s) with its rows");
         }
 
-        return new Measured(plan, rows, batch, CommandOutcome.Refused($"{Agent(record)} was not {verb}: {string.Join(", and ", what)}. {nothing}", lines));
+        return new Measured(plan, fresh, all, rows, CommandOutcome.Refused(
+            $"{Agent(record)} was not {verb}: {string.Join(", and ", what)}. {nothing}",
+            [.. OrchestrationReports.RefusalLines(plan, rows, layout.RowsDirectory(record.Name))]));
     }
 
     /// <summary>
-    /// Writes a measured fold into the main tree, then the agent's rows into its registries, never interrupted: the rows as
-    /// written, or - once anything is written - what stopped it, as a change begun and not finished.
+    /// The agent's rows as a fold weighs them: those it declares anew - or never had applied - checked as applying them
+    /// would write them; those an earlier fold applied and it declares as it did then, never applied again; and a row it
+    /// declares anew over one an earlier fold applied refused where the registries changed that row since, as a file the
+    /// main tree changed since is refused.
     /// </summary>
-    private async Task<(CommandOutcome? Failure, AnchorBatch Batch)> WriteAsync(HarnessContext context, AgentRecord record, string path, Measured measured)
+    private async Task<(AgentRowsPlan Plan, IReadOnlyList<AnchorRowDeclaration> Fresh, IReadOnlyList<AnchorRowDeclaration> All)> MeasureRowsAsync(
+        string main,
+        OrchestratorLayout layout,
+        AgentRecord record,
+        CancellationToken cancellationToken)
+    {
+        var (declared, problems) = AgentRows.Read(_fileSystem, layout.RowsDirectory(record.Name));
+
+        if (problems.Count > 0)
+        {
+            return (new AgentRowsPlan(new AnchorBatch([], problems), []), [], declared);
+        }
+
+        var applied = (_store.ReadAppliedRows(layout, record.Name)?.Rows ?? []).ToDictionary(row => row.Id, StringComparer.Ordinal);
+        var fresh = declared.Where(row => !applied.TryGetValue(row.Id, out var last) || last != row).ToList();
+        var unchanged = declared.Where(row => applied.TryGetValue(row.Id, out var last) && last == row).Select(row => row.Id).ToList();
+        var batch = await _anchors.ApplyAsync(main, fresh, dryRun: true, cancellationToken).ConfigureAwait(false);
+        var redeclared = batch.Rows
+            .Where(outcome => outcome.Action != AnchorRowAction.AlreadyIn && applied.ContainsKey(outcome.Id))
+            .Select(outcome => applied[outcome.Id])
+            .ToList();
+
+        if (batch.Succeeded && redeclared.Count > 0)
+        {
+            var check = await _anchors.ApplyAsync(main, redeclared, dryRun: true, cancellationToken).ConfigureAwait(false);
+            var moved = check.Rows
+                .Where(outcome => outcome.Action != AnchorRowAction.AlreadyIn)
+                .Select(outcome => $"{outcome.Id}: the registries changed it after an earlier fold of this agent applied it - {OrchestrationReports.Since(outcome)} - so "
+                    + "applying what it declares now would lose that change. Set the row by hand as it should be; a row already as declared is recorded, not written again")
+                .Concat(check.Problems.Select(problem => $"whether the registries still hold what an earlier fold applied cannot be told: {problem}"))
+                .ToList();
+
+            if (moved.Count > 0)
+            {
+                batch = batch with { Problems = [.. batch.Problems, .. moved] };
+            }
+        }
+
+        return (new AgentRowsPlan(batch, unchanged), fresh, declared);
+    }
+
+    /// <summary>
+    /// Writes a measured fold into the main tree, records what it wrote as shared, then applies the rows the agent declared
+    /// anew and records them as applied, never interrupted: the rows as written and the seed as recorded, or - once anything
+    /// is written - what stopped it, as a change begun and not finished.
+    /// </summary>
+    private async Task<Written> WriteAsync(HarnessContext context, OrchestratorLayout layout, AgentRecord record, string path, SeedRecord seed, Measured measured)
     {
         var main = context.Layout.MainCheckoutRoot;
         var plan = measured.Plan!;
         var applied = await _fold.ApplyAsync(main, path, plan).ConfigureAwait(false);
+        var records = Records(layout, record);
+        var progress = $"after writing {applied.Written.Count} of {plan.Written.Count} path(s) and removing {applied.Deleted.Count} of {plan.Deleted.Count}";
+        SeedRecord folded;
+
+        try
+        {
+            folded = _fold.Folded(seed, plan, applied, path);
+            _store.WriteSeed(layout, record.Name, folded);
+        }
+        catch (Exception ex) when (Unfinished(ex))
+        {
+            return new Written(
+                CommandOutcome.Failed(
+                    HarnessExit.Incomplete,
+                    $"Folding {Lower(Agent(record))} wrote into the main tree {progress}, and its seed could not record what it wrote: "
+                    + $"{ex.Message.TrimEnd('.')}. Its rows were not applied; run it again once that is dealt with - a fold run again finds what it "
+                    + "wrote already in, records it, and measures the rest afresh.",
+                    records),
+                measured.Rows,
+                seed);
+        }
 
         if (applied.Stopped is { } why)
         {
-            return (CommandOutcome.Failed(
-                HarnessExit.Incomplete,
-                $"Folding {Lower(Agent(record))} stopped part way, after writing {applied.Written} of {plan.Written.Count} path(s) and removing "
-                + $"{applied.Deleted} of {plan.Deleted.Count}: {why.TrimEnd('.')}. What it wrote is in the main tree, and its rows were not applied; run it "
-                + "again once that is dealt with - a fold run again finds what it wrote already in, and measures the rest afresh."), measured.Rows);
+            return new Written(
+                CommandOutcome.Failed(
+                    HarnessExit.Incomplete,
+                    $"Folding {Lower(Agent(record))} stopped part way, {progress}: {why.TrimEnd('.')}. What it wrote is in the main tree and recorded "
+                    + "as shared, and its rows were not applied; run it again once that is dealt with - a fold run again measures the rest afresh.",
+                    records),
+                measured.Rows,
+                folded);
         }
 
         if (measured.Declared.Count == 0)
         {
-            return (null, measured.Rows);
+            return new Written(null, measured.Rows, folded);
         }
 
         AnchorBatch batch;
@@ -1336,46 +1544,85 @@ public sealed class AgentService(
         }
         catch (Exception ex) when (Unfinished(ex))
         {
-            batch = new AnchorBatch(measured.Rows.Rows, [], Written: false) { Failure = ex.Message.TrimEnd('.') };
+            batch = new AnchorBatch(measured.Rows.Batch.Rows, []) { Failure = ex.Message.TrimEnd('.') };
         }
 
-        return batch.Succeeded
-            ? (null, batch)
-            : (CommandOutcome.Failed(
-                HarnessExit.Incomplete,
-                $"{Agent(record)} is folded into the main tree, and applying its rows failed{(batch.Failure is { } failure ? $": {failure}" : string.Empty)}. Its "
-                + "worktree is kept. Correct the cause and run again: the fold finds its own writes already in, and a row already as declared is not "
-                + "written again.",
-                [.. OrchestrationReports.RowLines(batch)]), batch);
+        var rows = measured.Rows with { Batch = batch };
+
+        if (!batch.Succeeded)
+        {
+            return new Written(
+                CommandOutcome.Failed(
+                    HarnessExit.Incomplete,
+                    $"{Agent(record)} is folded into the main tree, and applying its rows failed{(batch.Failure is { } failure ? $": {failure}" : string.Empty)}. Its "
+                    + "worktree is kept. Correct the cause and run again: the fold finds its own writes recorded as shared, and a row already as declared "
+                    + "is not written again.",
+                    [.. OrchestrationReports.RowLines(batch), .. records]),
+                rows,
+                folded);
+        }
+
+        try
+        {
+            var kept = (_store.ReadAppliedRows(layout, record.Name)?.Rows ?? []).ToDictionary(row => row.Id, StringComparer.Ordinal);
+
+            foreach (var row in measured.All)
+            {
+                kept[row.Id] = row;
+            }
+
+            _store.WriteAppliedRows(layout, record.Name, new AppliedRowsRecord { Rows = [.. kept.Values.OrderBy(row => row.Id, StringComparer.Ordinal)] });
+        }
+        catch (Exception ex) when (Unfinished(ex))
+        {
+            return new Written(
+                CommandOutcome.Failed(
+                    HarnessExit.Incomplete,
+                    $"{Agent(record)} is folded into the main tree and its rows are in the registries, and the record of the rows it applied could not be "
+                    + $"written: {ex.Message.TrimEnd('.')}. Run it again once that is dealt with: a row already as declared is recorded, not written again.",
+                    [.. OrchestrationReports.RowLines(batch), .. records]),
+                rows,
+                folded);
+        }
+
+        return new Written(null, rows, folded);
     }
 
-    /// <summary>Why a live agent's work cannot be folded as it stands: no base, never seeded, or a commit made inside it.</summary>
-    private async Task<CommandOutcome?> UnfoldableAsync(OrchestratorLayout layout, AgentRecord record, string path, CancellationToken cancellationToken)
+    /// <summary>Why a live agent's work cannot be folded as it stands - not whole, or a commit made inside it - or its seed, where it can.</summary>
+    private async Task<(CommandOutcome? Refusal, SeedRecord? Seed)> UnfoldableAsync(OrchestratorLayout layout, AgentRecord record, string path, CancellationToken cancellationToken)
     {
-        if (record.Base is null)
-        {
-            return CommandOutcome.Refused(
-                $"{Agent(record)} records no commit its worktree was made from, as when making it stopped part way, so nothing of it can be measured; "
-                + $"{OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, "--apply --discard-uncommitted")} deletes it with nothing folded.");
-        }
+        var seed = _store.ReadSeed(layout, record.Name);
 
-        if (_store.ReadSeed(layout, record.Name) is null)
+        if (MakingUnfinished(record, seed) is { } unfinished)
         {
-            return CommandOutcome.Refused(
-                $"{Agent(record)} was never seeded, and its seed is what tells its work from what it was handed: '{ToolPackage.Command} {SeedCommand} "
-                + $"{record.Orchestrator} {record.Name}' seeds it, with --empty where it was handed nothing.");
+            return (CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {unfinished}."), null);
         }
 
         var head = await _gitClient.ResolveCommitAsync(path, "HEAD", cancellationToken).ConfigureAwait(false);
 
         return head == record.Base
-            ? null
-            : CommandOutcome.Refused(
+            ? (null, seed)
+            : (CommandOutcome.Refused(
                 $"{Agent(record)}'s HEAD is {OrchestrationReports.Base(head)}, and its base is {OrchestrationReports.Base(record.Base)}: a commit made inside "
                 + "it hides its changes from git status, the only list of paths a fold reads, so folding it now would take part of its work and silently "
                 + $"drop the rest. Agents never commit; 'git -C \"{path}\" reset --soft {record.Base}' turns its commits back into uncommitted changes a "
-                + "fold reads, where that is what is wanted.");
+                + "fold reads, where that is what is wanted."), null);
     }
+
+    /// <summary>
+    /// Why an agent whose making stopped part way is not whole, and what finishes it or drops it; null where it is whole.
+    /// The one wording of it, whichever command meets it.
+    /// </summary>
+    /// <param name="record">The agent's record.</param>
+    /// <param name="seed">Its seed, or null where it was never seeded.</param>
+    private static string? MakingUnfinished(AgentRecord record, SeedRecord? seed)
+        => record.Base is null
+            ? $"it records no commit its worktree was made from, so nothing of it can be measured; "
+                + $"{OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, "--apply --discard-uncommitted")} drops it"
+            : seed is null
+                ? "it was never seeded, and its seed is what tells its work from what it was handed; "
+                    + $"{OrchestrationReports.Line(SeedCommand, record.Orchestrator, record.Name)} seeds it, with --empty where it is to be handed nothing"
+                : null;
 
     /// <summary>The directories the anchor registries are kept in, relative to the tree: what an agent is refreshed with where no path is named.</summary>
     private async Task<IReadOnlyList<string>> RegistryDirectoriesAsync(HarnessContext context, CancellationToken cancellationToken)
@@ -1402,15 +1649,27 @@ public sealed class AgentService(
             : throw new HarnessException(HarnessExit.Refused, OrchestrationReports.NoOrchestrator(orchestrator));
     }
 
-    /// <summary>A live agent whose worktree git records as its own: what seeding, refreshing and folding work on.</summary>
-    private async Task<AgentAt> LiveAgentAsync(string startDirectory, string orchestrator, string agent, CancellationToken cancellationToken)
+    /// <summary>The agent named, of the orchestrator named, with its record: every command on an existing agent starts here.</summary>
+    private async Task<AgentAt> FindAsync(string startDirectory, string orchestrator, string agent, CancellationToken cancellationToken)
     {
         var (context, layout, _) = await OrchestratorAsync(startDirectory, orchestrator, cancellationToken).ConfigureAwait(false);
 
-        if (_store.ReadAgent(layout, agent) is not { } record)
+        return _store.ReadAgent(layout, agent) is { } record
+            ? new AgentAt(null, context, layout, record)
+            : new AgentAt(CommandOutcome.Refused($"Orchestrator '{orchestrator}' has no agent named '{agent}'."));
+    }
+
+    /// <summary>A live agent whose worktree git records as its own, and whose making finished: what seeding, refreshing and folding work on.</summary>
+    private async Task<AgentAt> LiveAgentAsync(string startDirectory, string orchestrator, string agent, CancellationToken cancellationToken)
+    {
+        var found = await FindAsync(startDirectory, orchestrator, agent, cancellationToken).ConfigureAwait(false);
+
+        if (found.Refusal is not null)
         {
-            return new AgentAt(CommandOutcome.Refused($"Orchestrator '{orchestrator}' has no agent named '{agent}'."));
+            return found;
         }
+
+        var (context, record) = (found.Context!, found.Record!);
 
         if (record.State != AgentStates.Live)
         {
@@ -1435,14 +1694,13 @@ public sealed class AgentService(
             return new AgentAt(CommandOutcome.Refused(Unusable(record, path, standing)));
         }
 
+        // Seeding is how an agent never seeded is made whole, so only a missing base refuses here.
         if (record.Base is null)
         {
-            return new AgentAt(CommandOutcome.Refused(
-                $"{Agent(record)} records no commit its worktree was made from, as when making it stopped part way; "
-                + $"{OrchestrationReports.DeleteAgentLine(orchestrator, agent, "--apply --discard-uncommitted")} deletes it with nothing folded."));
+            return new AgentAt(CommandOutcome.Refused($"{Agent(record)} is not whole - making it stopped part way: {MakingUnfinished(record, seed: null)}."));
         }
 
-        return new AgentAt(null, context, layout, record, path);
+        return found with { Path = path };
     }
 
     /// <summary>
@@ -1452,7 +1710,7 @@ public sealed class AgentService(
     private static (string Path, string? Moved) WorktreeOf(HarnessContext context, AgentRecord record)
     {
         var configured = PathPatterns.Normalize(context.Config.Worktrees.Root);
-        var path = WorktreeAddress.Nested(record.Orchestrator, record.Name).PathUnder(context.Layout.WorktreesDirectoryUnder(record.WorktreesRoot));
+        var path = record.WorktreePath(context.Layout);
 
         return string.Equals(configured, record.WorktreesRoot, StringComparison.Ordinal)
             ? (path, null)
@@ -1461,12 +1719,24 @@ public sealed class AgentService(
                 + "the agent's worktree is there.");
     }
 
-    /// <summary>What the directory at an agent's worktree path is to git.</summary>
+    /// <summary>What the directory at an agent's worktree path is to git; a path that cannot be looked at is never taken for one that is gone.</summary>
     private async Task<WorktreeStanding> StandingAsync(HarnessContext context, string path, CancellationToken cancellationToken)
     {
-        if (!_fileSystem.DirectoryExists(path))
+        try
         {
-            return new WorktreeStanding(Standing.Gone, null, null);
+            switch (_fileSystem.KindOf(path))
+            {
+                case PathKind.None:
+                    return new WorktreeStanding(Standing.Gone, null, null);
+                case PathKind.File:
+                    return new WorktreeStanding(Standing.Foreign, null, "it is a file, not a directory");
+                case PathKind.Link:
+                    return new WorktreeStanding(Standing.Foreign, null, "it is a link, and a worktree is never reached through one");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new WorktreeStanding(Standing.Unreadable, null, $"whether anything is there cannot be told: {ex.Message.TrimEnd('.')}");
         }
 
         WorktreeIdentity identity;
@@ -1497,14 +1767,14 @@ public sealed class AgentService(
         Standing.Gone => $"{Agent(record)} has no worktree at '{path}'; {OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name, "--apply --discard-uncommitted")} deletes it with nothing folded.",
         Standing.Husk => $"{Agent(record)}: '{path}' is no worktree - {standing.Why} - so every question asked of it would be answered by the main tree. "
             + "Nothing was read, written or removed. What a removal that stopped part way leaves is finished by "
-            + $"'{ToolPackage.Command} {WorktreeService.DeleteCommand} {WorktreeAddress.Nested(record.Orchestrator, record.Name).Name} --force' once what it holds is kept.",
+            + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, WorktreeAddress.Nested(record.Orchestrator, record.Name).Name, "--force")} once what it holds is kept.",
         Standing.Foreign => $"{Agent(record)}: '{path}' is not a worktree of this repository - {standing.Why}. Nothing was read, written or removed.",
         _ => $"Whether '{path}', the worktree of {Lower(Agent(record))}, is a worktree of this repository cannot be told: {standing.Why?.TrimEnd('.')}. Nothing was read, written or removed.",
     };
 
     /// <summary>
     /// Takes each of <paramref name="trees"/> on this machine whole, as a sync takes a copy: no leg builds in it, and no other
-    /// fold, seed or deletion writes it, meanwhile. All of them, or none.
+    /// fold, seed or deletion writes it, meanwhile. All of them, or none; the run's id names what it keeps.
     /// </summary>
     private async Task<Hold> HoldAsync(HarnessLayout layout, string command, CancellationToken cancellationToken, params string[] trees)
     {
@@ -1530,18 +1800,19 @@ public sealed class AgentService(
             if (attempt.Handle is not { } handle)
             {
                 await new Handles(handles).DisposeAsync().ConfigureAwait(false);
-                return new Hold(new Handles([]), CommandOutcome.Refused($"{attempt.HeldBy} Nothing was changed; run it again once that is done."));
+                return new Hold(new Handles([]), CommandOutcome.Refused($"{attempt.HeldBy} Nothing was changed; run it again once that is done."), runId);
             }
 
             handles.Add(handle);
         }
 
-        return new Hold(new Handles(handles), null);
+        return new Hold(new Handles(handles), null, runId);
     }
 
     /// <summary>
-    /// Copies the agent's Claude transcripts into its logs directory: the lines that say what was kept and where, and why a
-    /// transcript found could not be kept. None found, or a directory that could not be looked in, is said and stops nothing.
+    /// Copies the agent's Claude transcripts into its orchestrator's logs directory: the lines that say what was kept and
+    /// where, and why a transcript found could not be kept. None found, or a directory that could not be looked in, is said
+    /// and stops nothing.
     /// </summary>
     private async Task<(IReadOnlyList<string> Lines, string? Failed)> TranscriptsAsync(OrchestratorLayout layout, AgentRecord record)
     {
@@ -1565,32 +1836,26 @@ public sealed class AgentService(
 
     private static string TranscriptsPlan(AgentRecord record)
         => record.Session is null
-            ? $"no Claude session is recorded for it, so no transcript is looked for; '{ToolPackage.Command} {CreateCommand} {record.Orchestrator} {record.Name} --model {record.Model} --session <id>' records one"
+            ? $"no Claude session is recorded for it, so no transcript is looked for; {OrchestrationReports.Line(CreateCommand, record.Orchestrator, record.Name, "--model", record.Model, "--session", "<id>")} records one"
             : $"transcripts: session {record.Session}'s, where Claude Code keeps them";
 
-    private static string EvidenceLine(EvidenceKept kept, string destination, IReadOnlyList<string> linked)
-        => (kept.Kept.Count == 0 ? "its evidence roots held nothing to keep" : $"kept {kept.Kept.Count} evidence file(s) in '{destination}', each read back")
-            + (linked.Count == 0 ? string.Empty : $"; {string.Join(", ", linked)} {(linked.Count == 1 ? "is a link" : "are links")}, and what a link leads to stays where it is");
+    private static string EvidenceLine(EvidenceKept kept, string destination)
+        => (kept.Kept.Count == 0 ? "its evidence roots held nothing to keep" : $"kept {kept.Kept.Count} evidence file(s) in '{destination}', each proved")
+            + (kept.Linked.Count == 0 ? string.Empty : $"; {string.Join(", ", kept.Linked)} {(kept.Linked.Count == 1 ? "is a link" : "are links")}, and what a link leads to stays where it is");
 
-    private static IEnumerable<string> RowsHeading(AnchorBatch batch, OrchestratorLayout layout, string agent)
-        => batch.Rows.Count == 0 && batch.Problems.Count == 0 ? [] : [$"rows filed in '{layout.RowsDirectory(agent)}':"];
+    /// <summary>What a hand-over leaves out, said: an untracked directory git will not look into is never handed to an agent.</summary>
+    private static IEnumerable<string> NotHanded(Handable handable)
+        => handable.Directories.Count == 0
+            ? []
+            : [$"not handed: {ReportText.Listed(handable.Directories)} - a directory git will not look into, a repository of its own, which a fold never moves"];
 
-    private static int Planned(AnchorBatch batch) => batch.Rows.Count(row => row.Action != AnchorRowAction.AlreadyIn);
-
-    /// <summary>A keeping of the agent's evidence that does not exist yet, named for this moment: its directory, and its name as records give it.</summary>
-    private (string Directory, string Keeping) FreshEvidence(OrchestratorLayout layout, string agent)
-    {
-        var stamp = _clock.GetUtcNow().UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
-        var name = stamp;
-
-        for (var suffix = 2; _fileSystem.DirectoryExists(layout.KeptEvidence(agent, OrchestratorLayout.KeptEvidence(name))); suffix++)
-        {
-            name = $"{stamp}-{suffix}";
-        }
-
-        var keeping = OrchestratorLayout.KeptEvidence(name);
-        return (layout.KeptEvidence(agent, keeping), keeping);
-    }
+    /// <summary>Where the agent's records are, as every exit after one is written names them: each that is there.</summary>
+    private string[] Records(OrchestratorLayout layout, AgentRecord record)
+        => [
+            $"record {layout.AgentRecordFile(record.Name)}",
+            .. _fileSystem.FileExists(layout.SeedFile(record.Name)) ? [$"seed {layout.SeedFile(record.Name)}"] : Array.Empty<string>(),
+            .. _fileSystem.FileExists(layout.AppliedRowsFile(record.Name)) ? [$"applied rows {layout.AppliedRowsFile(record.Name)}"] : Array.Empty<string>(),
+        ];
 
     private string? StandsIn(string path)
     {
@@ -1619,9 +1884,13 @@ public sealed class AgentService(
     private static string? PathsProblem(IReadOnlyList<string> paths, string what)
         => paths.Select(path => OrchestrationRules.RelativePathProblem(path.TrimEnd('/', '\\'), what)).FirstOrDefault(problem => problem is not null);
 
-    /// <summary>Whether <paramref name="exception"/> is one a step after a first write can meet and must answer, rather than let escape.</summary>
+    /// <summary>
+    /// Whether <paramref name="exception"/> is one a step after a first write can meet and must answer, rather than let
+    /// escape: the file system's, git's and the tool's own refusals, a record that does not read, and a configuration that
+    /// no longer loads - a fold can bring a change of it into the main tree.
+    /// </summary>
     private static bool Unfinished(Exception exception)
-        => exception is IOException or UnauthorizedAccessException or HarnessException or JsonException;
+        => exception is IOException or UnauthorizedAccessException or HarnessException or JsonException or ConfigException;
 
     private static string Agent(AgentRecord record) => $"Agent '{record.Name}' of '{record.Orchestrator}'";
 
@@ -1641,7 +1910,7 @@ public sealed class AgentService(
     /// <summary>What the directory at an agent's worktree path is, its git directory where it is a worktree, and why where it is not usable.</summary>
     private sealed record WorktreeStanding(Standing Kind, string? AdministrativeDirectory, string? Why);
 
-    /// <summary>A live agent to work on, or why it cannot be.</summary>
+    /// <summary>An agent found - or a live one to work on, with its worktree - or why it cannot be.</summary>
     private sealed record AgentAt(
         CommandOutcome? Refusal,
         HarnessContext? Context = null,
@@ -1652,14 +1921,17 @@ public sealed class AgentService(
     /// <summary>An agent being deleted, and what its worktree is.</summary>
     private sealed record Target(HarnessContext Context, OrchestratorLayout Layout, AgentRecord Record, WorktreeAddress Address, string Path, WorktreeStanding Standing);
 
-    /// <summary>An agent's fold and rows, measured, and why they cannot be written where they cannot.</summary>
-    private sealed record Measured(FoldPlan? Plan, IReadOnlyList<AnchorRowDeclaration> Declared, AnchorBatch Rows, CommandOutcome? Refusal);
+    /// <summary>An agent's fold and rows, measured: the rows declared anew, every row declared, and why they cannot be written where they cannot.</summary>
+    private sealed record Measured(FoldPlan? Plan, IReadOnlyList<AnchorRowDeclaration> Declared, IReadOnlyList<AnchorRowDeclaration> All, AgentRowsPlan Rows, CommandOutcome? Refusal);
+
+    /// <summary>What writing a fold did: why it stopped where it did, the rows as applied, and the seed as recorded.</summary>
+    private sealed record Written(CommandOutcome? Failure, AgentRowsPlan Rows, SeedRecord Seed);
 
     /// <summary>What deleting a live agent measured before writing anything, and why it cannot go on where it cannot.</summary>
     private sealed record ClosingMeasure(Measured? Fold, IReadOnlyList<string> Discarded, EvidenceFound Evidence, CommandOutcome? Refusal);
 
-    /// <summary>The trees held, or why they could not be.</summary>
-    private sealed record Hold(Handles Handles, CommandOutcome? Refusal);
+    /// <summary>The trees held, or why they could not be, and the run's id.</summary>
+    private sealed record Hold(Handles Handles, CommandOutcome? Refusal, RunId Run);
 
     /// <summary>Locks let go together, in the reverse of the order they were taken.</summary>
     private sealed class Handles(IReadOnlyList<RunLockHandle> handles) : IAsyncDisposable

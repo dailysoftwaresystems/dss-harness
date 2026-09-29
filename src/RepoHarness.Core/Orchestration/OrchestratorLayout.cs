@@ -9,13 +9,14 @@ namespace RepoHarness.Core.Orchestration;
 /// <remarks>
 /// <code>
 /// agent.json                  the orchestrator's own record
-/// logs/&lt;name&gt;.jsonl          one line for each run that changed the orchestrator or one agent, or tried to
+/// logs/&lt;name&gt;.jsonl          one line for each run that reached the orchestrator or one agent, refusals included
 /// logs/&lt;agent&gt;/              the agent's Claude transcripts, kept when it is deleted
 /// work/&lt;agent&gt;/              the agent's scratch and task files, outside its worktree
 /// plans/&lt;name&gt;/              plans, the orchestrator's own and one directory for each agent
 /// agents/&lt;agent&gt;/agent.json   the agent's record
-/// agents/&lt;agent&gt;/seed.json    what it was handed when it began, and each path's digest
+/// agents/&lt;agent&gt;/seed.json    what it shares with the main tree: each path handed to it or folded, with its digest
 /// agents/&lt;agent&gt;/rows/        the anchor rows it files, one directory for each
+/// agents/&lt;agent&gt;/applied-rows.json   the rows its folds applied, each as declared then
 /// agents/&lt;agent&gt;/evidence/    what its worktree's evidence roots held when it was deleted
 /// </code>
 /// The orchestrator's name and each agent's are the directories they are kept in, and an agent is never named as its
@@ -45,6 +46,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The directory an agent files its anchor rows in.</summary>
     public const string RowsDirectoryName = "rows";
+
+    /// <summary>The name of the file the rows an agent's folds applied are kept in.</summary>
+    public const string AppliedRowsFileName = "applied-rows.json";
 
     /// <summary>The directory an agent's evidence is kept in when it is deleted.</summary>
     public const string EvidenceDirectoryName = "evidence";
@@ -109,6 +113,10 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>Where <paramref name="agent"/> files its anchor rows.</summary>
     /// <param name="agent">The agent's name.</param>
     public string RowsDirectory(string agent) => Path.Combine(AgentDirectory(agent), RowsDirectoryName);
+
+    /// <summary>The rows the folds of <paramref name="agent"/> applied, each as declared then.</summary>
+    /// <param name="agent">The agent's name.</param>
+    public string AppliedRowsFile(string agent) => Path.Combine(AgentDirectory(agent), AppliedRowsFileName);
 
     /// <summary>Where the evidence of <paramref name="agent"/> is kept when it is deleted.</summary>
     /// <param name="agent">The agent's name.</param>

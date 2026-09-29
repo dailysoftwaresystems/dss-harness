@@ -117,7 +117,7 @@ public sealed class OrchestratorService(
         if (!await _gitClient.IsIgnoredAsync(layout.MainCheckoutRoot, probe, cancellationToken).ConfigureAwait(false))
         {
             return CommandOutcome.Refused(
-                $"git does not ignore '{probe}', so what orchestrator '{name}' keeps would be committed. Run '{ToolPackage.Command} init', "
+                $"git does not ignore '{probe}', so what orchestrator '{name}' keeps would be committed. Run {OrchestrationReports.Line("init")}, "
                 + "which keeps .orchestrators in git and everything made in it out. Nothing was created.");
         }
 
@@ -133,7 +133,7 @@ public sealed class OrchestratorService(
 
             // Plain worktrees and orchestrators share the names under the root: the directory named for this one is
             // where its agents' worktrees are made.
-            if (_fileSystem.DirectoryExists(group) && (WorktreeInspector.HoldsOwnGit(_fileSystem, group) || !IsEmpty(group)))
+            if (_fileSystem.DirectoryExists(group) && (WorktreeInspector.HoldsOwnGit(_fileSystem, group) || !_fileSystem.IsEmpty(group)))
             {
                 return CommandOutcome.Refused(
                     $"'{group}' is {(WorktreeInspector.HoldsOwnGit(_fileSystem, group) ? "a worktree" : "a directory holding files no orchestrator made")}, and "
@@ -219,7 +219,7 @@ public sealed class OrchestratorService(
         // git's list of worktrees, asked before the orchestrator is held: what is below its directory under the root. A list
         // git cannot give is raised, never read as no worktree below.
         var below = _fileSystem.DirectoryExists(group)
-            ? await new WorktreeInspector(_gitClient, _fileSystem, _platform, _output).FindWorktreesBelowAsync(layout.MainCheckoutRoot, worktreesDirectory, group, cancellationToken).ConfigureAwait(false)
+            ? await new WorktreeInspector(_gitClient, _fileSystem, _platform, _output).FindWorktreesBelowAsync(layout.MainCheckoutRoot, worktreesDirectory, group, orchestrators: true, cancellationToken).ConfigureAwait(false)
             : [];
 
         // Decided and done with no other command deciding about this orchestrator meanwhile: an agent made beside this
@@ -253,7 +253,7 @@ public sealed class OrchestratorService(
             {
                 return CommandOutcome.Refused(
                     $"Orchestrator '{name}' was not deleted: worktrees are left below '{group}' - {ReportText.Listed(below)}. Delete each with "
-                    + $"'{ToolPackage.Command} {WorktreeService.DeleteCommand} <address>' first. Nothing was changed.");
+                    + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, "<address>")} first. Nothing was changed.");
             }
 
             var kept = agents.Select(agent => (agent.Name, Evidence: Files(orchestrator.EvidenceDirectory(agent.Name)), Transcripts: Files(orchestrator.TranscriptsDirectory(agent.Name))))
@@ -272,13 +272,8 @@ public sealed class OrchestratorService(
             {
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
-                    $"Orchestrator '{name}' is not deleted yet: {stopped}. Its record is kept, so '{ToolPackage.Command} {DeleteCommand} {name}"
-                    + $"{(deleteEvidence ? " --delete-evidence" : string.Empty)}' run again finishes it.");
-            }
-
-            if (_fileSystem.DirectoryExists(group) && IsEmpty(group))
-            {
-                _fileSystem.DeleteDirectory(group);
+                    $"Orchestrator '{name}' is not deleted yet: {stopped}. Its record is kept, so "
+                    + $"{OrchestrationReports.Line(DeleteCommand, name, deleteEvidence ? "--delete-evidence" : string.Empty)} run again finishes it.");
             }
 
             return CommandOutcome.Ok(
@@ -287,30 +282,37 @@ public sealed class OrchestratorService(
                     $"removed {orchestrator.Directory}",
                     .. agents.Count == 0 ? [] : new[] { $"with the history of {agents.Count} deleted agent(s)" },
                     .. kept.Count == 0 ? [] : new[] { $"and {kept.Sum(agent => agent.Evidence)} evidence file(s) and {kept.Sum(agent => agent.Transcripts)} transcript file(s)" },
+                    .. RemoveEmptyGroup(group),
                 ]);
         });
     }
 
     /// <summary>
-    /// Removes everything the orchestrator keeps, its record last, so that a removal stopped part way leaves the record,
-    /// and the orchestrator is still there to delete again rather than leftovers nothing names. Why it stopped, or null.
+    /// Removes everything the orchestrator keeps, every record last - each agent's after everything else of that agent,
+    /// the orchestrator's after its agents - so that a removal stopped part way leaves only what still reads: the
+    /// orchestrator is still there to delete again, and each agent left is one whose record says what it is, never a
+    /// directory nothing names. Why it stopped, or null.
     /// </summary>
     private string? Remove(OrchestratorLayout orchestrator)
     {
         try
         {
-            foreach (var directory in _fileSystem.EnumerateDirectories(orchestrator.Directory))
+            foreach (var directory in _fileSystem.EnumerateDirectories(orchestrator.Directory).Where(directory => !Same(directory, orchestrator.AgentsDirectory)))
             {
                 _fileSystem.DeleteDirectory(directory);
             }
 
-            foreach (var file in _fileSystem.EnumerateFiles(orchestrator.Directory, recursive: false).Where(file => !PathContainment.AreSame(file, orchestrator.RecordFile, _platform.PathComparison)))
+            if (_fileSystem.DirectoryExists(orchestrator.AgentsDirectory))
             {
-                _fileSystem.DeleteFile(file);
+                foreach (var agent in _fileSystem.EnumerateDirectories(orchestrator.AgentsDirectory))
+                {
+                    RemoveKeepingRecordLast(agent, Path.Combine(agent, OrchestratorLayout.RecordFileName));
+                }
+
+                _fileSystem.DeleteDirectory(orchestrator.AgentsDirectory);
             }
 
-            _fileSystem.DeleteFile(orchestrator.RecordFile);
-            _fileSystem.DeleteDirectory(orchestrator.Directory);
+            RemoveKeepingRecordLast(orchestrator.Directory, orchestrator.RecordFile);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -318,6 +320,46 @@ public sealed class OrchestratorService(
             return ex.Message.TrimEnd('.');
         }
     }
+
+    /// <summary>Removes <paramref name="directory"/> with everything in it, <paramref name="record"/> last.</summary>
+    private void RemoveKeepingRecordLast(string directory, string record)
+    {
+        foreach (var child in _fileSystem.EnumerateDirectories(directory))
+        {
+            _fileSystem.DeleteDirectory(child);
+        }
+
+        foreach (var file in _fileSystem.EnumerateFiles(directory, recursive: false).Where(file => !Same(file, record)))
+        {
+            _fileSystem.DeleteFile(file);
+        }
+
+        _fileSystem.DeleteFile(record);
+        _fileSystem.DeleteDirectory(directory);
+    }
+
+    /// <summary>
+    /// Removes the directory named for a deleted orchestrator under the worktrees root, where it is left empty; one that
+    /// cannot be is said, beside the deletion, never in place of it - the orchestrator is gone either way.
+    /// </summary>
+    private IEnumerable<string> RemoveEmptyGroup(string group)
+    {
+        try
+        {
+            if (_fileSystem.DirectoryExists(group) && _fileSystem.IsEmpty(group))
+            {
+                _fileSystem.DeleteDirectory(group);
+            }
+
+            return [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [$"its directory under the worktrees root, '{group}', is empty and could not be removed: {ex.Message.TrimEnd('.')}"];
+        }
+    }
+
+    private bool Same(string one, string other) => PathContainment.AreSame(one, other, _platform.PathComparison);
 
     public async Task<CommandOutcome> ListAsync(
         string startDirectory,
@@ -352,16 +394,35 @@ public sealed class OrchestratorService(
             inventory.Add(new OrchestratorInventory(
                 orchestrator,
                 record,
-                [.. agents.Select(agent => new AgentInventory(
-                    agent,
-                    listed.FirstOrDefault(worktree => worktree.Name == WorktreeAddress.Nested(orchestrator.Name, agent.Name).Name),
-                    WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(agent.Record?.WorktreesRoot ?? context.Config.Worktrees.Root)),
-                    Evidence(orchestrator, agent.Name),
-                    Files(orchestrator.TranscriptsDirectory(agent.Name))))],
-                [.. listed.Where(worktree => WorktreeAddress.AgentOf(orchestrator.Name, worktree.Name) is { } agent && !agents.Any(entry => entry.Name == agent))]));
+                [.. agents.Select(agent => Inventory(layout, context.Config.Worktrees.Root, orchestrator, agent))],
+                [.. listed.Where(worktree => WorktreeAddress.AgentOf(orchestrator.Name, worktree.Name) is { } agent && !agents.Any(entry => entry.Name == agent))],
+                OrchestrationRules.OpenAgents(orchestrator.Name, agents, listed.Select(worktree => worktree.Name))));
         }
 
         return OrchestrationReports.List(inventory, json);
+    }
+
+    /// <summary>
+    /// One agent as the listing reports it: where its worktree is, from its own record - the worktrees root it was made
+    /// under - and whether anything is there, asked of that path; for a record that does not read, the configured root.
+    /// </summary>
+    private AgentInventory Inventory(HarnessLayout layout, string configuredRoot, OrchestratorLayout orchestrator, AgentEntry agent)
+    {
+        var path = agent.Record?.WorktreePath(layout) ?? WorktreeAddress.Nested(orchestrator.Name, agent.Name).PathUnder(layout.WorktreesDirectoryUnder(configuredRoot));
+        return new AgentInventory(agent, WorktreeExists(path), path, Evidence(orchestrator, agent.Name), Files(orchestrator.TranscriptsDirectory(agent.Name)));
+    }
+
+    /// <summary>Whether anything is at an agent's worktree path; a path that cannot be looked at is said to be there, never gone.</summary>
+    private bool WorktreeExists(string path)
+    {
+        try
+        {
+            return _fileSystem.KindOf(path) != PathKind.None;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     /// <summary>The keepings of the evidence of <paramref name="agent"/>, each as its records name it.</summary>
@@ -375,8 +436,6 @@ public sealed class OrchestratorService(
     private int Files(string directory)
         => _fileSystem.DirectoryExists(directory) ? _fileSystem.EnumerateFiles(directory, recursive: true).Count() : 0;
 
-    private bool IsEmpty(string directory)
-        => !_fileSystem.EnumerateDirectories(directory).Any() && !_fileSystem.EnumerateFiles(directory, recursive: false).Any();
 
 }
 
@@ -385,21 +444,23 @@ public sealed class OrchestratorService(
 /// <param name="Record">Its record.</param>
 /// <param name="Agents">Its agents.</param>
 /// <param name="WorktreesWithoutAgent">Worktrees below its directory that no agent of it records.</param>
+/// <param name="Open">The agents that count against its limit (<see cref="OrchestrationRules.OpenAgents"/>).</param>
 public sealed record OrchestratorInventory(
     OrchestratorLayout Layout,
     OrchestratorRecord Record,
     IReadOnlyList<AgentInventory> Agents,
-    IReadOnlyList<WorktreeListing> WorktreesWithoutAgent);
+    IReadOnlyList<WorktreeListing> WorktreesWithoutAgent,
+    IReadOnlyList<string> Open);
 
 /// <summary>One agent, as list-orchestrator reports it.</summary>
 /// <param name="Entry">Its directory's record, or why it has none that reads.</param>
-/// <param name="Worktree">Its worktree, where git records it.</param>
-/// <param name="WorktreePath">Where its worktree is, or was.</param>
+/// <param name="WorktreeExists">Whether anything is at its worktree's path.</param>
+/// <param name="WorktreePath">Where its worktree is, or was: under the worktrees root it was made under.</param>
 /// <param name="Evidence">The evidence directories kept for it, relative to its directory.</param>
 /// <param name="Transcripts">How many transcript files are kept for it.</param>
 public sealed record AgentInventory(
     AgentEntry Entry,
-    WorktreeListing? Worktree,
+    bool WorktreeExists,
     string WorktreePath,
     IReadOnlyList<string> Evidence,
     int Transcripts);

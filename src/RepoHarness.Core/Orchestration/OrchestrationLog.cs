@@ -8,7 +8,7 @@ namespace RepoHarness.Core.Orchestration;
 /// <summary>One line of an orchestrator's log: a command the tool ran on the orchestrator, or on one of its agents.</summary>
 /// <param name="At">When it finished.</param>
 /// <param name="Command">The command.</param>
-/// <param name="Outcome">How it ended: ok, refused, failed, incomplete or interrupted.</param>
+/// <param name="Outcome">How it ended: its exit code's name, as <c>help exit-codes</c> gives it - Success, Refused, Incomplete and the rest.</param>
 /// <param name="ExitCode">Its exit code.</param>
 /// <param name="Message">What it said.</param>
 /// <param name="Details">The lines it said beneath that, where it said any.</param>
@@ -52,7 +52,7 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock)
 
         var path = orchestrator.LogFile(subject);
         var line = JsonSerializer.Serialize(
-            new OrchestrationEvent(_clock.GetUtcNow(), command, OutcomeOf(outcome.ExitCode), outcome.ExitCode, outcome.Message, outcome.Details is { Count: > 0 } details ? details : null),
+            new OrchestrationEvent(_clock.GetUtcNow(), command, HarnessExit.Describe(outcome.ExitCode)?.Name ?? outcome.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture), outcome.ExitCode, outcome.Message, outcome.Details is { Count: > 0 } details ? details : null),
             JsonStateFile.LineOptions);
 
         MachineWideFile.Update(path, Window, () =>
@@ -125,12 +125,4 @@ public sealed class OrchestrationLog(IFileSystem fileSystem, TimeProvider clock)
         return events;
     }
 
-    private static string OutcomeOf(int exitCode) => exitCode switch
-    {
-        HarnessExit.Success => "ok",
-        HarnessExit.Refused => "refused",
-        HarnessExit.Incomplete => "incomplete",
-        HarnessExit.Cancelled => "interrupted",
-        _ => "failed",
-    };
 }

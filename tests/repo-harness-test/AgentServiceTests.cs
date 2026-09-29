@@ -34,7 +34,7 @@ public sealed class AgentServiceTests
         Assert.Equal("one\nmain edit\n", OrchestrationKit.Read(worktree, "a.txt"));
         Assert.True(Directory.Exists(kit.Layout.WorkDirectory("ag")));
         Assert.True(Directory.Exists(kit.Layout.PlansDirectory("ag")));
-        Assert.Contains(kit.Harness.OrchestrationLog.Read(kit.Layout.LogFile("ag")), entry => entry.Command == AgentService.CreateCommand && entry.Outcome == "ok");
+        Assert.Contains(kit.Harness.OrchestrationLog.Read(kit.Layout.LogFile("ag")), entry => entry.Command == AgentService.CreateCommand && entry.Outcome == nameof(HarnessExit.Success));
     }
 
     /// <summary>--empty hands the agent nothing and records that it was handed nothing.</summary>
@@ -67,7 +67,7 @@ public sealed class AgentServiceTests
         var refused = await kit.Harness.AgentService.CreateAsync(kit.Main, OrchestrationKit.Orchestrator, "second", "model-b", false, null, Token);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.StartsWith("Orchestrator 'o1' already has 1 agent(s) with a worktree, its limit: first.", refused.Message);
+        Assert.StartsWith("Orchestrator 'o1' already has 1 open agent(s), its limit: first.", refused.Message);
         Assert.False(Directory.Exists(kit.Layout.AgentDirectory("second")));
 
         Assert.True((await kit.DeleteAsync("first", apply: true, discard: true)).Succeeded);
@@ -283,5 +283,151 @@ public sealed class AgentServiceTests
         Assert.Contains("was made under worktrees root '.worktrees', and the configuration names '.elsewhere' now", refused.Message);
         Assert.True(Directory.Exists(worktree));
         Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+    }
+
+    /// <summary>
+    /// A hand-over that stops part way records exactly what was handed and names its records, so a fold never takes a
+    /// copied file for the agent's own work.
+    /// </summary>
+    [Fact]
+    public async Task AHandOverThatStopsPartWay_RecordsOnlyWhatWasHanded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        var agents = kit.Harness.Agents(new UncopyableFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt")), kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.CreateAsync(kit.Main, "o1", "ag", "model-b", false, null, Token);
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Contains("stopped after 1 of 2 path(s)", stopped.Message);
+        Assert.Contains($"seed {kit.Layout.SeedFile("ag")}", stopped.Details!);
+        Assert.Equal(["a.txt"], seed.Paths.Keys);
+    }
+
+    /// <summary>Seeding again is never refused over a copy the agent was handed and left alone: that is not a change of its own.</summary>
+    [Fact]
+    public async Task SeedingAgain_NeverTakesACopyItWasHandedForItsOwnChange()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        await kit.CreateAgentAsync("ag");
+
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.True(seeded.Succeeded, OrchestrationKit.Describe(seeded));
+    }
+
+    /// <summary>Seeding again with nothing keeps what the agent was handed before: a copy still in its worktree is never taken for its own work.</summary>
+    [Fact]
+    public async Task SeedingAgainWithNothing_KeepsWhatItWasHandedBefore()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        await kit.CreateAgentAsync("ag");
+
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: true, force: false, Token);
+
+        Assert.True(seeded.Succeeded, OrchestrationKit.Describe(seeded));
+        Assert.Contains("what it was handed before stays recorded", seeded.Message);
+        Assert.Contains("a.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
+    }
+
+    /// <summary>Refreshing is refused over a file the agent changed that it was never handed: the main tree's copy would undo its work.</summary>
+    [Fact]
+    public async Task Refreshing_IsRefusedOverAFileTheAgentChanged_ThatItWasNeverHanded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["b.txt"], apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains("changed 1 of the path(s) to refresh - b.txt -", refused.Message);
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>Refreshing is refused over a new file both trees made: the agent's own would be replaced by the main tree's.</summary>
+    [Fact]
+    public async Task Refreshing_IsRefusedOverANewFileBothTreesMade()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "n.txt", "the agent's\n");
+        OrchestrationKit.Write(kit.Main, "n.txt", "the main tree's\n");
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["n.txt"], apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains("changed 1 of the path(s) to refresh - n.txt -", refused.Message);
+        Assert.Equal("the agent's\n", OrchestrationKit.Read(worktree, "n.txt"));
+    }
+
+    /// <summary>Two agents made at once never both take an orchestrator's last place: its limit is counted and taken in one step.</summary>
+    [Fact]
+    public async Task TwoAgentsMadeAtOnce_NeverBothTakeTheLastPlace()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp, parallel: 1);
+
+        var made = await Task.WhenAll(
+            Task.Run(() => kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "a1", "model-b", false, null, Token), Token),
+            Task.Run(() => kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "a2", "model-b", false, null, Token), Token));
+
+        Assert.Single(made, outcome => outcome.Succeeded);
+        Assert.Single(made, outcome => outcome.ExitCode == HarnessExit.Refused && outcome.Message.Contains("open agent(s), its limit", StringComparison.Ordinal));
+    }
+
+    /// <summary>A session, a model or a name that is not one is a usage error before anything is read or written: a line break at its end among them.</summary>
+    [Theory]
+    [InlineData("ag", "../../x")]
+    [InlineData("ag", "abc\n")]
+    [InlineData("ag\n", null)]
+    public async Task ASessionOrANameThatIsNotOne_IsAUsageError(string agent, string? session)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+
+        var refused = await kit.Harness.AgentService.CreateAsync(kit.Main, "o1", agent, "model-b", false, session, Token);
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.False(Directory.Exists(kit.Layout.AgentDirectory("ag")));
+    }
+
+    /// <summary>A path given on the command line that is not relative to the tree - rooted, or climbing out of it - is a usage error.</summary>
+    [Fact]
+    public async Task APathGivenThatIsNotRelativeToTheTree_IsAUsageError()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+
+        var settled = await kit.FoldAsync("ag", apply: true, "/etc/passwd");
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["../outside"], apply: true, Token);
+
+        Assert.Equal(HarnessExit.UsageError, settled.ExitCode);
+        Assert.Equal(HarnessExit.UsageError, refreshed.ExitCode);
+    }
+
+    /// <summary>The real file system, except that one file cannot be copied, as while another program holds it.</summary>
+    private sealed class UncopyableFileSystem(Core.FileSystem.IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    {
+        public override void CopyFile(string source, string destination, bool overwrite = false)
+        {
+            if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException($"The process cannot access the file '{source}' because it is being used by another process.");
+            }
+
+            base.CopyFile(source, destination, overwrite);
+        }
     }
 }

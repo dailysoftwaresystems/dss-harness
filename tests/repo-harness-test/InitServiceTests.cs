@@ -459,6 +459,31 @@ public sealed class InitServiceTests
     }
 
     /// <summary>
+    /// A file in the orchestrators' directory that git no longer ignores - a branch whose rules predate init's - is refused
+    /// by sync like any other: records and transcripts would go into the next commit, and sync never passes that silently.
+    /// </summary>
+    [Fact]
+    public async Task AFileInTheOrchestratorsDirectory_GitNoLongerIgnores_IsRefusedBySync()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        await harness.InitService.InitializeAsync(temp.Path, token);
+        File.AppendAllText(temp.Combine(".gitignore"), $"!/{Core.Repository.HarnessLayout.OrchestratorsDirectoryName}/notes.txt\n");
+        temp.WriteFile(Path.Combine(Core.Repository.HarnessLayout.OrchestratorsDirectoryName, "notes.txt"), "a transcript's line");
+
+        var config = harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path));
+        var exclusions = new Core.Sync.SyncExclusions(config.Sync, config.Worktrees.Root);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => exclusions.RefuseWhenNoLongerIgnoredAsync(harness.GitClient, temp.Path, token));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(Core.Repository.HarnessLayout.OrchestratorsDirectoryName, refused.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A hand-written rule ignoring the worktrees root whole, as repositories wrote before init kept it in git, takes
     /// the placeholder the block keeps: init names it as the rule git follows, and leaves it where it is.
     /// </summary>

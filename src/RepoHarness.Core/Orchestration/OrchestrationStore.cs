@@ -132,6 +132,27 @@ public sealed class OrchestrationStore(IFileSystem fileSystem)
         Write(orchestrator.SeedFile(agent), seed, seed.Problem());
     }
 
+    /// <summary>The rows the agent's folds applied, or null where none ever were.</summary>
+    /// <param name="orchestrator">Its orchestrator.</param>
+    /// <param name="agent">The agent's name.</param>
+    /// <exception cref="HarnessException">The record cannot be read as one (<see cref="HarnessExit.Refused"/>).</exception>
+    public AppliedRowsRecord? ReadAppliedRows(OrchestratorLayout orchestrator, string agent)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        return Read<AppliedRowsRecord>(orchestrator.AppliedRowsFile(agent), "the record of an agent's applied rows", record => record.Problem());
+    }
+
+    /// <summary>Writes the rows the agent's folds applied.</summary>
+    /// <param name="orchestrator">Its orchestrator.</param>
+    /// <param name="agent">The agent's name.</param>
+    /// <param name="record">The record, which must be one.</param>
+    public void WriteAppliedRows(OrchestratorLayout orchestrator, string agent, AppliedRowsRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(orchestrator);
+        ArgumentNullException.ThrowIfNull(record);
+        Write(orchestrator.AppliedRowsFile(agent), record, record.Problem());
+    }
+
     /// <summary>
     /// Changes the agent's record as <paramref name="change"/> says, reading it and writing it with no other process doing
     /// the same to that orchestrator at once, so two commands can never each write over what the other decided - a

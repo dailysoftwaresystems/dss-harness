@@ -159,8 +159,7 @@ public sealed record AnchorRowOutcome(string Id, AnchorRowAction Action, AnchorC
 /// <summary>What applying declared rows did, or would do on a dry run.</summary>
 /// <param name="Rows">Each row planned, in order; on a refusal, those that could be planned.</param>
 /// <param name="Problems">Why rows were refused, each naming its id; nothing was written while there is one.</param>
-/// <param name="Written">Whether the rows were written and read back as declared.</param>
-public sealed record AnchorBatch(IReadOnlyList<AnchorRowOutcome> Rows, IReadOnlyList<string> Problems, bool Written)
+public sealed record AnchorBatch(IReadOnlyList<AnchorRowOutcome> Rows, IReadOnlyList<string> Problems)
 {
     /// <summary>Why writing them failed, once every row had passed its checks; null where nothing did.</summary>
     public string? Failure { get; init; }

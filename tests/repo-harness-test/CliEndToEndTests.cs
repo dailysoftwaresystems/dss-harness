@@ -389,6 +389,38 @@ public sealed partial class CliEndToEndTests
         Assert.Single(listed);
     }
 
+    /// <summary>delete-agent with --discard-uncommitted and no --apply is a dry run: the command line abandons and removes nothing.</summary>
+    [Fact]
+    public async Task DeleteAgentWithoutApply_IsADryRun_EvenAbandoning()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        var result = await CliRunner.RunAsync(["delete-agent", "o1", "ag", "--discard-uncommitted", "-C", kit.Main], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("dry run", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Equal(Core.Orchestration.AgentStates.Live, kit.Record("ag").State);
+        Assert.True(Directory.Exists(worktree));
+    }
+
+    /// <summary>list-orchestrator --json prints its one JSON document on standard output, and nothing else.</summary>
+    [Fact]
+    public async Task ListOrchestratorJson_PrintsOneJsonDocumentAndNothingElse()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+
+        var result = await CliRunner.RunAsync(["list-orchestrator", "--json", "-C", kit.Main], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        var document = System.Text.Json.Nodes.JsonNode.Parse(result.StandardOutput)!;
+        Assert.Equal("o1", (string?)document["orchestrators"]![0]!["name"]);
+        Assert.Equal("ag", (string?)document["orchestrators"]![0]!["agents"]![0]!["name"]);
+    }
+
     /// <summary>
     /// The defect that rode the layout change: a configuration one verb called valid and another
     /// refused. Both verbs read the same file through the same reader, so a spelling wrong enough

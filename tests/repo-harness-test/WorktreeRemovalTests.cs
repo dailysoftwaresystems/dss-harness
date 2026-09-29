@@ -1074,6 +1074,42 @@ public sealed class WorktreeRemovalTests
         TestLinks.DirectoryLink(worktrees, target.Path);
     }
 
+    /// <summary>
+    /// What a removal leaves of a plain worktree - no .git of its own - holding a submodule's .git is deleted with --force:
+    /// a worktree's submodules are its own contents, never worktrees below it.
+    /// </summary>
+    [Fact]
+    public async Task AHuskHoldingASubmodulesGit_IsDeletedWithForce()
+    {
+        using var temp = new TempDirectory();
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "plain");
+        Directory.CreateDirectory(Path.Combine(path, "vendor"));
+        File.WriteAllText(Path.Combine(path, "vendor", ".git"), "gitdir: ../.git/modules/vendor\n");
+        File.Delete(Path.Combine(path, ".git"));
+
+        var outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "plain", force: true, deleteEvidence: false, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(outcome.Succeeded, outcome.Outcome.Message);
+        Assert.False(Directory.Exists(path));
+    }
+
+    /// <summary>A directory under the worktrees root that cannot be looked in is said, and the worktrees git records are still listed.</summary>
+    [Fact]
+    public async Task ADirectoryUnderTheRootThatCannotBeLookedIn_IsSaid_AndTheRestListed()
+    {
+        using var temp = new TempDirectory();
+        var harness = await PrepareAsync(temp);
+        await CreateAsync(harness, temp, "real");
+        var odd = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(HarnessFactory.WorktreePath(temp.Path, "real"))!, "odd")).FullName;
+        var service = Service(harness, harness.GitClient, new UnlistableFileSystem(harness.FileSystem, odd));
+
+        var listed = await service.ListAsync(temp.Path, TestContext.Current.CancellationToken);
+
+        Assert.Equal("real", Assert.Single(listed).Name);
+        Assert.Contains($"'odd' under the worktrees root, '{odd}', could not be looked in", harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
     private static WorktreeService Service(HarnessFactory harness, IGitClient git, IFileSystem? fileSystem = null)
         => new(harness.ContextLoader, git, fileSystem ?? harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies);
 
@@ -1174,14 +1210,14 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<bool> IsDirtyAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.IsDirtyAsync(directory, Token(cancellationToken)));
 
-    public Task<IReadOnlyList<string>> GetStatusAsync(string directory, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<GitStatusEntry>> GetStatusAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.GetStatusAsync(directory, Token(cancellationToken)));
 
     public Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.ReadStatusAsync(directory, Token(cancellationToken)));
 
-    public Task<IReadOnlyDictionary<string, string>> HashWorkingFilesAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
-        => Call(() => inner.HashWorkingFilesAsync(directory, paths, Token(cancellationToken)));
+    public Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListChangedSinceAsync(directory, commit, Token(cancellationToken)));
 
     public Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         => Call(() => inner.BlobIdsAtAsync(directory, commit, paths, Token(cancellationToken)));
@@ -1311,4 +1347,13 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         BeforeEveryCall?.Invoke();
         return call();
     }
+}
+
+/// <summary>The real file system, except that one directory cannot be listed, as one this user may not read.</summary>
+internal sealed class UnlistableFileSystem(IFileSystem inner, string unlistable) : PassThroughFileSystem(inner)
+{
+    public override IEnumerable<string> EnumerateDirectories(string path)
+        => string.Equals(Path.GetFullPath(path), Path.GetFullPath(unlistable), StringComparison.OrdinalIgnoreCase)
+            ? throw new UnauthorizedAccessException($"Access to the path '{path}' is denied.")
+            : base.EnumerateDirectories(path);
 }

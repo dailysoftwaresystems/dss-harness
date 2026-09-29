@@ -52,9 +52,10 @@ public interface IWorktreeService
     /// <paramref name="force"/> skips every check, and that look, and overrides a lock.
     /// </summary>
     /// <remarks>
-    /// <paramref name="name"/> is an address: a plain worktree's name, or <c>orchestrator/agent</c>. A directory under
-    /// the root that holds worktrees below it - an orchestrator's, holding its agents' - is refused even with
-    /// <paramref name="force"/>, since deleting it would delete each of them.
+    /// <paramref name="name"/> is an address: a plain worktree's name, or <c>orchestrator/agent</c>. A plain address with
+    /// no .git of its own that holds worktrees below it - the directory named for an orchestrator, holding its agents' -
+    /// is refused even with <paramref name="force"/>, since deleting it would delete each of them; one whose worktrees
+    /// git cannot list is not deleted either. A worktree's own submodules and nested repositories never count.
     /// </remarks>
     /// <exception cref="HarnessException">
     /// As for <see cref="CreateAsync"/>, or the path resolved outside the worktrees directory.
@@ -109,8 +110,8 @@ public sealed record WorktreeOutcome(CommandOutcome Outcome, string Name, string
     public bool Succeeded => Outcome.Succeeded;
 
     /// <summary>
-    /// The commit a worktree just created was made from, as read from it: <see langword="null"/> when it could not be
-    /// read, and for anything but a creation.
+    /// The commit a worktree just created was made from, as read from it - recorded under <c>refs/harness/worktree-base/</c>
+    /// or not: <see langword="null"/> when it could not be read, and for anything but a creation.
     /// </summary>
     public string? BaseCommit { get; init; }
 
@@ -229,11 +230,13 @@ public sealed class WorktreeService(
         }
 
         // Plain worktrees and orchestrators share the names under the root: an orchestrator's agents' worktrees are made
-        // in the directory named for it there.
-        if (_fileSystem.DirectoryExists(Path.Combine(layout.OrchestratorsDirectory, worktreeName)))
+        // in the directory named for it there. Any directory of that name among the orchestrators' takes it, record or
+        // not: one a deletion stopped part way through is still an orchestrator's.
+        if (IsOrchestrators(layout, worktreeName))
         {
             return WorktreeOutcome.Failed(CommandOutcome.Refused(
-                $"'{worktreeName}' is an orchestrator's name, and its agents' worktrees are made under '{ReportText.Printable(layout.WorktreePathUnder(settings.Root, worktreeName))}'; choose another name."));
+                $"'{worktreeName}' is an orchestrator's name, and its agents' worktrees are made under "
+                + $"'{ReportText.Printable(WorktreeAddress.Plain(worktreeName).PathUnder(layout.WorktreesDirectoryUnder(settings.Root)))}'; choose another name."));
         }
 
         return await CreateAtCoreAsync(context, WorktreeAddress.Plain(worktreeName), cancellationToken).ConfigureAwait(false);
@@ -386,10 +389,10 @@ public sealed class WorktreeService(
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
+        // The commit is what the worktree was made from whether or not the record took: said, and still returned.
         if (!recorded.Succeeded)
         {
             _output.Detail(CreateCommand, $"could not record the base commit: {recorded.FailureMessage}");
-            return null;
         }
 
         return commit;
@@ -473,16 +476,17 @@ public sealed class WorktreeService(
 
         // A directory holding worktrees below it - an orchestrator's, holding its agents' - is never deleted as one,
         // --force or not: deleting it would delete each of them, with everything they hold and git's records left
-        // naming directories that are gone. Only a directory with no .git of its own is one: a worktree's submodules
-        // and nested repositories are its own contents, which the checks below weigh. Where git cannot list its
-        // worktrees, whether any is below is not known, and nothing is deleted.
-        if (_fileSystem.DirectoryExists(path) && !WorktreeInspector.HoldsOwnGit(_fileSystem, path))
+        // naming directories that are gone. Only a plain address with no .git of its own can be one - an agent's
+        // worktree holds none, and a worktree's submodules and nested repositories, a husk's included, are its own
+        // contents, which the checks below weigh: below it count the worktrees git records, and, in the directory named
+        // for an orchestrator, every one holding a .git of its own. Where that cannot be told, nothing is deleted.
+        if (!address.IsNested && _fileSystem.DirectoryExists(path) && !WorktreeInspector.HoldsOwnGit(_fileSystem, path))
         {
             IReadOnlyList<string> below;
 
             try
             {
-                below = await inspector.FindWorktreesBelowAsync(layout.MainCheckoutRoot, worktreesDirectory, path, cancellationToken).ConfigureAwait(false);
+                below = await inspector.FindWorktreesBelowAsync(layout.MainCheckoutRoot, worktreesDirectory, path, IsOrchestrators(layout, worktreeName), cancellationToken).ConfigureAwait(false);
             }
             catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
             {
@@ -688,8 +692,9 @@ public sealed class WorktreeService(
             .ToList();
 
         var names = new List<(string Name, string Path)>();
+        var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
 
-        foreach (var directory in _fileSystem.EnumerateDirectories(worktreesDirectory))
+        foreach (var directory in Directories(worktreesDirectory, "the worktrees root"))
         {
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
@@ -699,10 +704,22 @@ public sealed class WorktreeService(
             }
 
             // A directory that is no worktree may be an orchestrator's, holding its agents' worktrees, each listed by
-            // both names; one holding none is said to be no worktree, as any other directory there is.
+            // both names; one holding none is said to be no worktree, as any other directory there is. One that cannot
+            // be looked in is said too, and listed as nothing: what it holds is never guessed at.
             var agents = 0;
+            IReadOnlyList<string> children;
 
-            foreach (var child in _fileSystem.EnumerateDirectories(directory))
+            try
+            {
+                children = Directories(directory, $"'{name}' under the worktrees root");
+            }
+            catch (HarnessException ex)
+            {
+                _output.Warn(ListCommand, $"{ex.Message.TrimEnd('.')}, so no worktree below it is listed.");
+                continue;
+            }
+
+            foreach (var child in children)
             {
                 var agent = Path.GetFileName(Path.TrimEndingDirectorySeparator(child));
 
@@ -724,10 +741,10 @@ public sealed class WorktreeService(
         // not record is said, and taken as dealt with, since it is nobody's orchestrator.
         bool TakeListed(string directory, string name, string? orchestrator)
         {
-            var address = orchestrator is null ? name : $"{orchestrator}{WorktreeAddress.Separator}{name}";
+            var address = orchestrator is null ? name : WorktreeAddress.Nested(orchestrator, name).Name;
             var resolved = _fileSystem.ResolveLinks(directory);
 
-            if (registered.Any(worktree => PathsEqual(worktree.Path, resolved)))
+            if (inspector.RecordAt(registered, resolved) is not null)
             {
                 names.Add((address, resolved));
                 return true;
@@ -764,6 +781,24 @@ public sealed class WorktreeService(
 
         return listings;
     }
+
+    /// <summary>The directories directly in <paramref name="directory"/>; one that cannot be looked in raises, named as <paramref name="what"/>.</summary>
+    /// <exception cref="HarnessException">It could not be looked in (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    private IReadOnlyList<string> Directories(string directory, string what)
+    {
+        try
+        {
+            return [.. _fileSystem.EnumerateDirectories(directory)];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"{what}, '{ReportText.Printable(directory)}', could not be looked in: {ex.Message.TrimEnd('.')}");
+        }
+    }
+
+    /// <summary>Whether <paramref name="name"/> is an orchestrator's: a directory of that name is kept among the orchestrators'.</summary>
+    private bool IsOrchestrators(HarnessLayout layout, string name)
+        => _fileSystem.DirectoryExists(Orchestration.OrchestratorLayout.Of(layout, name).Directory);
 
     /// <summary>
     /// How many characters <c>build/&lt;variant&gt;/</c> adds below a worktree, for the longest
@@ -824,8 +859,7 @@ public sealed class WorktreeService(
                 + "or pass --force to delete it anyway.");
         }
 
-        var dotGit = Path.Combine(path, ".git");
-        var what = _fileSystem.FileExists(dotGit) || _fileSystem.DirectoryExists(dotGit)
+        var what = WorktreeInspector.HoldsOwnGit(_fileSystem, path)
             ? "its .git names no worktree git records"
             : "it holds no .git of its own, and git records no worktree there";
 
@@ -991,14 +1025,13 @@ public sealed class WorktreeService(
     private string DescribeWhatRemains(string name, string path, string? administrativeDirectory, bool checksRan)
     {
         var finish = $"'{ToolPackage.Command} {DeleteCommand} {name} --force'";
-        var dotGit = Path.Combine(path, ".git");
         var gone = new List<string>();
 
         if (!_fileSystem.DirectoryExists(path))
         {
             gone.Add("its directory");
         }
-        else if (!_fileSystem.FileExists(dotGit) && !_fileSystem.DirectoryExists(dotGit))
+        else if (!WorktreeInspector.HoldsOwnGit(_fileSystem, path))
         {
             gone.Add("its .git file");
         }

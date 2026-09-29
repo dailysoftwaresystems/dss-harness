@@ -12,4 +12,7 @@ public sealed record GitStatusEntry(char Index, char WorkTree, GitName Path, Git
 
     /// <summary>Every path this change touches: its own, and, for a rename or a copy, the one it was made from.</summary>
     public IReadOnlyList<GitName> Paths => Source is null ? [Path] : [Path, Source];
+
+    /// <summary>The entry as a person reads it: both status columns, a space, and its path as git quotes one.</summary>
+    public string Line => $"{Index}{WorkTree} {Path.Quoted}";
 }

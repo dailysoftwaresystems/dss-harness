@@ -11,7 +11,9 @@ namespace RepoHarness.Core.FileSystem;
 /// </summary>
 /// <remarks>
 /// A shape this build does not recognise is a hard failure rather than silent data loss, as it is wherever this tool
-/// reads JSON that decides something: a member no type declares is refused, never dropped. Written indented, camelCase,
+/// reads JSON that decides something: a member no type declares is refused, never dropped; a member written twice is
+/// refused rather than read as its last value; and null is refused where the type declares a value, a list's items
+/// included, rather than read in and failing later in whatever trusts it. Written indented, camelCase,
 /// without the members that are null, and with paths and names written as they are rather than escaped - a person reads
 /// these files as often as the tool does. An enumeration is written by its name.
 /// </remarks>
@@ -24,8 +26,10 @@ public static class JsonStateFile
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { new JsonStringEnumConverter(), new Configuration.NonNullListConverter() },
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        AllowDuplicateProperties = false,
+        RespectNullableAnnotations = true,
         NewLine = "\n",
     };
 

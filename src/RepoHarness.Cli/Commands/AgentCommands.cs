@@ -27,7 +27,7 @@ internal static class CreateAgentCommand
     {
         var command = new Command(
             Name,
-            "Create an agent of an orchestrator: its record, its worktree, and its seed - the main tree's uncommitted state, each path's digest recorded; refused past the orchestrator's limit.");
+            "Create an agent of an orchestrator: its record, its worktree, and its seed - the main tree's uncommitted state handed to it, each changed file copied and each deletion made, every path recorded; refused past the orchestrator's limit.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(ModelOption);
@@ -60,7 +60,7 @@ internal static class SeedAgentCommand
 
     private static readonly Option<bool> EmptyOption = new("--empty")
     {
-        Description = "Record that it was handed nothing, and copy nothing.",
+        Description = "Hand it nothing more, and copy nothing: what it was handed before stays recorded.",
     };
 
     private static readonly Option<bool> ForceOption = new("--force")
@@ -70,7 +70,7 @@ internal static class SeedAgentCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Seed a live agent again with the main tree's uncommitted state; refused where its worktree holds changes of its own, unless --force.");
+        var command = new Command(Name, "Seed a live agent again with the main tree's uncommitted state; refused where its worktree holds changes of its own - a copy it was handed and left alone is not one - unless --force.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(EmptyOption);
@@ -105,13 +105,13 @@ internal static class RefreshAgentCommand
         Arity = ArgumentArity.ZeroOrMore,
     };
 
-    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Copy them; without it, only say what would be copied.");
+    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Hand them over; without it, only say what would be handed over.");
 
     internal static Command Create()
     {
         var command = new Command(
             Name,
-            "Copy into a live agent the main tree's changed files under the paths it has not edited, recorded as handed to it so its fold leaves them out.");
+            "Hand a live agent the main tree's changes under the paths, recorded as handed to it so its fold leaves them out; refused, copying nothing, where the agent changed or deleted one of them.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Arguments.Add(PathsArgument);

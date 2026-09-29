@@ -19,52 +19,7 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 
     public bool DirectoryExists(string path) => Directory.Exists(path);
 
-    public string ResolveLinks(string path)
-    {
-        // Followed as realpath follows them: after each link the walk starts again from the root,
-        // so a link within a link's target is followed too, and a cycle of links ends the walk.
-        const int MaxLinks = 40;
-        var pending = Path.GetFullPath(path);
-
-        for (var links = 0; links <= MaxLinks; links++)
-        {
-            var root = Path.GetPathRoot(pending) ?? string.Empty;
-            var segments = pending[root.Length..].Split(
-                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                StringSplitOptions.RemoveEmptyEntries);
-            var resolved = root;
-            string? restart = null;
-
-            for (var index = 0; index < segments.Length && restart is null; index++)
-            {
-                var next = Path.Combine(resolved, segments[index]);
-                var directory = new DirectoryInfo(next);
-
-                if (directory.LinkTarget is { } target)
-                {
-                    restart = Path.Combine([Path.Combine(resolved, target), .. segments[(index + 1)..]]);
-                }
-                else if (!directory.Exists)
-                {
-                    // Nothing below a directory that does not exist can be a link.
-                    return Path.TrimEndingDirectorySeparator(Path.Combine([next, .. segments[(index + 1)..]]));
-                }
-                else
-                {
-                    resolved = next;
-                }
-            }
-
-            if (restart is null)
-            {
-                return Path.TrimEndingDirectorySeparator(resolved);
-            }
-
-            pending = Path.GetFullPath(restart);
-        }
-
-        throw new IOException($"More than {MaxLinks} links along '{path}', which may form a cycle.");
-    }
+    public string ResolveLinks(string path) => LinkPaths.Resolve(path);
 
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
@@ -454,10 +409,27 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 
     public string ReadAllText(string path) => File.ReadAllText(path);
 
-    public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
+    public byte[] ReadAllBytes(string path)
+    {
+        using var stream = OpenRead(path);
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
 
-    public Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
-        => File.ReadAllBytesAsync(path, cancellationToken);
+    public async Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        // Opened as every read of a tree's file is, sharing with the tools that hold one open: a sync that hashed a file
+        // through OpenRead is never refused copying it for a narrower share.
+        var stream = OpenRead(path);
+
+        await using (stream.ConfigureAwait(false))
+        {
+            using var copy = new MemoryStream();
+            await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
+            return copy.ToArray();
+        }
+    }
 
     public void WriteAllTextAtomic(string path, string contents)
     {

@@ -45,6 +45,10 @@ public sealed class AgentDeletionTests
         Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
         Assert.StartsWith("dry run: deleting agent 'ag' of 'o1' folds 1 path(s), removes 0 and applies 1 row(s), keeps its transcripts and 1 evidence file(s)", dry.Message);
         Assert.True(Directory.Exists(worktree));
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.DoesNotContain("D-TEST-AGENT-ROW", OrchestrationKit.Read(kit.Main, Path.Combine(".plans", "_deferred-anchor-registry.md")));
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+        Assert.False(Directory.Exists(kit.Layout.EvidenceDirectory("ag")));
 
         var deleted = await kit.DeleteAsync("ag", apply: true);
         var record = kit.Record("ag");
@@ -62,7 +66,7 @@ public sealed class AgentDeletionTests
         Assert.Equal("{\"type\":\"user\"}\n", OrchestrationKit.Read(kit.Layout.TranscriptsDirectory("ag"), Path.Combine("some-project", "sess1.jsonl")));
         Assert.True(File.Exists(Path.Combine(kit.Layout.TranscriptsDirectory("ag"), "some-project", "parent", "subagents", "agent-sess1.jsonl")));
         Assert.Contains(deleted.Details!, line => line.StartsWith("kept 2 transcript file(s) of session sess1", StringComparison.Ordinal));
-        Assert.Contains(kit.Harness.OrchestrationLog.Read(kit.Layout.LogFile("ag")), entry => entry.Command == AgentService.DeleteCommand && entry.Outcome == "ok");
+        Assert.Contains(kit.Harness.OrchestrationLog.Read(kit.Layout.LogFile("ag")), entry => entry.Command == AgentService.DeleteCommand && entry.Outcome == nameof(HarnessExit.Success));
     }
 
     /// <summary>--discard-uncommitted abandons an agent: nothing of it is folded, and its evidence is still kept.</summary>
@@ -138,7 +142,7 @@ public sealed class AgentDeletionTests
 
         Assert.Equal(HarnessExit.Incomplete, left.ExitCode);
         Assert.Contains("its worktree holds 1 file(s) its closing did not record", left.Message);
-        Assert.Equal(["  b.txt", $"log {kit.Layout.LogFile("ag")}"], left.Details);
+        Assert.Equal(["  b.txt", $"record {kit.Layout.AgentRecordFile("ag")}", $"seed {kit.Layout.SeedFile("ag")}", $"log {kit.Layout.LogFile("ag")}"], left.Details);
         Assert.True(Directory.Exists(worktree));
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
     }
@@ -354,7 +358,7 @@ public sealed class AgentDeletionTests
         var deleted = await kit.DeleteAsync("ag", apply: true, discard: true);
 
         Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
-        Assert.Contains(deleted.Details!, line => line.StartsWith("its evidence roots held nothing to keep; evidence, deep/logs are links", StringComparison.Ordinal));
+        Assert.Contains(deleted.Details!, line => line.StartsWith("its evidence roots held nothing to keep; deep/logs, evidence are links", StringComparison.Ordinal));
         Assert.False(Directory.Exists(worktree));
         Assert.True(File.Exists(outside.Combine("kept.log")));
         Assert.True(File.Exists(outside.Combine("logs", "deeper.log")));
@@ -433,6 +437,157 @@ public sealed class AgentDeletionTests
             {
                 _written = true;
                 File.WriteAllText(lateFile, "written late\n");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Work the worktree holds once its fold is written - a file an agent still running wrote meanwhile - stops the
+    /// deletion before anything is kept or removed: the removal would discard it on a measurement that missed it.
+    /// </summary>
+    [Fact]
+    public async Task WorkFoundAfterTheFoldIsWritten_StopsTheDeletion_BeforeAnythingIsRemoved()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var agents = kit.Harness.Agents(new WritingMeanwhileFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt"), Path.Combine(worktree, "late.txt")), kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", [], apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Contains("after its fold was written, it still differs from the main tree", stopped.Message);
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+        Assert.True(File.Exists(Path.Combine(worktree, "late.txt")));
+    }
+
+    /// <summary>A file the closing recorded and the worktree changed since is work done in an agent already closed: left for a person.</summary>
+    [Fact]
+    public async Task AClosedAgent_WithARecordedFileChangedSince_IsLeftForAPerson()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", [], apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Contains("b.txt", kit.Record("ag").Closing!.Held.Keys);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\nand more after the closing\n");
+
+        var left = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Incomplete, left.ExitCode);
+        Assert.Contains("its worktree holds 1 file(s) its closing did not record", left.Message);
+        Assert.Contains("  b.txt", left.Details!);
+        Assert.True(Directory.Exists(worktree));
+    }
+
+    /// <summary>A closed agent whose worktree is gone - removed after the closing, its record not yet updated - is finished: nothing is left to remove.</summary>
+    [Fact]
+    public async Task AClosedAgentWhoseWorktreeIsGone_IsFinished()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", [], apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
+
+        var finished = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
+        Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
+        Assert.NotNull(kit.Record("ag").Closing);
+    }
+
+    /// <summary>
+    /// An evidence file changed after it was kept is not the file kept: it is left and named, and the removal stops on it,
+    /// losing nothing.
+    /// </summary>
+    [Fact]
+    public async Task AnEvidenceFileChangedAfterItWasKept_IsLeftAndNamed()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var log = Path.Combine(worktree, "evidence", "run.log");
+        OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        var agents = kit.Harness.Agents(new ChangedOnClosingFileSystem(kit.Harness.FileSystem, kit.Layout.AgentRecordFile("ag"), log), kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", [], apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Contains(stopped.Details!, line => line.StartsWith("1 evidence file(s) were left: evidence/run.log (changed since it was kept)", StringComparison.Ordinal));
+        Assert.Equal("measured\nwritten after the keeping\n", File.ReadAllText(log));
+        Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
+    }
+
+    /// <summary>A link to a file under an evidence root is neither kept nor counted: removing the worktree takes the link, never what it leads to.</summary>
+    [Fact]
+    public async Task ALinkToAFileUnderAnEvidenceRoot_IsNeitherKeptNorCounted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(worktree, "evidence", "latest.log"), Path.Combine(worktree, "evidence", "run.log")));
+
+        var deleted = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Contains(deleted.Details!, line => line.StartsWith("kept 1 evidence file(s)", StringComparison.Ordinal) && line.Contains("evidence/latest.log is a link", StringComparison.Ordinal));
+        var kept = Assert.Single(Directory.GetDirectories(kit.Layout.EvidenceDirectory("ag")));
+        Assert.False(File.Exists(Path.Combine(kept, "evidence", "latest.log")));
+        Assert.False(Directory.Exists(worktree));
+    }
+
+    /// <summary>
+    /// What a removal leaves of an agent's worktree - no .git of its own - holding a repository of its own is deleted with
+    /// --force: an agent's worktree holds no worktrees below it, so nothing in it is taken for one.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentsHuskHoldingARepository_IsDeletedWithForce()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.Harness.InitializeGitRepositoryAsync(Directory.CreateDirectory(Path.Combine(worktree, "nested")).FullName, Token);
+        File.Delete(Path.Combine(worktree, ".git"));
+
+        var removed = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token);
+
+        Assert.True(removed.Succeeded, removed.Outcome.Message);
+        Assert.False(Directory.Exists(worktree));
+    }
+
+    /// <summary>The real file system, except that writing one main-tree file writes a file into the agent's worktree too, as an agent still at work would.</summary>
+    private sealed class WritingMeanwhileFileSystem(IFileSystem inner, string trigger, string meanwhile) : PassThroughFileSystem(inner)
+    {
+        public override void ReplaceFile(string source, string destination)
+        {
+            base.ReplaceFile(source, destination);
+
+            if (string.Equals(Path.GetFullPath(destination), Path.GetFullPath(trigger), StringComparison.OrdinalIgnoreCase) && !File.Exists(meanwhile))
+            {
+                File.WriteAllText(meanwhile, "written meanwhile\n");
+            }
+        }
+    }
+
+    /// <summary>The real file system, except that recording the agent closed changes one file, as a program still writing it would.</summary>
+    private sealed class ChangedOnClosingFileSystem(IFileSystem inner, string record, string changed) : PassThroughFileSystem(inner)
+    {
+        public override void WriteAllTextAtomic(string path, string contents)
+        {
+            base.WriteAllTextAtomic(path, contents);
+
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(record), StringComparison.OrdinalIgnoreCase)
+                && contents.Contains($"\"state\": \"{AgentStates.Closed}\"", StringComparison.Ordinal))
+            {
+                File.AppendAllText(changed, "written after the keeping\n");
             }
         }
     }

@@ -99,16 +99,16 @@ public static partial class HostCopies
     /// <param name="treeRoot">The tree, as written or with its links resolved, as git names one.</param>
     /// <param name="comparison">How this machine compares paths.</param>
     /// <remarks>
-    /// A root kept on another disk through a link is tried where it leads too: git names a tree by where it resolved,
-    /// and a leg by the path it was configured with, and the two must name one copy alike.
+    /// A root reached through a link - itself one, or a directory above it - is tried where it leads too, with the tree
+    /// where it leads: git names a tree by where it resolved, and a leg by the path it was configured with, and the two
+    /// must name one copy alike.
     /// </remarks>
     public static string NameOf(string worktreesDirectory, string treeRoot, StringComparison comparison)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreesDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(treeRoot);
 
-        if ((WorktreeAddress.OfTree(worktreesDirectory, treeRoot, comparison)
-                ?? (LinkTargetOf(worktreesDirectory) is { } target ? WorktreeAddress.OfTree(target, treeRoot, comparison) : null)) is { } address)
+        if ((WorktreeAddress.OfTree(worktreesDirectory, treeRoot, comparison) ?? Resolved(worktreesDirectory, treeRoot, comparison)) is { } address)
         {
             return address.CopyName;
         }
@@ -119,12 +119,13 @@ public static partial class HostCopies
         return name.Length > 0 ? name : "worktree";
     }
 
-    /// <summary>Where <paramref name="directory"/> leads, when it is itself a link or a junction; otherwise <see langword="null"/>.</summary>
-    private static string? LinkTargetOf(string directory)
+    /// <summary>The address of <paramref name="treeRoot"/> under <paramref name="worktreesDirectory"/> with every link along either followed; null where there is none, or a link cannot be read.</summary>
+    private static WorktreeAddress? Resolved(string worktreesDirectory, string treeRoot, StringComparison comparison)
     {
         try
         {
-            return new DirectoryInfo(directory).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+            var root = LinkPaths.Resolve(worktreesDirectory);
+            return WorktreeAddress.OfTree(root, treeRoot, comparison) ?? WorktreeAddress.OfTree(root, LinkPaths.Resolve(treeRoot), comparison);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

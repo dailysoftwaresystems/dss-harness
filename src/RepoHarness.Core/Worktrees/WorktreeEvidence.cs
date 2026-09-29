@@ -6,8 +6,9 @@ namespace RepoHarness.Core.Worktrees;
 /// <summary>What a worktree's declared evidence roots hold, root by root, as a removal of the worktree would reach it.</summary>
 /// <param name="Files">Each root holding files, with every file under it, relative to the worktree and spelt with forward slashes.</param>
 /// <param name="Linked">
-/// The roots that are links, or are reached through one: what they lead to is outside the worktree, which a removal leaves
-/// where it is, so nothing of it is the removal's to lose, to keep or to delete.
+/// The roots that are links, or are reached through one, and the links to files under a root: what they lead to is outside
+/// the worktree, or elsewhere in it, which a removal leaves where it is - it takes a link, never what the link leads to - so
+/// nothing of it is the removal's to lose, to keep or to delete.
 /// </param>
 /// <param name="Unreadable">The roots that could not be read, each with why: an unread root is never an empty one.</param>
 public sealed record EvidenceFiles(
@@ -26,7 +27,8 @@ public sealed record EvidenceFiles(
 /// </summary>
 /// <remarks>
 /// Found as a removal reaches them: never through a link or junction, whether the root is one, a directory it is reached
-/// through is one, or one sits under it. A root reaching outside the worktree holds nothing a removal would take.
+/// through is one, or one sits under it - a link to a file under a root included. A root reaching outside the worktree
+/// holds nothing a removal would take.
 /// </remarks>
 public static class WorktreeEvidence
 {
@@ -58,23 +60,38 @@ public static class WorktreeEvidence
             {
                 reachedWorktree ??= fileSystem.ResolveLinks(worktree);
 
-                if (!PathContainment.AreSame(fileSystem.ResolveLinks(top), Path.Combine(reachedWorktree, root), comparison))
+                if (LinkPaths.LeadsElsewhere(fileSystem, worktree, reachedWorktree, root, comparison) is not null)
                 {
                     linked.Add(root);
                     continue;
                 }
 
-                IReadOnlyList<string> found = fileSystem.KindOf(top) switch
+                var found = new List<string>();
+
+                switch (fileSystem.KindOf(top))
                 {
-                    PathKind.File => [root],
-                    PathKind.Directory => [.. fileSystem.EnumerateFiles(top, recursive: true).Select(file => PathPatterns.Normalize(Path.GetRelativePath(worktree, file))).Order(StringComparer.Ordinal)],
-                    PathKind.Link => throw new IOException($"'{top}' became a link while it was being read"),
-                    _ => [],
-                };
+                    case PathKind.File:
+                        found.Add(root);
+                        break;
+
+                    case PathKind.Directory:
+                        foreach (var file in fileSystem.EnumerateFiles(top, recursive: true))
+                        {
+                            // Spelt with forward slashes where the platform separates, never by rewriting a backslash: on
+                            // Linux a backslash is part of a name, and rewritten it would name another file.
+                            var relative = Path.GetRelativePath(worktree, file).Replace(Path.DirectorySeparatorChar, '/');
+                            (fileSystem.KindOf(file) == PathKind.Link ? linked : found).Add(relative);
+                        }
+
+                        break;
+
+                    case PathKind.Link:
+                        throw new IOException($"'{top}' became a link while it was being read");
+                }
 
                 if (found.Count > 0)
                 {
-                    files[root] = found;
+                    files[root] = [.. found.Order(StringComparer.Ordinal)];
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -83,6 +100,6 @@ public static class WorktreeEvidence
             }
         }
 
-        return new EvidenceFiles(new Dictionary<string, IReadOnlyList<string>>(files, StringComparer.Ordinal), linked, unreadable);
+        return new EvidenceFiles(new Dictionary<string, IReadOnlyList<string>>(files, StringComparer.Ordinal), [.. linked.Order(StringComparer.Ordinal)], unreadable);
     }
 }

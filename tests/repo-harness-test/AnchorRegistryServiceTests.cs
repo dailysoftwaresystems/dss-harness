@@ -696,7 +696,6 @@ public sealed class AnchorRegistryServiceTests
             cancellationToken);
 
         Assert.True(batch.Succeeded, string.Join("; ", batch.Problems));
-        Assert.True(batch.Written);
         Assert.Equal([AnchorRowAction.AlreadyIn, AnchorRowAction.Changed, AnchorRowAction.New], batch.Rows.Select(row => row.Action));
         Assert.Equal(["status"], batch.Rows[1].Change.Fields.Select(field => field.Field));
 
@@ -745,13 +744,11 @@ public sealed class AnchorRegistryServiceTests
         var dry = await harness.AnchorRegistryService.ApplyAsync(temp.Path, [Declared(Three, "open", "work") with { Priority = "P2" }], dryRun: true, cancellationToken);
 
         Assert.False(refused.Succeeded);
-        Assert.False(refused.Written);
         Assert.Collection(
             refused.Problems,
             problem => Assert.StartsWith($"{One}: 'bogus' is not a status.", problem),
             problem => Assert.StartsWith("D-AREA-TOPIC-FOUR: 'D-AREA-TOPIC-FOUR' has no row yet, and a new anchor needs a priority", problem));
         Assert.True(dry.Succeeded);
-        Assert.False(dry.Written);
         Assert.Equal(pending, File.ReadAllBytes(PendingPath(temp)));
         Assert.Equal(done, File.ReadAllBytes(DonePath(temp)));
     }
@@ -807,7 +804,6 @@ public sealed class AnchorRegistryServiceTests
         var again = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, dryRun: false, cancellationToken);
 
         Assert.True(first.Succeeded, first.Failure ?? string.Join("; ", first.Problems));
-        Assert.True(first.Written);
         Assert.Equal("a | b", Assert.Single(Rows(harness, PendingPath(temp))).Trigger);
         Assert.True(again.Succeeded, again.Failure ?? string.Join("; ", again.Problems));
         Assert.Equal(AnchorRowAction.AlreadyIn, Assert.Single(again.Rows).Action);

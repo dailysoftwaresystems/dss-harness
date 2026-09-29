@@ -206,8 +206,8 @@ public sealed class GitClientTests
 
         var entry = Assert.Single(await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken));
 
-        Assert.StartsWith("R", entry, StringComparison.Ordinal);
-        Assert.EndsWith("RENAMED.md", entry, StringComparison.Ordinal);
+        Assert.StartsWith("R", entry.Line, StringComparison.Ordinal);
+        Assert.EndsWith("RENAMED.md", entry.Line, StringComparison.Ordinal);
         Assert.True(await harness.GitClient.IsDirtyAsync(temp.Path, cancellationToken));
     }
 
@@ -223,7 +223,7 @@ public sealed class GitClientTests
 
         var entry = Assert.Single(await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken));
 
-        Assert.Equal("?? ação 'quoted' file.txt", entry);
+        Assert.Equal("?? ação 'quoted' file.txt", entry.Line);
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public sealed class GitClientTests
 
         var entry = Assert.Single(await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken));
 
-        Assert.Equal("?? notes.txt", entry);
+        Assert.Equal("?? notes.txt", entry.Line);
         Assert.True(await harness.GitClient.IsDirtyAsync(temp.Path, cancellationToken));
     }
 
@@ -258,7 +258,7 @@ public sealed class GitClientTests
 
         var entry = Assert.Single(await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken));
 
-        Assert.Equal(" R RENAMED.md", entry);
+        Assert.Equal(" R RENAMED.md", entry.Line);
     }
 
     [Fact]
@@ -272,6 +272,56 @@ public sealed class GitClientTests
             new HarnessFactory().GitClient.GetStatusAsync(temp.Path, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, exception.ExitCode);
+    }
+
+    /// <summary>
+    /// What the work tree changes since a commit is asked as git status compares: an edit, a deletion and a staged change
+    /// are named; an untracked file is not; and a file committed with carriage returns, left alone in a repository that
+    /// converts line endings, is no change.
+    /// </summary>
+    [Fact]
+    public async Task ListChangedSinceAsync_ComparesAsGitStatusDoes()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("edited.txt", "one\n");
+        temp.WriteFile("deleted.txt", "one\n");
+        temp.WriteFile("crlf.txt", "one\r\n");
+        await harness.RunGitAsync(temp.Path, ["-c", "core.autocrlf=false", "add", "."], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["-c", "core.autocrlf=false", "commit", "-q", "-m", "files"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["config", "core.autocrlf", "true"], cancellationToken);
+        var head = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile("edited.txt", "one\ntwo\n");
+        File.Delete(temp.Combine("deleted.txt"));
+        temp.WriteFile("untracked.txt", "new\n");
+
+        var changed = await harness.GitClient.ListChangedSinceAsync(temp.Path, head, cancellationToken);
+
+        Assert.Equal(["deleted.txt", "edited.txt"], changed.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>A file the commit lists that git cannot read is never answered as no file there: that would take it for one the agent added.</summary>
+    [Fact]
+    public async Task BlobIdsAtAsync_RefusesAFileTheCommitListsButGitCannotRead()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("lost.txt", "a file whose object goes missing\n");
+        await harness.RunGitAsync(temp.Path, ["add", "lost.txt"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["commit", "-q", "-m", "a file"], cancellationToken);
+        var blob = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:lost.txt"], cancellationToken)).StandardOutput.Trim();
+        var loose = temp.Combine(".git", "objects", blob[..2], blob[2..]);
+        File.SetAttributes(loose, FileAttributes.Normal);
+        File.Delete(loose);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.BlobIdsAtAsync(temp.Path, "HEAD", ["lost.txt"], cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
+        Assert.Contains("git lists 'lost.txt' at HEAD but could not read it", refused.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1029,7 +1079,7 @@ public sealed class GitClientProtocolTests
 
         var entries = await git.GetStatusAsync("/repo", TestContext.Current.CancellationToken);
 
-        Assert.Equal(["R  new.txt", " R moved.txt", "C  copy.txt", "UU f.txt", "?? untracked.txt"], entries);
+        Assert.Equal(["R  new.txt", " R moved.txt", "C  copy.txt", "UU f.txt", "?? untracked.txt"], entries.Select(entry => entry.Line));
     }
 
     [Fact]

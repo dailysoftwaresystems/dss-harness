@@ -353,7 +353,9 @@ public sealed class SyncExclusions
     /// contents without ignoring the directory, a path that does not exist is ignored by nothing,
     /// and a placeholder a repository tracks on purpose is not a disagreement. Each of those would
     /// make this refuse a tree that is exactly as its author meant it.
-    /// The floor is exempt: <c>.git</c> is never ignored by git and never could be.
+    /// <c>.git</c> alone is exempt: git never ignores it, and never could. The orchestrators' directory, on the floor too, is
+    /// not: it is ignored by the rule init writes, and a branch whose rules predate that one would hand records and
+    /// transcripts to the next <c>git add</c>.
     /// </remarks>
     public async Task RefuseWhenNoLongerIgnoredAsync(
         IGitClient gitClient,
@@ -364,7 +366,7 @@ public sealed class SyncExclusions
 
         var uncovered = new List<string>();
 
-        foreach (var path in _withheld.Where(path => !SyncConfig.NeverTransferFloor.Contains(path, StringComparer.Ordinal)))
+        foreach (var path in _withheld.Where(path => !string.Equals(path, ".git", StringComparison.Ordinal)))
         {
             cancellationToken.ThrowIfCancellationRequested();
 

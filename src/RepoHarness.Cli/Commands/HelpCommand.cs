@@ -1134,10 +1134,11 @@ internal static class HelpCommand
             builder,
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, "
             + "made by create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, "
-            + "and delete-worktree takes that address. A directory holding worktrees below it is never deleted as one, --force "
-            + $"or not ({HarnessExit.Refused}), nor one with no .git of its own while git cannot list its worktrees "
-            + $"({HarnessExit.CommandFailed}), and a plain worktree cannot take an orchestrator's name. An agent's copies on hosts "
-            + "are kept under orchestrator--agent, so two orchestrators' agents of one name keep theirs apart.");
+            + "and delete-worktree takes that address. The directory named for an orchestrator is never deleted as one while "
+            + $"worktrees are below it, --force or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git "
+            + $"cannot list its worktrees ({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. "
+            + "A plain worktree cannot take an orchestrator's name. An agent's copies on hosts are kept under "
+            + "orchestrator--agent, so two orchestrators' agents of one name keep theirs apart.");
         builder.AppendLine();
         builder.AppendLine("Worktrees always belong to the main checkout, so running create-worktree from");
         builder.AppendLine("inside a worktree adds a sibling rather than nesting one.");
@@ -1347,13 +1348,14 @@ internal static class HelpCommand
             builder,
             [
                 ($"  {OrchestratorLayout.RecordFileName}", "its record: name, model, createdAt, parallel, session"),
-                ($"  {OrchestratorLayout.LogsDirectoryName}/<name>{OrchestratorLayout.LogExtension}", "a JSON line for each run that changed it or one agent"),
+                ($"  {OrchestratorLayout.LogsDirectoryName}/<name>{OrchestratorLayout.LogExtension}", "a JSON line for each run that reached it or one agent, refusals included"),
                 ($"  {OrchestratorLayout.LogsDirectoryName}/<agent>/", "the agent's Claude transcripts, kept when it is deleted"),
                 ($"  {OrchestratorLayout.WorkDirectoryName}/<agent>/", "the agent's scratch and task files"),
                 ($"  {OrchestratorLayout.PlansDirectoryName}/<name>/", "plans: its own, and a directory for each agent"),
-                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.RecordFileName}", "the agent's record: name, model, createdAt, base, state"),
-                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SeedFileName}", "what it was handed, each path with its SHA-256"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.RecordFileName}", "the agent's record: name, model, createdAt, base, state, closing"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.SeedFileName}", "what it shares with the main tree: each path handed or folded"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.RowsDirectoryName}/<ID>/", "an anchor row it files, a file for each cell"),
+                ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.AppliedRowsFileName}", "the rows its folds applied, each as declared then"),
                 ($"  {OrchestratorLayout.AgentsDirectoryName}/<agent>/{OrchestratorLayout.EvidenceDirectoryName}/", "its evidence roots' files, kept when it is deleted"),
             ]);
         builder.AppendLine();
@@ -1377,43 +1379,53 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most agents with a worktree at once: create-agent "
-            + "refuses the next, naming those that have one. Run again, create-orchestrator changes only the limit and the session, "
-            + "and create-agent records only the session; for an agent whose making stopped part way, it says so and names what "
+            $"--parallel, {OrchestratorRecord.DefaultParallel} unless given, is the most open agents at once - every agent not yet "
+            + "deleted, and every worktree git lists below the orchestrator's directory: create-agent refuses the next, naming them, "
+            + "and list-orchestrator counts them. Run again, create-orchestrator changes only the limit and the session, and "
+            + "create-agent records only the session; for an agent whose making stopped part way, it says so and names what "
             + "finishes it. An agent's name is never used twice: a deleted agent's directory stays as its history.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             "Seeding. create-agent hands the agent the main tree's uncommitted state - every path git status lists, off the "
-            + "worktrees root, .git and .orchestrators - and records each path's digest; --empty hands it nothing. A symbolic link "
-            + "among it is refused before the worktree is made, so nothing is left behind. seed-agent does it again, refused over "
-            + "changes of the agent's own unless --force. refresh-agent copies the main tree's changes under the paths given - the "
-            + "anchor registries' directory where none are - into a live agent, a dry run until --apply, refused where the agent "
-            + "edited or deleted one, and records them as handed to it, so its fold leaves them out.");
+            + "worktrees root, .git and .orchestrators: each changed file copied into its worktree, each deletion made there - and "
+            + "records what it was handed, each file with its digest. An untracked directory git will not look into, a repository "
+            + "of its own, is named and not handed; --empty hands it nothing. A symbolic link among it is refused before the "
+            + "worktree is made, so nothing is left behind. seed-agent does it again, refused over changes of the agent's own - a "
+            + "copy it was handed and left alone is not one - unless --force; --empty hands it nothing more, keeping what it was "
+            + "handed before. refresh-agent hands a live agent the main tree's changes under the paths given - the anchor "
+            + "registries' directory where none are - a dry run until --apply, refused, copying nothing, where the agent changed "
+            + "or deleted one, and records them as handed to it, so its fold leaves them out.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             "Folding. fold-agent writes an agent's own work into the main tree, a dry run until --apply, and never removes its "
-            + "worktree. Every path its status lists and every path it was handed goes in one list: its own, written; deleted, "
-            + "removed with the directories that leaves empty; inherited, handed to it and unchanged; already in the main tree; or "
-            + "settled. A handed path is compared with what it was handed, any other with the blob at the agent's own base "
-            + "through git's clean filters, so a line-ending conversion is no change and a sibling's committed fold is never "
-            + "written over. The whole fold is refused, and nothing written, where the main tree changed one of its paths since - "
-            + "by a commit, or by an uncommitted edit, the message says which - where a commit was made inside the agent, and for "
-            + "a link, a directory, or a path leading out of the main tree. --settled <path> leaves out a path you reconciled by "
-            + "hand, so the rest goes in; it is not a --force. A path this process cannot look at is never read as absent: the "
-            + "fold fails, nothing written. A file that changed after it was weighed is never written: the fold stops there, "
-            + $"exit {HarnessExit.Incomplete}, and run again weighs it anew. Then the rows it filed are applied, all or nothing: a new id written "
-            + "as write-anchor writes one, an existing row changed in the cells that differ, and one already as declared left "
-            + "alone; a write that fails puts both registries back byte for byte.");
+            + "worktree. Every path its status lists and every path it shares with the main tree - handed to it, or written or "
+            + "removed by an earlier fold - goes in one list: its own, written; deleted, removed with the directories that leaves "
+            + "empty; inherited, shared and unchanged; already in the main tree; or settled. A shared path is compared with what "
+            + "both trees held, any other with the blob at the agent's own base as git status compares, so a line-ending "
+            + "conversion is no change, a changed mode is one, and a sibling's committed fold is never written over. What a fold "
+            + "writes is recorded as shared: when a review sends the agent back, its later change of such a path - putting it back "
+            + "as it was included - is its work to fold like any other. The whole fold is refused, and nothing written, where the "
+            + "main tree changed one of its paths since - by a commit, or by an uncommitted edit, the message says which - where a "
+            + "commit was made inside the agent, and for a link, a directory, or a path leading out of the main tree. --settled "
+            + "<path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force. A path this process "
+            + "cannot look at is never read as absent: the fold fails, nothing written. A file of either tree that changed after "
+            + $"it was weighed is never written over: the fold stops there, exit {HarnessExit.Incomplete}, and run again weighs it "
+            + "anew. Then the rows it declares anew are applied, all or nothing: a new id written as write-anchor writes one, an "
+            + "existing row changed in the cells that differ, and one already as declared left alone; a write that fails puts both "
+            + "registries back byte for byte. A row an earlier fold applied, declared as it was then, is never applied again, so a "
+            + "change the registries took since stands; one declared anew over it is refused where the registries changed it "
+            + "since, as a file is.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             "Deleting. delete-agent folds what is left and applies the rows, proves nothing is left to fold, copies the agent's "
             + $"Claude transcripts, found by session id under {ClaudeTranscripts.ConfigDirectoryVariable} or ~/.claude, into "
             + $"{OrchestratorLayout.LogsDirectoryName}/<agent>/ - one not found is said, and one found and not kept stops it before "
-            + "anything is closed - and keeps what the evidence roots named before the fold and after it hold, reading each file "
-            + "back; a root that is or passes through a link is neither kept nor counted. It then records the agent closed, "
+            + "anything is closed - and keeps what the evidence roots named before the fold and after it hold, each copy proved, in "
+            + "a directory named for the run; a root that is or passes through a link, and a link under one, is neither kept nor "
+            + "counted. It then records the agent closed, "
             + "deletes the evidence files still holding what was kept - one that cannot be deleted is named and left, and stops "
             + "the removal - and removes the worktree and its copies on hosts through delete-worktree - never forced, and its "
             + "evidence check kept, so a file written late stops it. It says "
@@ -1430,8 +1442,10 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "Every command that writes the main tree holds it, as a sync holds a copy, and delete-agent holds the agent's "
-            + "worktree too, so no leg builds in either meanwhile. delete-agent refuses to run from inside the worktree it removes, "
+            "Every command that writes the main tree or an agent's worktree holds it, as a sync holds a copy - fold-agent, "
+            + "seed-agent, refresh-agent and delete-agent hold the agent's worktree as well as the main tree - so no leg builds in "
+            + "either meanwhile, and once one has written, an interruption waits for it to finish. delete-agent refuses to run from "
+            + "inside the worktree it removes, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
             + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
             + "directory, and the evidence and transcripts its agents kept only with --delete-evidence; it removes the record "

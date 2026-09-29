@@ -5,8 +5,8 @@ namespace RepoHarness.Core.Git;
 
 /// <summary>
 /// The variables git reads a repository from rather than from <c>-C &lt;directory&gt;</c>: every name
-/// <c>git rev-parse --local-env-vars</c> prints. Every git child this tool starts, and every child that
-/// runs git itself, starts without them.
+/// <c>git rev-parse --local-env-vars</c> prints. Every git child this tool starts, and the forge's command
+/// line, which runs git itself, start without them; a build or test a leg runs is left its own environment.
 /// </summary>
 /// <remarks>
 /// <para>

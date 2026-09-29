@@ -34,7 +34,7 @@ public sealed class AgentFoldTests
         var applied = await kit.FoldAsync("ag", apply: true);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
-        Assert.Contains("1 path(s) handed to it: 0 its own, 1 inherited, 0 already in the main tree, 0 deleted, 0 settled", applied.Details!);
+        Assert.Contains("1 path(s) it shares with the main tree, handed to it or folded before: 0 its own, 1 inherited, 0 already in the main tree, 0 deleted, 0 settled", applied.Details!);
         Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
         Assert.Equal("new\n", OrchestrationKit.Read(kit.Main, "new.txt"));
         Assert.False(Directory.Exists(Path.Combine(kit.Main, "docs")));
@@ -129,7 +129,11 @@ public sealed class AgentFoldTests
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nmerged by hand\n");
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nmain edit\n");
 
-        Assert.Equal(HarnessExit.Refused, (await kit.FoldAsync("ag", apply: true)).ExitCode);
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal) && line.EndsWith("so writing the agent's copy would lose that change", StringComparison.Ordinal));
+        Assert.Contains(refused.Details!, line => line.StartsWith("  'docs/x.md': the main tree changed it after the agent's base", StringComparison.Ordinal) && line.EndsWith("so removing it would lose that change", StringComparison.Ordinal));
 
         var applied = await kit.FoldAsync("ag", apply: true, "b.txt", "docs/x.md");
 
@@ -161,7 +165,7 @@ public sealed class AgentFoldTests
     /// that stopped part way, or went through - finds its own writes already in.
     /// </summary>
     [Fact]
-    public async Task AFoldRunAgain_FindsItsOwnWritesAlreadyIn()
+    public async Task AFoldRunAgain_FindsItsOwnWritesShared_AndWritesNothing()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -172,8 +176,28 @@ public sealed class AgentFoldTests
         var again = await kit.FoldAsync("ag", apply: true);
 
         Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
-        Assert.Contains("0 inherited path(s) left out; 0 path(s) are its own:", again.Details!);
-        Assert.Contains("  b.txt", again.Details!);
+        Assert.Contains("1 inherited path(s) left out; 0 path(s) are its own:", again.Details!);
+        Assert.Contains("b.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
+    }
+
+    /// <summary>
+    /// A change the main tree already holds as the agent does - made there by hand, or by a fold that stopped before it
+    /// could record it - is neither written nor refused, and is recorded as shared from then on.
+    /// </summary>
+    [Fact]
+    public async Task AChangeTheMainTreeAlreadyHolds_IsAlreadyIn_AndRecordedAsShared()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nagent edit\n");
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Contains("and 1 path(s) the main tree already holds as it does, with nothing to write:", folded.Details!);
+        Assert.Contains("b.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
     }
 
     /// <summary>
@@ -308,7 +332,7 @@ public sealed class AgentFoldTests
         var applied = await kit.FoldAsync("ag", apply: true);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
-        Assert.Contains("  b.txt   (not handed to it)", applied.Details!);
+        Assert.Contains("  b.txt   (not handed to it, nor folded before)", applied.Details!);
 
         if (!OperatingSystem.IsWindows())
         {
@@ -326,7 +350,8 @@ public sealed class AgentFoldTests
         kit.Harness.OrchestrationStore.WriteAgent(kit.Layout, kit.Record("ag") with
         {
             State = Core.Orchestration.AgentStates.Closed,
-            Closing = new Core.Orchestration.AgentClosing { At = DateTimeOffset.UtcNow, Abandoned = false, Evidence = string.Empty, Stamp = "1:1", Held = [] },
+            Abandoned = false,
+            Closing = new Core.Orchestration.AgentClosing { At = DateTimeOffset.UtcNow, Evidence = string.Empty, Stamp = "1:1", Held = [] },
         });
 
         var refused = await kit.FoldAsync("ag", apply: true);
@@ -373,6 +398,272 @@ public sealed class AgentFoldTests
         Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
         Assert.Contains("what it changed cannot be read", failed.Message);
         Assert.False(File.Exists(Path.Combine(kit.Main, "new.txt")));
+    }
+
+    /// <summary>
+    /// Two agents of one base that both add a file: the first fold writes it, and the second is refused rather than write
+    /// its own over the first's.
+    /// </summary>
+    [Fact]
+    public async Task AFileTwoAgentsBothAdd_IsRefusedToTheSecondFold()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var first = await kit.CreateAgentAsync("a1");
+        var second = await kit.CreateAgentAsync("a2");
+        OrchestrationKit.Write(first, "tests/new.c", "first\n");
+        OrchestrationKit.Write(second, "tests/new.c", "second\n");
+        Assert.True((await kit.FoldAsync("a1", apply: true)).Succeeded);
+
+        var refused = await kit.FoldAsync("a2", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith("  'tests/new.c' is not at the agent's base", StringComparison.Ordinal) && line.EndsWith("and the main tree holds it", StringComparison.Ordinal));
+        Assert.Equal("first\n", OrchestrationKit.Read(kit.Main, "tests/new.c"));
+    }
+
+    /// <summary>A file the agent was handed and deleted is removed from the main tree where the main tree still holds what it handed.</summary>
+    [Fact]
+    public async Task AHandedFileTheAgentDeleted_IsRemoved_WhereTheMainTreeKeptIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(worktree, "a.txt"));
+
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "a.txt")));
+    }
+
+    /// <summary>A file the agent was handed and deleted is refused where the main tree changed it since: removing it would lose that change.</summary>
+    [Fact]
+    public async Task AHandedFileTheAgentDeleted_IsRefused_WhereTheMainTreeChangedItSince()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(worktree, "a.txt"));
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\nand another\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains("  'a.txt': the main tree changed it after it was handed to the agent, so removing it would lose that change", refused.Details!);
+        Assert.Equal("one\nmain edit\nand another\n", OrchestrationKit.Read(kit.Main, "a.txt"));
+    }
+
+    /// <summary>
+    /// An agent a review sends back, which puts back a path its fold wrote and deletes a file its fold added: the next fold
+    /// weighs both against what the first fold left, and folds them - never missed because the agent's status no longer
+    /// lists them.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentSentBack_FoldsItsUndoingOfWhatItsFoldWrote()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(worktree, "new.txt", "new\n");
+        Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
+
+        OrchestrationKit.Write(worktree, "b.txt", "two\n");
+        File.Delete(Path.Combine(worktree, "new.txt"));
+
+        var again = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "new.txt")));
+    }
+
+    /// <summary>An agent a review sends back, which changes again a path its fold wrote, has that change folded, never refused as the main tree's.</summary>
+    [Fact]
+    public async Task AnAgentSentBack_ThatChangesAFoldedPathAgain_IsFolded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nfirst pass\n");
+        Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nsecond pass\n");
+
+        var again = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.Equal("two\nsecond pass\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>A main-tree file saved between the fold's measuring and its writing is never written over: the fold stops there, saying so.</summary>
+    [Fact]
+    public async Task AMainTreeFileSavedAfterItWasMeasured_IsNeverWrittenOver()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var agents = kit.Harness.Agents(new ShiftingFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt"), "two\nsaved meanwhile\n"), kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", [], apply: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Contains("holds other content in the main tree now than when it was measured, so it was not written over", stopped.Message);
+        Assert.Equal("two\nsaved meanwhile\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>An execute bit the main tree set since the agent's base is its change: the agent's copy, with the base's mode, is never written over it.</summary>
+    [Fact]
+    public async Task AnExecuteBitTheMainTreeSetSince_IsNeverWrittenOver()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows files have no execute bit.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var main = Path.Combine(kit.Main, "b.txt");
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(main, File.GetUnixFileMode(main) | UnixFileMode.UserExecute);
+        }
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal));
+        Assert.True(OperatingSystem.IsWindows() || (File.GetUnixFileMode(main) & UnixFileMode.UserExecute) != 0);
+    }
+
+    /// <summary>
+    /// A file committed with carriage returns, in a repository that converts line endings, is no change of the main tree's
+    /// where the main tree left it alone: compared as git status compares, through the index's rules, never by hashing the
+    /// file on its own.
+    /// </summary>
+    [Fact]
+    public async Task AFileCommittedWithCarriageReturns_IsNoChangeOfTheMainTrees_WhereItWasLeftAlone()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "crlf.txt", "one\r\n");
+        await kit.GitAsync(kit.Main, "-c", "core.autocrlf=false", "add", "crlf.txt");
+        await kit.GitAsync(kit.Main, "-c", "core.autocrlf=false", "commit", "-q", "-m", "a file with carriage returns");
+        await kit.GitAsync(kit.Main, "config", "core.autocrlf", "true");
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "crlf.txt", "one\r\nagent edit\r\n");
+
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("one\r\nagent edit\r\n", OrchestrationKit.Read(kit.Main, "crlf.txt"));
+    }
+
+    /// <summary>A deletion in the main tree's uncommitted state is handed to the agent as one - made in its worktree too - and its fold leaves it out.</summary>
+    [Fact]
+    public async Task AMainTreeDeletion_IsHandedToTheAgent_AndItsFoldLeavesItOut()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        File.Delete(Path.Combine(kit.Main, "docs", "x.md"));
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        Assert.False(File.Exists(Path.Combine(worktree, "docs", "x.md")));
+        Assert.Contains("docs/x.md", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Absent ?? []);
+
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Contains("1 inherited path(s) left out; 0 path(s) are its own:", applied.Details!);
+        Assert.False(File.Exists(Path.Combine(kit.Main, "docs", "x.md")));
+    }
+
+    /// <summary>A file the agent makes again where it was handed a deletion is its work, and is folded into the main tree that still lacks it.</summary>
+    [Fact]
+    public async Task AFileTheAgentMakesAgain_WhereItWasHandedADeletion_IsFolded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        File.Delete(Path.Combine(kit.Main, "docs", "x.md"));
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "docs/x.md", "x\nback again\n");
+
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("x\nback again\n", OrchestrationKit.Read(kit.Main, "docs/x.md"));
+    }
+
+    /// <summary>An untracked repository in the main tree is named, and never handed: a fold never moves a directory.</summary>
+    [Fact]
+    public async Task AnUntrackedRepositoryInTheMainTree_IsNamedAndNotHanded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var nested = Directory.CreateDirectory(Path.Combine(kit.Main, "nested")).FullName;
+        await kit.Harness.InitializeGitRepositoryAsync(nested, TestContext.Current.CancellationToken);
+
+        var created = await kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "ag", "model-b", false, null, TestContext.Current.CancellationToken);
+
+        Assert.True(created.Succeeded, OrchestrationKit.Describe(created));
+        Assert.Contains(created.Details!, line => line.StartsWith("not handed: ", StringComparison.Ordinal) && line.Contains("nested", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(Path.Combine(kit.Worktree("ag"), "nested")));
+    }
+
+    /// <summary>A path the main tree reaches through a link that stays inside it is never written through: the fold is refused.</summary>
+    [Fact]
+    public async Task APathTheMainTreeReachesThroughALinkInsideIt_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "docs/x.md", "x\nagent edit\n");
+        Directory.Move(Path.Combine(kit.Main, "docs"), Path.Combine(kit.Main, "docs-real"));
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(Path.Combine(kit.Main, "docs"), Path.Combine(kit.Main, "docs-real")));
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith("  'docs/x.md' is reached through a symbolic link or junction in the main tree", StringComparison.Ordinal));
+        Assert.Equal("x\n", OrchestrationKit.Read(kit.Main, "docs-real/x.md"));
+    }
+
+    /// <summary>A rename the agent staged is folded as what it is: the new path written, and the old one removed.</summary>
+    [Fact]
+    public async Task ARenameTheAgentStaged_IsFoldedAsAWriteAndARemoval()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.GitAsync(worktree, "mv", "a.txt", "c.txt");
+
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("one\n", OrchestrationKit.Read(kit.Main, "c.txt"));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "a.txt")));
+    }
+
+    /// <summary>A path no record can keep - one another platform reads as rooted - is refused before anything is written.</summary>
+    [Fact]
+    public async Task APathNoRecordCanKeep_IsRefusedBeforeAnythingIsWritten()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows cannot hold a colon in a file name.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(worktree, "C:weird.txt", "rooted on Windows\n");
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => kit.FoldAsync("ag", apply: true));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains("no record of an agent can keep a path another platform would read as somewhere else", refused.Message);
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
     }
 
     /// <summary>The real file system, except that one file is written anew just before its second read, as by an agent still at work.</summary>

@@ -4,6 +4,18 @@ using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Orchestration;
 
+/// <summary>An agent's rows as a fold weighs them: what applying those it declared anew does, or did, and those it did not.</summary>
+/// <param name="Batch">What applying the rows it declared anew - or never had applied - does, or did.</param>
+/// <param name="Unchanged">
+/// The ids an earlier fold of it applied that it declares as it did then: never applied again, so a change the registries
+/// took since is never undone by a row the agent did not touch.
+/// </param>
+public sealed record AgentRowsPlan(AnchorBatch Batch, IReadOnlyList<string> Unchanged)
+{
+    /// <summary>How many rows applying it writes: new, or changed.</summary>
+    public int Planned => Batch.Rows.Count(row => row.Action != AnchorRowAction.AlreadyIn);
+}
+
 /// <summary>
 /// The anchor rows an agent files, in <c>agents/&lt;agent&gt;/rows/</c>: a directory for each row, named for its anchor,
 /// holding a file for each cell - <c>status.txt</c>, <c>trigger.txt</c>, <c>closing.txt</c> and <c>cross-refs.txt</c>, and

@@ -48,13 +48,12 @@ public interface IGitClient
     Task<bool> IsDirtyAsync(string directory, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Porcelain status entries, one per changed path: two status characters and a space, then the
-    /// path; a rename or copy is one entry, with its new path. Untracked files and changed submodules
-    /// are listed even where configuration would hide them; an untracked directory is one entry, and
-    /// an ignored file is none.
+    /// Porcelain status entries, one per changed path; a rename or copy is one entry, with its new path and the one it
+    /// was made from. Untracked files and changed submodules are listed even where configuration would hide them; an
+    /// untracked directory is one entry, and an ignored file is none.
     /// </summary>
     /// <exception cref="HarnessException">git could not read the status.</exception>
-    Task<IReadOnlyList<string>> GetStatusAsync(string directory, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<GitStatusEntry>> GetStatusAsync(string directory, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Every path the work tree at <paramref name="directory"/> changes, as git names it: modified, staged or deleted;
@@ -66,21 +65,20 @@ public interface IGitClient
     Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// The id of the blob git would store for each working file of <paramref name="paths"/> under
-    /// <paramref name="directory"/>, made through the clean filters its own path selects - line-ending conversion among
-    /// them - which is the comparison git status makes. Nothing is written.
+    /// Every tracked path whose working state under <paramref name="directory"/> differs from what <paramref name="commit"/>
+    /// holds - its content, compared as git status compares it, the index's line-ending rules among them, or its mode
+    /// where the repository trusts modes - its deletion included. An untracked file is not listed. Nothing is written.
     /// </summary>
-    /// <exception cref="HarnessException">git could not read one of them.</exception>
-    Task<IReadOnlyDictionary<string, string>> HashWorkingFilesAsync(
-        string directory,
-        IReadOnlyList<string> paths,
-        CancellationToken cancellationToken = default);
+    /// <exception cref="HarnessException">git could not compare the work tree with the commit.</exception>
+    Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The id of the blob <paramref name="commit"/> holds at each of <paramref name="paths"/>, or <see langword="null"/>
     /// where it holds no file there - nothing, a directory, or a submodule's entry. One git process for them all.
     /// </summary>
-    /// <exception cref="HarnessException">git could not read the commit, or answer for every path.</exception>
+    /// <exception cref="HarnessException">
+    /// git could not read the commit, answer for every path, or read a file the commit lists.
+    /// </exception>
     Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(
         string directory,
         string commit,

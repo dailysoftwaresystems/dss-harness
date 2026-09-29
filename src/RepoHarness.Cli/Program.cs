@@ -1,6 +1,7 @@
 using System.CommandLine;
 using RepoHarness.Cli;
 using RepoHarness.Cli.Commands;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Worktrees;
@@ -75,17 +76,12 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
         return HarnessExit.UsageError;
     }
 
-    // A deletion past its point of no return goes on after Ctrl+C, and a host agent can be running
-    // one for another machine; a fold writing the main tree is never left half written. Those wait
-    // for their action as long as a deletion expects. No other command is any slower to stop.
+    // A command past its point of no return goes on after Ctrl+C - a deletion, a fold or a hand-over is
+    // never left half written, and a host agent can be running one for another machine - so each is
+    // waited for as long as a deletion expects. No other command is any slower to stop.
     var invocation = new InvocationConfiguration();
 
-    if (parseResult.CommandResult.Command.Name
-        is DeleteWorktreeCommand.Name
-        or DeleteAgentCommand.Name
-        or FoldAgentCommand.Name
-        or DeleteOrchestratorCommand.Name
-        or HostAgentProtocol.CommandName)
+    if (PointOfNoReturn.Commands.Contains(parseResult.CommandResult.Command.Name))
     {
         invocation.ProcessTerminationTimeout = WorktreeService.DefaultInterruptionGrace;
     }

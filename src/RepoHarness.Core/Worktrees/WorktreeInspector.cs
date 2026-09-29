@@ -133,8 +133,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         var status = await _gitClient.GetStatusAsync(path, cancellationToken).ConfigureAwait(false);
         var index = await _gitClient.ListIndexAsync(path, cancellationToken).ConfigureAwait(false);
 
-        // Each status entry is two status characters and a space, then the path.
-        List<string> changes = [.. status.Select(entry => entry[3..])];
+        List<string> changes = [.. status.Select(entry => entry.Path.Quoted)];
         changes.AddRange(await FindHiddenEditsAsync(path, index, cancellationToken).ConfigureAwait(false));
 
         var head = await _gitClient.ResolveCommitAsync(path, "HEAD", cancellationToken).ConfigureAwait(false);
@@ -187,26 +186,43 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
 
     /// <summary>
     /// The addresses of the worktrees below <paramref name="path"/>, which is not one itself: each git records strictly
-    /// inside it, and each directory directly in it holding a .git entry of its own, whether git still records it or
-    /// not - an orchestrator's directory holds its agents'. Asked of git and of the directory both, so neither a record
-    /// git lost nor a list git cannot give hides one; git's list failing leaves the directory's answer.
+    /// inside it, and - in the directory named for an orchestrator - each directory directly in it holding a .git entry of
+    /// its own, whether git still records it or not, since an orchestrator's directory holds its agents' worktrees and
+    /// nothing else. Anywhere else such a directory is a worktree's own submodule or nested repository, not a worktree.
     /// </summary>
     /// <param name="mainCheckoutRoot">The main checkout, whose list is read.</param>
     /// <param name="worktreesDirectory">The worktrees root, which the addresses are relative to.</param>
     /// <param name="path">A directory under the root.</param>
+    /// <param name="orchestrators">Whether <paramref name="path"/> is the directory named for an orchestrator.</param>
     /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">
+    /// git could not list its worktrees, or the directory could not be looked in (<see cref="HarnessExit.CommandFailed"/>):
+    /// never read as no worktree below it.
+    /// </exception>
     public async Task<IReadOnlyList<string>> FindWorktreesBelowAsync(
         string mainCheckoutRoot,
         string worktreesDirectory,
         string path,
+        bool orchestrators,
         CancellationToken cancellationToken)
     {
         var found = new SortedSet<string>(StringComparer.Ordinal);
         var resolved = ResolveLinks(path);
 
-        foreach (var child in _fileSystem.EnumerateDirectories(path))
+        if (orchestrators)
         {
-            if (HoldsOwnGit(_fileSystem, child))
+            IEnumerable<string> children;
+
+            try
+            {
+                children = [.. _fileSystem.EnumerateDirectories(path)];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new HarnessException(HarnessExit.CommandFailed, $"'{path}' could not be looked in: {ex.Message.TrimEnd('.')}");
+            }
+
+            foreach (var child in children.Where(child => HoldsOwnGit(_fileSystem, child)))
             {
                 found.Add(AddressOf(worktreesDirectory, child));
             }
@@ -426,9 +442,8 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         foreach (var entry in index.Where(entry => entry.IsSubmodule && entry.Stage == 0))
         {
             var directory = Path.Combine(root, entry.Path);
-            var gitEntry = Path.Combine(directory, ".git");
 
-            if (!_fileSystem.FileExists(gitEntry) && !_fileSystem.DirectoryExists(gitEntry))
+            if (!HoldsOwnGit(_fileSystem, directory))
             {
                 continue;
             }

@@ -129,7 +129,7 @@ public sealed class AnchorRegistryService(
 
         if (rows.Count == 0)
         {
-            return new AnchorBatch([], [], Written: false);
+            return new AnchorBatch([], []);
         }
 
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
@@ -204,7 +204,7 @@ public sealed class AnchorRegistryService(
             // Every row is checked, and every one refused is named, before any is written.
             if (problems.Count > 0 || dryRun || writes.Count == 0)
             {
-                return new AnchorBatch(outcomes, problems, Written: false);
+                return new AnchorBatch(outcomes, problems);
             }
 
             var snapshot = registries.All.ToDictionary(registry => registry, registry => _fileSystem.ReadAllBytes(registry.FullPath));
@@ -223,7 +223,7 @@ public sealed class AnchorRegistryService(
 
             return wrong.Count > 0
                 ? Restored(outcomes, snapshot, $"the rows did not read back as declared: {string.Join("; ", wrong)}")
-                : new AnchorBatch(outcomes, [], Written: true);
+                : new AnchorBatch(outcomes, []);
         });
     }
 
@@ -679,9 +679,10 @@ public sealed class AnchorRegistryService(
             pending = Load(registries.Pending, rules);
             done = Load(registries.Done, rules);
         }
-        catch (HarnessException ex)
+        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
         {
-            return [ex.Message];
+            // A registry that cannot be read back is not one proved to hold the rows: it is put back like any other.
+            return [ex.Message.TrimEnd('.')];
         }
 
         var wrong = new List<string>();
@@ -769,7 +770,7 @@ public sealed class AnchorRegistryService(
             }
         }
 
-        return new AnchorBatch(outcomes, [], Written: false) { Failure = failure, Restored = restored, RestoreFailed = failed };
+        return new AnchorBatch(outcomes, []) { Failure = failure, Restored = restored, RestoreFailed = failed };
     }
 
     private void WriteAll(IEnumerable<(AnchorRegistry Registry, string Text)> writes)

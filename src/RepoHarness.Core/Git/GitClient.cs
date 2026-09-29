@@ -171,57 +171,58 @@ public sealed class GitClient(
         return entries.Count > 0;
     }
 
-    public async Task<IReadOnlyList<string>> GetStatusAsync(
-        string directory,
-        CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<GitStatusEntry>> GetStatusAsync(string directory, CancellationToken cancellationToken = default)
+        => StatusAsync(directory, "normal", cancellationToken);
+
+    public Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default)
+        => StatusAsync(directory, "all", cancellationToken);
+
+    public async Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
     {
-        // -z keeps paths NUL separated so a path containing a space or a quote is
-        // never mangled by the textual quoting git would otherwise apply. Untracked
-        // files and submodules are asked for explicitly because configuration can hide
-        // both: under status.showUntrackedFiles=no a new file is not listed at all, and
-        // the tree reads as clean to a caller about to discard it. --no-optional-locks
-        // keeps the question from writing anything: status otherwise refreshes the index
-        // and writes it back whenever it can take the lock.
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+
+        // git diff against the commit compares the way git status does: the index's record of a file whose stat is clean,
+        // and otherwise the file through the clean filters and the line-ending rules that read the index, so a file only
+        // checked out with other line endings is no change; and its mode, where core.filemode trusts one. Without git's
+        // optional locks, the index it refreshes to answer is never written. Untracked files are not listed.
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=normal", "--ignore-submodules=none"],
+            ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", commit, "--"],
             cancellationToken).ConfigureAwait(false);
 
-        // An empty list must mean "nothing changed", never "the question failed":
-        // a caller reads it as a clean tree and proceeds over uncommitted work.
-        Ensure(result, "read the repository status");
+        Ensure(result, $"read what the work tree changes since {commit}");
 
-        return [.. ParseStatus(result.StandardOutput).Select(entry => $"{entry.Index}{entry.WorkTree} {entry.Path.Quoted}")];
+        return Records(result.StandardOutput)
+            .Select(GitName.FromBytes)
+            .Where(name => name.IsUtf8)
+            .Select(name => name.Text)
+            .ToHashSet(StringComparer.Ordinal);
     }
 
-    public async Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(
-        string directory,
-        CancellationToken cancellationToken = default)
+    /// <summary>
+    /// The one status question, with the untracked files named as <paramref name="untracked"/> says: <c>normal</c> names an
+    /// untracked directory as one entry, <c>all</c> names each file in one, git's ignore rules followed - which a walk of
+    /// the directory would not follow.
+    /// </summary>
+    /// <remarks>
+    /// Asked with <c>-z</c> and read as bytes, so no path is quoted or mangled and a name that is not UTF-8 is kept as git
+    /// holds it. Untracked files and submodules are asked for explicitly, because configuration can hide both: under
+    /// status.showUntrackedFiles=no a new file is not listed at all, and the tree reads as clean to a caller about to
+    /// discard it. <c>--no-optional-locks</c> keeps the question from writing anything: status otherwise refreshes the
+    /// index and writes it back whenever it can take the lock.
+    /// </remarks>
+    private async Task<IReadOnlyList<GitStatusEntry>> StatusAsync(string directory, string untracked, CancellationToken cancellationToken)
     {
-        // Read as bytes, so a name that is not UTF-8 is kept as git holds it and said as git quotes it, never
-        // mistaken for another. --untracked-files=all names each file of an untracked directory, as git's own ignore
-        // rules leave it, where a walk would offer what git ignores.
         var result = await RunForBytesAsync(
             directory,
-            ["--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=none"],
+            ["--no-optional-locks", "status", "--porcelain", "-z", $"--untracked-files={untracked}", "--ignore-submodules=none"],
             cancellationToken).ConfigureAwait(false);
 
+        // An empty list must mean "nothing changed", never "the question failed": a caller reads it as a clean tree and
+        // proceeds over uncommitted work.
         Ensure(result, "read the repository status");
 
         return ParseStatus(result.StandardOutput);
-    }
-
-    public async Task<IReadOnlyDictionary<string, string>> HashWorkingFilesAsync(
-        string directory,
-        IReadOnlyList<string> paths,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(paths);
-
-        var distinct = paths.Distinct(StringComparer.Ordinal).ToList();
-        var ids = await HashAsync(directory, distinct, asStored: false, cancellationToken).ConfigureAwait(false);
-
-        return distinct.Zip(ids).ToDictionary(pair => pair.First, pair => pair.Second, StringComparer.Ordinal);
     }
 
     public async Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(
@@ -284,10 +285,26 @@ public sealed class GitClient(
             throw new HarnessException(HarnessExit.CommandFailed, $"git cannot read commit {commit}, so which files it holds cannot be told: {lines[0]}");
         }
 
+        var unanswered = new List<string>();
+
         for (var index = 0; index < asked.Count; index++)
         {
-            ids[asked[index]] = lines[index + 1].Split(' ') is ["blob", var id] ? id : null;
+            switch (lines[index + 1].Split(' '))
+            {
+                case ["blob", var id]:
+                    ids[asked[index]] = id;
+                    break;
+                case ["tree" or "commit" or "tag", _]:
+                    ids[asked[index]] = null;
+                    break;
+                default:
+                    ids[asked[index]] = null;
+                    unanswered.Add(asked[index]);
+                    break;
+            }
         }
+
+        await RefuseListedButUnreadAsync(directory, commit, unanswered, files, cancellationToken).ConfigureAwait(false);
 
         foreach (var path in paths.Where(HoldsLineBreak))
         {
@@ -374,7 +391,7 @@ public sealed class GitClient(
             .Where(path => File.Exists(Path.Combine(directory, path)))
             .ToList();
 
-        var ids = await HashAsync(directory, wanted, asStored: true, cancellationToken).ConfigureAwait(false);
+        var ids = await HashAsync(directory, wanted, cancellationToken).ConfigureAwait(false);
         var modes = await ModesAsync(directory, wanted, cancellationToken).ConfigureAwait(false);
 
         // Built afresh in an index of this tool's own, and put in place whole. Staging into the index git
@@ -432,29 +449,19 @@ public sealed class GitClient(
     /// a filter makes of a file: the index names the files a tree holds, and a build reads each one's
     /// bytes itself.
     /// </remarks>
-    /// <param name="directory">The work tree the paths are relative to.</param>
-    /// <param name="paths">The files.</param>
-    /// <param name="asStored">
-    /// Whether each is written into git's object store as its bytes stand, filters skipped - what staging a copy
-    /// needs - rather than hashed, and nothing written, through the clean filters its path selects - what comparing
-    /// a working file with a blob needs.
-    /// </param>
-    /// <param name="cancellationToken">Stops it.</param>
     private async Task<IReadOnlyList<string>> HashAsync(
         string directory,
         IReadOnlyList<string> paths,
-        bool asStored,
         CancellationToken cancellationToken)
     {
         var ids = new Dictionary<string, string>(StringComparer.Ordinal);
         var together = paths.Where(path => !NeedsAHashOfItsOwn(path)).ToList();
-        string[] options = asStored ? ["-w", "--no-filters"] : [];
 
         if (together.Count > 0)
         {
             var hashed = await RunCoreAsync(
                     directory,
-                    ["hash-object", .. options, "--stdin-paths"],
+                    ["hash-object", "-w", "--no-filters", "--stdin-paths"],
                     echoOutput: false,
                     untranslated: false,
                     indexFile: null,
@@ -486,7 +493,7 @@ public sealed class GitClient(
         {
             var hashed = await RunCoreAsync(
                     directory,
-                    ["hash-object", .. options, "--", path],
+                    ["hash-object", "-w", "--no-filters", "--", path],
                     echoOutput: false,
                     untranslated: false,
                     indexFile: null,
@@ -981,24 +988,43 @@ public sealed class GitClient(
             }
         }
 
-        // git answers "missing" for a file whose object it cannot read exactly as it does for a path
-        // that names no file, and only the commit's listing tells the two apart. Passed off as absent,
-        // a file nobody could read passed a check that read nothing in it.
-        var unanswered = asked.Where(path => read[path] is null).ToList();
+        await RefuseListedButUnreadAsync(directory, commit, asked.Where(path => read[path] is null), files, cancellationToken).ConfigureAwait(false);
+        return read;
+    }
 
-        if (unanswered.Count > 0)
+    /// <summary>
+    /// Refuses where git answered "missing" for a path <paramref name="commit"/>'s listing holds: git answers that for a file
+    /// whose object it cannot read exactly as it does for a path that names no file, and only the listing tells the two
+    /// apart. Passed off as absent, a file nobody could read would pass every check that read nothing in it.
+    /// </summary>
+    /// <param name="directory">The work tree asked in.</param>
+    /// <param name="commit">The commit asked about.</param>
+    /// <param name="unanswered">The paths git answered "missing" for.</param>
+    /// <param name="files">The commit's listing, where it was read already.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">One of them is listed, and could not be read (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    private async Task RefuseListedButUnreadAsync(
+        string directory,
+        string commit,
+        IEnumerable<string> unanswered,
+        Dictionary<string, string>? files,
+        CancellationToken cancellationToken)
+    {
+        var missing = unanswered.ToList();
+
+        if (missing.Count == 0)
         {
-            files ??= await FilesAtCommitAsync(directory, commit, cancellationToken).ConfigureAwait(false);
-
-            if (unanswered.FirstOrDefault(files.ContainsKey) is { } unread)
-            {
-                throw new HarnessException(
-                    HarnessExit.CommandFailed,
-                    $"git lists '{unread}' at {commit} but could not read it. Check the repository with 'git fsck'.");
-            }
+            return;
         }
 
-        return read;
+        files ??= await FilesAtCommitAsync(directory, commit, cancellationToken).ConfigureAwait(false);
+
+        if (missing.FirstOrDefault(files.ContainsKey) is { } unread)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"git lists '{unread}' at {commit} but could not read it. Check the repository with 'git fsck'.");
+        }
     }
 
     public async Task<IReadOnlyList<GitName>> ListFilesAtCommitAsync(
@@ -1378,10 +1404,6 @@ public sealed class GitClient(
         return worktrees;
     }
 
-    /// <summary>
-    /// Reads <c>git status --porcelain -z</c>: one entry per changed path, each two status
-    /// characters and a space, then the path.
-    /// </summary>
     /// <summary>
     /// The changes <c>git status --porcelain -z</c> printed, read as bytes one to a character: the one reading of its
     /// records, for every status question asked.

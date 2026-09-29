@@ -181,4 +181,102 @@ public sealed class OrchestratorServiceTests
             base.DeleteDirectory(path);
         }
     }
+
+    /// <summary>
+    /// A removal that stops inside an agent's directory leaves that agent's record, removed after everything else of it,
+    /// so the orchestrator's deletion finishes when run again rather than being refused over a directory nothing names.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalStoppedInsideAnAgent_KeepsThatAgentsRecord_AndFinishesWhenRunAgain()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        Assert.True((await kit.DeleteAsync("ag", apply: true, discard: true)).Succeeded);
+        OrchestrationKit.Write(kit.Layout.AgentDirectory("ag"), "notes/handoff.md", "done\n");
+        var stuck = new StuckDirectoryFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Layout.AgentDirectory("ag"), "notes"));
+        var service = new OrchestratorService(kit.Harness.ContextLoader, kit.Harness.GitClient, stuck, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, TimeProvider.System);
+
+        var stopped = await service.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.True(File.Exists(kit.Layout.AgentRecordFile("ag")));
+
+        var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.False(Directory.Exists(kit.Layout.Directory));
+    }
+
+    /// <summary>A directory under the worktrees root that cannot be removed once the orchestrator is gone is said beside the deletion, never in place of it.</summary>
+    [Fact]
+    public async Task ADirectoryUnderTheRootThatCannotBeRemoved_IsSaid_AndTheOrchestratorIsStillDeleted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Directory.CreateDirectory(kit.Worktrees);
+        var stuck = new StuckDirectoryFileSystem(kit.Harness.FileSystem, kit.Worktrees);
+        var service = new OrchestratorService(kit.Harness.ContextLoader, kit.Harness.GitClient, stuck, kit.Harness.Platform, kit.Harness.Output, kit.Harness.WorktreeService, kit.Harness.OrchestrationStore, kit.Harness.OrchestrationLog, TimeProvider.System);
+
+        var deleted = await service.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Contains(deleted.Details!, line => line.StartsWith($"its directory under the worktrees root, '{kit.Worktrees}', is empty and could not be removed", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(kit.Layout.Directory));
+    }
+
+    /// <summary>
+    /// list-orchestrator's text names where each agent stands - live, deleted and abandoned, or unreadable - and counts its
+    /// open agents as create-agent does: every one not deleted, one whose record does not read among them.
+    /// </summary>
+    [Fact]
+    public async Task TheListing_SaysWhereEachAgentStands_AndCountsItsOpenAgents()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("live");
+        await kit.CreateAgentAsync("gone");
+        Assert.True((await kit.DeleteAsync("gone", apply: true, discard: true)).Succeeded);
+        OrchestrationKit.Write(kit.Layout.AgentDirectory("odd"), "agent.json", "{");
+
+        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, name: null, json: false, Token);
+
+        Assert.True(listed.Succeeded, OrchestrationKit.Describe(listed));
+        Assert.Contains(listed.Details!, line => line.StartsWith("o1  model model-a, 2 of at most 4 agent(s) open", StringComparison.Ordinal));
+        Assert.Contains(listed.Details!, line => line.StartsWith("  live  live at ", StringComparison.Ordinal));
+        Assert.Contains(listed.Details!, line => line.StartsWith("  gone  deleted at ", StringComparison.Ordinal) && line.Contains(", abandoned", StringComparison.Ordinal));
+        Assert.Contains(listed.Details!, line => line.StartsWith("  odd  unreadable: ", StringComparison.Ordinal));
+    }
+
+    /// <summary>list-orchestrator names one orchestrator when asked, refuses one that does not exist, and says a live agent's worktree is gone where it is.</summary>
+    [Fact]
+    public async Task TheListingOfOneOrchestrator_SaysAGoneWorktreeIsGone_AndRefusesAnUnknownOne()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
+
+        var listed = await kit.Harness.OrchestratorService.ListAsync(kit.Main, "o1", json: true, Token);
+        var unknown = await kit.Harness.OrchestratorService.ListAsync(kit.Main, "nope", json: true, Token);
+
+        var agent = Assert.Single(Assert.Single(JsonNode.Parse(Assert.Single(listed.Data))!["orchestrators"]!.AsArray())!["agents"]!.AsArray())!;
+        Assert.False((bool?)agent["worktreeExists"]);
+        Assert.Equal(worktree, (string?)agent["path"]);
+        Assert.Equal(HarnessExit.Refused, unknown.ExitCode);
+        Assert.StartsWith("No orchestrator named 'nope'.", unknown.Message);
+    }
+
+    /// <summary>An orchestrator allowing no agent at all is a usage error.</summary>
+    [Fact]
+    public async Task AnOrchestratorAllowingNoAgent_IsAUsageError()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+
+        var refused = await kit.Harness.OrchestratorService.CreateAsync(kit.Main, "o2", "model-a", 0, null, Token);
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.False(Directory.Exists(OrchestratorLayout.Of(new Core.Repository.HarnessLayout(kit.Main, kit.Main), "o2").Directory));
+    }
 }

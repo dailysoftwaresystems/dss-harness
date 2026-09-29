@@ -41,6 +41,24 @@ public sealed class PhysicalFileSystemTests
         Assert.Equal(1024, Create().DirectorySize(tree));
     }
 
+    /// <summary>A file read whole is read while another program holds it open for writing, as a stream read of it is: a log being appended to among them.</summary>
+    [Fact]
+    public async Task ReadAllBytes_ReadsAFileAnotherProgramHoldsOpenForWriting()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("growing.log");
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+
+        using (var writer = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+        {
+            writer.Write("line one\n"u8);
+            writer.Flush();
+
+            Assert.Equal("line one\n"u8.ToArray(), fileSystem.ReadAllBytes(path));
+            Assert.Equal("line one\n"u8.ToArray(), await fileSystem.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+        }
+    }
+
     /// <summary>
     /// A build directory linked onto another filesystem is measured there, and named by it: measured through the
     /// path as written, it was the room of the filesystem the link sits on.
