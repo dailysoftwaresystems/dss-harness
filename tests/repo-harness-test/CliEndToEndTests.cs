@@ -32,6 +32,8 @@ public sealed partial class CliEndToEndTests
         string[] commands =
         [
             "init", "verify-git", "create-worktree", "delete-worktree", "list-worktree",
+            "create-orchestrator", "delete-orchestrator", "list-orchestrator",
+            "create-agent", "seed-agent", "refresh-agent", "fold-agent", "delete-agent",
             "check-root-litter", "check-anchor-citations", "fix-line-endings", "check-ci-legs",
             "legs", "install-missing-tools", "sync", "build", "test", "run", "host-exec", "help",
         ];
@@ -349,6 +351,77 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// A caller whose environment names another repository through any variable git reads one from:
+    /// with GIT_COMMON_DIR pointing elsewhere, the deletion was refused and the worktree left registered,
+    /// because only three of git's fifteen such variables were cleared. Malformed -c settings travel the
+    /// same way and are cleared with them.
+    /// </summary>
+    [Fact]
+    public async Task DeleteWorktree_IsNotSteered_ByTheCallersRepositoryVariables()
+    {
+        using var temp = new TempDirectory();
+        using var other = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await PrepareRepositoryAsync(temp);
+        await new HarnessFactory().InitializeGitRepositoryAsync(other.Path, cancellationToken);
+        var otherGit = Path.Combine(other.Path, ".git");
+
+        var created = await CliRunner.RunAsync(["create-worktree", "wt", "-C", temp.Path], cancellationToken);
+        Assert.Equal(HarnessExit.Success, created.ExitCode);
+
+        var deleted = await CliRunner.RunAsync(
+            ["delete-worktree", "wt", "-C", temp.Path],
+            cancellationToken,
+            environment: new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                ["GIT_DIR"] = otherGit,
+                ["GIT_WORK_TREE"] = other.Path,
+                ["GIT_INDEX_FILE"] = Path.Combine(otherGit, "index"),
+                ["GIT_COMMON_DIR"] = otherGit,
+                ["GIT_OBJECT_DIRECTORY"] = Path.Combine(otherGit, "objects"),
+                ["GIT_CONFIG_PARAMETERS"] = "'not a setting",
+                ["GIT_CONFIG_COUNT"] = "not a number",
+            });
+
+        Assert.Equal(HarnessExit.Success, deleted.ExitCode);
+        Assert.False(Directory.Exists(HarnessFactory.WorktreePath(temp.Path, "wt")));
+        var listed = await new HarnessFactory().GitClient.ListWorktreesAsync(temp.Path, cancellationToken);
+        Assert.Single(listed);
+    }
+
+    /// <summary>delete-agent with --discard-uncommitted and no --apply is a dry run: the command line abandons and removes nothing.</summary>
+    [Fact]
+    public async Task DeleteAgentWithoutApply_IsADryRun_EvenAbandoning()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        var result = await CliRunner.RunAsync(["delete-agent", "o1", "ag", "--discard-uncommitted", "-C", kit.Main], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("dry run", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Equal(Core.Orchestration.AgentStates.Live, kit.Record("ag").State);
+        Assert.True(Directory.Exists(worktree));
+    }
+
+    /// <summary>list-orchestrator --json prints its one JSON document on standard output, and nothing else.</summary>
+    [Fact]
+    public async Task ListOrchestratorJson_PrintsOneJsonDocumentAndNothingElse()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+
+        var result = await CliRunner.RunAsync(["list-orchestrator", "--json", "-C", kit.Main], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        var document = System.Text.Json.Nodes.JsonNode.Parse(result.StandardOutput)!;
+        Assert.Equal("o1", (string?)document["orchestrators"]![0]!["name"]);
+        Assert.Equal("ag", (string?)document["orchestrators"]![0]!["agents"]![0]!["name"]);
+    }
+
+    /// <summary>
     /// The defect that rode the layout change: a configuration one verb called valid and another
     /// refused. Both verbs read the same file through the same reader, so a spelling wrong enough
     /// for one is wrong for the other, and the run that finds out is never the first to say so.
@@ -645,6 +718,7 @@ public sealed partial class CliEndToEndTests
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains(WorktreeSettings.DefaultRoot, result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(WorktreeSettings.SeededRoot, result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("worktrees.root", result.StandardOutput, StringComparison.Ordinal);
     }
 

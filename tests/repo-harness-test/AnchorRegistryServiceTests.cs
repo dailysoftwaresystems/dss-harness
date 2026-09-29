@@ -672,6 +672,146 @@ public sealed class AnchorRegistryServiceTests
         Assert.Equal("inputs  : held still\t4  +  38", Assert.Single(Rows(harness, PendingPath(temp))).Trigger);
     }
 
+    /// <summary>
+    /// A batch writes a new id's row, changes an existing row in the cells that differ only - a cell already as declared
+    /// keeps its stored bytes, runs of spaces and all - and leaves a row already as declared alone.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_WritesNewRows_ChangesOnlyWhatDiffers_AndLeavesRowsAlreadyAsDeclared()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two) with { ClosingWork = "keep  these   runs" }, dryRun: false, cancellationToken);
+
+        var batch = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            [
+                Declared(One, "open", "work"),
+                Declared(Two, "gated", "keep  these   runs"),
+                Declared(Three, "open", "new work") with { Priority = "P2" },
+            ],
+            dryRun: false,
+            cancellationToken);
+
+        Assert.True(batch.Succeeded, string.Join("; ", batch.Problems));
+        Assert.Equal([AnchorRowAction.AlreadyIn, AnchorRowAction.Changed, AnchorRowAction.New], batch.Rows.Select(row => row.Action));
+        Assert.Equal(["status"], batch.Rows[1].Change.Fields.Select(field => field.Field));
+
+        var rows = Rows(harness, PendingPath(temp));
+        Assert.Equal([One, Two, Three], rows.Select(row => row.Id));
+        Assert.Contains($"| `{Two}` | P1 | {AnchorStatus.Render(AnchorState.Gated)} | trigger for {Two} | keep  these   runs | refs |", File.ReadAllText(PendingPath(temp)), StringComparison.Ordinal);
+        Assert.Equal("P2", rows[2].Priority);
+    }
+
+    /// <summary>A declared row whose status now belongs in the other registry is moved there, as set-anchor moves one.</summary>
+    [Fact]
+    public async Task ApplyAsync_MovesARowWhoseStatusBelongsInTheOtherRegistry()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+
+        var batch = await harness.AnchorRegistryService.ApplyAsync(temp.Path, [Declared(One, "closed", "work")], dryRun: false, cancellationToken);
+
+        Assert.True(batch.Succeeded, string.Join("; ", batch.Problems));
+        Assert.True(batch.Rows[0].Change.Moved);
+        Assert.Empty(Rows(harness, PendingPath(temp)));
+        Assert.Equal([One], Rows(harness, DonePath(temp)).Select(row => row.Id));
+    }
+
+    /// <summary>
+    /// Every row is checked before any is written, and every one refused is named: one bad row writes none of them, and a
+    /// dry run writes nothing at all.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_ChecksEveryRowFirst_AndWritesNoneWhenOneIsRefused()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        var pending = File.ReadAllBytes(PendingPath(temp));
+        var done = File.ReadAllBytes(DonePath(temp));
+
+        var refused = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            [Declared(Three, "open", "work") with { Priority = "P2" }, Declared(One, "bogus", "work"), Declared("D-AREA-TOPIC-FOUR", "open", "work")],
+            dryRun: false,
+            cancellationToken);
+        var dry = await harness.AnchorRegistryService.ApplyAsync(temp.Path, [Declared(Three, "open", "work") with { Priority = "P2" }], dryRun: true, cancellationToken);
+
+        Assert.False(refused.Succeeded);
+        Assert.Collection(
+            refused.Problems,
+            problem => Assert.StartsWith($"{One}: 'bogus' is not a status.", problem),
+            problem => Assert.StartsWith("D-AREA-TOPIC-FOUR: 'D-AREA-TOPIC-FOUR' has no row yet, and a new anchor needs a priority", problem));
+        Assert.True(dry.Succeeded);
+        Assert.Equal(pending, File.ReadAllBytes(PendingPath(temp)));
+        Assert.Equal(done, File.ReadAllBytes(DonePath(temp)));
+    }
+
+    /// <summary>
+    /// A write that fails once rows are being written puts both registries back byte for byte - a byte order mark no write
+    /// of the tool's would keep among them - and says so, so rows are never left half applied.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_PutsBothRegistriesBackByteForByte_WhenAWriteFails()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        File.WriteAllBytes(PendingPath(temp), [.. System.Text.Encoding.UTF8.Preamble, .. File.ReadAllBytes(PendingPath(temp))]);
+        var pending = File.ReadAllBytes(PendingPath(temp));
+        var done = File.ReadAllBytes(DonePath(temp));
+
+        var crashing = new AnchorRegistryService(
+            harness.ContextLoader,
+            harness.AnchorRegistryLocator,
+            harness.AnchorRegistryLock,
+            new FailingWriteFileSystem(harness.FileSystem, failOnWrite: 3));
+
+        var batch = await crashing.ApplyAsync(
+            temp.Path,
+            [Declared(Three, "open", "work") with { Priority = "P2" }, Declared(One, "closed", "work")],
+            dryRun: false,
+            cancellationToken);
+
+        Assert.False(batch.Succeeded);
+        Assert.StartsWith("writing the rows failed:", batch.Failure);
+        Assert.Equal([".plans/_deferred-anchor-registry.md", ".plans/_deferred-anchor-registry-done.md"], batch.Restored.Order(StringComparer.Ordinal).Reverse());
+        Assert.Empty(batch.RestoreFailed);
+        Assert.Equal(pending, File.ReadAllBytes(PendingPath(temp)));
+        Assert.Equal(done, File.ReadAllBytes(DonePath(temp)));
+    }
+
+    /// <summary>
+    /// A row whose cells hold a pipe is written, reads back as declared, and is already in when applied again: stored
+    /// cells are compared as they read, pipes plain, never as they are written, escaped.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_ARowWithAPipeInItsCells_ReadsBackAsDeclared_AndIsAlreadyInWhenAppliedAgain()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        AnchorRowDeclaration[] rows = [new(Three, "open", "a | b", "x || y", "z|w") { Priority = "P2" }];
+
+        var first = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, dryRun: false, cancellationToken);
+        var again = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, dryRun: false, cancellationToken);
+
+        Assert.True(first.Succeeded, first.Failure ?? string.Join("; ", first.Problems));
+        Assert.Equal("a | b", Assert.Single(Rows(harness, PendingPath(temp))).Trigger);
+        Assert.True(again.Succeeded, again.Failure ?? string.Join("; ", again.Problems));
+        Assert.Equal(AnchorRowAction.AlreadyIn, Assert.Single(again.Rows).Action);
+    }
+
+    private static AnchorRowDeclaration Declared(string id, string status, string closing)
+        => new(id, status, $"trigger for {id}", closing, "refs");
+
     private static async Task<HarnessFactory> PrepareAsync(TempDirectory temp, bool triggerCarriesVerdict = false)
     {
         var harness = new HarnessFactory();

@@ -996,7 +996,7 @@ public sealed class ActionFileParser(
             return null;
         }
 
-        if (path.Split('/', '\\').Any(segment => segment == ".."))
+        if (PlatformPaths.ClimbsOut(path))
         {
             problems.Add(At(node, $"a step's 'workingDirectory' is '{path}', which climbs out of "
                 + "the step's own root with '..'; it names a directory under that root, so that a "

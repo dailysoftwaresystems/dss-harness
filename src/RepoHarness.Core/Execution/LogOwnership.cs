@@ -1,4 +1,3 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
@@ -95,19 +94,9 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
     /// <summary>How long one update of the owner file waits for another process's; see <see cref="MachineWideFile"/>.</summary>
     private static readonly TimeSpan UpdateWindow = TimeSpan.FromSeconds(10);
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-
-        // As the lock file, the configuration, the sync marker and the host protocol are read: a
-        // shape this build does not recognise is a hard failure, not silent data loss. The one
-        // field an older build wrote is declared, so upgrading reads its own owner file rather than
-        // refusing it.
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-    };
+    // Every state file's rules (JsonStateFile): a shape this build does not recognise is refused. The one field an older
+    // build wrote is declared, so upgrading reads its own owner file rather than refusing it.
+    private static readonly JsonSerializerOptions JsonOptions = JsonStateFile.Options;
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;

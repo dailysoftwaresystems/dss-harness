@@ -125,6 +125,55 @@ public sealed record AnchorSetRequest(string Id)
         Priority is not null || Status is not null || Trigger is not null || ClosingWork is not null || CrossRefs is not null;
 }
 
+/// <summary>A row as declared: what the registries are to hold for its id once it is applied.</summary>
+/// <param name="Id">The anchor.</param>
+/// <param name="Status">The status word; it alone decides which registry the row is in.</param>
+/// <param name="Trigger">What is wrong, and what would make it worth doing.</param>
+/// <param name="ClosingWork">What remains to be done to close it.</param>
+/// <param name="CrossRefs">Where it is cited, and related anchors.</param>
+public sealed record AnchorRowDeclaration(string Id, string Status, string Trigger, string ClosingWork, string CrossRefs)
+{
+    /// <summary>Its priority; null keeps an existing row's, and a new row must declare one.</summary>
+    public string? Priority { get; init; }
+}
+
+/// <summary>What applying one declared row does.</summary>
+public enum AnchorRowAction
+{
+    /// <summary>Its id had no row, and one is written.</summary>
+    New,
+
+    /// <summary>Its row is changed, in the cells that differ, and moved where its status now belongs.</summary>
+    Changed,
+
+    /// <summary>Its row already holds what was declared, and is not written again.</summary>
+    AlreadyIn,
+}
+
+/// <summary>What applying one declared row did, or would do.</summary>
+/// <param name="Id">The anchor.</param>
+/// <param name="Action">What was done with it.</param>
+/// <param name="Change">The change, as write-anchor or set-anchor describes one.</param>
+public sealed record AnchorRowOutcome(string Id, AnchorRowAction Action, AnchorChange Change);
+
+/// <summary>What applying declared rows did, or would do on a dry run.</summary>
+/// <param name="Rows">Each row planned, in order; on a refusal, those that could be planned.</param>
+/// <param name="Problems">Why rows were refused, each naming its id; nothing was written while there is one.</param>
+public sealed record AnchorBatch(IReadOnlyList<AnchorRowOutcome> Rows, IReadOnlyList<string> Problems)
+{
+    /// <summary>Why writing them failed, once every row had passed its checks; null where nothing did.</summary>
+    public string? Failure { get; init; }
+
+    /// <summary>The registries put back byte for byte after <see cref="Failure"/>.</summary>
+    public IReadOnlyList<string> Restored { get; init; } = [];
+
+    /// <summary>The registries that could not be put back after <see cref="Failure"/>, and are not as they were.</summary>
+    public IReadOnlyList<string> RestoreFailed { get; init; } = [];
+
+    /// <summary>Whether every row was checked and, unless on a dry run, is in the registries as declared.</summary>
+    public bool Succeeded => Problems.Count == 0 && Failure is null;
+}
+
 /// <summary>Which anchors to list.</summary>
 public sealed record AnchorListFilter
 {

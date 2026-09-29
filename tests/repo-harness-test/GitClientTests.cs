@@ -155,14 +155,7 @@ public sealed class GitClientTests
         await harness.InitializeGitRepositoryAsync(real, cancellationToken);
 
         var link = temp.Combine("link");
-        try
-        {
-            Directory.CreateSymbolicLink(link, real);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(link, real));
 
         var root = await harness.GitClient.GetRepositoryRootAsync(link, cancellationToken);
         var main = await harness.GitClient.GetMainWorktreeAsync(link, cancellationToken);
@@ -213,8 +206,8 @@ public sealed class GitClientTests
 
         var entry = Assert.Single(await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken));
 
-        Assert.StartsWith("R", entry, StringComparison.Ordinal);
-        Assert.EndsWith("RENAMED.md", entry, StringComparison.Ordinal);
+        Assert.StartsWith("R", entry.Line, StringComparison.Ordinal);
+        Assert.EndsWith("RENAMED.md", entry.Line, StringComparison.Ordinal);
         Assert.True(await harness.GitClient.IsDirtyAsync(temp.Path, cancellationToken));
     }
 
@@ -230,7 +223,7 @@ public sealed class GitClientTests
 
         var entry = Assert.Single(await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken));
 
-        Assert.Equal("?? ação 'quoted' file.txt", entry);
+        Assert.Equal("?? ação 'quoted' file.txt", entry.Line);
     }
 
     [Fact]
@@ -247,7 +240,7 @@ public sealed class GitClientTests
 
         var entry = Assert.Single(await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken));
 
-        Assert.Equal("?? notes.txt", entry);
+        Assert.Equal("?? notes.txt", entry.Line);
         Assert.True(await harness.GitClient.IsDirtyAsync(temp.Path, cancellationToken));
     }
 
@@ -265,7 +258,7 @@ public sealed class GitClientTests
 
         var entry = Assert.Single(await harness.GitClient.GetStatusAsync(temp.Path, cancellationToken));
 
-        Assert.Equal(" R RENAMED.md", entry);
+        Assert.Equal(" R RENAMED.md", entry.Line);
     }
 
     [Fact]
@@ -279,6 +272,56 @@ public sealed class GitClientTests
             new HarnessFactory().GitClient.GetStatusAsync(temp.Path, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, exception.ExitCode);
+    }
+
+    /// <summary>
+    /// What the work tree changes since a commit is asked as git status compares: an edit, a deletion and a staged change
+    /// are named; an untracked file is not; and a file committed with carriage returns, left alone in a repository that
+    /// converts line endings, is no change.
+    /// </summary>
+    [Fact]
+    public async Task ListChangedSinceAsync_ComparesAsGitStatusDoes()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("edited.txt", "one\n");
+        temp.WriteFile("deleted.txt", "one\n");
+        temp.WriteFile("crlf.txt", "one\r\n");
+        await harness.RunGitAsync(temp.Path, ["-c", "core.autocrlf=false", "add", "."], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["-c", "core.autocrlf=false", "commit", "-q", "-m", "files"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["config", "core.autocrlf", "true"], cancellationToken);
+        var head = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile("edited.txt", "one\ntwo\n");
+        File.Delete(temp.Combine("deleted.txt"));
+        temp.WriteFile("untracked.txt", "new\n");
+
+        var changed = await harness.GitClient.ListChangedSinceAsync(temp.Path, head, cancellationToken);
+
+        Assert.Equal(["deleted.txt", "edited.txt"], changed.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>A file the commit lists that git cannot read is never answered as no file there: that would take it for one the agent added.</summary>
+    [Fact]
+    public async Task BlobIdsAtAsync_RefusesAFileTheCommitListsButGitCannotRead()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("lost.txt", "a file whose object goes missing\n");
+        await harness.RunGitAsync(temp.Path, ["add", "lost.txt"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["commit", "-q", "-m", "a file"], cancellationToken);
+        var blob = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:lost.txt"], cancellationToken)).StandardOutput.Trim();
+        var loose = temp.Combine(".git", "objects", blob[..2], blob[2..]);
+        File.SetAttributes(loose, FileAttributes.Normal);
+        File.Delete(loose);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.BlobIdsAtAsync(temp.Path, "HEAD", ["lost.txt"], cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
+        Assert.Contains("git lists 'lost.txt' at HEAD but could not read it", refused.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -549,7 +592,7 @@ public sealed class GitClientTests
         var head = await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken);
         var processes = new CountingProcesses(harness.ProcessRunner);
 
-        var read = await new GitClient(processes, harness.Output).ReadFilesAtCommitAsync(
+        var read = await new GitClient(processes, harness.Output, localVariables: harness.LocalVariables).ReadFilesAtCommitAsync(
             temp.Path,
             head!,
             ["docs/notes.md", "src/naïve name.txt", "bom.txt", "data.bin", "wide.txt"],
@@ -585,7 +628,7 @@ public sealed class GitClientTests
         var head = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
         var processes = new CountingProcesses(harness.ProcessRunner);
 
-        var read = await new GitClient(processes, harness.Output).ReadFilesAtCommitAsync(
+        var read = await new GitClient(processes, harness.Output, localVariables: harness.LocalVariables).ReadFilesAtCommitAsync(
             temp.Path,
             head,
             ["docs/notes.md", "docs/absent.md", "docs", "sub"],
@@ -869,14 +912,7 @@ public sealed class GitClientTests
         await harness.InitializeGitRepositoryAsync(temp.Path, token);
         temp.WriteFile(".gitignore", "*.log\n");
 
-        try
-        {
-            Directory.CreateSymbolicLink(temp.Combine("linked"), elsewhere.Path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("linked"), elsewhere.Path));
 
         var decisions = await harness.GitClient.ExplainIgnoredAsync(temp.Path, ["linked/a.log", "a.log", "src/main.c"], token);
 
@@ -929,22 +965,40 @@ public sealed class GitClientProtocolTests
     }
 
     [Fact]
-    public async Task EveryCommand_ClearsTheVariablesThatWouldPointGitAtAnotherTree()
+    public async Task EveryCommand_ClearsEveryVariableGitReadsARepositoryFrom()
     {
-        // GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE each outrank `-C <directory>`. A git hook runs
-        // with all three set, so a harness command invoked from a hook, or from a shell left in
-        // another checkout, would read and write a repository nobody named.
+        // Each outranks `-C <directory>`. A git hook runs with some of them set, so a harness command
+        // invoked from a hook, or from a shell left in another checkout, would read and write a
+        // repository nobody named: with GIT_COMMON_DIR naming another repository, deleting a worktree
+        // was refused and left it registered. Every name the list gives is cleared, not three of them.
         var (git, requests) = Scripted(Exited(0));
 
         await git.RunAsync("/repo", ["status"], cancellationToken: TestContext.Current.CancellationToken);
 
         var environment = Assert.Single(requests).Environment;
 
-        foreach (var name in (string[])["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"])
+        foreach (var name in LocalNames)
         {
             Assert.True(environment.ContainsKey(name), $"{name} was not cleared.");
             Assert.Null(environment[name]);
         }
+    }
+
+    [Fact]
+    public async Task AnIndexACallerAsksFor_IsSetAfterTheInheritedOneIsCleared()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        var processes = new CountingProcesses(harness.ProcessRunner);
+
+        await new GitClient(processes, harness.Output, localVariables: harness.LocalVariables)
+            .IndexExactlyAsync(temp.Path, ["README.md"], cancellationToken);
+
+        var indexed = processes.Started.Where(request => request.Environment.TryGetValue("GIT_INDEX_FILE", out var index) && index is not null).ToList();
+        Assert.NotEmpty(indexed);
+        Assert.All(indexed, request => Assert.Null(request.Environment["GIT_COMMON_DIR"]));
     }
 
     [Fact]
@@ -1025,7 +1079,7 @@ public sealed class GitClientProtocolTests
 
         var entries = await git.GetStatusAsync("/repo", TestContext.Current.CancellationToken);
 
-        Assert.Equal(["R  new.txt", " R moved.txt", "C  copy.txt", "UU f.txt", "?? untracked.txt"], entries);
+        Assert.Equal(["R  new.txt", " R moved.txt", "C  copy.txt", "UU f.txt", "?? untracked.txt"], entries.Select(entry => entry.Line));
     }
 
     [Fact]
@@ -1104,8 +1158,19 @@ public sealed class GitClientProtocolTests
         runner.RunAsync(Arg.Do<ProcessRequest>(requests.Add), Arg.Any<CancellationToken>()).Returns(result);
         runner.FindExecutable("git").Returns("git");
 
-        return (new GitClient(runner, Substitute.For<IHarnessOutput>()), requests);
+        return (new GitClient(runner, Substitute.For<IHarnessOutput>(), localVariables: GitLocalVariables.Fixed(LocalNames)), requests);
     }
+
+    /// <summary>
+    /// The names git gives, handed to a client whose runner answers every request alike: asked through it,
+    /// the question would be answered as if it were the command under test.
+    /// </summary>
+    private static readonly string[] LocalNames =
+    [
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY",
+        "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS",
+        "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+    ];
 
     private static ProcessResult Exited(int exitCode, string standardOutput = "", string stderr = "", bool timedOut = false)
         => new(exitCode, standardOutput, stderr, TimeSpan.Zero, timedOut);

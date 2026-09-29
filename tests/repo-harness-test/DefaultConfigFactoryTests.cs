@@ -15,6 +15,18 @@ public sealed class DefaultConfigFactoryTests
 
     private const string Processor = "x86_64";
 
+    /// <summary>
+    /// A configuration init writes puts worktrees at the top of the tree, beside the orchestrators directory, whatever
+    /// was detected; one that names no root keeps the default, so worktrees made before stay where they are.
+    /// </summary>
+    [Fact]
+    public void TheSeededConfiguration_PutsWorktreesAtTheTopOfTheTree()
+    {
+        Assert.Equal(".worktrees", Create(new DetectedProject("cmake", ".", "CMakeLists.txt")).Worktrees.Root);
+        Assert.Equal(".worktrees", DefaultConfigFactory.Create([], Os, Processor).Worktrees.Root);
+        Assert.Equal(".harness-config/worktrees", new WorktreeSettings().Root);
+    }
+
     [Fact]
     public void ACmakeProject_GetsToolchains_ASanitizer_AndLegsForBothConfigurations()
     {

@@ -32,20 +32,18 @@ public sealed class InitService(
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Two shapes, for two kinds of directory.
+    /// One shape for every directory the harness keeps in git while ignoring what is made in it: its
+    /// <em>contents</em> are excluded and a placeholder is kept, which is the only way to do both, as git
+    /// cannot re-include a file whose parent directory is itself excluded. The four slots under the
+    /// harness's directory — <c>sshItems</c>, <c>wslDistros</c>, <c>runner/.env</c> and
+    /// <c>runner/.secrets</c> — are small directories a person fills by hand, and keeping each one in the
+    /// repository tells that person where the file goes. The two at the root of the tree — the worktrees
+    /// root and the directory orchestrators keep what they hold in — are kept so a clone arrives with both
+    /// in place, and the orchestrator commands make agents' worktrees and records in them.
     /// </para>
     /// <para>
-    /// The four slots — <c>sshItems</c>, <c>wslDistros</c>, <c>runner/.env</c> and
-    /// <c>runner/.secrets</c> — are small directories a person fills by hand, and keeping each one
-    /// in the repository is what tells that person where the file goes. So their <em>contents</em>
-    /// are excluded and a placeholder is kept, which is the only way to do both: git cannot
-    /// re-include a file whose parent directory is itself excluded.
-    /// </para>
-    /// <para>
-    /// The worktrees root is excluded whole, with no placeholder, because it is a different kind of
-    /// directory: it holds entire working trees, nobody fills it by hand, and the worktree commands
-    /// create it themselves the first time they need it. Excluding only its contents has a cost the
-    /// slots can afford and it cannot. Measured, in a throwaway repository:
+    /// The worktrees root was excluded whole, with no placeholder, and the costs of this shape are
+    /// accepted with it, as measured in a throwaway repository:
     /// </para>
     /// <code>
     /// query                          /wt/          /wt           /wt/* + !/wt/.gitkeep
@@ -56,23 +54,16 @@ public sealed class InitService(
     /// git status 'wt'     a link     UNTRACKED     IGNORED       UNTRACKED
     /// </code>
     /// <para>
-    /// Excluding the contents makes the directory's own answer depend on a trailing slash, and it
-    /// fails toward not ignored. Worse, a directory holding any tracked file never reads as ignored
-    /// under either spelling, so a committed placeholder turns even the careful query wrong. For a
-    /// slot holding an address and a key that answer costs nothing; for a root holding checkouts it
-    /// is the difference between a clean sync and shipping every worktree to a remote host, asked
-    /// for in the most natural spelling and answered wrongly without a word. It also shows the
-    /// placeholder as untracked until it is committed, which is exactly what sync refuses on.
+    /// A directory holding a tracked file never reads as ignored itself, under either spelling, so a tool
+    /// asking git whether the root is ignored is told it is not, while everything made in it is. Sync does
+    /// not ask: it withholds the configured root by name, whatever git answers, and its guard against a
+    /// withheld path that stopped being ignored takes the placeholder as the harness's own. And the root
+    /// can no longer be a link to another disk: the link would read as an untracked entry, and git could
+    /// not keep the placeholder behind it; init names one it finds, and writes nothing through it.
     /// </para>
     /// <para>
-    /// And it is excluded by its name alone, with no trailing slash, as the runs directory is: a rule
-    /// ending in <c>/</c> matches only a directory, so a root or a runs directory kept on another disk
-    /// through a link - which the worktree commands follow - would be listed, and committed, as that
-    /// link. By name, it is ignored whatever it is and however it is asked about.
-    /// </para>
-    /// <para>
-    /// The root is taken from the configuration, because a configured root that nothing ignores
-    /// puts whole checkouts into <c>git status</c>.
+    /// The root is taken from the configuration, because a configured root that nothing ignores puts whole
+    /// checkouts into <c>git status</c>.
     /// </para>
     /// </remarks>
     internal static IReadOnlyList<ManagedIgnoreRule> BuildIgnoreRules(WorktreeSettings worktrees)
@@ -80,7 +71,6 @@ public sealed class InitService(
         var root = HarnessLayout.DirectoryName;
         var keep = HarnessLayout.GitKeepFileName;
         var runner = HarnessLayout.RunnerDirectoryRelative;
-        var worktreesRoot = worktrees.Root.Replace('\\', '/').Trim('/');
         var any = ManagedIgnoreRule.AnyName;
         var folder = ManagedIgnoreRule.AnyDirectoryName;
 
@@ -92,8 +82,9 @@ public sealed class InitService(
             // link to where they are kept is ignored as surely as the directory: see the remarks above.
             new($"/{root}/{HarnessLayout.RunsDirectoryName}", [$"{root}/{HarnessLayout.RunsDirectoryName}/{any}"], Ignores: true),
 
-            // The directory itself, never only its contents, and by name: see the remarks above.
-            new($"/{worktreesRoot}", [$"{worktreesRoot}/{any}"], Ignores: true),
+            // Where worktrees are made and where orchestrators keep what they hold: their contents ignored, and a
+            // placeholder kept in each (see the remarks above).
+            .. HarnessLayout.RootSlots(worktrees.Root).SelectMany(slot => Slot(slot, keep)),
 
             // One directory per host, each holding an address, a user and a key. Nothing under
             // either may ever be tracked.
@@ -144,7 +135,11 @@ public sealed class InitService(
     /// how it is named - a re-include of the actions directory after a rule ignoring <c>bin/</c> or
     /// <c>*.sh</c>, as an action's helper may be - which no name made up for any action's file shows.
     /// </param>
-    internal static IReadOnlyList<string> KeptInGit(IEnumerable<AnchorRegistry> registries, IEnumerable<string> actionFiles)
+    /// <param name="worktrees">The worktree settings, whose root holds a placeholder; the defaults where none are given.</param>
+    internal static IReadOnlyList<string> KeptInGit(
+        IEnumerable<AnchorRegistry> registries,
+        IEnumerable<string> actionFiles,
+        WorktreeSettings? worktrees = null)
     {
         var root = HarnessLayout.DirectoryName;
 
@@ -152,6 +147,7 @@ public sealed class InitService(
         [
             $"{root}/{HarnessLayout.ConfigFileName}",
             .. HarnessLayout.PlaceholderDirectories.Select(directory => $"{root}/{directory.Replace('\\', '/')}/{HarnessLayout.GitKeepFileName}"),
+            .. HarnessLayout.RootSlots((worktrees ?? new WorktreeSettings()).Root).Select(slot => $"{slot}/{HarnessLayout.GitKeepFileName}"),
             $"{HarnessLayout.RunnerActionsDirectoryRelative}/{ManagedIgnoreRule.AnyDirectoryName}/{ManagedIgnoreRule.AnyName}",
             .. actionFiles,
             .. registries.Where(registry => !registry.IsIgnored).Select(registry => registry.RelativePath.Replace('\\', '/')),
@@ -236,14 +232,28 @@ public sealed class InitService(
         // the ignore rules are written, because the rules depend on the configured worktrees root.
         var config = _configStore.Load(layout.ConfigFile);
 
-        // Each carries a placeholder, because git tracks no empty directory: without one a fresh
+        // Each holds a placeholder, because git tracks no empty directory: without one a fresh
         // clone of this branch would arrive without the directory at all. Whether the rest of each
-        // is ignored is the block's to say, below. No worktrees root here: the worktree commands
-        // create it the first time they need it, and a placeholder in it is what would make it read
-        // as not ignored (see BuildIgnoreRules).
+        // is ignored is the block's to say, below.
         foreach (var directory in HarnessLayout.PlaceholderDirectories)
         {
             EnsurePlaceholderDirectory(root, Path.Combine(layout.HarnessDirectory, directory), actions);
+        }
+
+        // The worktrees root and the orchestrators directory too, at the top of the tree. One kept on another disk
+        // through a link is named and left: git keeps nothing behind a link, and a placeholder written through one
+        // would be written to that disk, where no clone would find it.
+        foreach (var slot in HarnessLayout.RootSlots(config.Worktrees.Root))
+        {
+            var directory = Path.Combine(root, slot);
+
+            if (_fileSystem.IsLink(directory))
+            {
+                actions.Add($"note    '{slot}' is a link, and git keeps nothing behind one: no placeholder was written through it");
+                continue;
+            }
+
+            EnsurePlaceholderDirectory(root, directory, actions);
         }
 
         var gitIgnorePath = Path.Combine(root, ".gitignore");
@@ -259,7 +269,7 @@ public sealed class InitService(
             .LocateAsync(new HarnessContext(layout, config), cancellationToken)
             .ConfigureAwait(false);
 
-        await ReportConflictsAsync(root, gitIgnorePath, ignoreRules, registries.All, actions, cancellationToken)
+        await ReportConflictsAsync(root, gitIgnorePath, ignoreRules, registries.All, config.Worktrees, actions, cancellationToken)
             .ConfigureAwait(false);
 
         foreach (var registry in registries.All)
@@ -366,6 +376,7 @@ public sealed class InitService(
         string gitIgnorePath,
         IReadOnlyList<ManagedIgnoreRule> rules,
         IReadOnlyList<AnchorRegistry> registries,
+        WorktreeSettings worktrees,
         List<string> actions,
         CancellationToken cancellationToken)
     {
@@ -373,7 +384,7 @@ public sealed class InitService(
 
         try
         {
-            var kept = KeptInGit(registries, await ActionFilesAsync(root, cancellationToken).ConfigureAwait(false));
+            var kept = KeptInGit(registries, await ActionFilesAsync(root, cancellationToken).ConfigureAwait(false), worktrees);
 
             findings = await _managedIgnoreCheck
                 .FindAsync(root, _fileSystem.ReadAllText(gitIgnorePath), rules, kept, cancellationToken)

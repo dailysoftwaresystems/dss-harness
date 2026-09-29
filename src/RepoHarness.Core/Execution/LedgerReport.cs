@@ -1,7 +1,5 @@
 using System.Globalization;
-using System.Text.Encodings.Web;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
@@ -104,13 +102,7 @@ public sealed class LedgerReport
     /// <summary>The table's column headings, in order.</summary>
     public static IReadOnlyList<string> Headings { get; } = ["LEG", "VERDICT", "DURATION", "DETAIL"];
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
     /// <summary>Tells each text as it was written: a document read on the machine that wrote it.</summary>
     private static readonly Func<string, string> AsWritten = text => text;

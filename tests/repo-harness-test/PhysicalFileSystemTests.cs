@@ -20,6 +20,9 @@ public sealed class PhysicalFileSystemTests
     /// <summary>ERROR_SHARING_VIOLATION, which Windows answers an entry another program holds with.</summary>
     private const int SharingViolation = 32;
 
+    /// <summary>DELETE, which a look opens an entry with, as a deletion does.</summary>
+    private const uint DeleteAccess = 0x00010000;
+
     /// <summary>
     /// A directory's size is what its files hold, below it at any depth, walking no directory link:
     /// what a link points at is not this directory's to free. A directory that is not there holds nothing.
@@ -36,16 +39,27 @@ public sealed class PhysicalFileSystemTests
         Assert.Equal(1024, Create().DirectorySize(tree));
         Assert.Equal(0, Create().DirectorySize(temp.Combine("absent")));
 
-        try
-        {
-            Directory.CreateSymbolicLink(Path.Combine(tree, "out"), temp.Combine("outside"));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(Path.Combine(tree, "out"), temp.Combine("outside")));
 
         Assert.Equal(1024, Create().DirectorySize(tree));
+    }
+
+    /// <summary>A file read whole is read while another program holds it open for writing, as a stream read of it is: a log being appended to among them.</summary>
+    [Fact]
+    public async Task ReadAllBytes_ReadsAFileAnotherProgramHoldsOpenForWriting()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("growing.log");
+        var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+
+        using (var writer = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+        {
+            writer.Write("line one\n"u8);
+            writer.Flush();
+
+            Assert.Equal("line one\n"u8.ToArray(), fileSystem.ReadAllBytes(path));
+            Assert.Equal("line one\n"u8.ToArray(), await fileSystem.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+        }
     }
 
     /// <summary>
@@ -208,20 +222,20 @@ public sealed class PhysicalFileSystemTests
 
         foreach (var current in new[] { tree, directory })
         {
-            using (Waiting.Start(Ping, current))
+            using (Waiting.In(current))
             {
-                PathAssert.Same(current, Assert.Single(HeldUntil(tree, found => found > 0)).Path);
+                PathAssert.Same(current, Assert.Single(Create().FindHeld(tree, TestContext.Current.CancellationToken)).Path);
             }
 
-            Assert.Empty(HeldUntil(tree, found => found == 0));
+            Assert.Empty(HeldOnceLetGo(tree));
         }
 
-        using (Waiting.Start(program, temp.Path))
+        using (Waiting.Running(program, temp.Path))
         {
-            PathAssert.Same(program, Assert.Single(HeldUntil(tree, found => found > 0)).Path);
+            PathAssert.Same(program, Assert.Single(Create().FindHeld(tree, TestContext.Current.CancellationToken)).Path);
         }
 
-        Assert.Empty(HeldUntil(tree, found => found == 0));
+        Assert.Empty(HeldOnceLetGo(tree));
     }
 
     /// <summary>
@@ -238,14 +252,43 @@ public sealed class PhysicalFileSystemTests
         var outside = temp.Combine("outside");
         var held = temp.WriteFile(Path.Combine("outside", "held.txt"), "x");
         Directory.CreateDirectory(tree);
-        Junction(Path.Combine(tree, "out"), outside);
+        TestLinks.Junction(Path.Combine(tree, "out"), outside);
 
-        using (Waiting.Start(Ping, outside))
+        using (Waiting.In(outside))
         using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            // Held where it leads, as the process there has set itself up, and nothing of it through the link.
-            Assert.Equal(2, HeldUntil(outside, found => found == 2).Count);
+            // Held where it leads, and nothing of it through the link.
+            Assert.Equal(2, Create().FindHeld(outside, TestContext.Current.CancellationToken).Count);
             Assert.Empty(Create().FindHeld(tree, TestContext.Current.CancellationToken));
+        }
+    }
+
+    /// <summary>
+    /// On Windows, a program starting in a directory while the directory is looked at is refused it as its own, and
+    /// runs holding nothing there, so no later look finds it.
+    /// </summary>
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void FindHeld_FindsNothingOfAProgramStartedInADirectoryWhileItWasLookedAt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete what another program holds.");
+
+        using var temp = new TempDirectory();
+        var directory = temp.Combine("tree");
+        Directory.CreateDirectory(directory);
+
+        Waiting started;
+
+        // Opened as a look opens it, and let go once the program has set itself up.
+        using (var look = Win32Files.Open(directory, DeleteAccess, Win32Files.BackupSemantics))
+        {
+            Assert.False(look.IsInvalid);
+            started = Waiting.In(directory);
+        }
+
+        using (started)
+        {
+            Assert.Empty(Create().FindHeld(directory, TestContext.Current.CancellationToken));
         }
     }
 
@@ -271,11 +314,17 @@ public sealed class PhysicalFileSystemTests
 
     /// <summary>
     /// A path is written as Windows reads it past 260 characters: a drive path and a UNC path each with the prefix it
-    /// takes, and a path that already names a device left as it is.
+    /// takes, and a path that already names a device left as it is. The prefix turns off Windows' own tidying of a
+    /// path, so a '.' or '..' part is resolved, and a forward slash made a backslash, first - and a name ending in a dot,
+    /// which only the prefix reaches, is kept.
     /// </summary>
     [Theory]
     [SupportedOSPlatform("windows")]
     [InlineData(@"C:\repo\.worktrees\a", @"\\?\C:\repo\.worktrees\a")]
+    [InlineData(@"C:\repo\tree\..\copy-1\data", @"\\?\C:\repo\copy-1\data")]
+    [InlineData(@"C:/repo/./tree/", @"\\?\C:\repo\tree")]
+    [InlineData(@"C:\repo\name.", @"\\?\C:\repo\name.")]
+    [InlineData(@"\\server\share\repo\..\other", @"\\?\UNC\server\share\other")]
     [InlineData(@"\\server\share\repo", @"\\?\UNC\server\share\repo")]
     [InlineData(@"\\?\C:\repo", @"\\?\C:\repo")]
     [InlineData(@"\\.\C:\repo", @"\\.\C:\repo")]
@@ -283,7 +332,7 @@ public sealed class PhysicalFileSystemTests
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows reads a path this way.");
 
-        Assert.Equal(expected, WindowsHolds.Extended(path));
+        Assert.Equal(expected, Win32Files.Extended(path));
     }
 
     /// <summary>On Windows, an interruption stops the looking between one entry and the next, rather than after the walk.</summary>
@@ -296,6 +345,129 @@ public sealed class PhysicalFileSystemTests
         temp.WriteFile(Path.Combine("tree", "file.txt"), "x");
 
         Assert.ThrowsAny<OperationCanceledException>(() => Create().FindHeld(temp.Combine("tree"), new CancellationToken(canceled: true)));
+    }
+
+    /// <summary>
+    /// On Windows, every junction under a tree is removed as the link it is - one leading out of the tree and one
+    /// leading back into it - and nothing either leads to; a symbolic link, which git removes itself, is left.
+    /// </summary>
+    [Fact]
+    public void RemoveJunctions_RemovesEachJunctionAsALink_NeverWhatItLeadsTo()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has directory junctions.");
+
+        using var temp = new TempDirectory();
+        var tree = temp.Combine("tree");
+        var outside = temp.WriteFile(Path.Combine("outside", "canary.txt"), "kept");
+        var inside = temp.WriteFile(Path.Combine("tree", "real", "inner.txt"), "kept too");
+        Directory.CreateDirectory(Path.Combine(tree, "build"));
+        TestLinks.Junction(Path.Combine(tree, "build", "out"), temp.Combine("outside"));
+        TestLinks.Junction(Path.Combine(tree, "back"), Path.Combine(tree, "real"));
+        var symbolic = TestLinks.Try(() => Directory.CreateSymbolicLink(Path.Combine(tree, "linked"), temp.Combine("outside")));
+
+        var removed = Create().RemoveJunctions(tree);
+
+        Assert.Equal(
+            [Path.Combine(tree, "back"), Path.Combine(tree, "build", "out")],
+            removed.Order(StringComparer.OrdinalIgnoreCase));
+        Assert.False(Directory.Exists(Path.Combine(tree, "back")));
+        Assert.False(Directory.Exists(Path.Combine(tree, "build", "out")));
+        Assert.True(File.Exists(outside));
+        Assert.True(File.Exists(inside));
+        Assert.Equal(symbolic, Directory.Exists(Path.Combine(tree, "linked")));
+    }
+
+    /// <summary>
+    /// A tree named through a '..' part - a sibling of another tree, named from inside it - has its junctions removed as
+    /// any tree's are: the name Windows is handed is resolved first, never refused as one that is not a name.
+    /// </summary>
+    [Fact]
+    public void RemoveJunctions_OnATreeNamedThroughDotDot_RemovesItsJunctions()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has directory junctions.");
+
+        using var temp = new TempDirectory();
+        temp.WriteFile(Path.Combine("outside", "canary.txt"), "kept");
+        Directory.CreateDirectory(temp.Combine("tree"));
+        Directory.CreateDirectory(temp.Combine("sibling"));
+        TestLinks.Junction(temp.Combine("sibling", "data"), temp.Combine("outside"));
+
+        var named = Path.Combine(temp.Path, "tree", "..", "sibling");
+        var removed = Create().RemoveJunctions(named);
+
+        Assert.Single(removed);
+        Assert.False(Directory.Exists(temp.Combine("sibling", "data")));
+        Assert.True(File.Exists(temp.Combine("outside", "canary.txt")));
+
+        Create().DeleteDirectory(named);
+        Assert.False(Directory.Exists(temp.Combine("sibling")));
+    }
+
+    /// <summary>
+    /// A tree holding a junction is deleted whole and nothing the junction leads to goes with it: the runtime's own
+    /// recursive delete removes a junction and then reports it refused, leaving every directory above it.
+    /// </summary>
+    [Fact]
+    public void DeleteDirectory_DeletesATreeHoldingAJunction_AndNothingItLeadsTo()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has directory junctions.");
+
+        using var temp = new TempDirectory();
+        var tree = temp.Combine("tree");
+        var outside = temp.WriteFile(Path.Combine("outside", "canary.txt"), "kept");
+        Directory.CreateDirectory(Path.Combine(tree, "a", "b"));
+        TestLinks.Junction(Path.Combine(tree, "a", "b", "out"), temp.Combine("outside"));
+
+        Create().DeleteDirectory(tree);
+
+        Assert.False(Directory.Exists(tree));
+        Assert.True(File.Exists(outside));
+    }
+
+    /// <summary>A tree that is itself a junction is not walked, so nothing behind it is looked at or removed.</summary>
+    [Fact]
+    public void RemoveJunctions_OnATreeThatIsItselfAJunction_TouchesNothingBehindIt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows has directory junctions.");
+
+        using var temp = new TempDirectory();
+        var behind = temp.Combine("behind");
+        Directory.CreateDirectory(Path.Combine(behind, "deeper"));
+        TestLinks.Junction(Path.Combine(behind, "deeper", "inner"), temp.Combine("behind"));
+        TestLinks.Junction(temp.Combine("tree"), behind);
+
+        Assert.Empty(Create().RemoveJunctions(temp.Combine("tree")));
+        Assert.True(Directory.Exists(Path.Combine(behind, "deeper", "inner")));
+    }
+
+    /// <summary>A volume mounted on a directory has a junction's tag, and is told apart by the volume its target names.</summary>
+    [Theory]
+    [SupportedOSPlatform("windows")]
+    [InlineData(@"\\?\Volume{0c1d3a5e-0000-0000-0000-100000000000}\", true)]
+    [InlineData(@"\??\Volume{0c1d3a5e-0000-0000-0000-100000000000}\", true)]
+    [InlineData(@"Volume{0c1d3a5e-0000-0000-0000-100000000000}\", true)]
+    [InlineData(@"C:\Users\someone\Volume{x}", false)]
+    [InlineData(@"C:\target", false)]
+    [InlineData(null, false)]
+    public void NamesAVolume_TellsAMountedVolumeFromAJunction(string? target, bool volume)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows mounts a volume on a directory.");
+
+        Assert.Equal(volume, WindowsJunctions.NamesAVolume(target));
+    }
+
+    /// <summary>Linux and macOS have no junctions, and nothing is removed there.</summary>
+    [Fact]
+    public void RemoveJunctions_RemovesNothing_OnLinuxAndMacOs()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows has directory junctions; see those tests.");
+
+        using var temp = new TempDirectory();
+        temp.WriteFile(Path.Combine("tree", "a.txt"), "x");
+        TestLinks.Try(() => Directory.CreateSymbolicLink(temp.Combine(Path.Combine("tree", "linked")), temp.Combine("tree")));
+
+        Assert.Empty(Create().RemoveJunctions(temp.Combine("tree")));
+        Assert.True(File.Exists(temp.Combine(Path.Combine("tree", "a.txt"))));
     }
 
     /// <summary>On Linux and macOS nothing an open file or a current directory does stops a deletion, so nothing is held.</summary>
@@ -323,14 +495,7 @@ public sealed class PhysicalFileSystemTests
         using var temp = new TempDirectory();
         temp.WriteFile(Path.Combine("target", "sub", "file.txt"), "x");
 
-        try
-        {
-            Directory.CreateSymbolicLink(temp.Combine("link"), temp.Combine("target"));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("link"), temp.Combine("target")));
 
         Assert.True(Create().IsLink(temp.Combine("link")));
         Assert.False(Create().IsLink(temp.Combine("target")));
@@ -425,15 +590,11 @@ public sealed class PhysicalFileSystemTests
         var own = temp.WriteFile(Path.Combine("tree", "sub", "own.txt"), "x");
         var tree = temp.Combine("tree");
 
-        try
+        TestLinks.OrSkip(() =>
         {
             Directory.CreateSymbolicLink(Path.Combine(tree, "out"), temp.Combine("outside"));
             Directory.CreateSymbolicLink(Path.Combine(tree, "sub", "loop"), tree);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        });
 
         var files = Create().EnumerateFiles(tree, recursive: true).ToList();
         var links = Create().EnumerateDirectoryLinks(tree).Order(StringComparer.Ordinal).ToList();
@@ -459,15 +620,11 @@ public sealed class PhysicalFileSystemTests
         File.SetLastWriteTimeUtc(own, ownTime);
         File.SetLastWriteTimeUtc(target, DateTime.UtcNow.AddDays(1));
 
-        try
+        TestLinks.OrSkip(() =>
         {
             Directory.CreateSymbolicLink(Path.Combine(tree, "out"), temp.Combine("outside"));
             File.CreateSymbolicLink(Path.Combine(tree, "linked.txt"), target);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        });
 
         var written = Create().EnumerateWrittenFiles(tree).OrderBy(file => file.Path, StringComparer.Ordinal).ToList();
 
@@ -579,14 +736,7 @@ public sealed class PhysicalFileSystemTests
         var locked = temp.WriteFile(Path.Combine("tree", "locked.txt"), "x");
         File.SetAttributes(locked, File.GetAttributes(locked) | FileAttributes.ReadOnly);
 
-        try
-        {
-            Directory.CreateSymbolicLink(Path.Combine(tree, "link"), temp.Combine("outside"));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(Path.Combine(tree, "link"), temp.Combine("outside")));
 
         Create().DeleteDirectory(tree);
 
@@ -670,34 +820,16 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
-    /// What is held under <paramref name="tree"/>, looked at until <paramref name="until"/> accepts how many: what a
-    /// process sets up as it starts, and lets go of as it ends, is waited for rather than guessed at.
+    /// What is held under <paramref name="tree"/> once what held it has ended, looked at until nothing is: what a
+    /// process lets go of as it ends is waited for rather than guessed at.
     /// </summary>
-    private static IReadOnlyList<HeldEntry> HeldUntil(string tree, Func<int, bool> until)
+    private static IReadOnlyList<HeldEntry> HeldOnceLetGo(string tree)
     {
         IReadOnlyList<HeldEntry> held = [];
 
-        SpinWait.SpinUntil(() => until((held = Create().FindHeld(tree, TestContext.Current.CancellationToken)).Count), TimeSpan.FromSeconds(10));
+        SpinWait.SpinUntil(() => (held = Create().FindHeld(tree, TestContext.Current.CancellationToken)).Count == 0, TimeSpan.FromSeconds(10));
 
         return held;
-    }
-
-    /// <summary>Makes <paramref name="link"/> a junction leading to <paramref name="target"/>, which needs no privilege.</summary>
-    private static void Junction(string link, string target)
-    {
-        using var mklink = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"))
-        {
-            ArgumentList = { "/c", "mklink", "/J", link, target },
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        })!;
-
-        var error = mklink.StandardError.ReadToEnd();
-        mklink.WaitForExit();
-
-        Assert.True(mklink.ExitCode == 0, $"mklink /J failed: {error}");
     }
 
     /// <summary>
@@ -710,12 +842,40 @@ public sealed class PhysicalFileSystemTests
 
         private Waiting(Process process) => _process = process;
 
-        /// <summary>Starts <paramref name="program"/> - a copy of ping - waiting a minute in <paramref name="workingDirectory"/>.</summary>
-        public static Waiting Start(string program, string workingDirectory)
+        /// <summary>
+        /// Starts ping waiting a minute in <paramref name="directory"/>, and returns once it has written its first
+        /// line, by which it has opened that directory as its own.
+        /// </summary>
+        /// <remarks>
+        /// Nothing may be looked at before: a program opening its directory while it is looked at holds nothing there
+        /// (<see cref="FindHeld_FindsNothingOfAProgramStartedInADirectoryWhileItWasLookedAt"/>), so looking again and
+        /// again until it held its directory sometimes waited for what would never come.
+        /// </remarks>
+        public static Waiting In(string directory)
+        {
+            var waiting = Start(Ping, directory);
+
+            if (waiting._process.StandardOutput.ReadLine() is null)
+            {
+                waiting.Dispose();
+                throw new InvalidOperationException($"'{Ping}' ended before it wrote anything.");
+            }
+
+            return waiting;
+        }
+
+        /// <summary>
+        /// Starts <paramref name="program"/>, a copy of ping, waiting a minute in <paramref name="directory"/>: the
+        /// file it runs from is held from the moment it is started. A copy writes nothing to wait for - the words it
+        /// prints are kept beside the original.
+        /// </summary>
+        public static Waiting Running(string program, string directory) => Start(program, directory);
+
+        private static Waiting Start(string program, string directory)
             => new(Process.Start(new ProcessStartInfo(program)
             {
                 ArgumentList = { "-n", "60", "127.0.0.1" },
-                WorkingDirectory = workingDirectory,
+                WorkingDirectory = directory,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,

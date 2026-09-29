@@ -240,7 +240,11 @@ public sealed class AnchorCellFileCliTests
     /// <summary>A disk on which every file is held open by another program.</summary>
     private sealed class HeldByAnother(IFileSystem inner) : PassThroughFileSystem(inner)
     {
-        public override Stream OpenRead(string path)
-            => throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.");
+        public override Stream OpenRead(string path) => throw Held(path);
+
+        public override byte[] ReadAllBytes(string path) => throw Held(path);
+
+        private static IOException Held(string path)
+            => new($"The process cannot access the file '{path}' because it is being used by another process.");
     }
 }

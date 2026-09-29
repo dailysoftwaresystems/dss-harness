@@ -77,6 +77,20 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
 
+    /// <summary>
+    /// Whether <paramref name="directory"/> holds a <c>.git</c> of its own - a worktree's file or a repository's directory -
+    /// rather than being answered for by whatever repository encloses it.
+    /// </summary>
+    /// <param name="fileSystem">Looks.</param>
+    /// <param name="directory">The directory.</param>
+    public static bool HoldsOwnGit(IFileSystem fileSystem, string directory)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        var git = Path.Combine(directory, ".git");
+        return fileSystem.FileExists(git) || fileSystem.DirectoryExists(git);
+    }
+
     /// <summary>What git makes of <paramref name="path"/>, compared with the main checkout's repository.</summary>
     public async Task<WorktreeIdentity> IdentifyAsync(
         string mainCheckoutRoot,
@@ -119,8 +133,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         var status = await _gitClient.GetStatusAsync(path, cancellationToken).ConfigureAwait(false);
         var index = await _gitClient.ListIndexAsync(path, cancellationToken).ConfigureAwait(false);
 
-        // Each status entry is two status characters and a space, then the path.
-        List<string> changes = [.. status.Select(entry => entry[3..])];
+        List<string> changes = [.. status.Select(entry => entry.Path.Quoted)];
         changes.AddRange(await FindHiddenEditsAsync(path, index, cancellationToken).ConfigureAwait(false));
 
         var head = await _gitClient.ResolveCommitAsync(path, "HEAD", cancellationToken).ConfigureAwait(false);
@@ -153,6 +166,89 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             holdsSubmodules,
             movedFrom);
     }
+
+    /// <summary>
+    /// git's record of a worktree at <paramref name="path"/>, or <see langword="null"/> when git records none there:
+    /// found in git's own list, which names each worktree by the path it resolved, so the path is resolved the same
+    /// way first.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose list is read.</param>
+    /// <param name="path">Where the worktree is, or was.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">git's list could not be read (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    public async Task<GitWorktree?> FindRecordAsync(string mainCheckoutRoot, string path, CancellationToken cancellationToken)
+    {
+        var resolved = ResolveLinks(path);
+        var worktrees = await _gitClient.ListWorktreesAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+
+        return RecordAt(worktrees, resolved);
+    }
+
+    /// <summary>
+    /// The addresses of the worktrees below <paramref name="path"/>, which is not one itself: each git records strictly
+    /// inside it, and - in the directory named for an orchestrator - each directory directly in it holding a .git entry of
+    /// its own, whether git still records it or not, since an orchestrator's directory holds its agents' worktrees and
+    /// nothing else. Anywhere else such a directory is a worktree's own submodule or nested repository, not a worktree.
+    /// </summary>
+    /// <param name="mainCheckoutRoot">The main checkout, whose list is read.</param>
+    /// <param name="worktreesDirectory">The worktrees root, which the addresses are relative to.</param>
+    /// <param name="path">A directory under the root.</param>
+    /// <param name="orchestrators">Whether <paramref name="path"/> is the directory named for an orchestrator.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">
+    /// git could not list its worktrees, or the directory could not be looked in (<see cref="HarnessExit.CommandFailed"/>):
+    /// never read as no worktree below it.
+    /// </exception>
+    public async Task<IReadOnlyList<string>> FindWorktreesBelowAsync(
+        string mainCheckoutRoot,
+        string worktreesDirectory,
+        string path,
+        bool orchestrators,
+        CancellationToken cancellationToken)
+    {
+        var found = new SortedSet<string>(StringComparer.Ordinal);
+        var resolved = ResolveLinks(path);
+
+        if (orchestrators)
+        {
+            IEnumerable<string> children;
+
+            try
+            {
+                children = [.. _fileSystem.EnumerateDirectories(path)];
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new HarnessException(HarnessExit.CommandFailed, $"'{path}' could not be looked in: {ex.Message.TrimEnd('.')}");
+            }
+
+            foreach (var child in children.Where(child => HoldsOwnGit(_fileSystem, child)))
+            {
+                found.Add(AddressOf(worktreesDirectory, child));
+            }
+        }
+
+        // A list git could not give is not an empty one: raised, never read as no worktree below.
+        foreach (var worktree in await _gitClient.ListWorktreesAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false))
+        {
+            if (!worktree.IsMain && PathContainment.IsStrictlyInside(resolved, worktree.Path, _platform.PathComparison))
+            {
+                found.Add(AddressOf(ResolveLinks(worktreesDirectory), worktree.Path));
+            }
+        }
+
+        return [.. found];
+
+        string AddressOf(string root, string tree)
+            => WorktreeAddress.OfTree(root, tree, _platform.PathComparison)?.Name
+                ?? Path.GetRelativePath(root, tree).Replace(Path.DirectorySeparatorChar, WorktreeAddress.Separator);
+    }
+
+    /// <summary>The worktree among <paramref name="worktrees"/> recorded at <paramref name="resolvedPath"/>, never the main one.</summary>
+    /// <param name="worktrees">git's list.</param>
+    /// <param name="resolvedPath">A path with its links resolved, as git lists one.</param>
+    public GitWorktree? RecordAt(IEnumerable<GitWorktree> worktrees, string resolvedPath)
+        => worktrees.FirstOrDefault(worktree => !worktree.IsMain && PathsEqual(worktree.Path, resolvedPath));
 
     /// <summary>
     /// Everything that stops clearing git's record of a worktree whose directory is already gone:
@@ -346,9 +442,8 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         foreach (var entry in index.Where(entry => entry.IsSubmodule && entry.Stage == 0))
         {
             var directory = Path.Combine(root, entry.Path);
-            var gitEntry = Path.Combine(directory, ".git");
 
-            if (!_fileSystem.FileExists(gitEntry) && !_fileSystem.DirectoryExists(gitEntry))
+            if (!HoldsOwnGit(_fileSystem, directory))
             {
                 continue;
             }
@@ -597,11 +692,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         }
     }
 
-    private bool PathsEqual(string left, string right)
-        => string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            _platform.PathComparison);
+    private bool PathsEqual(string left, string right) => PathContainment.AreSame(left, right, _platform.PathComparison);
 
     /// <summary>A submodule repository the worktree's deletion would delete.</summary>
     /// <param name="Shown">How the submodule is named in a refusal.</param>

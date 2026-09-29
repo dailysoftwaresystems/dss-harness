@@ -14,6 +14,17 @@ public interface IFileSystem
     bool DirectoryExists(string path);
 
     /// <summary>
+    /// What is at <paramref name="path"/> itself - a file, a directory, a link or junction, or nothing - raised where
+    /// that cannot be told. <see cref="FileExists"/> and <see cref="DirectoryExists"/> answer false for a path this process
+    /// may not look at, and a caller deciding from that what may be deleted, or skipped as empty, reads "cannot tell" as
+    /// "nothing there".
+    /// </summary>
+    /// <param name="path">The path to look at.</param>
+    /// <exception cref="IOException">What is there could not be asked.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not ask.</exception>
+    PathKind KindOf(string path);
+
+    /// <summary>
     /// <paramref name="path"/> as an absolute path with every symbolic link and junction along it
     /// followed, the form git reports paths in. The part of the path that does not exist is kept
     /// as spelled.
@@ -24,7 +35,7 @@ public interface IFileSystem
     /// <summary>Creates a directory and any missing parents. No-op when it exists.</summary>
     void CreateDirectory(string path);
 
-    /// <summary>Deletes a file. No-op when it is already absent.</summary>
+    /// <summary>Deletes a file, one git or anyone else marked read only included. No-op when it is already absent.</summary>
     void DeleteFile(string path);
 
     /// <summary>Copies a file to a new file in the temporary directory, and returns the copy's path.</summary>
@@ -37,8 +48,17 @@ public interface IFileSystem
     void CopyFile(string source, string destination, bool overwrite = false);
 
     /// <summary>
+    /// Puts the file at <paramref name="source"/> in place of <paramref name="destination"/> in one step - a rename over
+    /// whatever is there - so a reader never sees a file half written. Windows refusing for a moment, while another
+    /// process holds the destination, is tried again a few times before it is reported.
+    /// </summary>
+    /// <param name="source">A file written beside the destination, on the same volume.</param>
+    /// <param name="destination">The file it replaces, or where it goes.</param>
+    void ReplaceFile(string source, string destination);
+
+    /// <summary>
     /// Deletes a directory and everything under it, including files git has marked
-    /// read only. No-op when absent.
+    /// read only, and never anything a link or junction under it leads to. No-op when absent.
     /// </summary>
     void DeleteDirectory(string path);
 
@@ -104,6 +124,23 @@ public interface IFileSystem
     IEnumerable<string> EnumerateDirectoryLinks(string path);
 
     /// <summary>
+    /// Removes every directory junction anywhere under <paramref name="path"/>, each as the link it is, never what
+    /// it leads to: git for Windows leaves a junction when it removes the tree around it, and the runtime's
+    /// recursive delete reports one as refused. Symbolic links are left, as are directories reached only through a
+    /// link. Nothing on Linux and macOS, which have no junctions, and nothing where the directory is not there or is
+    /// itself a link.
+    /// </summary>
+    /// <param name="path">The directory to look under.</param>
+    /// <returns>The junctions removed, in the order they were.</returns>
+    /// <exception cref="JunctionRemovalException">
+    /// One could not be removed, or is a volume mounted on a directory, which is never unmounted; it names those
+    /// removed before it.
+    /// </exception>
+    /// <exception cref="IOException">A directory under it could not be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not read a directory under it.</exception>
+    IReadOnlyList<string> RemoveJunctions(string path);
+
+    /// <summary>
     /// What another program holds under <paramref name="path"/>, itself included, so that Windows would not delete
     /// it: a directory that is a process's current directory, a file or directory open without sharing its
     /// deletion, and a file a program is running from. Each entry is opened as a deletion opens it and let go at
@@ -121,6 +158,15 @@ public interface IFileSystem
 
     /// <summary>Reads a whole file as UTF-8 text.</summary>
     string ReadAllText(string path);
+
+    /// <summary>Reads a whole file's bytes, as they are.</summary>
+    /// <param name="path">The file.</param>
+    byte[] ReadAllBytes(string path);
+
+    /// <summary>Reads a whole file's bytes, as they are, stopping between one block and the next when asked.</summary>
+    /// <param name="path">The file.</param>
+    /// <param name="cancellationToken">Stops the read.</param>
+    Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Opens a file for reading its bytes. Streamed rather than read whole, because a tree sync

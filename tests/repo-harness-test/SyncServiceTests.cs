@@ -985,14 +985,7 @@ public sealed class SyncServiceTests
         {
             await File.WriteAllTextAsync(outside, "a credential\n", cancellationToken);
 
-            try
-            {
-                File.CreateSymbolicLink(Path.Combine(temp.Path, "src", "linked.c"), outside);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-            }
+            TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(temp.Path, "src", "linked.c"), outside));
 
             var result = await service.SyncAsync(
                 temp.Path, Transport(harness), copy, new SyncOptions(), cancellationToken);
@@ -2368,7 +2361,7 @@ public sealed class SyncServiceTests
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
         var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
         var mainCopy = Path.GetFullPath(Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]));
-        var name = HostCopies.NameOf(worktree);
+        var name = HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase);
         var worktreeCopy = HostCopies.ForWorktree(mainCopy, name);
         var stoppedCopy = HostCopies.ForWorktree(mainCopy + "-stopped", name);
         var dryCopy = HostCopies.ForWorktree(mainCopy + "-dry", name);
@@ -2393,7 +2386,7 @@ public sealed class SyncServiceTests
             Assert.True(Directory.Exists(stoppedCopy));
             Assert.Equal([("ssh pi", worktreeCopy), ("ssh vps", stoppedCopy)], recorded.Select(entry => (entry.Host, entry.Path)));
             Assert.All(recorded, entry => Assert.True(record.SameTree(worktree, entry.Tree), entry.Tree));
-            Assert.Empty(record.Of(context.Layout, HostCopies.NameOf(temp.Path)));
+            Assert.Empty(record.Of(context.Layout, HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), temp.Path, StringComparison.OrdinalIgnoreCase)));
         }
         finally
         {
@@ -2416,7 +2409,7 @@ public sealed class SyncServiceTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
         var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
-        var copy = HostCopies.ForWorktree(Path.GetFullPath(Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8])), HostCopies.NameOf(worktree));
+        var copy = HostCopies.ForWorktree(Path.GetFullPath(Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8])), HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase));
         var other = temp.Combine("elsewhere", Path.GetFileName(worktree));
         Directory.CreateDirectory(other);
 
@@ -2425,7 +2418,7 @@ public sealed class SyncServiceTests
             await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", worktree], cancellationToken);
             var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
             new HostCopyRecord(harness.FileSystem, harness.Platform.PathComparison)
-                .Claim(context.Layout, new HostCopyEntry(HostCopies.NameOf(worktree), "ssh pi", copy, other));
+                .Claim(context.Layout, new HostCopyEntry(HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase), "ssh pi", copy, other));
 
             var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
                 worktree, new RecordingTransport(Transport(harness), reports: HostId.Ssh("pi")), copy, new SyncOptions(), cancellationToken));

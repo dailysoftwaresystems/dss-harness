@@ -423,6 +423,30 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The layout topic says the worktrees root and the orchestrators directory are kept in git by their placeholders
+    /// with everything made in them ignored, what that costs, and that sync withholds both.
+    /// </summary>
+    [Fact]
+    public async Task LayoutTopic_SaysTheWorktreesRootAndTheOrchestratorsDirectoryAreKeptInGit()
+    {
+        var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        foreach (var said in new[]
+        {
+            ".worktrees/ contents ignored, .gitkeep tracked; the worktrees, at worktrees.root, which init writes as this",
+            ".orchestrators/ contents ignored, .gitkeep tracked; what each orchestrator and its agents keep, in the main checkout, "
+                + "and never sent to a host by sync",
+            "The worktrees root and the orchestrators directory are kept in git by their placeholders, so each reads as not ignored "
+                + "itself while everything made in it is, and neither can be a link: init names one it finds, and writes nothing "
+                + "through it. Sync withholds both by name.",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The legs topic says a toolchain names its compiler, that a build directory is held to the
     /// compiler it was configured with by the file it starts, not by its name, and where a language
     /// only a subproject enables is identified.
@@ -530,27 +554,6 @@ public sealed partial class HelpTests
         Assert.Contains($"{HarnessExit.HostUnavailable,3}  host-exec:", result.StandardOutput, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData("exit-codes")]
-    [InlineData("config")]
-    [InlineData("legs")]
-    [InlineData("space")]
-    [InlineData("worktrees")]
-    [InlineData("anchors")]
-    [InlineData("layout")]
-    [InlineData("secrets")]
-    [InlineData("tools")]
-    [InlineData("runners")]
-    [InlineData("verdicts")]
-    public async Task EveryAdvertisedTopic_Renders(string topic)
-    {
-        var result = await CliRunner.RunAsync(["help", topic], TestContext.Current.CancellationToken);
-
-        Assert.Equal(0, result.ExitCode);
-        Assert.True(result.StandardOutput.Length > 200, $"topic '{topic}' produced little output");
-        Assert.DoesNotContain("Unknown topic", result.StandardOutput, StringComparison.Ordinal);
-    }
-
     /// <summary>
     /// The runner topic says a leg's line names what its steps kept, as the path sync --pull takes.
     /// </summary>
@@ -596,6 +599,52 @@ public sealed partial class HelpTests
             "With --hosts it also asks each declared host which worktree copies it keeps beside its repositoryPath, and "
                 + "how large each is, and sets them against that record",
             $"{HarnessExit.HostUnavailable} where a host cannot be reached. --json prints the listing as one JSON document.",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The worktrees topic says where an orchestrator's agents' worktrees sit, that they are named by their address, that
+    /// a directory holding worktrees is never deleted as one, and how their copies are named apart.
+    /// </summary>
+    [Fact]
+    public async Task WorktreesTopic_SaysAgentsWorktreesAreNamedByTheirAddress()
+    {
+        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Contains(
+            "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, made by "
+            + "create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, and delete-worktree "
+            + $"takes that address. The directory named for an orchestrator is never deleted as one while worktrees are below it, --force "
+            + $"or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git cannot list its worktrees "
+            + $"({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. A plain worktree cannot take an "
+            + "orchestrator's name. An agent's copies on hosts are kept under orchestrator--agent, so two orchestrators' agents of one name "
+            + "keep theirs apart.",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The worktrees topic says that on Windows each junction is removed as a link before git runs, what stops that,
+    /// and that git worktree repair is named only while git still records the worktree.
+    /// </summary>
+    [Fact]
+    public async Task WorktreesTopic_SaysJunctionsAreRemovedAsLinks_AndWhenRepairIsNamed()
+    {
+        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        foreach (var said in new[]
+        {
+            "On Windows, each directory junction in the worktree is removed first, as a link, never what it leads to: git leaves "
+                + "every junction, and the directories above it, while reporting the worktree removed.",
+            $"One that cannot be removed stops the deletion before git runs ({HarnessExit.CommandFailed}), and a volume mounted "
+                + "on a directory is never unmounted.",
+            "A directory under the root with no .git and no record of git's - what a removal that stopped part way leaves - is "
+                + $"refused ({HarnessExit.Refused}), naming --force; git worktree repair is named only while git still records a worktree there.",
         })
         {
             Assert.Contains(said, text, StringComparison.Ordinal);
@@ -767,24 +816,60 @@ public sealed partial class HelpTests
         Assert.StartsWith(ToolPackage.Command + " ", usage, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Every topic the overview advertises renders, and none is missing from it: the overview, the topic argument and the
+    /// answer to an unknown topic all read one list of topics, which this reads back through the overview.
+    /// </summary>
     [Fact]
-    public async Task Overview_AdvertisesOnlyTopicsThatExist()
+    public async Task EveryTopicTheOverviewAdvertises_Renders()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var overview = await CliRunner.RunAsync(["help"], cancellationToken);
 
         Assert.Equal(0, overview.ExitCode);
 
-        var topics = TopicPattern().Matches(overview.StandardOutput);
-        Assert.NotEmpty(topics);
+        var topics = TopicPattern().Matches(overview.StandardOutput).Select(match => match.Groups["topic"].Value).ToList();
 
-        foreach (Match match in topics)
+        Assert.Contains("orchestrators", topics);
+        Assert.Contains("ci", topics);
+
+        foreach (var topic in topics)
         {
-            var topic = match.Groups["topic"].Value;
             var rendered = await CliRunner.RunAsync(["help", topic], cancellationToken);
 
+            Assert.Equal(0, rendered.ExitCode);
+            Assert.True(rendered.StandardOutput.Length > 200, $"topic '{topic}' produced little output");
             Assert.DoesNotContain("Unknown topic", rendered.StandardOutput, StringComparison.Ordinal);
         }
+
+        var unknown = await CliRunner.RunAsync(["help", "not-a-topic"], cancellationToken);
+        Assert.Contains($"Try: {string.Join(", ", topics)}.", unknown.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic names every orchestrator and agent command, what an orchestrator keeps where, and that
+    /// deleting an agent is never forced.
+    /// </summary>
+    [Fact]
+    public async Task OrchestratorsTopic_NamesEveryCommand_WhatIsKeptWhere_AndThatDeletingIsNeverForced()
+    {
+        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Equal(0, result.ExitCode);
+
+        foreach (var command in new[] { "create-orchestrator", "delete-orchestrator", "list-orchestrator", "create-agent", "seed-agent", "refresh-agent", "fold-agent", "delete-agent" })
+        {
+            Assert.Contains($"  {ToolPackage.Command} {command} ", result.StandardOutput, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("agents/<agent>/seed.json", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
+        Assert.Contains("never forced, and its evidence check kept, so a file written late stops it", text, StringComparison.Ordinal);
+        Assert.Contains("a file changed or new since is work, left for you", text, StringComparison.Ordinal);
+        Assert.Contains("one not found is said, and one found and not kept stops it before anything is closed", text, StringComparison.Ordinal);
+        Assert.Contains("A path this process cannot look at is never read as absent: the fold fails, nothing written.", text, StringComparison.Ordinal);
+        Assert.Contains("it removes the record last, so one that stops part way finishes when run again", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -868,7 +953,7 @@ public sealed partial class HelpTests
         }
     }
 
-    [GeneratedRegex(@"^\s{2}(?<name>\S+)(\s+<\S+>)?\s{2,}(?<description>.+)$")]
+    [GeneratedRegex(@"^\s{2}(?<name>\S+)(\s+\[?<\S+)*\s{2,}(?<description>.+)$")]
     private static partial Regex CommandLinePattern();
 
     [GeneratedRegex(ToolPackage.Command + @" help (?<topic>[a-z-]+)")]

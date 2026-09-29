@@ -19,61 +19,47 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
 
     public bool DirectoryExists(string path) => Directory.Exists(path);
 
-    public string ResolveLinks(string path)
-    {
-        // Followed as realpath follows them: after each link the walk starts again from the root,
-        // so a link within a link's target is followed too, and a cycle of links ends the walk.
-        const int MaxLinks = 40;
-        var pending = Path.GetFullPath(path);
-
-        for (var links = 0; links <= MaxLinks; links++)
-        {
-            var root = Path.GetPathRoot(pending) ?? string.Empty;
-            var segments = pending[root.Length..].Split(
-                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-                StringSplitOptions.RemoveEmptyEntries);
-            var resolved = root;
-            string? restart = null;
-
-            for (var index = 0; index < segments.Length && restart is null; index++)
-            {
-                var next = Path.Combine(resolved, segments[index]);
-                var directory = new DirectoryInfo(next);
-
-                if (directory.LinkTarget is { } target)
-                {
-                    restart = Path.Combine([Path.Combine(resolved, target), .. segments[(index + 1)..]]);
-                }
-                else if (!directory.Exists)
-                {
-                    // Nothing below a directory that does not exist can be a link.
-                    return Path.TrimEndingDirectorySeparator(Path.Combine([next, .. segments[(index + 1)..]]));
-                }
-                else
-                {
-                    resolved = next;
-                }
-            }
-
-            if (restart is null)
-            {
-                return Path.TrimEndingDirectorySeparator(resolved);
-            }
-
-            pending = Path.GetFullPath(restart);
-        }
-
-        throw new IOException($"More than {MaxLinks} links along '{path}', which may form a cycle.");
-    }
+    public string ResolveLinks(string path) => LinkPaths.Resolve(path);
 
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
     public void DeleteFile(string path)
     {
-        if (File.Exists(path))
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        try
         {
             File.Delete(path);
         }
+        catch (UnauthorizedAccessException) when ((File.GetAttributes(path) & FileAttributes.ReadOnly) != 0)
+        {
+            // Windows refuses to delete a read-only file, as git marks the ones under .git/objects; cleared only once
+            // the delete refuses, as DeleteDirectory clears them.
+            File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+            File.Delete(path);
+        }
+    }
+
+    public PathKind KindOf(string path)
+    {
+        FileAttributes attributes;
+
+        try
+        {
+            attributes = File.GetAttributes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return PathKind.None;
+        }
+
+        // A reparse point that is no link - a file a cloud or deduplication service keeps - is what it looks like.
+        return (attributes & FileAttributes.ReparsePoint) != 0 && IsLink(path) ? PathKind.Link
+            : (attributes & FileAttributes.Directory) != 0 ? PathKind.Directory
+            : PathKind.File;
     }
 
     public string CopyToTemporaryFile(string path)
@@ -104,6 +90,10 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
             return;
         }
 
+        // Each junction first, as a link: the runtime's recursive delete removes one and then reports it refused,
+        // leaving every directory above it, and only the retry below used to finish the job.
+        RemoveJunctions(path);
+
         try
         {
             Directory.Delete(path, recursive: true);
@@ -121,6 +111,8 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     }
 
     public void MoveDirectory(string source, string destination) => Directory.Move(source, destination);
+
+    public void ReplaceFile(string source, string destination) => ReplaceWith(source, destination);
 
     public bool IsLink(string path) => new FileInfo(path).LinkTarget is not null;
 
@@ -308,6 +300,41 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     public IEnumerable<string> EnumerateDirectoryLinks(string path)
         => Walk(path, recursive: true, (ref FileSystemEntry entry) => entry.IsDirectory && IsLink(ref entry), (ref FileSystemEntry entry) => entry.ToSpecifiedFullPath());
 
+    public IReadOnlyList<string> RemoveJunctions(string path)
+    {
+        // A root that is itself a link is not walked: listing it would list what it leads to.
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(path) || IsLink(path))
+        {
+            return [];
+        }
+
+        // Every junction is found before any is removed, so the walk never meets a directory it just changed.
+        var removed = new List<string>();
+
+        foreach (var link in EnumerateDirectoryLinks(path).ToList())
+        {
+            try
+            {
+                switch (WindowsJunctions.KindOf(link))
+                {
+                    case JunctionKind.Junction:
+                        WindowsJunctions.Remove(link);
+                        removed.Add(link);
+                        break;
+
+                    case JunctionKind.MountedVolume:
+                        throw new JunctionRemovalException(link, "a volume is mounted there, and it is never unmounted here", [.. removed]);
+                }
+            }
+            catch (IOException ex) when (ex is not JunctionRemovalException)
+            {
+                throw new JunctionRemovalException(link, ex.Message, [.. removed]);
+            }
+        }
+
+        return removed;
+    }
+
     public IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default)
     {
         if (!OperatingSystem.IsWindows() || !Directory.Exists(path))
@@ -381,6 +408,28 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     public IEnumerable<string> EnumerateDirectories(string path) => Directory.EnumerateDirectories(path);
 
     public string ReadAllText(string path) => File.ReadAllText(path);
+
+    public byte[] ReadAllBytes(string path)
+    {
+        using var stream = OpenRead(path);
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
+
+    public async Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
+    {
+        // Opened as every read of a tree's file is, sharing with the tools that hold one open: a sync that hashed a file
+        // through OpenRead is never refused copying it for a narrower share.
+        var stream = OpenRead(path);
+
+        await using (stream.ConfigureAwait(false))
+        {
+            using var copy = new MemoryStream();
+            await stream.CopyToAsync(copy, cancellationToken).ConfigureAwait(false);
+            return copy.ToArray();
+        }
+    }
 
     public void WriteAllTextAtomic(string path, string contents)
     {

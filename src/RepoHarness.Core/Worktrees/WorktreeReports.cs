@@ -1,8 +1,8 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
 
@@ -11,17 +11,16 @@ namespace RepoHarness.Core.Worktrees;
 /// <summary>What <c>list-worktree</c> reports: the worktrees, and the copies hosts keep of them and of those that are gone.</summary>
 public static class WorktreeReports
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-
-        // Paths hold backslashes and names any text; escaping them would make the document unreadable to a person
-        // for no benefit to a parser.
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
+    private static readonly JsonSerializerOptions JsonOptions = ReportJson.Options;
 
     /// <summary>The command that deletes a worktree, and deals with the copies left under its name.</summary>
-    private static string Delete(string name) => $"{ToolPackage.Command} {WorktreeService.DeleteCommand} {name}";
+    private static string Delete(string name) => $"{ToolPackage.Command} {WorktreeService.DeleteCommand} {Shown(name)}";
+
+    /// <summary>
+    /// The name a person types for the worktree whose copies are kept under <paramref name="name"/>: an orchestrator's
+    /// agent's as <c>orchestrator/agent</c>, never as the two-hyphen name its copies' directories bear.
+    /// </summary>
+    private static string Shown(string name) => WorktreeAddress.OfCopyName(name);
 
     /// <summary>What <c>list-worktree</c> reports.</summary>
     /// <param name="worktrees">The worktrees there are.</param>
@@ -90,7 +89,7 @@ public static class WorktreeReports
 
         foreach (var tree in copies.Elsewhere)
         {
-            yield return $"{tree.Name}, the worktree at '{tree.Tree}', outside the worktrees root";
+            yield return $"{Shown(tree.Name)}, the worktree at '{tree.Tree}', outside the worktrees root";
 
             foreach (var copy in tree.Copies)
             {
@@ -100,7 +99,7 @@ public static class WorktreeReports
 
         foreach (var tree in copies.Gone)
         {
-            yield return $"{tree.Name}, gone from '{tree.Tree}': '{Delete(tree.Name)}' deals with the copies it left";
+            yield return $"{Shown(tree.Name)}, gone from '{tree.Tree}': '{Delete(tree.Name)}' deals with the copies it left";
 
             foreach (var copy in tree.Copies)
             {
@@ -141,7 +140,7 @@ public static class WorktreeReports
     /// <summary>What a found copy is to this machine, and what deleting its name would do with it.</summary>
     private static string Standing(HostCopySeen copy) => copy.Standing switch
     {
-        CopyStanding.Listed => Noted($"worktree '{copy.Found.Name}'", copy.Found),
+        CopyStanding.Listed => Noted($"worktree '{Shown(copy.Found.Name)}'", copy.Found),
         CopyStanding.Elsewhere => Noted($"the worktree at '{copy.Tree}'", copy.Found),
         CopyStanding.Gone => $"gone from '{copy.Tree}': '{Delete(copy.Found.Name)}' {WhatDeletingDoes(copy.Found)}",
         _ => $"not recorded here, so deleting a worktree here never reaches it; {Origin(copy.Found)}",
@@ -189,7 +188,7 @@ public static class WorktreeReports
             document["undeclared"] = new JsonArray([.. copies.Undeclared.Select(copy => (JsonNode)new JsonObject
             {
                 ["host"] = copy.Host,
-                ["name"] = copy.Worktree,
+                ["name"] = Shown(copy.Worktree),
                 ["path"] = copy.Path,
                 ["tree"] = copy.Tree,
             })]);
@@ -215,7 +214,7 @@ public static class WorktreeReports
         {
             var node = new JsonObject
             {
-                ["name"] = tree.Name,
+                ["name"] = Shown(tree.Name),
                 ["tree"] = tree.Tree,
                 ["copies"] = Copies(tree.Copies),
             };
@@ -244,7 +243,7 @@ public static class WorktreeReports
 
         node["copies"] = new JsonArray([.. host.Copies.Select(copy => (JsonNode)new JsonObject
         {
-            ["name"] = copy.Found.Name,
+            ["name"] = Shown(copy.Found.Name),
             ["path"] = copy.Found.Path,
             ["bytes"] = copy.Found.Bytes,
             ["origin"] = JsonNamingPolicy.CamelCase.ConvertName(copy.Found.Origin.ToString()),
@@ -256,7 +255,7 @@ public static class WorktreeReports
         })]);
         node["missing"] = new JsonArray([.. host.Missing.Select(missing => (JsonNode)new JsonObject
         {
-            ["name"] = missing.Worktree,
+            ["name"] = Shown(missing.Worktree),
             ["path"] = missing.Path,
             ["tree"] = missing.Tree,
         })]);

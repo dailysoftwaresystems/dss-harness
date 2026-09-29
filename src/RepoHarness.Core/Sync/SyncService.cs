@@ -560,7 +560,10 @@ public sealed class SyncService(
         // worktree is deleted, and forgotten.
         if (!options.DryRun && context.Layout.IsWorktree(_platform) && transport.Host.Kind != Hosts.HostKind.Local)
         {
-            var name = HostCopies.NameOf(context.Layout.RepositoryRoot);
+            var name = HostCopies.NameOf(
+                context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root),
+                context.Layout.RepositoryRoot,
+                _platform.PathComparison);
             var claim = new HostCopyEntry(name, transport.Host.ToString(), destinationRoot, Path.GetFullPath(context.Layout.RepositoryRoot));
 
             if (new HostCopyRecord(_fileSystem, _platform.PathComparison).Claim(context.Layout, claim) is { } holder)
@@ -822,29 +825,9 @@ public sealed class SyncService(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Checked against the hash the far side took before sending, inside ReadFileAsync: an
-            // artefact carried host to host is evidence that a binary built there runs here, and
-            // evidence nobody checked is not evidence.
-            var contents = await transport.ReadFileAsync(sourceRoot, path, cancellationToken).ConfigureAwait(false);
-            var expected = FileContentHash.Of(contents);
-
-            await _localTransport
-                .WriteFileAsync(destinationRoot, path, contents, cancellationToken)
-                .ConfigureAwait(false);
-
-            // And again after it is written, because a file that arrived intact and landed truncated
-            // is still not the artefact somebody is about to run.
-            var landed = await _localTransport.ReadFileAsync(destinationRoot, path, cancellationToken).ConfigureAwait(false);
-            var actual = FileContentHash.Of(landed);
-
-            if (!string.Equals(expected, actual, StringComparison.Ordinal))
-            {
-                throw new HarnessException(
-                    HarnessExit.CommandFailed,
-                    $"'{path}' did not land intact from {transport.Host}: it arrived as {expected} and "
-                    + $"was written as {actual}.");
-            }
-
+            // Checked against the hash the far side took before sending, inside ReadFileAsync, and again once it is
+            // written here.
+            await CopyVerifiedAsync(transport, sourceRoot, _localTransport, destinationRoot, path, written: null, cancellationToken).ConfigureAwait(false);
             brought.Add(path);
         }
 
@@ -942,31 +925,10 @@ public sealed class SyncService(
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var contents = await _localTransport
-                    .ReadFileAsync(sourceRoot, path, cancellationToken)
-                    .ConfigureAwait(false);
-
-                var expected = FileContentHash.Of(contents);
-
-                await transport.WriteFileAsync(destinationRoot, path, contents, cancellationToken)
-                    .ConfigureAwait(false);
-
                 // Counted as written before it is verified, because what has to be taken back is
                 // what reached the far side, and a file that arrived wrong is one of those.
-                landed.Add(path);
-
-                var arrived = await transport.ReadFileAsync(destinationRoot, path, cancellationToken)
+                await CopyVerifiedAsync(_localTransport, sourceRoot, transport, destinationRoot, path, () => landed.Add(path), cancellationToken)
                     .ConfigureAwait(false);
-
-                var actual = FileContentHash.Of(arrived);
-
-                if (!string.Equals(expected, actual, StringComparison.Ordinal))
-                {
-                    throw new HarnessException(
-                        HarnessExit.CommandFailed,
-                        $"'{path}' did not land intact on {transport.Host}: it was sent as {expected} and "
-                        + $"arrived as {actual}.");
-                }
             }
         }
         catch (Exception)
@@ -976,6 +938,47 @@ public sealed class SyncService(
         }
 
         return landed.Count;
+    }
+
+    /// <summary>
+    /// Copies <paramref name="path"/> from one tree to another through their transports, and reads it back where it
+    /// landed: the one way a file goes between two trees reached through transports, whichever way it goes - a copy between
+    /// two trees on this machine is <see cref="VerifiedFileCopy"/>'s, which proves its copy before putting it in place. A
+    /// file that arrived intact and landed truncated is still not the artefact somebody is about to run - an artefact taken
+    /// host to host is evidence that something built there runs here, and evidence nobody checked is not evidence.
+    /// </summary>
+    /// <param name="from">How the tree it is read from is reached.</param>
+    /// <param name="fromRoot">That tree's root.</param>
+    /// <param name="to">How the tree it is written to is reached.</param>
+    /// <param name="toRoot">That tree's root.</param>
+    /// <param name="path">The file, relative to both roots.</param>
+    /// <param name="written">Told once it is written, before it is read back; null where nothing needs telling.</param>
+    /// <param name="cancellationToken">Stops the copy.</param>
+    /// <exception cref="HarnessException">It did not read back as it was read (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    private static async Task CopyVerifiedAsync(
+        ISyncTransport from,
+        string fromRoot,
+        ISyncTransport to,
+        string toRoot,
+        string path,
+        Action? written,
+        CancellationToken cancellationToken)
+    {
+        var contents = await from.ReadFileAsync(fromRoot, path, cancellationToken).ConfigureAwait(false);
+        var expected = FileContentHash.Of(contents);
+
+        await to.WriteFileAsync(toRoot, path, contents, cancellationToken).ConfigureAwait(false);
+        written?.Invoke();
+
+        var actual = FileContentHash.Of(await to.ReadFileAsync(toRoot, path, cancellationToken).ConfigureAwait(false));
+
+        if (!string.Equals(expected, actual, StringComparison.Ordinal))
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{path}' did not land intact, copied from {from.Host} to {to.Host}: it was read as {expected} and "
+                + $"reads back as {actual}.");
+        }
     }
 
     /// <summary>

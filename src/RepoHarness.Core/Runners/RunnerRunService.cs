@@ -1554,8 +1554,7 @@ public sealed class RunnerRunService(
             // empty, gitignored, and one per run for ever on every host that ran the action.
             if (Path.GetDirectoryName(scratch.Build) is { Length: > 0 } run
                 && _fileSystem.DirectoryExists(run)
-                && !_fileSystem.EnumerateDirectories(run).Any()
-                && !_fileSystem.EnumerateFiles(run, recursive: false).Any())
+                && _fileSystem.IsEmpty(run))
             {
                 _fileSystem.DeleteDirectory(run);
             }

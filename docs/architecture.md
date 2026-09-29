@@ -254,23 +254,22 @@ than a target wrote; another generator, or a ninja too old to know the tool, is 
 sync's lists and by `init`'s ignore rule, so the file system's reading of it would put the
 worktrees where nothing withholds or ignores them, and an entry would protect nothing.
 
-**The root is ignored whole, and never holds a placeholder.** `init` writes `/<root>` for it and
-creates nothing there; `create-worktree` makes the directory the first time it needs it. It is
-ignored by name, with no trailing slash, as `.harness-config/runs` is: a rule ending in `/` matches
-only a directory, so a root or a runs directory kept on another disk through a link - which the
-worktree commands follow - was listed by `git status`, and committed by `git add -A`, as that link.
-By name, it is ignored whatever it is, and however it is asked about. The other
-harness directories a person fills by hand — `sshItems`, `wslDistros`, `runner/.env`,
-`runner/.secrets` — keep the opposite shape, their *contents* ignored and a `.gitkeep` tracked, so
-the directory itself tells that person where the file goes. The root cannot afford that shape.
-Measured: excluding only a directory's contents makes the directory's own `git check-ignore` answer
-depend on a trailing slash, and it fails toward *not ignored* — `<root>` without the slash reads as
-not ignored while worktrees sit inside it. A directory holding any tracked file never reads as
-ignored under either spelling, so a committed placeholder turns even `<root>/` wrong. For a slot
-holding an address and a key that answer costs nothing; for a root holding whole checkouts it is the
-difference between a clean sync and every worktree reaching a remote host. The placeholder also
-showed as untracked until committed, which is exactly the state sync's no-longer-ignored guard
-refuses.
+**The root is kept in git by a placeholder, and everything made in it is ignored.** `init` writes
+`/<root>/*` and `!/<root>/.gitkeep` for it and creates the placeholder, as it does for the
+orchestrators directory, `.orchestrators`, and for the harness directories a person fills by hand
+— `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` — so a clone arrives with each
+directory in place. A configuration `init` writes names `.worktrees` as the root; one that names
+none keeps `.harness-config/worktrees`, so worktrees made before stay where they are. The root
+was ignored whole, with no placeholder, and the costs of this shape were measured then and are
+accepted now: a directory holding a tracked file never reads as ignored itself, so `git
+check-ignore <root>` answers *not ignored* while every worktree inside it is ignored, and the root
+can no longer be kept on another disk through a link, which git would list as an untracked entry
+and keep nothing behind; `init` names such a link and writes nothing through it. Sync does not
+depend on either answer: it withholds the configured root and `.orchestrators` by name, whatever
+git says, and its guard against a withheld path that stopped being ignored takes the root's
+placeholder, untracked until it is committed, as the harness's own - any other untracked file
+there still refuses, named as the worktrees root it is. The root may not be `.git` or
+`.orchestrators`, or inside either.
 
 `init` leaves hand-written `.gitignore` rules alone, so a repository that already ignored one of
 these paths by hand keeps its rule beside the managed one. What `init` reports is git's own answer,
@@ -352,12 +351,30 @@ mistaken for somewhere work is kept: the deletion checks below read branches, ta
 remote-tracking refs, the newest stash and other worktrees' HEADs, and this record is none of them.
 It is removed when the worktree is, so it can never answer for a later worktree of the same name.
 
-Every git command the harness runs first clears `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE`
-from the child's environment. Each of the three silently outranks `-C <directory>`, and a git hook
-runs with all three set, so a harness command invoked from a hook — or from a shell someone left in
-another checkout — would otherwise read and write a repository nobody named. A caller that
-deliberately wants a different index still gets one: the inherited value is cleared first and the
-requested one set after.
+Every git command the harness runs, and the forge's command line, which runs git itself, starts
+without any variable git reads a repository from: every name `git rev-parse --local-env-vars`
+prints, asked of git once per command rather than written down here. They include `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY` and the two that hold
+`-c` settings, `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT`. Each silently outranks
+`-C <directory>`, and a git hook runs with some of them set, so a harness command invoked from a
+hook — or from a shell someone left in another checkout — would otherwise read and write a
+repository nobody named: measured with `GIT_COMMON_DIR` naming another repository, deleting a
+worktree was refused and left it registered. Settings passed that way do not reach the harness's
+git either. A caller that deliberately wants a different index still gets one: the inherited value
+is cleared first and the requested one set after. An answer that does not name `GIT_DIR` is not
+taken, and the command fails without running git.
+
+An orchestrator's agents' worktrees sit below the directory named for it,
+`<root>/<orchestrator>/<agent>`, and are made by `create-agent` with the agent's records, never by
+`create-worktree`, which makes plain worktrees only. Each is named by its address,
+`orchestrator/agent`, wherever a person reads or types it: `list-worktree` lists it so,
+`delete-worktree` takes it, and the commit it was made from is recorded at
+`refs/harness/worktree-base/<orchestrator>/<agent>`. Plain worktrees and orchestrators share the
+names under the root, so a plain worktree cannot take an orchestrator's name, and an agent's worktree
+is never made inside a plain one, where git would take it for part of it. A directory with no `.git`
+of its own that holds worktrees below it - an orchestrator's, holding its agents' - is never deleted
+as one, `--force` or not: deleting it would delete each of them. A worktree's submodules and nested
+repositories are its own contents, and do not make it such a directory.
 
 ### What deleting one refuses
 
@@ -445,13 +462,27 @@ history of a repository nested inside one included.
   closed - older versions do, and filesystems other than NTFS - a handle sharing deletion still
   keeps its directory from going, and is not found. Linux and macOS need no look, since neither an
   open file nor a current directory stops a deletion there.
-- When git fails part way all the same, as on a file something opened after that look, its record
-  and some files may already be gone: the command deletes nothing more, exits 20 and says what is
-  left, and `delete-worktree <name> --force` finishes it, which is safe because every check passed
-  before removal began.
+- Checked, on Windows, every directory junction in the worktree is then removed, as the link it
+  is, never what it leads to. git for Windows leaves every junction when it removes a worktree,
+  and every directory above one, while reporting the worktree removed - its `.git` file and its
+  record already deleted - measured with git 2.55.0.windows.5; symbolic links it removes itself,
+  so they are left to it. A junction that cannot be removed stops the deletion before git runs,
+  exit 20, naming it, what Windows said and the junctions removed before it. A volume mounted on a
+  directory has a junction's tag and is never unmounted: it stops the deletion the same way.
+  A successful deletion names the junctions it removed.
+- When git fails part way all the same, as on a file something opened after that look, or when
+  it reports the worktree removed while its directory is still there, its record and some files
+  may already be gone: the command deletes nothing more, exits 20 and says what is left, and
+  `delete-worktree <name> --force` finishes it, which is safe because every check passed before
+  removal began. Run again without `--force`, the command names that same way for a directory
+  that holds no `.git` of its own and that git records no worktree at, which is what such a
+  removal leaves; `git worktree repair` is named only while git still records a worktree there,
+  since it rebuilds a lost `.git` file from that record and has nothing to rebuild from without
+  it.
 - Forced, it is `git worktree remove --force --force`, which overrides a lock. A directory git
-  leaves behind is deleted, and git is then asked again to clear its record, which it can once
-  the directory is gone. A file that cannot be deleted is reported with exit 20 and what to do
+  leaves behind is deleted, each junction in it first as a link - the runtime's own recursive
+  delete removes a junction and then reports it refused - and git is then asked again to clear
+  its record, which it can once the directory is gone. A file that cannot be deleted is reported with exit 20 and what to do
   next.
 - The record is confirmed gone by its administrative directory, found before removal, or, where
   git could not name that directory, by git's list. A record whose directory is already gone,
@@ -464,6 +495,106 @@ minutes for the deletion to finish, as does a host agent running it for another 
 before the two minutes are up, git is stopped and the command says what is left. The deletion
 can be left partly done on any platform, and on Linux and macOS the interruption reaches git
 itself; running `delete-worktree <name> --force` then finishes it.
+
+## Orchestrators and agents
+
+An orchestrator is a session that runs agents side by side, each in a worktree of its own. Everything it and its
+agents keep is in the main checkout under `.orchestrators/<orchestrator>/` - records, logs, plans, scratch, the rows
+an agent files, its kept evidence and transcripts - never in a worktree, and init keeps the directory in git by its
+placeholder and everything made in it out; sync withholds it from every host by name. A session taking the work
+over, on another account or after the last one ended, reads it there. `OrchestratorLayout` spells every path once;
+`OrchestrationStore` reads and writes the records strictly - a record that does not read as exactly what it must be
+is refused, never guessed at - and `OrchestrationLog` appends one JSON line for each run that reached an orchestrator's
+or an agent's record, refusals included: create-orchestrator, create-agent, seed-agent and every `--apply`; a dry run is
+not logged. Each line names its outcome by its exit code's name, the one table of them. A log that cannot take a line
+never replaces what the command did; the command says so instead. Once a command has written, an interruption waits for
+it as long as a deletion expects (`PointOfNoReturn`, the one list the command line reads), and what stops it from there
+on is exit 21, naming what is in and how running it again finishes.
+
+An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
+and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
+orchestrator under the root is shared with plain worktrees' names, so create-worktree refuses an orchestrator's
+name and create-orchestrator a worktree's, and delete-worktree never deletes a directory holding worktrees below
+it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own counts,
+and below any other directory with none of its own only what git records - a husk's submodules are its own contents,
+which `--force` deletes with it. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
+every record last - each agent's after the rest of that agent, the orchestrator's after its agents - so a removal that
+stops part way (exit 21) leaves only records that read, and run again it finishes. list-orchestrator counts an
+orchestrator's open agents as create-agent does (`OrchestrationRules.OpenAgents`), and says where each agent's
+worktree is from its own record, the worktrees root it was made under.
+
+### Seeding and folding
+
+The seed is the main tree's uncommitted state handed to the agent when it is made - every path git status lists,
+less `TreeFloor`: `.git`, `.orchestrators` and the worktrees root, asserted where the copying happens rather than left
+to ignore rules a repository can edit away - each changed file copied into its worktree, with the copy's SHA-256 and,
+where the platform has one, its execute bit, and each deletion made there too and recorded as absent. `seed.json` is
+then what the agent shares with the main tree, path by path. An untracked directory git will not look into - a
+repository of its own - is named and not handed, since a fold never moves one. A symbolic link is refused rather than
+handed over as the file it leads to, before the worktree is made, so the refusal leaves nothing behind. seed-agent
+counts as the agent's own only a change of what it shares that it made itself; refresh-agent hands over the main
+tree's later changes under the paths it is given the same way, refused, copying nothing, where the agent changed or
+deleted one of them.
+
+An agent's contribution is a measurement (`AgentFold`): its worktree's status, and every path it shares with the
+main tree whether its status lists it or not, less the shared paths left as they were. Each path goes in exactly one
+list - its own, deleted, inherited, already in the main tree, settled - or is refused, and one refusal refuses the whole
+fold before anything is written. A shared path is compared with what both trees held - a file, or its absence; any
+other with the blob at the agent's own base (`cat-file --batch-check`, one process), never the main tree's HEAD, which a
+sibling's committed fold moves, and the main tree is asked whether it moved from that base as git status would answer
+(`git diff --name-only` against the base, one process): through the index's line-ending rules, so a file only checked
+out with other line endings is no change, and with its mode, so a sibling's changed execute bit is one. A fold records
+what it wrote, removed and found already in as shared, so a later fold - after a review sends the agent back - weighs
+those paths against what the fold left, never against the base: the agent putting a path back as it was is its change
+to fold. A refusal of a changed main-tree path says whether a commit or an uncommitted edit changed it, since the two
+are reconciled differently. A deletion needs the same baseline proof a copy does. A path reached through a link in
+either tree, a directory - a submodule, a repository of the agent's own - and a HEAD moved past the base are
+refused. `--settled` is the one way out of an all-or-nothing refusal, asked before the deletion branch so a
+deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. A path the main
+tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
+cannot look at is never read as absent, which would take the agent's file for its deletion: the fold fails before
+anything is written. A file of either tree that changed after it was weighed is never written over: the agent's copy is
+refused where it no longer holds the SHA-256 weighed (`VerifiedFileCopy`), and the main tree's file is weighed again
+before each write and each removal. The fold stops there, exit 21, for a run again to weigh it anew.
+
+The rows an agent files (`AgentRows`) are read strictly - a directory for each anchor, a file for each cell, read
+as write-anchor reads a cell file - and applied through `IAnchorRegistryService.ApplyAsync`, which composes each
+row exactly as write-anchor or set-anchor does, one after another under the registries' one lock: every row is
+checked and every refusal named before any is written, a row already as declared is left alone, a change names
+only the cells that differ, a row moving between the registries is written destination first, and a write that
+fails, or rows that do not read back as declared, put both registries back byte for byte. The rows a fold applied are
+recorded as declared then (`applied-rows.json`): one the agent declares as it did then is never applied again, so a
+change the registries took since - the orchestrator closing the row, a sibling's cross-reference - stands; one it
+declares anew over it is refused where the registries no longer hold what the fold applied, as a file the main tree
+changed is.
+
+### Deleting an agent
+
+delete-agent measures everything first, under the run lock on the main tree and on the agent's worktree: the
+fold and the rows, or with `--discard-uncommitted` what the agent changed. It writes the fold and the rows, proves
+nothing is left to fold - the removal's discard of uncommitted work is built from that measurement alone - copies
+the agent's Claude transcripts by session id (`ClaudeTranscripts`; found by file name alone, since Claude Code's
+format is its own; one not found is said, and one found and not kept stops the deletion before the agent is
+closed), and keeps the evidence roots' files, over the roots named before the fold and after it, in the agent's
+directory, in a directory named for the run, every copy proved as it is made (`AgentEvidence`, which finds files as a
+removal reaches them through `WorktreeEvidence`, the walk delete-worktree's evidence check makes: never through a link,
+and a root that is or passes through one, and a link under one, neither kept nor counted). Only then does it record the agent closed: which git worktree it was
+(`WorktreeStamp`, the creation and write times of `commondir` in its git directory, which a new worktree at the
+same path does not share) and every path it held with its digest. It deletes the evidence originals still holding
+what was kept - one that cannot be deleted is named and left, and stops the removal - and asks delete-worktree for
+the removal - never forced, its evidence check kept, so a file written after the copy was read back stops it rather
+than going with it - then proves the removal: directory gone, git's record gone, no copy recorded on a host. A
+question it cannot answer is named as that, never read as nothing left. An agent made under a worktrees root the
+configuration no longer names is refused with nothing touched, since delete-worktree looks under the root the
+configuration names.
+
+A closed agent is never folded, seeded or refreshed again. delete-agent run again compares its worktree with what
+closing recorded, never with the main tree, which later agents go on changing: a file changed or new since is
+work, left for a person (exit 21); a file gone since is the debris of a removal that stopped part way; a path the
+main tree ignores is never work, asked of the main tree with its index, since the removal may have deleted the
+worktree's own ignore rules first. A directory with no `.git` of its own is never read - git would answer for the
+main checkout - and never forced: its evidence is kept again, and the forced removal is named for a person. A
+worktree made at the path since is another, and not the agent's to remove.
 
 ## Anchor registries
 
@@ -1307,7 +1438,9 @@ while a gate ran turned a green suite red, with four test processes live at once
   hangs a leg indefinitely, with no output and no verdict.
 - A host's copy of a tree is a git repository sync creates: the main checkout's at the host's
   `repositoryPath`, and each worktree's beside it, at `<repositoryPath>.worktree-<name>`, named for
-  the worktree's directory as a worktree's name is spelt. One copy per host had every worktree whose
+  the worktree's directory as a worktree's name is spelt - an orchestrator's agent's for both its
+  orchestrator's name and its own, joined by two hyphens, which no worktree's name can hold, so two
+  orchestrators' agents of one name keep their copies apart. One copy per host had every worktree whose
   legs reached a host wait for every other's, under one lock, each sync replacing the tree the one
   before had put there. Beside the main copy rather than inside it, because the agent a sync starts
   begins in the copy's parent, which must already be there, and a copy inside another would be taken
@@ -1907,7 +2040,7 @@ with "the harness could not run", because the remedies differ.
 | 14 | A required tool is missing, or could not be started |
 | 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
 | 20 | The wrapped command ran and failed |
-| 21 | Ran with nothing failing, but a leg reached no verdict; it is not a pass |
+| 21 | Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold or a hand-over stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 

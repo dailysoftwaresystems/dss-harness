@@ -44,13 +44,17 @@ public static class HarnessExit
     public const int CommandFailed = 20;
 
     /// <summary>
-    /// The work ran and nothing failed, but not every unit of it reached a verdict.
+    /// The work ran and nothing failed, but not every unit of it reached a verdict; or a change was begun and not
+    /// finished - a deletion, a fold or a hand-over stopped part way - and running the command again, once what it names
+    /// is dealt with, finishes it.
     /// </summary>
     /// <remarks>
     /// Distinct from <see cref="Success"/> because a leg that never ran is not a leg that passed,
     /// and distinct from <see cref="CommandFailed"/> because nothing reported failure. A gate
     /// comparing runs needs to tell "the tests passed" from "the tests never ran", and a single
-    /// zero for both is how a switched-off machine reads as a green build.
+    /// zero for both is how a switched-off machine reads as a green build. An agent closed whose
+    /// worktree's removal stopped part way is the same answer: its deletion is not done, and
+    /// delete-agent run again finishes it without folding anything.
     /// </remarks>
     public const int Incomplete = 21;
 
@@ -100,7 +104,7 @@ public static class HarnessExit
             [nameof(ToolMissing)] = "A required external tool is not installed, or could not be started.",
             [nameof(HostUnavailable)] = "A host could not be reached, or DssHarness could not run there; nothing ran on it.",
             [nameof(CommandFailed)] = "The wrapped command ran and reported failure.",
-            [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict; it is not a pass.",
+            [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold or a hand-over stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it.",
             [nameof(InternalError)] = "The harness itself failed unexpectedly; this is a defect in the tool.",
             [nameof(Cancelled)] = "The run was interrupted before it finished; what it had already done is still reported.",
         };

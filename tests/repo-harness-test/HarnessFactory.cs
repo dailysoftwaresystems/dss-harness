@@ -5,6 +5,7 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -40,7 +41,7 @@ public sealed class HarnessFactory
         FileSystem = new PhysicalFileSystem(FilePermissions);
         ProcessRunner = new ProcessRunner(Platform, FilePermissions);
         ProcessTable = ProcessTableFactory.Create(Platform, ProcessRunner);
-        GitClient = new GitClient(ProcessRunner, Output);
+        GitClient = new GitClient(ProcessRunner, Output, localVariables: LocalVariables);
         RepositoryLocator = new RepositoryLocator(GitClient);
         ConfigStore = new JsonConfigStore(FileSystem);
         GitIgnoreManager = new GitIgnoreManager(FileSystem);
@@ -83,7 +84,42 @@ public sealed class HarnessFactory
             GitClient,
             new ManagedIgnoreCheck(GitClient, FileSystem, Platform, Output),
             Platform);
+
+        RunLock = new RunLock(FileSystem, Output, Identity);
+        OrchestrationStore = new OrchestrationStore(FileSystem);
+        OrchestrationLog = new OrchestrationLog(FileSystem, TimeProvider.System);
+        Transcripts = TranscriptsOver(FileSystem);
+        OrchestratorService = new OrchestratorService(ContextLoader, GitClient, FileSystem, Platform, Output, WorktreeService, OrchestrationStore, OrchestrationLog, TimeProvider.System);
+        AgentService = Agents(FileSystem, AnchorRegistryService);
     }
+
+    /// <summary>The agent service over <paramref name="fileSystem"/> and <paramref name="anchors"/>, for a test that changes what one of them does.</summary>
+    /// <param name="fileSystem">
+    /// Reads and writes everything the service keeps on disk: both trees, the run lock, the orchestrator's records and
+    /// log, and the transcripts it keeps.
+    /// </param>
+    /// <param name="anchors">Applies an agent's rows.</param>
+    public AgentService Agents(IFileSystem fileSystem, IAnchorRegistryService anchors)
+        => new(
+            ContextLoader,
+            GitClient,
+            fileSystem,
+            Platform,
+            Output,
+            FilePermissions,
+            new WorktreeService(ContextLoader, GitClient, fileSystem, PathBudget, Platform, Output, HostCopies),
+            new RunLock(fileSystem, Output, Identity),
+            AnchorRegistryLocator,
+            anchors,
+            TranscriptsOver(fileSystem),
+            new OrchestrationStore(fileSystem),
+            new OrchestrationLog(fileSystem, TimeProvider.System),
+            TimeProvider.System,
+            () => CurrentDirectory ?? Directory.GetCurrentDirectory());
+
+    /// <summary>Claude Code's transcripts over <paramref name="fileSystem"/>, in <see cref="ClaudeConfigDirectory"/> where a test sets it.</summary>
+    private ClaudeTranscripts TranscriptsOver(IFileSystem fileSystem)
+        => new(fileSystem, Platform, name => name == ClaudeTranscripts.ConfigDirectoryVariable ? ClaudeConfigDirectory : Environment.GetEnvironmentVariable(name));
 
     public StringWriter StandardOutput { get; } = new();
 
@@ -103,6 +139,15 @@ public sealed class HarnessFactory
     public IProcessTable ProcessTable { get; }
 
     public IGitClient GitClient { get; }
+
+    /// <summary>
+    /// Which variables git reads a repository from, asked of git once for the whole test run, as a command
+    /// asks once: a factory is made per test, and asking per factory would start a git process for each.
+    /// </summary>
+    public GitLocalVariables LocalVariables => SharedLocalVariables;
+
+    private static readonly GitLocalVariables SharedLocalVariables = new(
+        new ProcessRunner(new HostPlatform(), FilePermissionsFactory.Create()));
 
     public IRepositoryLocator RepositoryLocator { get; }
 
@@ -148,6 +193,31 @@ public sealed class HarnessFactory
     /// <summary>The tool provisioning init calls, a double so no test reaches a host.</summary>
     public IToolProvisionService ToolProvisionService { get; }
 
+    /// <summary>The run lock, in the main checkout of whichever repository a test makes.</summary>
+    public RunLock RunLock { get; }
+
+    /// <summary>Orchestrators' and agents' records.</summary>
+    public OrchestrationStore OrchestrationStore { get; }
+
+    /// <summary>Orchestrators' logs.</summary>
+    public OrchestrationLog OrchestrationLog { get; }
+
+    /// <summary>
+    /// Where Claude Code's configuration is taken to be: a directory no test makes unless it says, so no test ever reads
+    /// this machine's own transcripts.
+    /// </summary>
+    public string ClaudeConfigDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "repo-harness-no-claude-" + Guid.NewGuid().ToString("N"));
+
+    /// <summary>This process's working directory as the agent service sees it; the process's own where a test sets none.</summary>
+    public string? CurrentDirectory { get; set; }
+
+    /// <summary>Finds and keeps agents' Claude transcripts, under <see cref="ClaudeConfigDirectory"/>.</summary>
+    public ClaudeTranscripts Transcripts { get; }
+
+    public IOrchestratorService OrchestratorService { get; }
+
+    public AgentService AgentService { get; }
+
     /// <summary>Creates a git repository with one commit, so worktrees can be added.</summary>
     public async Task InitializeGitRepositoryAsync(string path, CancellationToken cancellationToken)
     {
@@ -165,6 +235,12 @@ public sealed class HarnessFactory
     /// Creates a repository, runs init in it, and replaces the seeded configuration with
     /// <paramref name="config"/> when one is given.
     /// </summary>
+    /// <remarks>
+    /// The ignore rules and placeholders init wrote are then made again for <paramref name="config"/>, as init
+    /// makes them for the configuration it finds: its worktrees root, not the one init seeds, is where the tests'
+    /// worktrees go. Written after init rather than before it, so a test can hand over a configuration the
+    /// validator refuses, to see a later command refuse it.
+    /// </remarks>
     public async Task InitializeHarnessAsync(
         string path,
         CancellationToken cancellationToken,
@@ -178,6 +254,24 @@ public sealed class HarnessFactory
         if (config is not null)
         {
             WriteConfig(path, config);
+
+            var seeded = Path.Combine(path, WorktreeSettings.SeededRoot);
+
+            if (!HarnessLayout.RootSlots(config.Worktrees.Root).Contains(WorktreeSettings.SeededRoot, StringComparer.Ordinal))
+            {
+                FileSystem.DeleteDirectory(seeded);
+            }
+
+            GitIgnoreManager.Update(
+                Path.Combine(path, ".gitignore"),
+                [.. InitService.BuildIgnoreRules(config.Worktrees).Select(rule => rule.Rule)]);
+
+            foreach (var slot in HarnessLayout.RootSlots(config.Worktrees.Root))
+            {
+                var directory = Path.Combine(path, slot);
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, HarnessLayout.GitKeepFileName), string.Empty);
+            }
         }
     }
 

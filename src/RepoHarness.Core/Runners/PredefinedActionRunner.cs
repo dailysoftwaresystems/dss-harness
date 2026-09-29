@@ -167,5 +167,5 @@ public sealed class PredefinedActionRunner(IGitClient gitClient, IHarnessOutput 
     }
 
     private static string Short(string? commit)
-        => commit is null ? "an unknown commit" : commit[..Math.Min(12, commit.Length)];
+        => commit is null ? "an unknown commit" : ReportText.Commit(commit);
 }

@@ -96,7 +96,7 @@ public static partial class WorktreeName
         return new string(characters);
     }
 
-    [GeneratedRegex("^[a-z0-9]+(-[a-z0-9]+)*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^[a-z0-9]+(-[a-z0-9]+)*\z", RegexOptions.CultureInvariant)]
     private static partial Regex Pattern();
 }
 

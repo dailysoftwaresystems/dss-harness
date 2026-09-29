@@ -40,8 +40,58 @@ public sealed class HostCopiesTests
         using var temp = new TempDirectory();
         var layout = new HarnessLayout(temp.Path, temp.Path);
 
-        Assert.Equal(repositoryPath, HostCopies.For(repositoryPath, layout, temp.Path + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(expected, HostCopies.For(repositoryPath, layout, temp.Combine(".harness-config", "worktrees", directory), StringComparison.OrdinalIgnoreCase));
+        var root = temp.Combine(".harness-config", "worktrees");
+
+        Assert.Equal(repositoryPath, HostCopies.For(repositoryPath, layout, temp.Path + Path.DirectorySeparatorChar, root, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(expected, HostCopies.For(repositoryPath, layout, temp.Combine(".harness-config", "worktrees", directory), root, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Two orchestrators' agents of one name keep copies apart, each under its orchestrator's name and its own joined
+    /// by two hyphens, which no worktree's own name can hold; a plain worktree keeps its name.
+    /// </summary>
+    [Fact]
+    public void AnAgentsCopy_IsNamedForItsOrchestratorAndItself()
+    {
+        using var temp = new TempDirectory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var root = temp.Combine(".worktrees");
+
+        Assert.Equal("o1--api", HostCopies.NameOf(root, Path.Combine(root, "o1", "api"), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("o2--api", HostCopies.NameOf(root, Path.Combine(root, "o2", "api"), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("api", HostCopies.NameOf(root, Path.Combine(root, "api"), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("/home/dev/repo.worktree-o1--api", HostCopies.For("/home/dev/repo", layout, Path.Combine(root, "o1", "api"), root, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// A worktrees root kept on another disk through a link names an agent's copy alike whether the tree is spelt
+    /// through the link, as a leg is configured, or where it leads, as git names the tree a command runs in.
+    /// </summary>
+    [Fact]
+    public void AnAgentsCopy_IsNamedAlike_ThroughALinkedRootAndWhereItLeads()
+    {
+        using var temp = new TempDirectory();
+        var target = Directory.CreateDirectory(temp.Combine("elsewhere", "trees", "o1", "api")).Parent!.Parent!.FullName;
+        var root = temp.Combine(".worktrees");
+
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(root, target));
+
+        Assert.Equal("o1--api", HostCopies.NameOf(root, Path.Combine(root, "o1", "api"), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("o1--api", HostCopies.NameOf(root, Path.Combine(target, "o1", "api"), StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>A root reached through a link above it - not itself one - names an agent's copies by the agent's address all the same.</summary>
+    [Fact]
+    public void AnAgentsCopy_IsNamedForItsAddress_ThroughALinkAboveTheRoot()
+    {
+        using var temp = new TempDirectory();
+        var target = Directory.CreateDirectory(temp.Combine("real-out", "wt", "o1", "api")).Parent!.Parent!.Parent!.FullName;
+        var linked = temp.Combine("out");
+
+        TestLinks.OrSkip(() => TestLinks.DirectoryLink(linked, target));
+
+        var root = Path.Combine(linked, "wt");
+        Assert.Equal("o1--api", HostCopies.NameOf(root, Path.Combine(target, "wt", "o1", "api"), StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

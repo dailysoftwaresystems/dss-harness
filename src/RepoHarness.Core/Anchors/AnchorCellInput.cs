@@ -85,10 +85,7 @@ public static class AnchorCellInputs
 
         try
         {
-            using var stream = fileSystem.OpenRead(path);
-            using var buffer = new MemoryStream();
-            stream.CopyTo(buffer);
-            bytes = buffer.ToArray();
+            bytes = fileSystem.ReadAllBytes(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

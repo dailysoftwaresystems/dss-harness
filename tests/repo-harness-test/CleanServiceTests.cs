@@ -184,14 +184,7 @@ public sealed class CleanServiceTests
         var elsewhere = temp.WriteFile(Path.Combine("elsewhere", "a.o"), "object");
         Directory.CreateDirectory(Path.GetDirectoryName(directory)!);
 
-        try
-        {
-            Directory.CreateSymbolicLink(directory, Path.GetDirectoryName(elsewhere)!);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(directory, Path.GetDirectoryName(elsewhere)!));
 
         var (_, leg) = await CleanAsync(temp, harness, config);
 

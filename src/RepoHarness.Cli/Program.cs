@@ -1,6 +1,7 @@
 using System.CommandLine;
 using RepoHarness.Cli;
 using RepoHarness.Cli.Commands;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Worktrees;
@@ -17,6 +18,14 @@ root.Subcommands.Add(VerifyGitCommand.Create());
 root.Subcommands.Add(CreateWorktreeCommand.Create());
 root.Subcommands.Add(DeleteWorktreeCommand.Create());
 root.Subcommands.Add(ListWorktreeCommand.Create());
+root.Subcommands.Add(CreateOrchestratorCommand.Create());
+root.Subcommands.Add(DeleteOrchestratorCommand.Create());
+root.Subcommands.Add(ListOrchestratorCommand.Create());
+root.Subcommands.Add(CreateAgentCommand.Create());
+root.Subcommands.Add(SeedAgentCommand.Create());
+root.Subcommands.Add(RefreshAgentCommand.Create());
+root.Subcommands.Add(FoldAgentCommand.Create());
+root.Subcommands.Add(DeleteAgentCommand.Create());
 root.Subcommands.Add(WriteAnchorCommand.Create());
 root.Subcommands.Add(SetAnchorCommand.Create());
 root.Subcommands.Add(ReadAnchorCommand.Create());
@@ -67,12 +76,12 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
         return HarnessExit.UsageError;
     }
 
-    // A deletion past its point of no return goes on after Ctrl+C, and a host agent can be running
-    // one for another machine, so those two wait for their action as long as the deletion expects.
-    // No other command is any slower to stop.
+    // A command past its point of no return goes on after Ctrl+C - a deletion, a fold or a hand-over is
+    // never left half written, and a host agent can be running one for another machine - so each is
+    // waited for as long as a deletion expects. No other command is any slower to stop.
     var invocation = new InvocationConfiguration();
 
-    if (parseResult.CommandResult.Command.Name is DeleteWorktreeCommand.Name or HostAgentProtocol.CommandName)
+    if (PointOfNoReturn.Commands.Contains(parseResult.CommandResult.Command.Name))
     {
         invocation.ProcessTerminationTimeout = WorktreeService.DefaultInterruptionGrace;
     }

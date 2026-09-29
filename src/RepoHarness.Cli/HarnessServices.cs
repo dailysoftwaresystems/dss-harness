@@ -10,6 +10,7 @@ using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.LineEndings;
+using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -66,6 +67,10 @@ internal static class HarnessServices
         services.AddSingleton<IHarnessOutput>(provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>()));
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+
+        // One answer per command to which variables git reads a repository from, shared by every child
+        // that runs git: the git client's and the forge's command line's.
+        services.AddSingleton<GitLocalVariables>();
         services.AddSingleton<IGitClient, GitClient>();
         services.AddSingleton<IRepositoryLocator, RepositoryLocator>();
         services.AddSingleton<IConfigStore, JsonConfigStore>();
@@ -83,6 +88,12 @@ internal static class HarnessServices
             NamedMutexAnchorRegistryLock.DefaultTimeout));
         services.AddSingleton<IAnchorRegistryService, AnchorRegistryService>();
         services.AddSingleton<IAnchorBalanceService, AnchorBalanceService>();
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<OrchestrationStore>();
+        services.AddSingleton<OrchestrationLog>();
+        services.AddSingleton<ClaudeTranscripts>();
+        services.AddSingleton<IOrchestratorService, OrchestratorService>();
+        services.AddSingleton<IAgentService, AgentService>();
 
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();

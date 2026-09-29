@@ -7,6 +7,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Sync;
 
@@ -41,9 +42,21 @@ public static partial class HostCopies
     /// <param name="layout">The repository the tree belongs to.</param>
     /// <param name="treeRoot">The tree: the main checkout, or one of its worktrees.</param>
     /// <param name="comparison">How this machine compares paths.</param>
+    /// <param name="worktreesDirectory">The worktrees root; the configured one, where none is given.</param>
     /// <exception cref="HarnessException">The host declares no repositoryPath.</exception>
-    public static string Of(HarnessConfig config, HostId host, HarnessLayout layout, string treeRoot, StringComparison comparison)
-        => For(RepositoryPathOf(config, host), layout, treeRoot, comparison);
+    public static string Of(
+        HarnessConfig config,
+        HostId host,
+        HarnessLayout layout,
+        string treeRoot,
+        StringComparison comparison,
+        string? worktreesDirectory = null)
+        => For(
+            RepositoryPathOf(config, host),
+            layout,
+            treeRoot,
+            worktreesDirectory ?? layout.WorktreesDirectoryUnder(config.Worktrees.Root),
+            comparison);
 
     /// <summary>
     /// Where a host whose main copy is at <paramref name="repositoryPath"/> keeps the copy of
@@ -52,8 +65,9 @@ public static partial class HostCopies
     /// <param name="repositoryPath">Where the host keeps the main checkout's copy.</param>
     /// <param name="layout">The repository the tree belongs to.</param>
     /// <param name="treeRoot">The tree: the main checkout, or one of its worktrees.</param>
+    /// <param name="worktreesDirectory">The worktrees root.</param>
     /// <param name="comparison">How this machine compares paths.</param>
-    public static string For(string repositoryPath, HarnessLayout layout, string treeRoot, StringComparison comparison)
+    public static string For(string repositoryPath, HarnessLayout layout, string treeRoot, string worktreesDirectory, StringComparison comparison)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
         ArgumentNullException.ThrowIfNull(layout);
@@ -61,7 +75,7 @@ public static partial class HostCopies
 
         return string.Equals(Whole(treeRoot), Whole(layout.MainCheckoutRoot), comparison)
             ? repositoryPath
-            : ForWorktree(repositoryPath, NameOf(treeRoot));
+            : ForWorktree(repositoryPath, NameOf(worktreesDirectory, treeRoot, comparison));
     }
 
     /// <summary>The copy a worktree kept under <paramref name="name"/> has beside the main copy at <paramref name="repositoryPath"/>.</summary>
@@ -76,18 +90,47 @@ public static partial class HostCopies
     }
 
     /// <summary>
-    /// The name a tree's copies are kept under: its directory's, spelt as a worktree's name is - lower-case letters
-    /// and digits, and a hyphen for each run of anything else - so a worktree create-worktree made keeps its own.
+    /// The name a tree's copies are kept under. A worktree under the root keeps its address's
+    /// (<see cref="WorktreeAddress.CopyName"/>): its own name, or its orchestrator's and its own joined by two hyphens, so
+    /// two orchestrators' agents of one name keep copies apart. Any other tree keeps its directory's, spelt as a
+    /// worktree's name is - lower-case letters and digits, and a hyphen for each run of anything else.
     /// </summary>
-    /// <param name="treeRoot">The tree.</param>
-    public static string NameOf(string treeRoot)
+    /// <param name="worktreesDirectory">The worktrees root, as configured.</param>
+    /// <param name="treeRoot">The tree, as written or with its links resolved, as git names one.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    /// <remarks>
+    /// A root reached through a link - itself one, or a directory above it - is tried where it leads too, with the tree
+    /// where it leads: git names a tree by where it resolved, and a leg by the path it was configured with, and the two
+    /// must name one copy alike.
+    /// </remarks>
+    public static string NameOf(string worktreesDirectory, string treeRoot, StringComparison comparison)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreesDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(treeRoot);
+
+        if ((WorktreeAddress.OfTree(worktreesDirectory, treeRoot, comparison) ?? Resolved(worktreesDirectory, treeRoot, comparison)) is { } address)
+        {
+            return address.CopyName;
+        }
 
         var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(treeRoot));
         var name = NotANameCharacter().Replace(leaf.ToLowerInvariant(), "-").Trim('-');
 
         return name.Length > 0 ? name : "worktree";
+    }
+
+    /// <summary>The address of <paramref name="treeRoot"/> under <paramref name="worktreesDirectory"/> with every link along either followed; null where there is none, or a link cannot be read.</summary>
+    private static WorktreeAddress? Resolved(string worktreesDirectory, string treeRoot, StringComparison comparison)
+    {
+        try
+        {
+            var root = LinkPaths.Resolve(worktreesDirectory);
+            return WorktreeAddress.OfTree(root, treeRoot, comparison) ?? WorktreeAddress.OfTree(root, LinkPaths.Resolve(treeRoot), comparison);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Where a host keeps the main checkout's copy, as the configuration declares it.</summary>
@@ -166,12 +209,7 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
     /// <summary>How long a change waits for another process changing the record.</summary>
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(30);
 
-    private static readonly JsonSerializerOptions Options = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-    };
+    private static readonly JsonSerializerOptions Options = JsonStateFile.Options;
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly StringComparison _pathComparison = pathComparison;

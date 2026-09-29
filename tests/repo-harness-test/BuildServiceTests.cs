@@ -698,14 +698,7 @@ public sealed class BuildServiceTests
 
         Assert.Equal(LegVerdict.Passed, (await BuildOnceAsync(factory, request, token)).Verdict.Verdict);
 
-        try
-        {
-            File.CreateSymbolicLink(Path.Combine(request.Variant.DirectoryUnder(temp.Path), "VERSION"), temp.Combine("VERSION"));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(request.Variant.DirectoryUnder(temp.Path), "VERSION"), temp.Combine("VERSION")));
 
         await StopPartWayAsync(factory, request, token);
         await EditAsync(temp, "VERSION", "2.0.0\n", HoursFromNow(1), token);

@@ -10,6 +10,14 @@ public sealed class WorktreeSettings
     public const string DefaultRoot = ".harness-config/worktrees";
 
     /// <summary>
+    /// The worktrees root init writes into a configuration it makes: at the top of the tree, beside the directory
+    /// orchestrators keep what they hold in, and 15 characters of the Windows path budget shorter than
+    /// <see cref="DefaultRoot"/>. A configuration that names no root keeps <see cref="DefaultRoot"/>, so worktrees
+    /// made before stay where they are.
+    /// </summary>
+    public const string SeededRoot = ".worktrees";
+
+    /// <summary>
     /// Where worktrees are created, relative to the main checkout. Configurable because the default
     /// spends 25 characters of the Windows path budget before a worktree's own name, and a repository
     /// whose build paths are long has no name left that fits; a shorter root is what buys those

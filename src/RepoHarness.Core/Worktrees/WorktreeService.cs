@@ -25,6 +25,17 @@ public interface IWorktreeService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Creates the worktree at <paramref name="address"/>: a plain one, or an orchestrator's agent's, below the
+    /// directory named for its orchestrator. Each name is held to worktrees.maxNameLength, and the whole path to the
+    /// path budget, as create-worktree holds a plain one.
+    /// </summary>
+    /// <exception cref="HarnessException">As for <see cref="CreateAsync"/>.</exception>
+    Task<WorktreeOutcome> CreateAtAsync(
+        string startDirectory,
+        WorktreeAddress address,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Removes a worktree, everything under it and git's record of it. Unless
     /// <paramref name="force"/> is set, it is refused and left untouched when deleting it would lose
     /// uncommitted changes, edits status cannot see, commits on no branch, tag, remote-tracking ref,
@@ -40,6 +51,12 @@ public interface IWorktreeService
     /// where git's removal would stop part way on it.
     /// <paramref name="force"/> skips every check, and that look, and overrides a lock.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="name"/> is an address: a plain worktree's name, or <c>orchestrator/agent</c>. A plain address with
+    /// no .git of its own that holds worktrees below it - the directory named for an orchestrator, holding its agents' -
+    /// is refused even with <paramref name="force"/>, since deleting it would delete each of them; one whose worktrees
+    /// git cannot list is not deleted either. A worktree's own submodules and nested repositories never count.
+    /// </remarks>
     /// <exception cref="HarnessException">
     /// As for <see cref="CreateAsync"/>, or the path resolved outside the worktrees directory.
     /// </exception>
@@ -59,7 +76,10 @@ public interface IWorktreeService
 }
 
 /// <summary>One existing worktree.</summary>
-/// <param name="Name">The worktree's name, which is its directory name under the worktrees root.</param>
+/// <param name="Name">
+/// The worktree's address: its directory's name under the worktrees root, or, for an orchestrator's agent,
+/// <c>orchestrator/agent</c>.
+/// </param>
 /// <param name="BaseCommit">
 /// The commit it was made from, or <see langword="null"/> when none was recorded — a worktree made
 /// before the record existed, or one whose record could not be written. Reported so the tree a
@@ -74,7 +94,7 @@ public sealed record WorktreeListing(string Name, string? BaseCommit)
 
     /// <summary>The line <c>list-worktree</c> prints for this worktree.</summary>
     public override string ToString()
-        => BaseCommit is null ? Name : $"{Name}  base {BaseCommit[..Math.Min(12, BaseCommit.Length)]}";
+        => BaseCommit is null ? Name : $"{Name}  base {ReportText.Commit(BaseCommit)}";
 }
 
 /// <summary>
@@ -88,6 +108,12 @@ public sealed record WorktreeOutcome(CommandOutcome Outcome, string Name, string
 {
     /// <summary>Whether the command succeeded.</summary>
     public bool Succeeded => Outcome.Succeeded;
+
+    /// <summary>
+    /// The commit a worktree just created was made from, as read from it - recorded under <c>refs/harness/worktree-base/</c>
+    /// or not: <see langword="null"/> when it could not be read, and for anything but a creation.
+    /// </summary>
+    public string? BaseCommit { get; init; }
 
     /// <summary>A failure carrying no worktree.</summary>
     public static WorktreeOutcome Failed(CommandOutcome outcome)
@@ -120,8 +146,6 @@ public sealed class WorktreeService(
     internal const string BaseCommitRefPrefix = "refs/harness/worktree-base/";
 
     private const int GenerateAttempts = 10;
-
-    private const int NamedChangeLimit = 3;
 
     /// <summary>
     /// How long the command line lets a deletion run after an interruption before it ends the process.
@@ -163,6 +187,13 @@ public sealed class WorktreeService(
 
         if (!useRandomName)
         {
+            // An agent's worktree is made with its records by create-agent, never on its own: one made here would be an
+            // agent no orchestrator knows.
+            if (WorktreeAddress.TryParse(name, out var address, out _) && address!.IsNested)
+            {
+                return Usage($"'{name}' names an orchestrator's agent, whose worktree create-agent makes with its records; create-worktree makes a plain one.");
+            }
+
             if (!WorktreeName.ValidateFormat(name).TryGetName(out _, out var formatError))
             {
                 return Usage(formatError);
@@ -198,12 +229,66 @@ public sealed class WorktreeService(
             worktreeName = accepted;
         }
 
-        var path = layout.WorktreePathUnder(settings.Root, worktreeName);
+        // Plain worktrees and orchestrators share the names under the root: an orchestrator's agents' worktrees are made
+        // in the directory named for it there. Any directory of that name among the orchestrators' takes it, record or
+        // not: one a deletion stopped part way through is still an orchestrator's.
+        if (IsOrchestrators(layout, worktreeName))
+        {
+            return WorktreeOutcome.Failed(CommandOutcome.Refused(
+                $"'{worktreeName}' is an orchestrator's name, and its agents' worktrees are made under "
+                + $"'{ReportText.Printable(WorktreeAddress.Plain(worktreeName).PathUnder(layout.WorktreesDirectoryUnder(settings.Root)))}'; choose another name."));
+        }
+
+        return await CreateAtCoreAsync(context, WorktreeAddress.Plain(worktreeName), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<WorktreeOutcome> CreateAtAsync(
+        string startDirectory,
+        WorktreeAddress address,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+
+        var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
+
+        foreach (var segment in address.Segments)
+        {
+            if (!WorktreeName.Validate(segment, context.Config.Worktrees.MaxNameLength).TryGetName(out _, out var error))
+            {
+                return Usage(error);
+            }
+        }
+
+        return await CreateAtCoreAsync(context, address, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Creates the worktree at <paramref name="address"/>, whose names were checked already.</summary>
+    private async Task<WorktreeOutcome> CreateAtCoreAsync(
+        HarnessContext context,
+        WorktreeAddress address,
+        CancellationToken cancellationToken)
+    {
+        var layout = context.Layout;
+        var settings = context.Config.Worktrees;
+        var worktreesDirectory = layout.WorktreesDirectoryUnder(settings.Root);
+        var worktreeName = address.Name;
+        var path = address.PathUnder(worktreesDirectory);
 
         if (_fileSystem.DirectoryExists(path))
         {
             return WorktreeOutcome.Failed(
                 CommandOutcome.Refused($"A worktree named '{worktreeName}' already exists."));
+        }
+
+        // An agent's worktree sits in the directory named for its orchestrator, which is no worktree of its own: one
+        // made inside a worktree would be taken for part of it, by git there and by every tool that asks git.
+        var parent = Path.GetDirectoryName(path)!;
+
+        if (address.IsNested
+            && WorktreeInspector.HoldsOwnGit(_fileSystem, parent))
+        {
+            return WorktreeOutcome.Failed(CommandOutcome.Refused(
+                $"'{ReportText.Printable(parent)}' is a worktree, and an orchestrator's agents' worktrees cannot be made inside one; delete it, or name the orchestrator otherwise."));
         }
 
         var budget = _pathBudget.Check(
@@ -217,7 +302,7 @@ public sealed class WorktreeService(
             return WorktreeOutcome.Failed(CommandOutcome.Refused(budget.Describe(path)));
         }
 
-        _fileSystem.CreateDirectory(layout.WorktreesDirectoryUnder(settings.Root));
+        _fileSystem.CreateDirectory(parent);
 
         // Worktrees are always created from the main checkout, so running this from
         // inside a worktree adds a sibling rather than nesting one.
@@ -249,12 +334,15 @@ public sealed class WorktreeService(
         var baseCommit = await RecordBaseCommitAsync(layout, worktreeName, path, cancellationToken)
             .ConfigureAwait(false);
 
-        var details = baseCommit is null ? new List<string> { path } : [path, $"base {Short(baseCommit)}"];
+        var details = baseCommit is null ? new List<string> { path } : [path, $"base {ReportText.Commit(baseCommit)}"];
 
         return new WorktreeOutcome(
             CommandOutcome.Ok($"created worktree '{worktreeName}'", details),
             worktreeName,
-            path);
+            path)
+        {
+            BaseCommit = baseCommit,
+        };
     }
 
     /// <summary>
@@ -301,10 +389,10 @@ public sealed class WorktreeService(
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
+        // The commit is what the worktree was made from whether or not the record took: said, and still returned.
         if (!recorded.Succeeded)
         {
             _output.Detail(CreateCommand, $"could not record the base commit: {recorded.FailureMessage}");
-            return null;
         }
 
         return commit;
@@ -353,8 +441,6 @@ public sealed class WorktreeService(
 
     private static string BaseCommitRef(string worktreeName) => BaseCommitRefPrefix + worktreeName;
 
-    private static string Short(string commit) => commit.Length <= 12 ? commit : commit[..12];
-
     public async Task<WorktreeOutcome> DeleteAsync(
         string startDirectory,
         string name,
@@ -365,16 +451,17 @@ public sealed class WorktreeService(
     {
         // Only the shape is checked, not the length: a worktree created under a longer
         // limit must stay deletable after the limit is lowered.
-        if (!WorktreeName.ValidateFormat(name).TryGetName(out var worktreeName, out var error))
+        if (!WorktreeAddress.TryParse(name, out var address, out var error))
         {
             return Usage(error);
         }
 
+        var worktreeName = address!.Name;
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
         var layout = context.Layout;
         var settings = context.Config.Worktrees;
         var worktreesDirectory = layout.WorktreesDirectoryUnder(settings.Root);
-        var path = layout.WorktreePathUnder(settings.Root, worktreeName);
+        var path = address.PathUnder(worktreesDirectory);
 
         // Guards the one recursive delete this command performs, and comes before anything is
         // touched, so this refusal can never follow a deletion.
@@ -387,6 +474,33 @@ public sealed class WorktreeService(
 
         var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
 
+        // A directory holding worktrees below it - an orchestrator's, holding its agents' - is never deleted as one,
+        // --force or not: deleting it would delete each of them, with everything they hold and git's records left
+        // naming directories that are gone. Only a plain address with no .git of its own can be one - an agent's
+        // worktree holds none, and a worktree's submodules and nested repositories, a husk's included, are its own
+        // contents, which the checks below weigh: below it count the worktrees git records, and, in the directory named
+        // for an orchestrator, every one holding a .git of its own. Where that cannot be told, nothing is deleted.
+        if (!address.IsNested && _fileSystem.DirectoryExists(path) && !WorktreeInspector.HoldsOwnGit(_fileSystem, path))
+        {
+            IReadOnlyList<string> below;
+
+            try
+            {
+                below = await inspector.FindWorktreesBelowAsync(layout.MainCheckoutRoot, worktreesDirectory, path, IsOrchestrators(layout, worktreeName), cancellationToken).ConfigureAwait(false);
+            }
+            catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+            {
+                return Failed($"{ex.Message} Nothing was deleted: whether '{ReportText.Printable(path)}' holds worktrees below it could not be told.");
+            }
+
+            if (below.Count > 0)
+            {
+                return Refused(
+                    $"'{ReportText.Printable(path)}' is not deleted, --force or not: it holds worktrees below it - {ReportText.Listed(below)} - and deleting it would "
+                    + $"delete each of them. Delete each on its own, with '{ToolPackage.Command} {DeleteCommand} <address>' or, for an orchestrator's agent, delete-agent.");
+            }
+        }
+
         if (!_fileSystem.DirectoryExists(path))
         {
             var cleared = await ClearRecordAsync(layout, worktreeName, path, force, inspector, cancellationToken)
@@ -397,13 +511,13 @@ public sealed class WorktreeService(
             // them again is what deleting it again is for.
             if (cleared is null)
             {
-                return await AndItsHostCopiesAsync(context, worktreeName, path, treeConfig: null, deleted: null, cancellationToken).ConfigureAwait(false);
+                return await AndItsHostCopiesAsync(context, address, path, treeConfig: null, deleted: null, cancellationToken).ConfigureAwait(false);
             }
 
             if (cleared.Succeeded)
             {
                 await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
-                return await AndItsHostCopiesAsync(context, worktreeName, path, treeConfig: null, cleared, cancellationToken).ConfigureAwait(false);
+                return await AndItsHostCopiesAsync(context, address, path, treeConfig: null, cleared, cancellationToken).ConfigureAwait(false);
             }
 
             return cleared;
@@ -444,14 +558,11 @@ public sealed class WorktreeService(
             switch (identity.Membership)
             {
                 case WorktreeMembership.NotAWorktree:
-                    return Refused(
-                        $"'{Printable(path)}' is not a worktree git can find, so what it holds cannot be checked. "
-                        + $"Run 'git -C {Printable(layout.MainCheckoutRoot)} worktree repair', which helps only while git still has the worktree's record: "
-                        + "when it was moved or its .git file was lost; or pass --force to delete it anyway.");
+                    return await RefuseNotAWorktreeAsync(layout, worktreeName, path, inspector, cancellationToken).ConfigureAwait(false);
 
                 case WorktreeMembership.OfAnotherRepository:
                     return Refused(
-                        $"'{worktreeName}' is not a worktree of this repository: '{Printable(path)}' belongs to another repository, whose history would be deleted with it. "
+                        $"'{worktreeName}' is not a worktree of this repository: '{ReportText.Printable(path)}' belongs to another repository, whose history would be deleted with it. "
                         + "Move it elsewhere, or pass --force to delete it anyway.");
             }
 
@@ -502,7 +613,7 @@ public sealed class WorktreeService(
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                return Unchecked(worktreeName, $"'{Printable(path)}' could not be looked through for what another program holds in it: {ex.Message.TrimEnd('.')}.");
+                return Unchecked(worktreeName, $"'{ReportText.Printable(path)}' could not be looked through for what another program holds in it: {ex.Message.TrimEnd('.')}.");
             }
 
             if (held.Count > 0)
@@ -546,7 +657,7 @@ public sealed class WorktreeService(
             {
                 Outcome = outcome.Outcome with
                 {
-                    Details = [.. outcome.Outcome.Details ?? [], $"discarded {discarded.Count} uncommitted change(s): {Listed(discarded)}"],
+                    Details = [.. outcome.Outcome.Details ?? [], $"discarded {discarded.Count} uncommitted change(s): {ReportText.Listed(discarded)}"],
                 },
             };
         }
@@ -555,7 +666,7 @@ public sealed class WorktreeService(
         // worktree a failed removal left in place. Not cancelled: the removal is past its point of
         // no return, and a record left behind would answer for a later worktree of the same name.
         await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
-        return await AndItsHostCopiesAsync(context, worktreeName, path, treeConfig, outcome, cancellationToken).ConfigureAwait(false);
+        return await AndItsHostCopiesAsync(context, address, path, treeConfig, outcome, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<WorktreeListing>> ListAsync(
@@ -581,40 +692,79 @@ public sealed class WorktreeService(
             .ToList();
 
         var names = new List<(string Name, string Path)>();
+        var inspector = new WorktreeInspector(_gitClient, _fileSystem, _platform, _output);
 
-        foreach (var directory in _fileSystem.EnumerateDirectories(worktreesDirectory))
+        foreach (var directory in Directories(worktreesDirectory, "the worktrees root"))
         {
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
-            if (string.IsNullOrEmpty(name))
+            if (string.IsNullOrEmpty(name) || TakeListed(directory, name, orchestrator: null))
             {
                 continue;
             }
 
+            // A directory that is no worktree may be an orchestrator's, holding its agents' worktrees, each listed by
+            // both names; one holding none is said to be no worktree, as any other directory there is. One that cannot
+            // be looked in is said too, and listed as nothing: what it holds is never guessed at.
+            var agents = 0;
+            IReadOnlyList<string> children;
+
+            try
+            {
+                children = Directories(directory, $"'{name}' under the worktrees root");
+            }
+            catch (HarnessException ex)
+            {
+                _output.Warn(ListCommand, $"{ex.Message.TrimEnd('.')}, so no worktree below it is listed.");
+                continue;
+            }
+
+            foreach (var child in children)
+            {
+                var agent = Path.GetFileName(Path.TrimEndingDirectorySeparator(child));
+
+                if (!string.IsNullOrEmpty(agent) && TakeListed(child, agent, orchestrator: name))
+                {
+                    agents++;
+                }
+            }
+
+            if (agents == 0)
+            {
+                _output.Detail(
+                    ListCommand,
+                    $"'{name}' is under the worktrees root and is not a worktree git records, so it is not listed");
+            }
+        }
+
+        // Whether the directory is a worktree git records, listed under its address; one holding a .git entry git does
+        // not record is said, and taken as dealt with, since it is nobody's orchestrator.
+        bool TakeListed(string directory, string name, string? orchestrator)
+        {
+            var address = orchestrator is null ? name : WorktreeAddress.Nested(orchestrator, name).Name;
             var resolved = _fileSystem.ResolveLinks(directory);
 
-            if (registered.Any(worktree => PathsEqual(worktree.Path, resolved)))
+            if (inspector.RecordAt(registered, resolved) is not null)
             {
-                names.Add((name, resolved));
+                names.Add((address, resolved));
+                return true;
             }
-            else if (_fileSystem.FileExists(Path.Combine(directory, ".git")) || _fileSystem.DirectoryExists(Path.Combine(directory, ".git")))
+
+            if (WorktreeInspector.HoldsOwnGit(_fileSystem, directory))
             {
                 // Said without being asked. A directory holding a .git entry that git no longer
                 // records is what a removal leaves when git's record went and a file in use did not,
                 // and its name stays taken: dropped from the listing silently, it looks free.
                 _output.Warn(
                     ListCommand,
-                    $"'{name}' holds a .git entry, and git records no worktree there: what a removal leaves "
+                    $"'{address}' holds a .git entry, and git records no worktree there: what a removal leaves "
                     + "when git's record goes and something in the directory could not. It is not listed, "
                     + "and a new worktree cannot take its name until it is gone; look inside for anything "
                     + $"wanted, then delete '{directory}'.");
+                return true;
             }
-            else
-            {
-                _output.Detail(
-                    ListCommand,
-                    $"'{name}' is under the worktrees root and is not a worktree git records, so it is not listed");
-            }
+
+            return false;
         }
 
         var listings = new List<WorktreeListing>();
@@ -631,6 +781,24 @@ public sealed class WorktreeService(
 
         return listings;
     }
+
+    /// <summary>The directories directly in <paramref name="directory"/>; one that cannot be looked in raises, named as <paramref name="what"/>.</summary>
+    /// <exception cref="HarnessException">It could not be looked in (<see cref="HarnessExit.CommandFailed"/>).</exception>
+    private IReadOnlyList<string> Directories(string directory, string what)
+    {
+        try
+        {
+            return [.. _fileSystem.EnumerateDirectories(directory)];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"{what}, '{ReportText.Printable(directory)}', could not be looked in: {ex.Message.TrimEnd('.')}");
+        }
+    }
+
+    /// <summary>Whether <paramref name="name"/> is an orchestrator's: a directory of that name is kept among the orchestrators'.</summary>
+    private bool IsOrchestrators(HarnessLayout layout, string name)
+        => _fileSystem.DirectoryExists(Orchestration.OrchestratorLayout.Of(layout, name).Directory);
 
     /// <summary>
     /// How many characters <c>build/&lt;variant&gt;/</c> adds below a worktree, for the longest
@@ -659,8 +827,50 @@ public sealed class WorktreeService(
         return longest < 0 ? 0 : Build.VariantKey.BuildRootName.Length + longest + 2;
     }
 
+    /// <summary>
+    /// The refusal for a directory under the root that is not a worktree git can find, which names the way back only
+    /// where there is one: <c>git worktree repair</c> rebuilds a lost .git file or a moved worktree from git's record,
+    /// and has nothing to rebuild from once the record is gone too - which is what a removal that stopped part way
+    /// leaves, git having deleted both first.
+    /// </summary>
+    private async Task<WorktreeOutcome> RefuseNotAWorktreeAsync(
+        HarnessLayout layout,
+        string name,
+        string path,
+        WorktreeInspector inspector,
+        CancellationToken cancellationToken)
+    {
+        GitWorktree? record;
+
+        try
+        {
+            record = await inspector.FindRecordAsync(layout.MainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return Unchecked(name, ex.Message);
+        }
+
+        if (record is not null)
+        {
+            return Refused(
+                $"'{ReportText.Printable(path)}' is not a worktree git can find, so what it holds cannot be checked, though git still records a worktree there. "
+                + $"Run 'git -C {ReportText.Printable(layout.MainCheckoutRoot)} worktree repair', which rebuilds its .git file from that record, as after it was moved or its .git file was lost; "
+                + "or pass --force to delete it anyway.");
+        }
+
+        var what = WorktreeInspector.HoldsOwnGit(_fileSystem, path)
+            ? "its .git names no worktree git records"
+            : "it holds no .git of its own, and git records no worktree there";
+
+        return Refused(
+            $"'{ReportText.Printable(path)}' is not a worktree, so what it holds cannot be checked: {what}. That is what a removal that stopped part way leaves, "
+            + "and what a directory made there by hand looks like, and git worktree repair has no record to rebuild it from. "
+            + $"Look at what it holds, and once nothing in it is needed, run '{ToolPackage.Command} {DeleteCommand} {name} --force' to delete it.");
+    }
+
     private static WorktreeOutcome Usage(string message)
-        => WorktreeOutcome.Failed(CommandOutcome.Failed(HarnessExit.UsageError, message));
+        => WorktreeOutcome.Failed(CommandOutcome.Usage(message));
 
     private static WorktreeOutcome Refused(string message)
         => WorktreeOutcome.Failed(CommandOutcome.Refused(message));
@@ -735,6 +945,33 @@ public sealed class WorktreeService(
         bool discardsChanges,
         CancellationToken stopping)
     {
+        // git for Windows leaves every directory junction when it removes a worktree, and every directory above one,
+        // reporting the worktree removed with its .git file and its record already gone. So each junction is removed
+        // first, as the link it is, never what it leads to: one that cannot be removed stops the deletion here, before
+        // git has touched anything. Not interrupted part way: the links go together, before git starts.
+        IReadOnlyList<string> unlinked;
+
+        try
+        {
+            unlinked = _fileSystem.RemoveJunctions(path);
+        }
+        catch (JunctionRemovalException ex)
+        {
+            var before = ex.Removed.Count == 0
+                ? "Nothing of it was removed"
+                : $"Only the {ex.Removed.Count} junction(s) before it were removed, as links, and what each led to is untouched: {ReportText.Listed(ex.Removed)}";
+
+            return Failed(
+                $"Worktree '{name}' was not deleted: its directory junction {ex.Message.TrimEnd('.')}. {before}; git was not run. "
+                + $"Deal with that junction, then run '{ToolPackage.Command} {DeleteCommand} {name}' again.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Failed(
+                $"Worktree '{name}' was not deleted: '{ReportText.Printable(path)}' could not be looked through for its directory junctions, "
+                + $"which git would leave: {ex.Message.TrimEnd('.')}. Nothing of it was removed; git was not run.");
+        }
+
         string[] arguments = holdsSubmodules || discardsChanges
             ? ["worktree", "remove", "--force", path]
             : ["worktree", "remove", path];
@@ -743,21 +980,39 @@ public sealed class WorktreeService(
             .RunAsync(layout.MainCheckoutRoot, arguments, cancellationToken: stopping)
             .ConfigureAwait(false);
 
+        var junctions = unlinked.Count == 0
+            ? string.Empty
+            : $" Its {unlinked.Count} directory junction(s) had been removed first, as links: {ReportText.Listed(unlinked)}.";
+
         // Nothing more is deleted here when git fails: git's refusal is the second check, and
         // deleting past it would undo the point of running it.
         if (!removal.Succeeded)
         {
             return Failed(
                 $"git could not remove worktree '{name}': {removal.FailureMessage.TrimEnd('.')}. "
-                + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true));
+                + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true)
+                + junctions);
         }
 
         if (_fileSystem.DirectoryExists(path))
         {
-            return Failed($"git reported worktree '{name}' removed, but '{path}' still exists.");
+            return Failed(
+                $"git reported worktree '{name}' removed, but '{path}' still exists. "
+                + DescribeWhatRemains(name, path, administrativeDirectory, checksRan: true)
+                + junctions);
         }
 
-        return Verified(name, path, administrativeDirectory, gitFailure: null);
+        var verified = Verified(name, path, administrativeDirectory, gitFailure: null);
+
+        return unlinked.Count == 0 || !verified.Succeeded
+            ? verified
+            : verified with
+            {
+                Outcome = verified.Outcome with
+                {
+                    Details = [.. verified.Outcome.Details ?? [], $"removed {unlinked.Count} directory junction(s) first, as links, never what they lead to: {ReportText.Listed(unlinked)}"],
+                },
+            };
     }
 
     /// <summary>
@@ -770,14 +1025,13 @@ public sealed class WorktreeService(
     private string DescribeWhatRemains(string name, string path, string? administrativeDirectory, bool checksRan)
     {
         var finish = $"'{ToolPackage.Command} {DeleteCommand} {name} --force'";
-        var dotGit = Path.Combine(path, ".git");
         var gone = new List<string>();
 
         if (!_fileSystem.DirectoryExists(path))
         {
             gone.Add("its directory");
         }
-        else if (!_fileSystem.FileExists(dotGit) && !_fileSystem.DirectoryExists(dotGit))
+        else if (!WorktreeInspector.HoldsOwnGit(_fileSystem, path))
         {
             gone.Add("its .git file");
         }
@@ -800,7 +1054,7 @@ public sealed class WorktreeService(
             : "Its directory, its .git file and git's record of it are";
 
         return $"{remaining} still there, but git may already have deleted some files, which would now stop a checked delete as changes. "
-            + $"Close whatever holds its files open, look at what is left with 'git -C {Printable(path)} status', then run {finish} to finish deleting it.";
+            + $"Close whatever holds its files open, look at what is left with 'git -C {ReportText.Printable(path)} status', then run {finish} to finish deleting it.";
     }
 
     /// <summary>
@@ -880,11 +1134,8 @@ public sealed class WorktreeService(
 
         try
         {
-            // With no directory to ask in, git's list is the only place the record can be found. git
-            // lists it by the path it resolved, so the path is resolved the same way to match it.
-            var resolved = inspector.ResolveLinks(path);
-            var worktrees = await _gitClient.ListWorktreesAsync(layout.MainCheckoutRoot, cancellationToken).ConfigureAwait(false);
-            record = worktrees.FirstOrDefault(worktree => !worktree.IsMain && PathsEqual(worktree.Path, resolved));
+            // With no directory to ask in, git's list is the only place the record can be found.
+            record = await inspector.FindRecordAsync(layout.MainCheckoutRoot, path, cancellationToken).ConfigureAwait(false);
 
             if (record is not null && !force)
             {
@@ -937,11 +1188,11 @@ public sealed class WorktreeService(
     }
 
     /// <summary>
-    /// Asks each host holding a copy of worktree <paramref name="name"/> to remove it, as the last part of deleting
-    /// it, and adds what they did to <paramref name="deleted"/>.
+    /// Asks each host holding a copy of the worktree at <paramref name="address"/> to remove it, as the last part of
+    /// deleting it, and adds what they did to <paramref name="deleted"/>.
     /// </summary>
     /// <param name="context">The repository.</param>
-    /// <param name="name">The worktree.</param>
+    /// <param name="address">The worktree, whose copies are kept under its <see cref="WorktreeAddress.CopyName"/>.</param>
     /// <param name="path">The worktree's directory, whose copies these are.</param>
     /// <param name="treeConfig">The configuration it ran on, read before it was deleted, where it could be.</param>
     /// <param name="deleted">What deleting it here did, or <see langword="null"/> when it was gone already.</param>
@@ -953,12 +1204,13 @@ public sealed class WorktreeService(
     /// </remarks>
     private async Task<WorktreeOutcome> AndItsHostCopiesAsync(
         HarnessContext context,
-        string name,
+        WorktreeAddress address,
         string path,
         HarnessConfig? treeConfig,
         WorktreeOutcome? deleted,
         CancellationToken cancellationToken)
     {
+        var name = address.Name;
         var done = deleted is null ? $"Worktree '{name}' is gone already" : $"Worktree '{name}' was deleted";
         var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
         IReadOnlyList<string> before = deleted?.Outcome.Details ?? [];
@@ -966,7 +1218,7 @@ public sealed class WorktreeService(
 
         try
         {
-            removal = await _hostCopies.RemoveAsync(context, name, path, treeConfig, cancellationToken).ConfigureAwait(false);
+            removal = await _hostCopies.RemoveAsync(context, address.CopyName, path, treeConfig, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
         {
@@ -1030,22 +1282,18 @@ public sealed class WorktreeService(
         string? gitFailure,
         WorktreeInspector inspector)
     {
-        IReadOnlyList<GitWorktree> remaining;
-        string resolved;
+        GitWorktree? remaining;
 
         try
         {
-            // git lists a worktree by the path it resolved, links followed, so the path is resolved
-            // the same way before the two are compared.
-            resolved = inspector.ResolveLinks(path);
-            remaining = await _gitClient.ListWorktreesAsync(layout.MainCheckoutRoot, CancellationToken.None).ConfigureAwait(false);
+            remaining = await inspector.FindRecordAsync(layout.MainCheckoutRoot, path, CancellationToken.None).ConfigureAwait(false);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
         {
             return Failed($"Worktree '{name}' is deleted, but whether git still has it registered could not be confirmed: {ex.Message}");
         }
 
-        return remaining.Any(worktree => !worktree.IsMain && PathsEqual(worktree.Path, resolved))
+        return remaining is not null
             ? StillRegistered(name, path, gitFailure)
             : Removed(name, path);
     }
@@ -1053,7 +1301,7 @@ public sealed class WorktreeService(
     private static WorktreeOutcome StillRegistered(string name, string path, string? gitFailure)
         => Failed(gitFailure is null
             ? $"Worktree '{name}' is deleted, but git still has it registered, which keeps the name from being used again; "
-                + $"run 'git worktree remove --force --force {Printable(path)}' to clear it."
+                + $"run 'git worktree remove --force --force {ReportText.Printable(path)}' to clear it."
             : $"Worktree '{name}' is deleted, but git still has it registered, which keeps the name from being used again, "
                 + $"and could not clear it: {gitFailure}");
 
@@ -1065,13 +1313,13 @@ public sealed class WorktreeService(
         if (findings.Changes.Count > 0)
         {
             reasons.Add(
-                $"it has {findings.Changes.Count} uncommitted change(s) that would be lost: {Listed(findings.Changes)} "
+                $"it has {findings.Changes.Count} uncommitted change(s) that would be lost: {ReportText.Listed(findings.Changes)} "
                 + "(commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree)");
         }
 
         if (findings.Commits > 0 && findings.Head is { } head)
         {
-            var shortHead = head[..Math.Min(12, head.Length)];
+            var shortHead = ReportText.Commit(head);
 
             reasons.Add(
                 $"{findings.Commits} commit(s) up to {shortHead} are on no branch, tag, remote-tracking ref, newest stash or other worktree's HEAD "
@@ -1088,34 +1336,26 @@ public sealed class WorktreeService(
             };
 
             reasons.Add(
-                $"submodule '{Printable(submodule.Path)}' holds {held}, in a repository deleted with the worktree "
+                $"submodule '{ReportText.Printable(submodule.Path)}' holds {held}, in a repository deleted with the worktree "
                 + "(push them, or keep them elsewhere)");
         }
 
         if (findings.LockReason is { } reason)
         {
-            var because = reason.Length == 0 ? string.Empty : $": {Printable(reason)}";
-            reasons.Add($"it is locked{because} (run 'git worktree unlock {Printable(path)}')");
+            var because = reason.Length == 0 ? string.Empty : $": {ReportText.Printable(reason)}";
+            reasons.Add($"it is locked{because} (run 'git worktree unlock {ReportText.Printable(path)}')");
         }
 
         if (findings.MovedFrom is { } recorded)
         {
-            var repair = $"run 'git -C {Printable(mainCheckoutRoot)} worktree repair {Printable(path)}' to point the record here";
+            var repair = $"run 'git -C {ReportText.Printable(mainCheckoutRoot)} worktree repair {ReportText.Printable(path)}' to point the record here";
 
             reasons.Add(recorded.Length == 0
                 ? $"git's record of it names no directory ({repair})"
-                : $"git's record of it names '{Printable(recorded)}', as after moving it by hand ({repair})");
+                : $"git's record of it names '{ReportText.Printable(recorded)}', as after moving it by hand ({repair})");
         }
 
         return $"Worktree '{name}' was not deleted, because {string.Join("; ", reasons)}; fix that, or pass --force to delete it anyway.";
-    }
-
-    /// <summary>The first few of <paramref name="changes"/> by name, and how many more there are.</summary>
-    private static string Listed(IReadOnlyList<string> changes)
-    {
-        var named = string.Join(", ", changes.Take(NamedChangeLimit).Select(Printable));
-
-        return changes.Count > NamedChangeLimit ? $"{named} and {changes.Count - NamedChangeLimit} more" : named;
     }
 
     /// <summary>
@@ -1132,7 +1372,7 @@ public sealed class WorktreeService(
             : $"One is this command's own current directory: close what holds the rest, then run {again} again from outside the worktree.";
 
         return $"Worktree '{name}' was not deleted, and nothing of it was removed: something holds "
-            + $"{Listed([.. held.Select(entry => $"'{Printable(entry.Path)}'")])} - a process whose current directory is in "
+            + $"{ReportText.Listed([.. held.Select(entry => $"'{ReportText.Printable(entry.Path)}'")])} - a process whose current directory is in "
             + "the worktree, a program with a file of it open, or a program running from it. Windows would not let git "
             + "delete what is held, so git would stop part way, with the worktree's .git file and git's record of it "
             + $"already gone. {remedy} "
@@ -1140,122 +1380,49 @@ public sealed class WorktreeService(
     }
 
     /// <summary>
-    /// Text as it can appear in a one-line message. A control character in a file name, such as
-    /// a newline, would split the line or reach the terminal raw, so such text is quoted and escaped.
-    /// </summary>
-    private static string Printable(string text)
-    {
-        if (!text.Any(char.IsControl))
-        {
-            return text;
-        }
-
-        var builder = new StringBuilder("\"");
-
-        foreach (var character in text)
-        {
-            switch (character)
-            {
-                case '\n':
-                    builder.Append("\\n");
-                    break;
-                case '\r':
-                    builder.Append("\\r");
-                    break;
-                case '\t':
-                    builder.Append("\\t");
-                    break;
-                case '"':
-                    builder.Append("\\\"");
-                    break;
-                case '\\':
-                    builder.Append("\\\\");
-                    break;
-                default:
-                    if (char.IsControl(character))
-                    {
-                        builder.Append("\\u").Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
-                    }
-                    else
-                    {
-                        builder.Append(character);
-                    }
-
-                    break;
-            }
-        }
-
-        return builder.Append('"').ToString();
-    }
-
-    /// <summary>
-    /// Generates a name no existing worktree already uses, or <see langword="null"/>
-    /// when repeated attempts all collided.
-    /// </summary>
-    /// <summary>
     /// Describes the declared evidence roots that hold anything, or <see langword="null"/> when none
     /// does. Phrased to follow "because", like every other reason a deletion gives.
     /// </summary>
     /// <remarks>
-    /// A root that cannot be read counts as holding something. An unreadable directory is not an
-    /// empty one, and every measurement here is biased toward keeping work rather than losing it.
+    /// Found as <see cref="WorktreeEvidence"/> finds them, the one reading delete-agent keeps them by. A root that cannot
+    /// be read counts as holding something: an unreadable directory is not an empty one, and every measurement here is
+    /// biased toward keeping work rather than losing it. A root that is, or is reached through, a link holds nothing the
+    /// removal would take, and is not counted.
     /// </remarks>
     private string? DescribeEvidence(string worktreePath, IReadOnlyList<string> evidenceRoots)
     {
-        var occupied = new List<string>();
+        var found = WorktreeEvidence.Find(_fileSystem, _platform.PathComparison, worktreePath, evidenceRoots);
 
-        foreach (var declared in evidenceRoots)
-        {
-            var root = Path.GetFullPath(Path.Combine(worktreePath, declared));
-
-            // A declared root reaching outside the worktree would make this refuse on files the
-            // deletion was never going to touch.
-            if (!PathContainment.IsStrictlyInside(worktreePath, root, _platform.PathComparison))
-            {
-                continue;
-            }
-
-            if (!_fileSystem.DirectoryExists(root))
-            {
-                continue;
-            }
-
-            try
-            {
-                // Files anywhere beneath it, not only directly in it: a measurement written into a
-                // subdirectory is still the only copy of it.
-                if (_fileSystem.EnumerateFiles(root, recursive: true).Any())
-                {
-                    occupied.Add(declared);
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                occupied.Add($"{declared} (which could not be read: {ex.Message})");
-            }
-        }
+        // Files anywhere beneath a root, not only directly in it: a measurement written into a subdirectory is still the
+        // only copy of it.
+        List<string> occupied =
+        [
+            .. found.Files.Keys,
+            .. found.Unreadable.Select(root => $"{root.Root} (which could not be read: {root.Why})"),
+        ];
 
         if (occupied.Count == 0)
         {
             return null;
         }
 
-        var named = occupied.Take(NamedChangeLimit).ToList();
-        var listed = string.Join(", ", named);
-        var remaining = occupied.Count - named.Count;
-
-        return remaining > 0
-            ? $"{occupied.Count} declared evidence directories hold measurements that only exist there: {listed} and {remaining} more"
-            : $"{occupied.Count} declared evidence director{(occupied.Count == 1 ? "y holds" : "ies hold")} measurements that only exist there: {listed}";
+        return occupied.Count == 1
+            ? $"1 declared evidence directory holds measurements that only exist there: {ReportText.Listed(occupied)}"
+            : $"{occupied.Count} declared evidence directories hold measurements that only exist there: {ReportText.Listed(occupied)}";
     }
 
+    /// <summary>
+    /// Generates a name no existing worktree or orchestrator already uses, or <see langword="null"/>
+    /// when repeated attempts all collided.
+    /// </summary>
     private string? GenerateUnusedName(HarnessLayout layout, string root, int length)
     {
         for (var attempt = 0; attempt < GenerateAttempts; attempt++)
         {
             var candidate = WorktreeName.Generate(length);
 
-            if (!_fileSystem.DirectoryExists(layout.WorktreePathUnder(root, candidate)))
+            if (!_fileSystem.DirectoryExists(layout.WorktreePathUnder(root, candidate))
+                && !_fileSystem.DirectoryExists(Path.Combine(layout.OrchestratorsDirectory, candidate)))
             {
                 return candidate;
             }
@@ -1288,9 +1455,5 @@ public sealed class WorktreeService(
         }
     }
 
-    private bool PathsEqual(string left, string right)
-        => string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            _platform.PathComparison);
+    private bool PathsEqual(string left, string right) => PathContainment.AreSame(left, right, _platform.PathComparison);
 }

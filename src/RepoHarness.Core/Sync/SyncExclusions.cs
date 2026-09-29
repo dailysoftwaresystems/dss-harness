@@ -33,6 +33,7 @@ public sealed class SyncExclusions
     private readonly string[] _excluded;
     private readonly string[] _neverTransfer;
     private readonly string[] _coveredByConfiguration;
+    private readonly string _worktreesRoot;
 
     /// <summary>Builds the policy from configuration.</summary>
     /// <param name="sync">The sync section.</param>
@@ -59,7 +60,7 @@ public sealed class SyncExclusions
             .Distinct(StringComparer.Ordinal)];
 
         _withheld = [.. sync.EffectiveNeverTransfer
-            .Concat([worktreesRoot])
+            .Concat(TreeFloor.Of(worktreesRoot))
             .Concat(gitIgnored ?? [])
             .Select(Normalize)
             .Where(path => path.Length > 0)
@@ -69,6 +70,8 @@ public sealed class SyncExclusions
             .Select(Normalize)
             .Where(path => path.Length > 0)
             .Distinct(StringComparer.Ordinal)];
+
+        _worktreesRoot = Normalize(worktreesRoot);
 
         // What an entry of the configuration's, or the worktrees root, already covers - where the search
         // for a misplaced entry counts no name: see RootedEntriesMatchingNothing.
@@ -350,7 +353,9 @@ public sealed class SyncExclusions
     /// contents without ignoring the directory, a path that does not exist is ignored by nothing,
     /// and a placeholder a repository tracks on purpose is not a disagreement. Each of those would
     /// make this refuse a tree that is exactly as its author meant it.
-    /// The floor is exempt: <c>.git</c> is never ignored by git and never could be.
+    /// <c>.git</c> alone is exempt: git never ignores it, and never could. The orchestrators' directory, on the floor too, is
+    /// not: it is ignored by the rule init writes, and a branch whose rules predate that one would hand records and
+    /// transcripts to the next <c>git add</c>.
     /// </remarks>
     public async Task RefuseWhenNoLongerIgnoredAsync(
         IGitClient gitClient,
@@ -361,7 +366,7 @@ public sealed class SyncExclusions
 
         var uncovered = new List<string>();
 
-        foreach (var path in _withheld.Where(path => !SyncConfig.NeverTransferFloor.Contains(path, StringComparer.Ordinal)))
+        foreach (var path in _withheld.Where(path => !string.Equals(path, ".git", StringComparison.Ordinal)))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -382,9 +387,13 @@ public sealed class SyncExclusions
                     $"Whether git still ignores '{path}' could not be established: {status.FailureMessage}");
             }
 
+            // The placeholder init keeps in the worktrees root is the harness's own, tracked on purpose, and shows as
+            // untracked only until it is committed: it is no file an ignore rule stopped covering.
+            var placeholder = $"?? {path}/{HarnessLayout.GitKeepFileName}";
+
             if (status.StandardOutput
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                .Any(line => line.StartsWith("?? ", StringComparison.Ordinal)))
+                .Any(line => line.StartsWith("?? ", StringComparison.Ordinal) && !string.Equals(line.TrimEnd('\r'), placeholder, StringComparison.Ordinal)))
             {
                 uncovered.Add(path);
             }
@@ -395,13 +404,19 @@ public sealed class SyncExclusions
             return;
         }
 
+        // Each named by where it came from: a worktrees root reported as a sync.neverTransfer entry would send a reader
+        // to a line that is not in the file.
+        var named = uncovered
+            .Select(path => string.Equals(path, _worktreesRoot, StringComparison.Ordinal)
+                ? $"the worktrees root '{path}'"
+                : _neverTransfer.Contains(path, StringComparer.Ordinal) ? $"sync.neverTransfer's '{path}'" : $"'{path}', which git ignored")
+            .ToList();
+
         throw new HarnessException(
             HarnessExit.Refused,
-            $"sync.neverTransfer names {string.Join(", ", uncovered.Select(path => $"'{path}'"))}, "
-            + "which now hold files git neither ignores nor tracks. Sync still withholds them, but "
-            + "the repository has two disagreeing statements of what is local to a machine, and "
-            + "those files read as work to commit: restore the ignore rule, or drop the path from "
-            + "sync.neverTransfer.");
+            $"{string.Join(", ", named)} now {(uncovered.Count == 1 ? "holds" : "hold")} files git neither ignores nor tracks. "
+            + "Sync still withholds them, but the repository has two disagreeing statements of what is local to a machine, "
+            + "and those files read as work to commit: restore the ignore rule, or, for a sync.neverTransfer entry, drop it.");
     }
 
     private static bool Matches(string[] paths, string relativePath)

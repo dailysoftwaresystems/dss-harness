@@ -403,14 +403,7 @@ public sealed class RunnerRunServiceTests
         var outside = temp.WriteFile(Path.Combine("outside", "elsewhere.txt"), "x");
         var target = Path.GetDirectoryName(outside)!;
 
-        try
-        {
-            Directory.CreateSymbolicLink(temp.Combine("can-link"), target);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Assert.Skip($"This machine does not allow creating symbolic links: {ex.Message}");
-        }
+        TestLinks.OrSkip(() => Directory.CreateSymbolicLink(temp.Combine("can-link"), target));
 
         await WriteActionAsync(factory, temp, $$"""
             name: corpus

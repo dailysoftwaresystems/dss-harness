@@ -387,64 +387,44 @@ public sealed class LocalSyncTransport(
             // Resolved the same way every other path a sync acts on is, so one arriving with '..'
             // cannot reach a directory beside the copy.
             var full = Resolve(root, directory);
-            var relative = directory;
 
-            // Only the directory the plan emptied is answered for. The walk continues upward to take
-            // parents the removal has just emptied in turn, but a parent that still holds something
-            // is the ordinary case — it is where the tree keeps its other files — and reporting it
-            // as a copy that diverges would put a false warning on almost every sync that deletes a
-            // nested directory.
-            var emptiedHere = true;
-
-            while (PathContainment.IsStrictlyInside(expanded, full, _platform.PathComparison))
+            if (!PathContainment.IsStrictlyInside(expanded, full, _platform.PathComparison) || !_fileSystem.DirectoryExists(full))
             {
-                // Files and subdirectories both, and links among them: EnumerateFiles lists a link
-                // to a file and EnumerateDirectories lists a link to a directory, so a directory
-                // holding nothing but a link is correctly not empty. That is the case the manifest
-                // cannot see, and the one where being wrong deletes what no plan can speak for.
-                if (!_fileSystem.DirectoryExists(full))
-                {
-                    break;
-                }
-
-                var held = _fileSystem
-                    .EnumerateFiles(full, recursive: false)
-                    .Concat(_fileSystem.EnumerateDirectories(full))
-                    .Select(Path.GetFileName)
-                    .Where(name => !string.IsNullOrEmpty(name))
-                    .Order(StringComparer.Ordinal)
-                    .Take(HeldNamesReported)
-                    .ToList();
-
-                if (held.Count > 0)
-                {
-                    if (emptiedHere)
-                    {
-                        // Answered for rather than passed over. This is the shape a consumer measured:
-                        // a directory whose every managed file the plan deleted, kept alive by bytecode
-                        // that sync.neverTransfer protects, so the checkout diverges from this tree and
-                        // the next structural check on that host fails with nothing naming the cause.
-                        answered.Add(EmptiedDirectory.Kept(relative.Replace('\\', '/'), held!));
-                    }
-
-                    break;
-                }
-
-                _fileSystem.DeleteDirectory(full);
-                answered.Add(EmptiedDirectory.Gone(relative.Replace('\\', '/')));
-
-                if (Path.GetDirectoryName(full) is not { Length: > 0 } parent)
-                {
-                    break;
-                }
-
-                full = parent;
-                relative = ManifestBuilder.Relative(expanded, parent);
-                emptiedHere = false;
+                continue;
             }
+
+            // Files and subdirectories both, and links among them, as the one emptiness test counts them: a directory
+            // holding nothing but a link is correctly not empty. That is the case the manifest cannot see, and the one
+            // where being wrong deletes what no plan can speak for.
+            if (!_fileSystem.IsEmpty(full))
+            {
+                // Answered for rather than passed over. This is the shape a consumer measured: a directory whose every
+                // managed file the plan deleted, kept alive by bytecode that sync.neverTransfer protects, so the checkout
+                // diverges from this tree and the next structural check on that host fails with nothing naming the cause.
+                answered.Add(EmptiedDirectory.Kept(directory.Replace('\\', '/'), HeldNames(full)));
+                continue;
+            }
+
+            // Only the directory the plan emptied is answered for. The walk continues upward to take parents the removal
+            // has just emptied in turn, but a parent that still holds something is the ordinary case - it is where the
+            // tree keeps its other files - and reporting it as a copy that diverges would put a false warning on almost
+            // every sync that deletes a nested directory.
+            var removed = _fileSystem.RemoveEmptiedDirectories(expanded, full, _platform.PathComparison);
+            answered.AddRange(removed.Select((gone, index) => EmptiedDirectory.Gone((index == 0 ? directory : ManifestBuilder.Relative(expanded, gone)).Replace('\\', '/'))));
         }
 
         return Task.FromResult<IReadOnlyList<EmptiedDirectory>>(answered);
+
+        // The first names a directory still holds, as an answer for it gives them.
+        IReadOnlyList<string> HeldNames(string full)
+            => [.. _fileSystem
+                .EnumerateFiles(full, recursive: false)
+                .Concat(_fileSystem.EnumerateDirectories(full))
+                .Select(Path.GetFileName)
+                .OfType<string>()
+                .Where(name => name.Length > 0)
+                .Order(StringComparer.Ordinal)
+                .Take(HeldNamesReported)];
     }
 
     /// <summary>
@@ -479,12 +459,7 @@ public sealed class LocalSyncTransport(
 
         try
         {
-            await using var stream = _fileSystem.OpenRead(path);
-            using var buffer = new MemoryStream();
-
-            await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-
-            return buffer.ToArray();
+            return await _fileSystem.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {

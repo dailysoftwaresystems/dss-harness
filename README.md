@@ -54,6 +54,14 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `create-worktree <name>` | Create a worktree (`--random` generates the name) |
 | `delete-worktree <name> [--force]` | Remove a worktree and everything under it, and its copies on hosts; refuses one holding work that would be lost, a locked one, or one whose evidence directories hold measurements, without `--force` |
 | `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is |
+| `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
+| `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
+| `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again; refused over changes of its own without `--force` |
+| `refresh-agent <o> <a> [<path>...] [--apply]` | Copy the main tree's changes under the paths - the anchor registries' directory by default - into a live agent, recorded as handed to it |
+| `fold-agent <o> <a> [--apply] [--settled <path>]` | Fold an agent's own work into the main tree and apply the rows it filed, all or nothing; its worktree is kept |
+| `delete-agent <o> <a> [--apply] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
+| `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
+| `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once every agent of it is deleted |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
 | `write-anchor <id> --priority P --trigger TEXT` | Add an anchor: to the pending registry, or to done when closed |
 | `set-anchor <id>` | Change an anchor; changing its status moves it between registries |
@@ -70,13 +78,17 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |
 | `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, worktrees, anchors, layout, secrets, runners |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, worktrees, orchestrators, anchors, layout, secrets, tools, runners, verdicts and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
 Zero means every selected leg reached a verdict and none failed. A run where nothing failed but
 some leg never reported exits `21` and names those legs: a leg that did no work proves nothing
-about the code, so it is never counted among the legs that passed.
+about the code, so it is never counted among the legs that passed. A command that changes an
+orchestrator or an agent exits `21` too when it stops part way - an agent closed and its worktree
+not yet removed, a fold or a hand-over half written, an orchestrator half deleted; run again, it
+finishes.
+`dssharness help orchestrators` explains seeding, folding and deleting agents.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,
 `testTimingRegex` or `runTimingRegex`, and prints them under the ledger as a `TIMINGS` block naming
@@ -141,16 +153,22 @@ in `config.json`.
 .harness-config/sshItems/<name>/.env         ignored; address, user, port
 .harness-config/sshItems/<name>/.key         ignored; the private key
 .harness-config/wslDistros/<name>/.env       ignored; the distribution and its credential
-.harness-config/worktrees/                   ignored whole, never a placeholder; created on first use
+.worktrees/                                  contents ignored, .gitkeep tracked; the worktrees
+.orchestrators/                              contents ignored, .gitkeep tracked; orchestrators and their agents
+.orchestrators/<o>/agent.json                ignored; the orchestrator's record
+.orchestrators/<o>/logs/<name>.jsonl         ignored; a line for each run that reached it or one agent, refusals included
+.orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
+.orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
+.orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, rows, the rows applied, kept evidence
 .harness-config/runs/                        ignored; one directory of logs per run
 .harness-config/lock.json                    ignored; records in-progress runs
 .plans/_deferred-anchor-registry.md          tracked; live anchors
 .plans/_deferred-anchor-registry-done.md     tracked; closed anchors
 ```
 
-The worktrees root is `worktrees.root` in `config.json`, shown here at its default. A
-repository whose build paths are long sets a shorter one, such as `.worktrees`, which buys
-back the characters the default spends before a worktree's own name.
+The worktrees root is `worktrees.root` in `config.json`, shown here as `init` writes it. A
+configuration that names none keeps worktrees under `.harness-config/worktrees`, which spends
+15 more characters of the path budget before a worktree's own name.
 
 Ignored state lives only in the main checkout. A worktree receives the tracked part
 of `.harness-config` through git but never the ignored part, so secrets and the run
