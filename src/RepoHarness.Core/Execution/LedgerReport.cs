@@ -322,15 +322,24 @@ public sealed class LedgerReport
     }
 
     /// <summary>
-    /// The table, heading first: <c>LEG / VERDICT / DURATION / DETAIL</c>.
+    /// The table, heading first: <c>LEG / VERDICT / DURATION / DETAIL</c>; nothing when no leg has a row.
     /// </summary>
     /// <remarks>
     /// Each column is as wide as what it holds, so a long verdict such as
     /// <c>skipped-unavailable</c> never pushes a detail into the duration column and nothing is
     /// truncated. The duration is right-aligned, so two legs' times can be compared down the column.
+    /// <para>
+    /// A command that stopped before any leg reached a verdict has no table: the heading alone, above
+    /// the line saying why it stopped, read as a table whose rows had gone missing.
+    /// </para>
     /// </remarks>
     public IReadOnlyList<string> Render()
     {
+        if (Lines.Count == 0)
+        {
+            return [];
+        }
+
         var leg = Width(Headings[0], Lines.Select(line => line.Leg));
         var verdict = Width(Headings[1], Lines.Select(line => Verdicts.Display(line.Verdict)));
         var duration = Width(Headings[2], Lines.Select(line => FormatDuration(line.Duration)));

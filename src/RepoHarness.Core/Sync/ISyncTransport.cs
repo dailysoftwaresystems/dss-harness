@@ -172,6 +172,15 @@ public interface ISyncTransport
     Task<CopyRemoval> RemoveCopyAsync(string root, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The worktree copies kept beside the main copy at <paramref name="repositoryPath"/> - each directory named
+    /// <c>&lt;repositoryPath&gt;.worktree-&lt;name&gt;</c> - with what each one's marker says and how many bytes its
+    /// files hold, in the order of their names. None where the directory they would be kept in is not there.
+    /// </summary>
+    /// <param name="repositoryPath">Where the host keeps the main checkout's copy, as the configuration declares it.</param>
+    /// <param name="cancellationToken">Stops the listing between copies.</param>
+    Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reads one file out of the copy: one a sync or a carry sends on, one it checks after writing, or a
     /// leg's output brought home.
     /// </summary>

@@ -1,6 +1,8 @@
+using System.ComponentModel;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Worktrees;
@@ -14,6 +16,15 @@ namespace RepoHarness.Tests;
 public sealed class WorktreeRemovalTests
 {
     private static readonly WorktreeSettings Relaxed = new() { PathBudgetReserve = 5, PathBudgetMargin = 2 };
+
+    /// <summary>ERROR_SHARING_VIOLATION, which Windows answers an entry another program holds with.</summary>
+    private const int SharingViolation = 32;
+
+    /// <summary>What a double says Windows said of each entry it holds.</summary>
+    private const string HeldReason = "The process cannot access the file because it is being used by another process.";
+
+    /// <summary>What a double says stopped it looking through a worktree.</summary>
+    private const string UnreadableReason = "Access to the path 'locked' is denied.";
 
     [Fact]
     public async Task AWorktreeReachedThroughALinkedWorktreesDirectory_IsDeletedWithoutForce()
@@ -246,7 +257,7 @@ public sealed class WorktreeRemovalTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareAsync(temp);
         var path = await CreateAsync(harness, temp, "partial");
-        var gitDirectory = (await harness.RunGitAsync(path, ["rev-parse", "--absolute-git-dir"], cancellationToken)).StandardOutput.Trim();
+        var gitDirectory = await GitDirectoryAsync(harness, path);
         var git = new InterceptingGitClient(harness.GitClient)
         {
             InsteadOfRun = arguments =>
@@ -278,16 +289,228 @@ public sealed class WorktreeRemovalTests
         Assert.False(Directory.Exists(path));
     }
 
+    /// <summary>
+    /// On Windows, a worktree with a file another program holds open is refused whole before git is asked to remove
+    /// anything, where git would have stopped part way with its .git file and git's record of it gone; once the
+    /// file is closed, it deletes.
+    /// </summary>
     [Fact]
-    public async Task AnIgnoredFileHeldOpen_LeavesACheckedRemovalPartWay_AndForceFinishesIt()
+    public async Task AnIgnoredFileHeldOpen_RefusesACheckedRemovalWhole_AndOnceClosedItDeletes()
     {
         Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete a file another program holds open.");
 
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareAsync(temp);
-        File.AppendAllText(temp.Combine(".gitignore"), "\n*.log\n");
-        await harness.CommitAllAsync(temp.Path, "ignore logs", cancellationToken);
+        await IgnoreAsync(harness, temp, "*.log");
+        var path = await CreateAsync(harness, temp, "held");
+        var gitDirectory = await GitDirectoryAsync(harness, path);
+        var held = Path.Combine(path, "build.log");
+        File.WriteAllText(held, "held open by a build server");
+        var git = new InterceptingGitClient(harness.GitClient);
+
+        WorktreeOutcome refused;
+
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            refused = await Service(harness, git).DeleteAsync(temp.Path, "held", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+        }
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.StartsWith("Worktree 'held' was not deleted, and nothing of it was removed: something holds '", refused.Outcome.Message, StringComparison.Ordinal);
+        Assert.Contains("build.log'", refused.Outcome.Message, StringComparison.Ordinal);
+        Assert.EndsWith($"Windows said: {new Win32Exception(SharingViolation).Message}", refused.Outcome.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(git.Runs, run => run.Arguments is ["worktree", "remove", ..]);
+        Assert.True(File.Exists(held));
+        Assert.True(File.Exists(Path.Combine(path, ".git")));
+        Assert.True(Directory.Exists(gitDirectory));
+
+        var deleted = await harness.WorktreeService.DeleteAsync(temp.Path, "held", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.True(deleted.Succeeded, deleted.Outcome.Message);
+        Assert.False(Directory.Exists(path));
+    }
+
+    /// <summary>
+    /// On Windows, a watcher on a directory in the worktree, as an editor or a language server keeps, holds nothing
+    /// git's removal cannot go through, and is no reason to refuse it.
+    /// </summary>
+    [Fact]
+    public async Task AWatcherOnADirectoryInIt_DoesNotStopACheckedRemoval()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete what another program holds.");
+
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await IgnoreAsync(harness, temp, "scratch/");
+        var path = await CreateAsync(harness, temp, "watched");
+        var scratch = Path.Combine(path, "scratch");
+        Directory.CreateDirectory(scratch);
+        File.WriteAllText(Path.Combine(scratch, "notes.txt"), "watched by an editor");
+
+        WorktreeOutcome outcome;
+
+        using (new FileSystemWatcher(scratch) { EnableRaisingEvents = true })
+        {
+            outcome = await harness.WorktreeService.DeleteAsync(temp.Path, "watched", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+        }
+
+        Assert.True(outcome.Succeeded, outcome.Outcome.Message);
+        Assert.False(Directory.Exists(path));
+    }
+
+    /// <summary>
+    /// A worktree another program holds part of is refused whole, once every check has passed and before git is
+    /// asked to remove anything: its directory, its .git file and git's record of it all stay, and the refusal names
+    /// what is held and says what Windows said.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeAnotherProgramHolds_IsRefusedWhole_BeforeGitRemovesAnything()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "held");
+        var gitDirectory = await GitDirectoryAsync(harness, path);
+        var git = new InterceptingGitClient(harness.GitClient);
+        var fileSystem = new HoldsAnswered(harness.FileSystem, FourHeld);
+
+        var outcome = await Service(harness, git, fileSystem).DeleteAsync(temp.Path, "held", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        var asked = Assert.Single(fileSystem.AskedAbout);
+
+        Assert.Equal(HarnessExit.Refused, outcome.Outcome.ExitCode);
+        Assert.Equal(
+            $"Worktree 'held' was not deleted, and nothing of it was removed: something holds '{Path.Combine(asked, "a")}', "
+            + $"'{Path.Combine(asked, "b")}', '{Path.Combine(asked, "c")}' and 1 more - a process whose current directory is in the "
+            + "worktree, a program with a file of it open, or a program running from it. Windows would not let git delete what is "
+            + "held, so git would stop part way, with the worktree's .git file and git's record of it already gone. Close what holds "
+            + $"it, then run '{ToolPackage.Command} delete-worktree held' again. Windows said: {HeldReason}",
+            outcome.Outcome.Message);
+        PathAssert.Same(path, asked);
+        Assert.DoesNotContain(git.Runs, run => run.Arguments is ["worktree", "remove", ..]);
+        Assert.True(File.Exists(Path.Combine(path, ".git")));
+        Assert.True(Directory.Exists(gitDirectory));
+        Assert.Equal(2, (await harness.GitClient.ListWorktreesAsync(temp.Path, cancellationToken)).Count);
+    }
+
+    /// <summary>
+    /// Where what holds the worktree is this command's own current directory, as when it runs inside the worktree, the
+    /// refusal says so and says to run it from outside, which nothing another program closes would let go; and where
+    /// something else holds part of it too, that that is to be closed as well.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeThisCommandRunsIn_IsRefused_SayingToRunItFromOutside()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "inside");
+        var here = new HeldEntry(Environment.CurrentDirectory, HeldReason);
+
+        var alone = await Service(harness, harness.GitClient, new HoldsAnswered(harness.FileSystem, _ => [here]))
+            .DeleteAsync(temp.Path, "inside", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+        var withOthers = await Service(harness, harness.GitClient, new HoldsAnswered(harness.FileSystem, directory => [.. FourHeld(directory), here]))
+            .DeleteAsync(temp.Path, "inside", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, alone.Outcome.ExitCode);
+        Assert.Contains(
+            $"already gone. It is this command's own current directory: run '{ToolPackage.Command} delete-worktree inside' again from outside the worktree. Windows said: ",
+            alone.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(HarnessExit.Refused, withOthers.Outcome.ExitCode);
+        Assert.Contains(
+            $"already gone. One is this command's own current directory: close what holds the rest, then run '{ToolPackage.Command} delete-worktree inside' "
+            + "again from outside the worktree. Windows said: ",
+            withOthers.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(path, ".git")));
+    }
+
+    /// <summary>
+    /// An interruption while the worktree is looked through for what holds it stops the deletion before anything is
+    /// removed, as one during the checks does: git is never asked to remove it.
+    /// </summary>
+    [Fact]
+    public async Task AnInterruptionWhileLookingForWhatHoldsIt_DeletesNothing()
+    {
+        using var temp = new TempDirectory();
+        using var interruption = new CancellationTokenSource();
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "looking");
+        var git = new InterceptingGitClient(harness.GitClient);
+        var fileSystem = new HoldsAnswered(harness.FileSystem, _ =>
+        {
+            interruption.Cancel();
+            return [];
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Service(harness, git, fileSystem).DeleteAsync(temp.Path, "looking", force: false, deleteEvidence: false, cancellationToken: interruption.Token));
+
+        // The looking itself was given the interruption, so a long walk stops between one entry and the next.
+        Assert.Equal(interruption.Token, fileSystem.LastToken);
+        Assert.DoesNotContain(git.Runs, run => run.Arguments is ["worktree", "remove", ..]);
+        Assert.True(File.Exists(Path.Combine(path, ".git")));
+    }
+
+    /// <summary>
+    /// A worktree that cannot be looked through for what another program holds is not deleted: nothing was removed,
+    /// and what stopped the looking is said.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeThatCannotBeLookedThrough_IsNotDeleted_AndSaysWhy()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "unread");
+        var git = new InterceptingGitClient(harness.GitClient);
+        var fileSystem = new HoldsAnswered(harness.FileSystem, _ => throw new UnauthorizedAccessException(UnreadableReason));
+
+        var outcome = await Service(harness, git, fileSystem).DeleteAsync(temp.Path, "unread", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.Outcome.ExitCode);
+        Assert.StartsWith(
+            $"'{Assert.Single(fileSystem.AskedAbout)}' could not be looked through for what another program holds in it: {UnreadableReason} "
+            + "Nothing was deleted",
+            outcome.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(git.Runs, run => run.Arguments is ["worktree", "remove", ..]);
+        Assert.True(Directory.Exists(path));
+    }
+
+    /// <summary>Forced, nothing is asked about what holds the worktree: the removal goes ahead, as far as it can.</summary>
+    [Fact]
+    public async Task AForcedDelete_NeverAsksWhatHoldsTheWorktree()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var path = await CreateAsync(harness, temp, "forced");
+        var fileSystem = new HoldsAnswered(harness.FileSystem, FourHeld);
+
+        var outcome = await Service(harness, harness.GitClient, fileSystem).DeleteAsync(temp.Path, "forced", force: true, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.True(outcome.Succeeded, outcome.Outcome.Message);
+        Assert.False(Directory.Exists(path));
+        Assert.Empty(fileSystem.AskedAbout);
+    }
+
+    /// <summary>
+    /// On Windows, forced, a file another program holds open still leaves the removal part way, saying so, and
+    /// forcing again once it is closed finishes it.
+    /// </summary>
+    [Fact]
+    public async Task AnIgnoredFileHeldOpen_LeavesAForcedRemovalPartWay_AndForceFinishesIt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows refuses to delete a file another program holds open.");
+
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await IgnoreAsync(harness, temp, "*.log");
         var path = await CreateAsync(harness, temp, "held");
         var held = Path.Combine(path, "build.log");
         File.WriteAllText(held, "held open by a build server");
@@ -296,12 +519,13 @@ public sealed class WorktreeRemovalTests
 
         using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            failed = await harness.WorktreeService.DeleteAsync(temp.Path, "held", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+            failed = await harness.WorktreeService.DeleteAsync(temp.Path, "held", force: true, deleteEvidence: false, cancellationToken: cancellationToken);
         }
 
         Assert.Equal(HarnessExit.CommandFailed, failed.Outcome.ExitCode);
-        Assert.Contains("already gone", failed.Outcome.Message, StringComparison.Ordinal);
+        Assert.StartsWith("Could not finish deleting '", failed.Outcome.Message, StringComparison.Ordinal);
         Assert.Contains("delete-worktree held --force", failed.Outcome.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(path, ".git")));
 
         var forced = await harness.WorktreeService.DeleteAsync(temp.Path, "held", force: true, deleteEvidence: false, cancellationToken: cancellationToken);
 
@@ -607,6 +831,43 @@ public sealed class WorktreeRemovalTests
         Assert.False(Directory.Exists(path));
         Assert.Single(await harness.GitClient.ListWorktreesAsync(temp.Path, TestContext.Current.CancellationToken));
     }
+
+    /// <summary>
+    /// The real file system, except that what another program holds is answered by <paramref name="answer"/>, and
+    /// each directory asked about is recorded.
+    /// </summary>
+    private sealed class HoldsAnswered(IFileSystem inner, Func<string, IReadOnlyList<HeldEntry>> answer) : PassThroughFileSystem(inner)
+    {
+        private readonly List<string> _askedAbout = [];
+
+        /// <summary>Each directory it was asked about, in order.</summary>
+        public IReadOnlyList<string> AskedAbout => _askedAbout;
+
+        /// <summary>The interruption the last asking was given.</summary>
+        public CancellationToken LastToken { get; private set; }
+
+        public override IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default)
+        {
+            _askedAbout.Add(path);
+            LastToken = cancellationToken;
+            return answer(path);
+        }
+    }
+
+    /// <summary>Four entries of <paramref name="directory"/>, each held as Windows says one is.</summary>
+    private static IReadOnlyList<HeldEntry> FourHeld(string directory)
+        => [.. new[] { "a", "b", "c", "d" }.Select(name => new HeldEntry(Path.Combine(directory, name), HeldReason))];
+
+    /// <summary>Makes the main checkout ignore <paramref name="pattern"/>, committed, so a worktree made from it does too.</summary>
+    private static async Task IgnoreAsync(HarnessFactory harness, TempDirectory temp, string pattern)
+    {
+        File.AppendAllText(temp.Combine(".gitignore"), $"\n{pattern}\n");
+        await harness.CommitAllAsync(temp.Path, $"ignore {pattern}", TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>The git directory of the worktree at <paramref name="path"/>, which is git's record of it.</summary>
+    private static async Task<string> GitDirectoryAsync(HarnessFactory harness, string path)
+        => (await harness.RunGitAsync(path, ["rev-parse", "--absolute-git-dir"], TestContext.Current.CancellationToken)).StandardOutput.Trim();
 
     /// <summary>The real file system, except that git's worktree records cannot be listed.</summary>
     private sealed class RecordHidingFileSystem(IFileSystem inner) : PassThroughFileSystem(inner)

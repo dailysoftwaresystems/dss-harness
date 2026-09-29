@@ -105,9 +105,21 @@ internal static class ListWorktreeCommand
 {
     internal const string Name = "list-worktree";
 
+    private static readonly Option<bool> HostsOption = new("--hosts")
+    {
+        Description = "Also ask each declared host which worktree copies it keeps beside its repositoryPath, and how large each is, set against the copies recorded here.",
+    };
+
+    private static readonly Option<bool> JsonOption = new("--json")
+    {
+        Description = "Print the listing as one JSON document.",
+    };
+
     internal static Command Create()
     {
-        var command = new Command(Name, "List existing worktrees.");
+        var command = new Command(Name, "List existing worktrees, the copies hosts keep of them, and the copies left by worktrees that are gone.");
+        command.Options.Add(HostsOption);
+        command.Options.Add(JsonOption);
         GlobalOptions.AddTo(command);
 
         command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
@@ -116,12 +128,12 @@ internal static class ListWorktreeCommand
                 .ListAsync(context.Directory, cancellationToken)
                 .ConfigureAwait(false);
 
-            return worktrees.Count == 0
-                ? CommandOutcome.Ok("no worktrees")
-                : CommandOutcome.Ok(
-                    $"{worktrees.Count} worktree(s)",
-                    [.. worktrees.Select(worktree => worktree.ToString())]);
-        }));
+            var copies = await context.Get<IHostCopyLister>()
+                .ListAsync(context.Directory, worktrees, context.ParseResult.GetValue(HostsOption), cancellationToken)
+                .ConfigureAwait(false);
+
+            return WorktreeReports.List(worktrees, copies, context.ParseResult.GetValue(JsonOption));
+        }, JsonOption));
 
         return command;
     }

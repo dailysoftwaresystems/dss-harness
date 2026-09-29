@@ -113,6 +113,12 @@ public static class SyncServe
     public const string RemoveCopy = "remove-copy";
 
     /// <summary>
+    /// Lists the worktree copies kept beside the main copy its root names, each with what its marker says and how
+    /// much its files hold, as listing a repository's worktrees with their hosts asks.
+    /// </summary>
+    public const string ListCopies = "list-copies";
+
+    /// <summary>
     /// The largest file one request can carry, in bytes.
     /// </summary>
     /// <remarks>
@@ -357,6 +363,46 @@ public enum CopyRemoval
 
     /// <summary>A directory holding no mark of the harness's: left where it is.</summary>
     NotACopy,
+}
+
+/// <summary>The worktree copies a host keeps beside its main copy.</summary>
+/// <param name="Copies">One for each, in the order of their names.</param>
+public sealed record SyncCopiesAnswer(IReadOnlyList<HostCopyFound> Copies);
+
+/// <summary>One worktree copy a host keeps beside its main copy, as the host found it.</summary>
+/// <param name="Name">The name it is kept under: what follows <see cref="HostCopies.WorktreeSuffix"/>.</param>
+/// <param name="Path">
+/// Where it is, spelt from the repositoryPath the host was asked about, as a sync spells the copy it records, so
+/// that the two compare.
+/// </param>
+/// <param name="Origin">What its marker says of how it came to be.</param>
+/// <param name="Bytes">How many bytes its files hold.</param>
+public sealed record HostCopyFound(string Name, string Path, CopyOrigin Origin, long Bytes)
+{
+    /// <summary>The machine its marker says made it, where it has a marker that could be read.</summary>
+    public string? CreatedBy { get; init; }
+
+    /// <summary>When its marker says it was made, where it has a marker that could be read.</summary>
+    public string? CreatedUtc { get; init; }
+
+    /// <summary>Why its marker could not be read, where it could not.</summary>
+    public string? Problem { get; init; }
+}
+
+/// <summary>How a copy came to be, as its marker says: what decides whether removing it takes it.</summary>
+public enum CopyOrigin
+{
+    /// <summary>The harness made it, so removing it takes it.</summary>
+    Made,
+
+    /// <summary>The harness took over a directory that was already there, so removing it leaves it.</summary>
+    TakenOver,
+
+    /// <summary>Nothing there says the harness made it, so removing it leaves it unless it holds nothing at all.</summary>
+    Unmarked,
+
+    /// <summary>Its marker is there and cannot be read, so removing it is refused.</summary>
+    Unreadable,
 }
 
 /// <summary>What the far side's root looks like.</summary>

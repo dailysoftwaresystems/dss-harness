@@ -407,10 +407,13 @@ names everything it found on one line, each with its remedy, and exits 13:
   skips everything else as well. A declared root that cannot be read counts as holding something,
   because an unreadable directory is not an empty one. A root resolving outside the worktree is
   ignored rather than refused, since the deletion was never going to touch it.
+- **Held, on Windows.** Looked at last, once every check above has passed: a worktree something
+  holds part of is refused on its own, since git's removal would stop part way on it.
+  [Removal](#removal) says what holds one.
 
-Without `--force`, when the check cannot be finished, because git cannot answer or a record
-cannot be read or its directory found, nothing is deleted and the command exits 20, with the
-reason first. Which worktree a directory is, and whether its record is gone, is decided
+Without `--force`, when the check cannot be finished, because git cannot answer, a record cannot
+be read or its directory found, or, on Windows, a directory in it cannot be looked through for
+what holds it, nothing is deleted and the command exits 20, with the reason first. Which worktree a directory is, and whether its record is gone, is decided
 from paths git reports. A path the harness spelled is compared with one only after every link
 along it is followed, so a linked `.harness-config` or worktrees directory changes nothing.
 
@@ -425,10 +428,27 @@ history of a repository nested inside one included.
   holding submodules is removed with `--force`, which git requires for one, and so is one whose
   uncommitted changes `--discard-uncommitted` discards, which git's check would refuse. That
   skips even this check, though git still keeps a lock, which only a second `--force` overrides.
-  When git fails part way, as on a file another program holds open, its record and some files
-  may already be gone: the command deletes nothing more, exits 20 and says what is left, and
-  `delete-worktree <name> --force` finishes it, which is safe because every check passed before
-  removal began.
+- Checked, on Windows, every entry of the worktree is first opened as a deletion opens it, and let
+  go at once. git's removal stops at the first entry something holds - a directory that is a
+  process's current directory, a file open without sharing its deletion, a file a program is
+  running from - after it has deleted the worktree's `.git` file and git's record of it, and only
+  `--force` finishes it then. So a worktree something holds is refused whole, exit 13, with nothing
+  removed, naming what is held and saying what Windows said; where that is the command's own
+  current directory, it says to run it from outside the worktree. What a deletion goes through
+  holds nothing: a watcher on a directory, as an editor or a language server keeps, and a file open
+  sharing its deletion and its writing. Moving the directory aside and back was measured as the
+  test and is not one: a watcher on a directory under it refuses the move, and a program running
+  from it does not. Opening cannot tell every case apart, and each is taken as said: a file open
+  sharing its deletion and not its writing is taken as held, as a program running from it is,
+  though a deletion goes through it; a read-only file a program runs from is not found, since it
+  refuses writing to anyone; and where Windows keeps a deleted file until every handle to it is
+  closed - older versions do, and filesystems other than NTFS - a handle sharing deletion still
+  keeps its directory from going, and is not found. Linux and macOS need no look, since neither an
+  open file nor a current directory stops a deletion there.
+- When git fails part way all the same, as on a file something opened after that look, its record
+  and some files may already be gone: the command deletes nothing more, exits 20 and says what is
+  left, and `delete-worktree <name> --force` finishes it, which is safe because every check passed
+  before removal began.
 - Forced, it is `git worktree remove --force --force`, which overrides a lock. A directory git
   leaves behind is deleted, and git is then asked again to clear its record, which it can once
   the directory is gone. A file that cannot be deleted is reported with exit 20 and what to do
@@ -1312,7 +1332,13 @@ while a gate ran turned a green suite red, with four test processes live at once
   refused, 15 where its host is unreachable, 20 where the removal failed there - so whoever deleted
   it learns something of it is left; deleting the worktree again finishes the job, and for a name
   whose worktree is gone removes what any worktree of that name left, never the copies of one that
-  still exists. On a host a leg was sent to,
+  still exists. `list-worktree` shows that record: each worktree's copies, and the copies left by
+  worktrees that are gone - removed by a tool that ran plain `git worktree remove`, say - each with
+  the `delete-worktree` that deals with them. With `--hosts` it asks each declared host which
+  `<repositoryPath>.worktree-<name>` copies it keeps and how large each is, from its home directory
+  as a removal is, and sets them against the record, so a copy the record does not hold - made from
+  another checkout or machine, or forgotten here - is found, as is a recorded one that is gone. It
+  changes nothing on a host or in the record, so it takes no lock. On a host a leg was sent to,
   the copy it was sent to is its tree, whatever worktree the leg names. The working tree being tested
   is transferred into its copy file by file, compared by content hash, so what the host holds is this
   tree including its uncommitted changes. Nothing is pushed and it is never

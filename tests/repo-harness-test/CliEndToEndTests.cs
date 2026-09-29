@@ -561,29 +561,7 @@ public sealed partial class CliEndToEndTests
     {
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
-        var harness = new HarnessFactory();
-        var platform = harness.Platform;
-
-        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
-        {
-            BuildConfigs = { ["debug"] = new BuildConfiguration() },
-            Tools = { new ToolConfig { Name = "dotnet" } },
-            Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug" } },
-            PredefinedRunners = { ["probe"] = new RunnerConfig { Action = "probe/probe.yml" } },
-        });
-
-        temp.WriteFile(
-            Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
-            """
-            name: probe
-            inputs:
-              area:
-                description: where the rows are staged
-            steps:
-              - name: stage
-                run: |
-                  dotnet {area}
-            """);
+        await PrepareInputWithNoValueAsync(temp, token);
 
         var result = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "-C", temp.Path], token);
 
@@ -592,6 +570,29 @@ public sealed partial class CliEndToEndTests
             "'stage' run line names '{area}', an input of the action, which has no value: give it one with --input area=<value>",
             result.StandardOutput + result.StandardError,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A run refused inside its leg before any leg reached a verdict prints no table: the heading alone,
+    /// above the FAIL line saying why, read as a table whose rows had gone missing. Where its records
+    /// are is still said.
+    /// </summary>
+    [Fact]
+    public async Task ARunStoppedBeforeAnyLegReachedAVerdict_PrintsNoTable_OnlyWhyItStopped()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        await PrepareInputWithNoValueAsync(temp, token);
+
+        var result = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "-C", temp.Path], token);
+        var output = result.StandardOutput + result.StandardError;
+
+        Assert.NotEqual(HarnessExit.Success, result.ExitCode);
+        Assert.Contains("run: FAIL - ", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("which has no value: give it one with --input area=<value>", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("logs: ", output, StringComparison.Ordinal);
+        Assert.DoesNotContain(LedgerReport.Headings[1], output, StringComparison.Ordinal);
+        Assert.DoesNotContain(LedgerReport.Headings[2], output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2349,6 +2350,37 @@ public sealed partial class CliEndToEndTests
         temp.WriteFile(
             Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
             "name: probe\nsteps:\n  - name: version\n    run: dotnet --version\n");
+    }
+
+    /// <summary>
+    /// A repository with one leg this machine can run, and a runner whose step names an input of its
+    /// action that has no value: a run of it is refused inside the leg, before any leg reaches a verdict.
+    /// </summary>
+    private static async Task PrepareInputWithNoValueAsync(TempDirectory temp, CancellationToken token)
+    {
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Tools = { new ToolConfig { Name = "dotnet" } },
+            Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug" } },
+            PredefinedRunners = { ["probe"] = new RunnerConfig { Action = "probe/probe.yml" } },
+        });
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
+            """
+            name: probe
+            inputs:
+              area:
+                description: where the rows are staged
+            steps:
+              - name: stage
+                run: |
+                  dotnet {area}
+            """);
     }
 
     /// <summary>An initialised repository whose path budget any temporary directory fits.</summary>

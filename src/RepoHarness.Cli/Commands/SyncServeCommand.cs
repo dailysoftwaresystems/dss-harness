@@ -77,6 +77,10 @@ internal static class SyncServeCommand
                     return Answer(new SyncRemoveAnswer(
                         await transport.RemoveCopyAsync(root, cancellationToken).ConfigureAwait(false)));
 
+                case SyncServe.ListCopies:
+                    return Answer(new SyncCopiesAnswer(
+                        await transport.ListCopiesAsync(root, cancellationToken).ConfigureAwait(false)));
+
                 case SyncServe.Manifest:
                     var withheld = Required(arguments, 1, operation)
                         .Split('\n', StringSplitOptions.RemoveEmptyEntries);

@@ -35,8 +35,10 @@ public interface IWorktreeService
     /// anything is refused unless <paramref name="deleteEvidence"/> is set, because a worktree's
     /// measurements are ignored precisely because they are not source, and losing them is silent.
     /// <paramref name="discardUncommitted"/> waives the uncommitted changes alone, which are then
-    /// deleted with the worktree and counted in the outcome; every other check still runs.
-    /// <paramref name="force"/> skips every check and overrides a lock.
+    /// deleted with the worktree and counted in the outcome; every other check still runs. Once
+    /// every check has passed, a worktree something holds part of is refused too, on Windows,
+    /// where git's removal would stop part way on it.
+    /// <paramref name="force"/> skips every check, and that look, and overrides a lock.
     /// </summary>
     /// <exception cref="HarnessException">
     /// As for <see cref="CreateAsync"/>, or the path resolved outside the worktrees directory.
@@ -67,6 +69,9 @@ public interface IWorktreeService
 /// </param>
 public sealed record WorktreeListing(string Name, string? BaseCommit)
 {
+    /// <summary>Where it is, links resolved, as git records it and as a sync records the tree a host's copy is of.</summary>
+    public string Path { get; init; } = string.Empty;
+
     /// <summary>The line <c>list-worktree</c> prints for this worktree.</summary>
     public override string ToString()
         => BaseCommit is null ? Name : $"{Name}  base {BaseCommit[..Math.Min(12, BaseCommit.Length)]}";
@@ -483,6 +488,29 @@ public sealed class WorktreeService(
         // this command runs in does not, and its copy there is reached through it.
         var treeConfig = await OwnConfigurationAsync(layout, path, cancellationToken).ConfigureAwait(false);
 
+        // On Windows, git's removal stops at the first entry another program holds, with the worktree's .git
+        // file and git's record of it already gone, and only --force finishes it then. So each entry is opened
+        // first as the removal will open it, and a worktree anything holds is refused whole, with nothing
+        // removed. Forced, nothing is asked: the removal goes as far as it can, and says what it left.
+        if (!force)
+        {
+            IReadOnlyList<HeldEntry> held;
+
+            try
+            {
+                held = _fileSystem.FindHeld(path, cancellationToken);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Unchecked(worktreeName, $"'{Printable(path)}' could not be looked through for what another program holds in it: {ex.Message.TrimEnd('.')}.");
+            }
+
+            if (held.Count > 0)
+            {
+                return Refused(DescribeHeld(worktreeName, held));
+            }
+        }
+
         // The last moment an interruption can stop this cleanly. From here the deletion goes on
         // after an interruption, which is reported at once; it can still be left partly done, and
         // --force then finishes it.
@@ -552,7 +580,7 @@ public sealed class WorktreeService(
             .Where(worktree => !worktree.IsMain)
             .ToList();
 
-        var names = new List<string>();
+        var names = new List<(string Name, string Path)>();
 
         foreach (var directory in _fileSystem.EnumerateDirectories(worktreesDirectory))
         {
@@ -567,7 +595,7 @@ public sealed class WorktreeService(
 
             if (registered.Any(worktree => PathsEqual(worktree.Path, resolved)))
             {
-                names.Add(name);
+                names.Add((name, resolved));
             }
             else if (_fileSystem.FileExists(Path.Combine(directory, ".git")) || _fileSystem.DirectoryExists(Path.Combine(directory, ".git")))
             {
@@ -591,11 +619,14 @@ public sealed class WorktreeService(
 
         var listings = new List<WorktreeListing>();
 
-        foreach (var name in names.Order(StringComparer.Ordinal))
+        foreach (var (name, path) in names.OrderBy(worktree => worktree.Name, StringComparer.Ordinal))
         {
             listings.Add(new WorktreeListing(
                 name,
-                await ReadBaseCommitAsync(context.Layout, name, cancellationToken).ConfigureAwait(false)));
+                await ReadBaseCommitAsync(context.Layout, name, cancellationToken).ConfigureAwait(false))
+            {
+                Path = path,
+            });
         }
 
         return listings;
@@ -1085,6 +1116,27 @@ public sealed class WorktreeService(
         var named = string.Join(", ", changes.Take(NamedChangeLimit).Select(Printable));
 
         return changes.Count > NamedChangeLimit ? $"{named} and {changes.Count - NamedChangeLimit} more" : named;
+    }
+
+    /// <summary>
+    /// Why a worktree something holds part of was refused before anything of it was removed: what is held, why that
+    /// would stop git part way, and what to do. Run from inside the worktree, this command holds it itself, which
+    /// nothing another program closes lets go, so that is said, with running it from outside.
+    /// </summary>
+    private string DescribeHeld(string name, IReadOnlyList<HeldEntry> held)
+    {
+        var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
+        var own = held.Any(entry => PathsEqual(entry.Path, Environment.CurrentDirectory));
+        var remedy = !own ? $"Close what holds it, then run {again} again."
+            : held.Count == 1 ? $"It is this command's own current directory: run {again} again from outside the worktree."
+            : $"One is this command's own current directory: close what holds the rest, then run {again} again from outside the worktree.";
+
+        return $"Worktree '{name}' was not deleted, and nothing of it was removed: something holds "
+            + $"{Listed([.. held.Select(entry => $"'{Printable(entry.Path)}'")])} - a process whose current directory is in "
+            + "the worktree, a program with a file of it open, or a program running from it. Windows would not let git "
+            + "delete what is held, so git would stop part way, with the worktree's .git file and git's record of it "
+            + $"already gone. {remedy} "
+            + $"Windows said: {string.Join(" ", held.Select(entry => entry.Reason).Distinct(StringComparer.Ordinal))}";
     }
 
     /// <summary>

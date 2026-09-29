@@ -265,12 +265,17 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktree);
 
+        return [.. All(layout).Where(entry => string.Equals(entry.Worktree, worktree, StringComparison.Ordinal))];
+    }
+
+    /// <summary>Every copy recorded, of whichever worktree, in the order they were recorded.</summary>
+    /// <param name="layout">The repository.</param>
+    /// <exception cref="HarnessException">The record cannot be read: refused.</exception>
+    public IReadOnlyList<HostCopyEntry> All(HarnessLayout layout)
+    {
         var path = PathOf(layout);
 
-        return MachineWideFile.Update<IReadOnlyList<HostCopyEntry>>(
-            System.IO.Path.GetFullPath(path),
-            Window,
-            () => [.. Read(path).Where(entry => string.Equals(entry.Worktree, worktree, StringComparison.Ordinal))]);
+        return MachineWideFile.Update(System.IO.Path.GetFullPath(path), Window, () => Read(path));
     }
 
     private void Change(HarnessLayout layout, Func<IReadOnlyList<HostCopyEntry>, IReadOnlyList<HostCopyEntry>> change)

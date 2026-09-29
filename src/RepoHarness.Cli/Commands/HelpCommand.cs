@@ -664,7 +664,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {ToolPackage.Command} test                    Build and test every selected leg");
         builder.AppendLine($"  {ToolPackage.Command} run <runner>            Run a predefined runner across its legs");
         builder.AppendLine($"  {ToolPackage.Command} clean                   Remove selected legs' build directories where they run");
-        builder.AppendLine($"  {ToolPackage.Command} list-worktree           Show existing worktrees");
+        builder.AppendLine($"  {ToolPackage.Command} list-worktree           Show worktrees and the copies hosts keep of them");
         builder.AppendLine($"  {ToolPackage.Command} read-anchors            List the deferred work recorded as anchors");
         builder.AppendLine();
         builder.AppendLine("Every command accepts");
@@ -1134,9 +1134,9 @@ internal static class HelpCommand
         builder.AppendLine("everything it found, on one line. A tag made inside a submodule counts as kept,");
         builder.AppendLine("and is lost with the submodule's repository.");
         builder.AppendLine();
-        builder.AppendLine("Without --force, when the check cannot be finished, because git cannot answer or");
-        builder.AppendLine("a record cannot be read or its directory found, nothing is deleted and it");
-        builder.AppendLine($"exits {HarnessExit.CommandFailed}.");
+        builder.AppendLine("Without --force, when the check cannot be finished, because git cannot answer, a");
+        builder.AppendLine("record cannot be read or its directory found, or, on Windows, a directory in it");
+        builder.AppendLine($"cannot be looked through for what holds it, nothing is deleted and it exits {HarnessExit.CommandFailed}.");
         builder.AppendLine("Ignored files outside a declared evidenceRoots directory are deleted unchecked,");
         builder.AppendLine("even ones no build makes again, such as .env, and so are ignored directories");
         builder.AppendLine("with everything in them, the history of a repository nested inside one and the");
@@ -1146,6 +1146,15 @@ internal static class HelpCommand
         builder.AppendLine("--discard-uncommitted for uncommitted changes, which it deletes with the");
         builder.AppendLine("worktree, saying how many and naming a few. --force skips every check and");
         builder.AppendLine("overrides a lock; whatever the worktree held is lost.");
+        builder.AppendLine();
+        builder.AppendLine($"On Windows, without --force, a worktree something holds part of is refused ({HarnessExit.Refused})");
+        builder.AppendLine("whole once every check has passed, with nothing removed, naming what is held: a");
+        builder.AppendLine("directory that is a process's current directory, this command's own among them,");
+        builder.AppendLine("a file open without sharing its deletion, or one a program is running from. git's");
+        builder.AppendLine("removal would stop there part way, with the worktree's .git file and git's record");
+        builder.AppendLine("of it already gone. Close what holds it and run delete-worktree again, from outside");
+        builder.AppendLine("the worktree where it is this command's own. A watcher on a directory, as an editor");
+        builder.AppendLine("keeps, holds nothing; --force looks for nothing, and goes as far as it can.");
         builder.AppendLine();
         builder.AppendLine("An interruption during the deletion can leave it partly done, on any platform;");
         builder.AppendLine("running delete-worktree again with --force finishes it.");
@@ -1165,6 +1174,18 @@ internal static class HelpCommand
         builder.AppendLine($"{HarnessExit.CommandFailed} where removing it failed there; or {HarnessExit.Cancelled} when interrupted. Running delete-worktree");
         builder.AppendLine("again removes what it left. For a name whose worktree is gone, it removes what any");
         builder.AppendLine("worktree of that name left, and never the copies of one that still exists.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{ListWorktreeCommand.Name} lists each worktree with the copies this machine records hosts keeping of it, and the "
+            + "copies left by worktrees that are gone - removed by hand, or by another tool - each with the "
+            + $"{DeleteWorktreeCommand.Name} that deals with them. With --hosts it also asks each declared host which worktree "
+            + "copies it keeps beside its repositoryPath, and how large each is, and sets them against that record: "
+            + "a copy of a worktree here, one left by a worktree that is gone, one the record does not hold - made "
+            + "from another checkout or machine, or forgotten here, which deleting a worktree never reaches - and one "
+            + "recorded that is not there. A host that cannot be asked is named, and the command fails with the "
+            + $"highest code among them, {HarnessExit.HostUnavailable} where a host cannot be reached. --json prints the "
+            + "listing as one JSON document.");
 
         return builder.ToString();
     }
