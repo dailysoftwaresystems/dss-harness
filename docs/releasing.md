@@ -3,7 +3,7 @@
 `DssHarness` ships as a public .NET tool on nuget.org, under the Apache License 2.0:
 
 ```bash
-dotnet tool install --global DssHarness
+dotnet tool install --global dssharness
 ```
 
 ## Security posture
@@ -106,7 +106,7 @@ To try a beta, download its `.nupkg` from the prerelease into a folder, then ins
 from there:
 
 ```bash
-dotnet tool install --global DssHarness --version 0.2.0-beta --add-source ./folder
+dotnet tool install --global dssharness --version 0.2.0-beta --add-source ./folder
 ```
 
 WSL distributions and ssh hosts install DssHarness from nuget.org alone, so a beta build
