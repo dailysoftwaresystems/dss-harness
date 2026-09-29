@@ -423,6 +423,30 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The layout topic says the worktrees root and the orchestrators directory are kept in git by their placeholders
+    /// with everything made in them ignored, what that costs, and that sync withholds both.
+    /// </summary>
+    [Fact]
+    public async Task LayoutTopic_SaysTheWorktreesRootAndTheOrchestratorsDirectoryAreKeptInGit()
+    {
+        var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        foreach (var said in new[]
+        {
+            ".worktrees/ contents ignored, .gitkeep tracked; the worktrees, at worktrees.root, which init writes as this",
+            ".orchestrators/ contents ignored, .gitkeep tracked; what each orchestrator and its agents keep, in the main checkout, "
+                + "and never sent to a host by sync",
+            "The worktrees root and the orchestrators directory are kept in git by their placeholders, so each reads as not ignored "
+                + "itself while everything made in it is, and neither can be a link: init names one it finds, and writes nothing "
+                + "through it. Sync withholds both by name.",
+        })
+        {
+            Assert.Contains(said, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// The legs topic says a toolchain names its compiler, that a build directory is held to the
     /// compiler it was configured with by the file it starts, not by its name, and where a language
     /// only a subproject enables is identified.

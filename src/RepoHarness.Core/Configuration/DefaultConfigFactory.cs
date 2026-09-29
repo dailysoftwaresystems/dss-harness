@@ -26,6 +26,7 @@ public static class DefaultConfigFactory
         {
             // The default project exists exactly when a project was detected to declare.
             Defaults = new HarnessDefaults { Project = detected.Count == 0 ? null : PrimaryProject },
+            Worktrees = new WorktreeSettings { Root = WorktreeSettings.SeededRoot },
             BuildConfigs =
             {
                 ["debug"] = new BuildConfiguration { CmakeBuildType = "Debug", DotnetConfiguration = "Debug", DartMode = "debug" },

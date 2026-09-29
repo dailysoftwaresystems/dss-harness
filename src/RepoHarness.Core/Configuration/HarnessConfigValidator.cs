@@ -169,6 +169,19 @@ public static partial class HarnessConfigValidator
             problems.Add("worktrees.root cannot be the repository root itself");
         }
 
+        // Two directories the harness keeps apart from the worktrees: git's own, and the one orchestrators keep what they
+        // hold in, beside which their agents' worktrees are made. A root that is either, or inside either, would mix
+        // them. Compared ignoring case: on Windows and macOS the two spellings are one directory.
+        var root = Repository.PathPatterns.Normalize(worktrees.Root);
+
+        foreach (var kept in new[] { ".git", Repository.HarnessLayout.OrchestratorsDirectoryName })
+        {
+            if (string.Equals(root, kept, StringComparison.OrdinalIgnoreCase) || root.StartsWith(kept + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add($"worktrees.root names '{worktrees.Root}', which is or is inside '{kept}'");
+            }
+        }
+
         RequireRelativePaths(worktrees.EvidenceRoots, "worktrees.evidenceRoots", problems);
 
         // A negative reserve makes the path budget arithmetic always pass, silently

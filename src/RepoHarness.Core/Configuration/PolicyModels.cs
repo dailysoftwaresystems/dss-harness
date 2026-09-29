@@ -74,7 +74,8 @@ public sealed class SyncConfig
 
     /// <summary>
     /// Paths sync must never transfer, whatever the configuration says: the repository's own
-    /// metadata.
+    /// metadata, and what orchestrators keep - their records, logs and the evidence and transcripts
+    /// they kept - which belong to the machine they were made on.
     /// </summary>
     /// <remarks>
     /// A constant rather than a default value. A default is replaced by whatever list a
@@ -88,7 +89,7 @@ public sealed class SyncConfig
     /// its actions, which a leg on another host has to be able to run.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<string> NeverTransferFloor { get; } = [".git"];
+    public static IReadOnlyList<string> NeverTransferFloor { get; } = [".git", Repository.HarnessLayout.OrchestratorsDirectoryName];
 
     /// <summary>Paths to exclude in addition to those git already ignores.</summary>
     public List<string> Exclude { get; init; } = [];

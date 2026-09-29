@@ -15,6 +15,9 @@ namespace RepoHarness.Tests;
 /// </summary>
 public sealed class ManagedIgnoreCheckTests
 {
+    /// <summary>The worktree settings init writes, which a tree initialised with no configuration of its own runs on.</summary>
+    private static readonly WorktreeSettings Seeded = new() { Root = WorktreeSettings.SeededRoot };
+
     /// <summary>
     /// Each managed rule is asked about paths it decides itself: were a probe decided by another rule,
     /// or by none, every answer the check gives about that rule would describe a different one.
@@ -29,7 +32,7 @@ public sealed class ManagedIgnoreCheckTests
         await harness.InitializeGitRepositoryAsync(temp.Path, token);
         await harness.InitService.InitializeAsync(temp.Path, token);
 
-        var rules = InitService.BuildIgnoreRules(new WorktreeSettings());
+        var rules = InitService.BuildIgnoreRules(Seeded);
         var asked = rules.SelectMany(rule => rule.Probes.Select(probe => (Rule: rule, Probe: probe))).ToList();
         var decisions = await harness.GitClient.ExplainIgnoredAsync(temp.Path, [.. asked.Select(entry => entry.Probe)], token);
 
@@ -40,7 +43,7 @@ public sealed class ManagedIgnoreCheckTests
             Assert.Equal(pair.First.Rule.Ignores, pair.Second.Ignored);
         });
 
-        var findings = await Check(harness).FindAsync(temp.Path, File.ReadAllText(temp.Combine(".gitignore")), rules, InitService.KeptInGit([], []), token);
+        var findings = await Check(harness).FindAsync(temp.Path, File.ReadAllText(temp.Combine(".gitignore")), rules, InitService.KeptInGit([], [], Seeded), token);
 
         Assert.Empty(findings.Conflicts);
         Assert.Empty(findings.Unruled);
@@ -205,6 +208,8 @@ public sealed class ManagedIgnoreCheckTests
         Assert.Equal(("*", 1, false, true), (ignoresAll.Pattern, ignoresAll.Line, ignoresAll.Wins, ignoresAll.Ignores));
         Assert.Equal(
             [
+                $"{WorktreeSettings.SeededRoot}/.gitkeep",
+                ".orchestrators/.gitkeep",
                 ".harness-config/sshItems/.gitkeep",
                 ".harness-config/wslDistros/.gitkeep",
                 ".harness-config/runner/.env/.gitkeep",
@@ -288,6 +293,8 @@ public sealed class ManagedIgnoreCheckTests
         Assert.Contains(".harness-config/config.json", kept);
         Assert.Contains(".harness-config/runner/actions/.gitkeep", kept);
         Assert.Contains(".harness-config/sshItems/.gitkeep", kept);
+        Assert.Contains($"{WorktreeSettings.DefaultRoot}/.gitkeep", kept);
+        Assert.Contains(".orchestrators/.gitkeep", kept);
         Assert.Contains($".harness-config/runner/actions/{ManagedIgnoreRule.AnyDirectoryName}/{ManagedIgnoreRule.AnyName}", kept);
         Assert.Contains(".harness-config/runner/actions/probe/bin/helper.exe", kept);
         Assert.Contains("docs/anchors/pending.md", kept);
@@ -438,8 +445,8 @@ public sealed class ManagedIgnoreCheckTests
         var findings = await Check(harness).FindAsync(
             temp.Path,
             File.ReadAllText(temp.Combine(".gitignore")),
-            InitService.BuildIgnoreRules(new WorktreeSettings()),
-            InitService.KeptInGit([], []),
+            InitService.BuildIgnoreRules(Seeded),
+            InitService.KeptInGit([], [], Seeded),
             token);
 
         var unanswered = Assert.Single(findings.Unanswered);
@@ -456,7 +463,7 @@ public sealed class ManagedIgnoreCheckTests
     /// for git add to commit.
     /// </summary>
     [Fact]
-    public async Task ALinkedRunsDirectoryAndWorktreesRoot_AreIgnored()
+    public async Task ALinkedRunsDirectory_IsIgnored()
     {
         using var temp = new TempDirectory();
         using var elsewhere = new TempDirectory();
@@ -468,12 +475,40 @@ public sealed class ManagedIgnoreCheckTests
         await harness.CommitAllAsync(temp.Path, "harness", token);
 
         Link(temp.Combine(".harness-config", "runs"), Directory.CreateDirectory(Path.Combine(elsewhere.Path, "runs")).FullName);
-        Link(temp.Combine(".harness-config", "worktrees"), Directory.CreateDirectory(Path.Combine(elsewhere.Path, "worktrees")).FullName);
 
         var status = await harness.RunGitAsync(temp.Path, ["status", "--porcelain", "--untracked-files=all"], token);
 
         Assert.True(status.Succeeded, status.FailureMessage);
         Assert.Equal(string.Empty, status.StandardOutput.Trim());
+    }
+
+    /// <summary>
+    /// A worktrees root kept on another disk through a link: git keeps nothing behind a link, so init writes no
+    /// placeholder through it and names it, and git lists the link as an untracked entry - the cost accepted with a
+    /// root git keeps in the repository, where a root ignored whole was ignored whatever it was.
+    /// </summary>
+    [Fact]
+    public async Task ALinkedWorktreesRoot_IsNamedByInit_AndNothingIsWrittenThroughIt()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, token);
+        Link(temp.Combine(WorktreeSettings.SeededRoot), Directory.CreateDirectory(Path.Combine(elsewhere.Path, "worktrees")).FullName);
+
+        var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
+
+        Assert.True(outcome.Succeeded, outcome.Message);
+        Assert.Contains(
+            $"note    '{WorktreeSettings.SeededRoot}' is a link, and git keeps nothing behind one: no placeholder was written through it",
+            outcome.Details ?? []);
+        Assert.False(File.Exists(Path.Combine(elsewhere.Path, "worktrees", ".gitkeep")));
+
+        var status = await harness.RunGitAsync(temp.Path, ["status", "--porcelain", "--untracked-files=all", "--", WorktreeSettings.SeededRoot], token);
+
+        Assert.Equal($"?? {WorktreeSettings.SeededRoot}", status.StandardOutput.Trim());
     }
 
     /// <summary>
@@ -517,8 +552,8 @@ public sealed class ManagedIgnoreCheckTests
         var findings = await new ManagedIgnoreCheck(git, harness.FileSystem, harness.Platform, harness.Output).FindAsync(
             temp.Path,
             File.ReadAllText(temp.Combine(".gitignore")),
-            InitService.BuildIgnoreRules(new WorktreeSettings()),
-            InitService.KeptInGit([], []),
+            InitService.BuildIgnoreRules(Seeded),
+            InitService.KeptInGit([], [], Seeded),
             token);
 
         Assert.Empty(findings.Conflicts);
@@ -546,8 +581,8 @@ public sealed class ManagedIgnoreCheckTests
         var refused = await Assert.ThrowsAsync<HarnessException>(() => check.FindAsync(
             temp.Path,
             File.ReadAllText(temp.Combine(".gitignore")),
-            InitService.BuildIgnoreRules(new WorktreeSettings()),
-            InitService.KeptInGit([], []),
+            InitService.BuildIgnoreRules(Seeded),
+            InitService.KeptInGit([], [], Seeded),
             token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
@@ -577,8 +612,8 @@ public sealed class ManagedIgnoreCheckTests
             var findings = await new ManagedIgnoreCheck(harness.GitClient, fileSystem, harness.Platform, harness.Output).FindAsync(
                 temp.Path,
                 File.ReadAllText(temp.Combine(".gitignore")),
-                InitService.BuildIgnoreRules(new WorktreeSettings()),
-                InitService.KeptInGit([], []),
+                InitService.BuildIgnoreRules(Seeded),
+                InitService.KeptInGit([], [], Seeded),
                 token);
 
             Assert.Equal("!/.harness-config/sshItems/*", Assert.Single(findings.Conflicts).Pattern);
@@ -742,8 +777,8 @@ public sealed class ManagedIgnoreCheckTests
         var findings = await new ManagedIgnoreCheck(git, harness.FileSystem, harness.Platform, harness.Output).FindAsync(
             temp.Path,
             File.ReadAllText(temp.Combine(".gitignore")),
-            InitService.BuildIgnoreRules(new WorktreeSettings()),
-            InitService.KeptInGit([], []),
+            InitService.BuildIgnoreRules(Seeded),
+            InitService.KeptInGit([], [], Seeded),
             token);
 
         if (setToNothing)
@@ -871,7 +906,7 @@ public sealed class ManagedIgnoreCheckTests
         }
 
         var content = File.ReadAllText(temp.Combine(".gitignore"));
-        var findings = await Check(harness).FindAsync(temp.Path, content, InitService.BuildIgnoreRules(new WorktreeSettings()), InitService.KeptInGit([], []), token);
+        var findings = await Check(harness).FindAsync(temp.Path, content, InitService.BuildIgnoreRules(Seeded), InitService.KeptInGit([], [], Seeded), token);
 
         return (findings, content);
     }

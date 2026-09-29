@@ -95,6 +95,8 @@ public sealed class SyncPlanTests
     [InlineData(".harness-config/config.json")]
     [InlineData("build/release/main.o")]
     [InlineData(".harness-config/worktrees/feature/src/a.c")]
+    [InlineData(".orchestrators/o1/agents/a1/agent.json")]
+    [InlineData(".orchestrators/o1/logs/a1.jsonl")]
     public void TheNeverTransferFloor_IsAlsoANeverDeleteFloor(string path)
     {
         // A path the harness will not write is one it cannot know the source lacks. Deleting it

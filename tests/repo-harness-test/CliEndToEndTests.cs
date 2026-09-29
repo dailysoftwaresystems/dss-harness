@@ -684,6 +684,7 @@ public sealed partial class CliEndToEndTests
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Contains(WorktreeSettings.DefaultRoot, result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(WorktreeSettings.SeededRoot, result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("worktrees.root", result.StandardOutput, StringComparison.Ordinal);
     }
 

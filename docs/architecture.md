@@ -254,23 +254,22 @@ than a target wrote; another generator, or a ninja too old to know the tool, is 
 sync's lists and by `init`'s ignore rule, so the file system's reading of it would put the
 worktrees where nothing withholds or ignores them, and an entry would protect nothing.
 
-**The root is ignored whole, and never holds a placeholder.** `init` writes `/<root>` for it and
-creates nothing there; `create-worktree` makes the directory the first time it needs it. It is
-ignored by name, with no trailing slash, as `.harness-config/runs` is: a rule ending in `/` matches
-only a directory, so a root or a runs directory kept on another disk through a link - which the
-worktree commands follow - was listed by `git status`, and committed by `git add -A`, as that link.
-By name, it is ignored whatever it is, and however it is asked about. The other
-harness directories a person fills by hand — `sshItems`, `wslDistros`, `runner/.env`,
-`runner/.secrets` — keep the opposite shape, their *contents* ignored and a `.gitkeep` tracked, so
-the directory itself tells that person where the file goes. The root cannot afford that shape.
-Measured: excluding only a directory's contents makes the directory's own `git check-ignore` answer
-depend on a trailing slash, and it fails toward *not ignored* — `<root>` without the slash reads as
-not ignored while worktrees sit inside it. A directory holding any tracked file never reads as
-ignored under either spelling, so a committed placeholder turns even `<root>/` wrong. For a slot
-holding an address and a key that answer costs nothing; for a root holding whole checkouts it is the
-difference between a clean sync and every worktree reaching a remote host. The placeholder also
-showed as untracked until committed, which is exactly the state sync's no-longer-ignored guard
-refuses.
+**The root is kept in git by a placeholder, and everything made in it is ignored.** `init` writes
+`/<root>/*` and `!/<root>/.gitkeep` for it and creates the placeholder, as it does for the
+orchestrators directory, `.orchestrators`, and for the harness directories a person fills by hand
+— `sshItems`, `wslDistros`, `runner/.env`, `runner/.secrets` — so a clone arrives with each
+directory in place. A configuration `init` writes names `.worktrees` as the root; one that names
+none keeps `.harness-config/worktrees`, so worktrees made before stay where they are. The root
+was ignored whole, with no placeholder, and the costs of this shape were measured then and are
+accepted now: a directory holding a tracked file never reads as ignored itself, so `git
+check-ignore <root>` answers *not ignored* while every worktree inside it is ignored, and the root
+can no longer be kept on another disk through a link, which git would list as an untracked entry
+and keep nothing behind; `init` names such a link and writes nothing through it. Sync does not
+depend on either answer: it withholds the configured root and `.orchestrators` by name, whatever
+git says, and its guard against a withheld path that stopped being ignored takes the root's
+placeholder, untracked until it is committed, as the harness's own - any other untracked file
+there still refuses, named as the worktrees root it is. The root may not be `.git` or
+`.orchestrators`, or inside either.
 
 `init` leaves hand-written `.gitignore` rules alone, so a repository that already ignored one of
 these paths by hand keeps its rule beside the managed one. What `init` reports is git's own answer,

@@ -611,6 +611,23 @@ public sealed class ConfigStoreTests
         Assert.DoesNotContain("doubled separator", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A worktrees root that is git's own directory or the orchestrators directory, or is inside either, is refused:
+    /// worktrees made there would mix with git's records or an orchestrator's.
+    /// </summary>
+    [Theory]
+    [InlineData(".orchestrators")]
+    [InlineData(".orchestrators/trees")]
+    [InlineData(".Orchestrators")]
+    [InlineData(".git")]
+    [InlineData(".git/worktrees")]
+    public void Load_RejectsAWorktreesRootThatIsOrIsInsideGitOrTheOrchestratorsDirectory(string root)
+    {
+        var exception = LoadInvalid($$"""{ "worktrees": { "root": "{{root}}" } }""");
+
+        Assert.Contains($"worktrees.root names '{root}', which is or is inside '", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Load_RejectsAnUnsupportedVersion()
     {

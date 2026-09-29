@@ -25,7 +25,7 @@ internal static class CreateWorktreeCommand
     {
         var command = new Command(
             Name,
-            $"Create a worktree under {WorktreeSettings.DefaultRoot}, unless worktrees.root says otherwise.");
+            $"Create a worktree under worktrees.root: {WorktreeSettings.SeededRoot} in a configuration init writes, {WorktreeSettings.DefaultRoot} where it names none.");
         command.Arguments.Add(NameArgument);
         command.Options.Add(RandomOption);
         GlobalOptions.AddTo(command);

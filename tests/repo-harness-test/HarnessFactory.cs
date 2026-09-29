@@ -174,6 +174,12 @@ public sealed class HarnessFactory
     /// Creates a repository, runs init in it, and replaces the seeded configuration with
     /// <paramref name="config"/> when one is given.
     /// </summary>
+    /// <remarks>
+    /// The ignore rules and placeholders init wrote are then made again for <paramref name="config"/>, as init
+    /// makes them for the configuration it finds: its worktrees root, not the one init seeds, is where the tests'
+    /// worktrees go. Written after init rather than before it, so a test can hand over a configuration the
+    /// validator refuses, to see a later command refuse it.
+    /// </remarks>
     public async Task InitializeHarnessAsync(
         string path,
         CancellationToken cancellationToken,
@@ -187,6 +193,24 @@ public sealed class HarnessFactory
         if (config is not null)
         {
             WriteConfig(path, config);
+
+            var seeded = Path.Combine(path, WorktreeSettings.SeededRoot);
+
+            if (!HarnessLayout.RootSlots(config.Worktrees.Root).Contains(WorktreeSettings.SeededRoot, StringComparer.Ordinal))
+            {
+                FileSystem.DeleteDirectory(seeded);
+            }
+
+            GitIgnoreManager.Update(
+                Path.Combine(path, ".gitignore"),
+                [.. InitService.BuildIgnoreRules(config.Worktrees).Select(rule => rule.Rule)]);
+
+            foreach (var slot in HarnessLayout.RootSlots(config.Worktrees.Root))
+            {
+                var directory = Path.Combine(path, slot);
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, HarnessLayout.GitKeepFileName), string.Empty);
+            }
         }
     }
 

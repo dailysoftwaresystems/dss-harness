@@ -141,16 +141,17 @@ in `config.json`.
 .harness-config/sshItems/<name>/.env         ignored; address, user, port
 .harness-config/sshItems/<name>/.key         ignored; the private key
 .harness-config/wslDistros/<name>/.env       ignored; the distribution and its credential
-.harness-config/worktrees/                   ignored whole, never a placeholder; created on first use
+.worktrees/                                  contents ignored, .gitkeep tracked; the worktrees
+.orchestrators/                              contents ignored, .gitkeep tracked; orchestrators and their agents
 .harness-config/runs/                        ignored; one directory of logs per run
 .harness-config/lock.json                    ignored; records in-progress runs
 .plans/_deferred-anchor-registry.md          tracked; live anchors
 .plans/_deferred-anchor-registry-done.md     tracked; closed anchors
 ```
 
-The worktrees root is `worktrees.root` in `config.json`, shown here at its default. A
-repository whose build paths are long sets a shorter one, such as `.worktrees`, which buys
-back the characters the default spends before a worktree's own name.
+The worktrees root is `worktrees.root` in `config.json`, shown here as `init` writes it. A
+configuration that names none keeps worktrees under `.harness-config/worktrees`, which spends
+16 more characters of the path budget before a worktree's own name.
 
 Ignored state lives only in the main checkout. A worktree receives the tracked part
 of `.harness-config` through git but never the ignored part, so secrets and the run

@@ -127,6 +127,22 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// <summary>Placeholder that keeps an otherwise-ignored directory in git.</summary>
     public const string GitKeepFileName = ".gitkeep";
 
+    /// <summary>The directory at the root of a tree where every orchestrator keeps what it holds.</summary>
+    public const string OrchestratorsDirectoryName = ".orchestrators";
+
+    /// <summary>
+    /// The directories at the root of a tree whose contents git ignores while a <see cref="GitKeepFileName"/> keeps
+    /// each in git, relative to the root with forward separators: where worktrees are made, and where orchestrators
+    /// keep what they hold. A clone then arrives with both in place, and nothing made in them is ever committed.
+    /// </summary>
+    /// <param name="worktreesRoot">The configured worktrees root.</param>
+    public static IReadOnlyList<string> RootSlots(string worktreesRoot)
+    {
+        ArgumentNullException.ThrowIfNull(worktreesRoot);
+
+        return [.. new[] { PathPatterns.Normalize(worktreesRoot), OrchestratorsDirectoryName }.Distinct(StringComparer.Ordinal)];
+    }
+
     /// <summary>
     /// The directories under <see cref="DirectoryName"/> that carry a <see cref="GitKeepFileName"/>,
     /// relative to it: the two connection-data slots, the actions, and the two value slots.
@@ -181,6 +197,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// <c>.harness-config</c> but never the ignored ones.
     /// </summary>
     public string MainHarnessDirectory => Path.Combine(MainCheckoutRoot, DirectoryName);
+
+    /// <summary>
+    /// Where every orchestrator keeps what it holds: in the main checkout, whichever tree asks, as the worktrees its
+    /// agents work in belong to the main checkout.
+    /// </summary>
+    public string OrchestratorsDirectory => Path.Combine(MainCheckoutRoot, OrchestratorsDirectoryName);
 
     /// <summary>
     /// Worktrees live under the main checkout, never under another worktree, so
