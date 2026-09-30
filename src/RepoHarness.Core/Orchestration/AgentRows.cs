@@ -14,6 +14,10 @@ public sealed record AgentRowsPlan(AnchorBatch Batch, IReadOnlyList<string> Unch
 {
     /// <summary>How many rows applying it writes: new, or changed.</summary>
     public int Planned => Batch.Rows.Count(row => row.Action != AnchorRowAction.AlreadyIn);
+
+    /// <summary>The cells of its rows that would lose stored text, and that nobody accepted losing.</summary>
+    public IReadOnlyList<AnchorRowCell> Unaccepted =>
+        [.. Batch.Rows.SelectMany(row => row.Lost.Where(cell => !cell.Accepted).Select(cell => new AnchorRowCell(row.Id, cell.Cell)))];
 }
 
 /// <summary>
@@ -34,10 +38,10 @@ public static class AgentRows
     public const string CellExtension = ".txt";
 
     /// <summary>The cell a row may leave out: an existing row keeps its own, and a new row must declare one.</summary>
-    public const string PriorityCell = "priority";
+    public const string PriorityCell = AnchorCellNames.Priority;
 
     /// <summary>The cells every row declares.</summary>
-    public static IReadOnlyList<string> RequiredCells { get; } = ["status", "trigger", "closing", "cross-refs"];
+    public static IReadOnlyList<string> RequiredCells { get; } = [AnchorCellNames.Status, .. AnchorCellNames.Text];
 
     /// <summary>The rows filed in <paramref name="directory"/>, in the order of their ids, and every problem found reading them.</summary>
     /// <param name="fileSystem">Reads the files.</param>
@@ -138,7 +142,12 @@ public static class AgentRows
 
             if (sound)
             {
-                rows.Add(new AnchorRowDeclaration(id, cells["status"].Trim(), cells["trigger"], cells["closing"], cells["cross-refs"])
+                rows.Add(new AnchorRowDeclaration(
+                    id,
+                    cells[AnchorCellNames.Status].Trim(),
+                    cells[AnchorCellNames.Trigger],
+                    cells[AnchorCellNames.Closing],
+                    cells[AnchorCellNames.CrossRefs])
                 {
                     Priority = cells.TryGetValue(PriorityCell, out var priority) ? priority.Trim() : null,
                 });

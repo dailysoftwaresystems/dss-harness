@@ -137,6 +137,88 @@ public sealed record AnchorRowDeclaration(string Id, string Status, string Trigg
     public string? Priority { get; init; }
 }
 
+/// <summary>A row's cells as the commands that change one name them: in messages, in an agent's row files, and in --accept-lost.</summary>
+public static class AnchorCellNames
+{
+    /// <summary>The priority band.</summary>
+    public const string Priority = "priority";
+
+    /// <summary>The status.</summary>
+    public const string Status = "status";
+
+    /// <summary>What is wrong, and what would make it worth doing.</summary>
+    public const string Trigger = "trigger";
+
+    /// <summary>What remains to be done to close it.</summary>
+    public const string Closing = "closing";
+
+    /// <summary>Where it is cited, and related anchors.</summary>
+    public const string CrossRefs = "cross-refs";
+
+    /// <summary>The cells that hold prose: each stored on one line, whatever lines it was written on.</summary>
+    public static IReadOnlyList<string> Text { get; } = [Trigger, Closing, CrossRefs];
+}
+
+/// <summary>One prose cell of one anchor's row, as --accept-lost names it: <c>&lt;ID&gt;:&lt;cell&gt;</c>.</summary>
+/// <param name="Id">The anchor.</param>
+/// <param name="Cell">One of <see cref="AnchorCellNames.Text"/>.</param>
+public sealed record AnchorRowCell(string Id, string Cell)
+{
+    /// <summary>
+    /// <paramref name="text"/> read as <c>&lt;ID&gt;:&lt;cell&gt;</c>, split at its last colon, the cell one of
+    /// <see cref="AnchorCellNames.Text"/>; <see langword="null"/> where it is not one.
+    /// </summary>
+    /// <param name="text">As given.</param>
+    public static AnchorRowCell? Parse(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var colon = text.LastIndexOf(':');
+
+        return colon > 0 && AnchorCellNames.Text.Contains(text[(colon + 1)..], StringComparer.Ordinal)
+            ? new AnchorRowCell(text[..colon], text[(colon + 1)..])
+            : null;
+    }
+
+    /// <summary>As --accept-lost names it.</summary>
+    public override string ToString() => $"{Id}:{Cell}";
+}
+
+/// <summary>How far applying a batch of rows goes.</summary>
+public enum AnchorBatchMode
+{
+    /// <summary>Say what applying them would do, writing nothing: a cell that would lose stored text is shown, not refused.</summary>
+    Plan,
+
+    /// <summary>Refuse whatever applying them would refuse, writing nothing: the check before a write that must not stop part way.</summary>
+    Check,
+
+    /// <summary>Write them.</summary>
+    Apply,
+}
+
+/// <summary>Rows to apply as one batch, and what the person applying them allows it that it otherwise refuses.</summary>
+/// <param name="Rows">The rows, applied in order.</param>
+public sealed record AnchorBatchRequest(IReadOnlyList<AnchorRowDeclaration> Rows)
+{
+    /// <summary>The ids it may create: a row no registry holds is otherwise refused, as a typo would make it a second row.</summary>
+    public IReadOnlyCollection<string> New { get; init; } = [];
+
+    /// <summary>The cells of existing rows it may write though their stored text does not survive in what replaces it.</summary>
+    public IReadOnlyCollection<AnchorRowCell> AcceptLost { get; init; } = [];
+}
+
+/// <summary>A cell of an existing row whose stored text would not survive the text replacing it.</summary>
+/// <param name="Cell">One of <see cref="AnchorCellNames.Text"/>.</param>
+/// <param name="Diff">What it loses and what replaces it, word by word.</param>
+/// <param name="Accepted">Whether --accept-lost named it.</param>
+public sealed record AnchorLostCell(string Cell, string Diff, bool Accepted);
+
+/// <summary>How the registries hold a declared row other than as declared.</summary>
+/// <param name="Id">The anchor.</param>
+/// <param name="How">What differs, said of the row: <c>its status is '...'</c>, or that it has no row.</param>
+public sealed record AnchorDifference(string Id, string How);
+
 /// <summary>What applying one declared row does.</summary>
 public enum AnchorRowAction
 {
@@ -154,7 +236,11 @@ public enum AnchorRowAction
 /// <param name="Id">The anchor.</param>
 /// <param name="Action">What was done with it.</param>
 /// <param name="Change">The change, as write-anchor or set-anchor describes one.</param>
-public sealed record AnchorRowOutcome(string Id, AnchorRowAction Action, AnchorChange Change);
+public sealed record AnchorRowOutcome(string Id, AnchorRowAction Action, AnchorChange Change)
+{
+    /// <summary>The cells of a changed row whose stored text does not survive what replaces it.</summary>
+    public IReadOnlyList<AnchorLostCell> Lost { get; init; } = [];
+}
 
 /// <summary>What applying declared rows did, or would do on a dry run.</summary>
 /// <param name="Rows">Each row planned, in order; on a refusal, those that could be planned.</param>

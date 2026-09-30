@@ -144,15 +144,23 @@ internal static class FoldAgentCommand
 
     private static readonly Option<string[]> SettledOption = OrchestrationArguments.Settled();
 
+    private static readonly Option<string[]> NewOption = OrchestrationArguments.New();
+
+    private static readonly Option<string[]> AcceptLostOption = OrchestrationArguments.AcceptLost();
+
     internal static Command Create()
     {
         var command = new Command(
             Name,
-            "Fold a live agent's own changes into the main tree, then apply the anchor rows it filed: all or nothing, and never over a change of the main tree's; its worktree is kept.");
+            "Fold a live agent's own changes into the main tree, then apply the anchor rows it filed: everything that refuses it is named before "
+            + "anything is written, the rows go in all or nothing, and a main-tree file changed after it was weighed stops the fold part way "
+            + "(exit 21) rather than being written over; its worktree is kept.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(ApplyOption);
         command.Options.Add(SettledOption);
+        command.Options.Add(NewOption);
+        command.Options.Add(AcceptLostOption);
         GlobalOptions.AddTo(command);
 
         command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<IAgentService>()
@@ -160,7 +168,7 @@ internal static class FoldAgentCommand
                 context.Directory,
                 context.ParseResult.GetRequiredValue(OrchestratorArgument),
                 context.ParseResult.GetRequiredValue(AgentArgument),
-                context.ParseResult.GetValue(SettledOption) ?? [],
+                OrchestrationArguments.Allowances(context.ParseResult, SettledOption, NewOption, AcceptLostOption),
                 context.ParseResult.GetValue(ApplyOption),
                 cancellationToken)));
 
@@ -181,6 +189,10 @@ internal static class DeleteAgentCommand
 
     private static readonly Option<string[]> SettledOption = OrchestrationArguments.Settled();
 
+    private static readonly Option<string[]> NewOption = OrchestrationArguments.New();
+
+    private static readonly Option<string[]> AcceptLostOption = OrchestrationArguments.AcceptLost();
+
     private static readonly Option<bool> DiscardUncommittedOption = new("--discard-uncommitted")
     {
         Description = "Abandon the agent: fold nothing and apply no rows, and remove its worktree with its changes; its evidence and transcripts are still kept.",
@@ -195,6 +207,8 @@ internal static class DeleteAgentCommand
         command.Arguments.Add(AgentArgument);
         command.Options.Add(ApplyOption);
         command.Options.Add(SettledOption);
+        command.Options.Add(NewOption);
+        command.Options.Add(AcceptLostOption);
         command.Options.Add(DiscardUncommittedOption);
         GlobalOptions.AddTo(command);
 
@@ -203,7 +217,7 @@ internal static class DeleteAgentCommand
                 context.Directory,
                 context.ParseResult.GetRequiredValue(OrchestratorArgument),
                 context.ParseResult.GetRequiredValue(AgentArgument),
-                context.ParseResult.GetValue(SettledOption) ?? [],
+                OrchestrationArguments.Allowances(context.ParseResult, SettledOption, NewOption, AcceptLostOption),
                 context.ParseResult.GetValue(ApplyOption),
                 context.ParseResult.GetValue(DiscardUncommittedOption),
                 cancellationToken)));

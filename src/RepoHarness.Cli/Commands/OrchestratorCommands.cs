@@ -18,7 +18,28 @@ internal static class OrchestrationArguments
 
     internal static Option<string[]> Settled() => new("--settled")
     {
+        HelpName = "path",
         Description = "A path you reconciled in the main tree by hand, left out of the fold so the rest can go in: neither compared nor written. Once for each path.",
+    };
+
+    internal static Option<string[]> New() => new("--new")
+    {
+        HelpName = "ID",
+        Description = "The id of a row the agent filed that the fold may make: a row no registry holds is otherwise refused, as a typo in an existing row's id would make it a second row. Once for each id.",
+    };
+
+    internal static Option<string[]> AcceptLost() => new("--accept-lost")
+    {
+        HelpName = "ID:cell",
+        Description = "A cell of an existing row - trigger, closing or cross-refs - the fold may write though its stored text does not survive in the agent's: read its word diff in the dry run first. Once for each cell.",
+    };
+
+    /// <summary>What a fold is let through, as the three options give it.</summary>
+    internal static FoldAllowances Allowances(ParseResult result, Option<string[]> settled, Option<string[]> added, Option<string[]> acceptLost) => new()
+    {
+        Settled = result.GetValue(settled) ?? [],
+        New = result.GetValue(added) ?? [],
+        AcceptLost = result.GetValue(acceptLost) ?? [],
     };
 }
 

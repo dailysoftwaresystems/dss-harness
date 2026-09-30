@@ -1,5 +1,6 @@
 using RepoHarness.Core.Anchors;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -110,11 +111,13 @@ public sealed class AgentRowsTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         await kit.CreateAgentAsync("ag");
         kit.FileRow("ag", Id, Row);
-        Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
+        Assert.True((await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id))).Succeeded);
         await kit.Harness.AnchorRegistryService.SetAsync(kit.Main, new AnchorSetRequest(Id) { Status = "gated" }, dryRun: false, Token);
 
         var again = await kit.FoldAsync("ag", apply: true);
-        var deleted = await kit.DeleteAsync("ag", apply: true, discard: false);
+
+        // Named new again - the command line of the first fold, reused - it is a row the agent filed, made by that fold.
+        var deleted = await kit.DeleteAsync("ag", apply: true, OrchestrationKit.Making(Id));
 
         Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
         Assert.Contains($"  {Id}: applied by an earlier fold and not declared anew since, so the registries keep what they hold now", again.Details!);
@@ -133,9 +136,9 @@ public sealed class AgentRowsTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         kit.FileRow("ag", Id, Row);
-        Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
+        Assert.True((await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id))).Succeeded);
         await kit.Harness.AnchorRegistryService.SetAsync(kit.Main, new AnchorSetRequest(Id) { Status = "gated" }, dryRun: false, Token);
-        kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["closing"] = "a better fix" });
+        kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["closing"] = "the fix, made better" });
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
 
         var refused = await kit.FoldAsync("ag", apply: true);
@@ -173,7 +176,7 @@ public sealed class AgentRowsTests
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         kit.FileRow("ag", Id, Row.Where(cell => cell.Key != "priority").ToDictionary(cell => cell.Key, cell => cell.Value));
 
-        var refused = await kit.FoldAsync("ag", apply: true);
+        var refused = await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(refused.Details!, line => line.Contains("a new anchor needs a priority", StringComparison.Ordinal));
@@ -194,13 +197,13 @@ public sealed class AgentRowsTests
         kit.FileRow("ag", Id, Row);
         var agents = kit.Harness.Agents(kit.Harness.FileSystem, new FailingWrites(kit.Harness.AnchorRegistryService));
 
-        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", OrchestrationKit.Making(Id), apply: true, Token);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.StartsWith("Agent 'ag' of 'o1' is folded into the main tree, and applying its rows failed", stopped.Message);
         Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
 
-        var again = await kit.FoldAsync("ag", apply: true);
+        var again = await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id));
 
         Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
         Assert.Contains(Id, OrchestrationKit.Read(kit.Main, Path.Combine(".plans", "_deferred-anchor-registry.md")));
@@ -219,12 +222,167 @@ public sealed class AgentRowsTests
         OrchestrationKit.Write(worktree, Path.Combine(".harness-config", "config.json"), "{");
         kit.FileRow("ag", Id, Row);
 
-        var stopped = await kit.FoldAsync("ag", apply: true);
+        var stopped = await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id));
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.StartsWith("Agent 'ag' of 'o1' is folded into the main tree, and applying its rows failed", stopped.Message);
         Assert.Equal("{", OrchestrationKit.Read(kit.Main, Path.Combine(".harness-config", "config.json")));
     }
+
+    /// <summary>
+    /// A consumer's run: rows holding an id broken at a line after a hyphen, a path broken after its '/', a citation of no
+    /// row, and a typo of an existing row's id that declares a priority and closes it refuse the fold whole, each named, with
+    /// nothing written - not the agent's file, and no row.
+    /// </summary>
+    [Fact]
+    public async Task RowsTheDoorWouldStoreBroken_OrThatNobodyNamedNew_RefuseTheFoldWhole()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.Harness.AnchorRegistryService.WriteAsync(kit.Main, new AnchorWriteRequest("D-PROBE-EXISTING-ROW-ONE", "P2", "an open row"), dryRun: false, Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", "D-PROBE-CUT-ID", new Dictionary<string, string>(Row) { ["trigger"] = "cites D-PROBE-EXISTING-\nROW-ONE across a line break after a hyphen" });
+        kit.FileRow("ag", "D-PROBE-CUT-PATH", new Dictionary<string, string>(Row) { ["closing"] = "see tests/hir/\ntest_x.cpp for the case" });
+        kit.FileRow("ag", "D-PROBE-UNRESOLVED-CITE", new Dictionary<string, string>(Row) { ["cross-refs"] = "[[D-PROBE-NO-SUCH-ROW-ANYWHERE]]" });
+        kit.FileRow("ag", "D-PROBE-EXISTING-ROW-ONR", new Dictionary<string, string>(Row) { ["status"] = "closed" });
+        var pending = OrchestrationKit.Read(kit.Main, Path.Combine(".plans", "_deferred-anchor-registry.md"));
+        var done = OrchestrationKit.Read(kit.Main, Path.Combine(".plans", "_deferred-anchor-registry-done.md"));
+
+        var refused = await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making("D-PROBE-CUT-ID", "D-PROBE-CUT-PATH", "D-PROBE-UNRESOLVED-CITE"));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains("4 problem(s) with its rows", refused.Message);
+        Assert.Collection(
+            refused.Details!.Where(line => line.StartsWith("  refused: ", StringComparison.Ordinal)),
+            line => Assert.StartsWith("  refused: D-PROBE-CUT-ID: The Trigger holds an anchor id broken after a hyphen ('D-PROBE-EXISTING- R'", line),
+            line => Assert.StartsWith(@"  refused: D-PROBE-CUT-PATH: The Closing work holds a path broken across a line after a '/' ('tests/hir/\ntest_x.cpp')", line),
+            line => Assert.EndsWith("pass --new D-PROBE-EXISTING-ROW-ONR; rows that begin the same way: D-PROBE-EXISTING-ROW-ONE.", line),
+            line => Assert.StartsWith("  refused: D-PROBE-UNRESOLVED-CITE: 'D-PROBE-UNRESOLVED-CITE' cites D-PROBE-NO-SUCH-ROW-ANYWHERE in its Cross-refs", line));
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal(pending, OrchestrationKit.Read(kit.Main, Path.Combine(".plans", "_deferred-anchor-registry.md")));
+        Assert.Equal(done, OrchestrationKit.Read(kit.Main, Path.Combine(".plans", "_deferred-anchor-registry-done.md")));
+    }
+
+    /// <summary>
+    /// A row whose stored text the agent's does not keep is shown in the dry run with its word diff and the command that
+    /// writes it; --apply refuses it with nothing written, and writes it once --accept-lost names the cell.
+    /// </summary>
+    [Fact]
+    public async Task ARowLosingStoredText_IsShownInTheDryRun_AndWrittenOnlyOnceAccepted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.Harness.AnchorRegistryService.WriteAsync(
+            kit.Main, new AnchorWriteRequest(Id, "P2", "something the agent found") { ClosingWork = "the plan we agreed", CrossRefs = "b.txt" }, dryRun: false, Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["closing"] = "another plan" });
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Contains("--accept-lost", dry.Message);
+        Assert.Contains($"    its closing loses stored text, written only with --accept-lost {Id}:closing: [-the-] {{+another+}} plan [-we agreed-]", dry.Details!);
+        Assert.Equal($"to write them: '{ToolPackage.Command} fold-agent o1 ag --apply --accept-lost {Id}:closing'", dry.Details![^1]);
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal("the plan we agreed", (await RowAsync(kit)).ClosingWork);
+
+        var accepted = await kit.FoldAsync("ag", apply: true, new FoldAllowances { AcceptLost = [$"{Id}:closing"] });
+
+        Assert.True(accepted.Succeeded, OrchestrationKit.Describe(accepted));
+        Assert.Equal("another plan", (await RowAsync(kit)).ClosingWork);
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// --new naming no row the agent filed, and --accept-lost naming a cell that loses nothing, refuse the fold; delete-agent
+    /// holds its rows to the same checks, and refuses either beside --discard-uncommitted, which folds nothing.
+    /// </summary>
+    [Fact]
+    public async Task NamesThatLetNothingThrough_AreRefused_AndDeleteAgentHoldsItsRowsToTheSameChecks()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        kit.FileRow("ag", Id, Row);
+
+        var unnamed = await kit.DeleteAsync("ag", apply: false);
+        var stale = await kit.FoldAsync("ag", apply: false, new FoldAllowances { New = [Id, "D-TEST-AGENT-NINE"], AcceptLost = [$"{Id}:closing"] });
+        var misspelt = await kit.FoldAsync("ag", apply: false, new FoldAllowances { AcceptLost = [$"{Id}:status"] });
+        var discarding = await kit.DeleteAsync("ag", apply: true, OrchestrationKit.Making(Id), discard: true);
+
+        Assert.Equal(HarnessExit.Refused, unnamed.ExitCode);
+        Assert.Contains(unnamed.Details!, line => line.Contains($"'{Id}' has no row in either registry, and it was not named new", StringComparison.Ordinal));
+        Assert.Equal(HarnessExit.Refused, stale.ExitCode);
+        Assert.Contains($"  refused: --new D-TEST-AGENT-NINE names no row filed in '{kit.Layout.RowsDirectory("ag")}': drop it, or correct the id.", stale.Details!);
+        Assert.Contains($"  refused: --accept-lost {Id}:closing names a cell that loses no stored text here: drop it, or correct it.", stale.Details!);
+        Assert.Equal(HarnessExit.UsageError, misspelt.ExitCode);
+        Assert.Equal($"--accept-lost '{Id}:status' is not <ID>:<cell>, where the cell is trigger, closing, cross-refs.", misspelt.Message);
+        Assert.Equal(HarnessExit.UsageError, discarding.ExitCode);
+        Assert.Equal("--new lets a fold through what it otherwise refuses, and --discard-uncommitted folds nothing: give one or the other.", discarding.Message);
+
+        var deleted = await kit.DeleteAsync("ag", apply: true, OrchestrationKit.Making(Id));
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Equal("the fix", (await RowAsync(kit)).ClosingWork);
+    }
+
+    /// <summary>
+    /// A row an earlier fold applied is compared with the registries as it was applied, and held to no rule a write is held
+    /// to now: the agent correcting a path its earlier row stored cut folds like any change, rather than being refused for
+    /// the cut the earlier row held.
+    /// </summary>
+    [Fact]
+    public async Task ARowAppliedBeforeARuleItBreaks_IsComparedAsApplied_SoItsCorrectionFolds()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.Harness.AnchorRegistryService.WriteAsync(
+            kit.Main, new AnchorWriteRequest(Id, "P2", "something the agent found") { ClosingWork = "placeholder", CrossRefs = "b.txt" }, dryRun: false, Token);
+        var registry = Path.Combine(kit.Main, ".plans", "_deferred-anchor-registry.md");
+        File.WriteAllText(registry, File.ReadAllText(registry).Replace("| placeholder |", "| see src/ main_x.c |", StringComparison.Ordinal));
+        await kit.CreateAgentAsync("ag");
+        kit.Harness.OrchestrationStore.WriteAppliedRows(
+            kit.Layout, "ag", new AppliedRowsRecord { Rows = [new(Id, "open", "something the agent found", "see src/\nmain_x.c", "b.txt") { Priority = "P2" }] });
+        kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["closing"] = "see src/main_x.c", ["cross-refs"] = "b.txt" });
+
+        var folded = await kit.FoldAsync("ag", apply: true, new FoldAllowances { AcceptLost = [$"{Id}:closing"] });
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal("see src/main_x.c", (await RowAsync(kit)).ClosingWork);
+    }
+
+    /// <summary>
+    /// A row an earlier fold applied that the registries changed since is refused as changed, saying how it differs - never
+    /// as a row whose state cannot be told because what the earlier fold applied breaks a rule a write is held to now.
+    /// </summary>
+    [Fact]
+    public async Task ARowAppliedBeforeARuleItBreaks_ChangedSince_IsRefusedAsChanged()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.Harness.AnchorRegistryService.WriteAsync(
+            kit.Main, new AnchorWriteRequest(Id, "P2", "something the agent found") { ClosingWork = "placeholder", CrossRefs = "b.txt" }, dryRun: false, Token);
+        var registry = Path.Combine(kit.Main, ".plans", "_deferred-anchor-registry.md");
+        File.WriteAllText(registry, File.ReadAllText(registry).Replace("| placeholder |", "| see src/main_x.c, mended by hand |", StringComparison.Ordinal));
+        await kit.CreateAgentAsync("ag");
+        kit.Harness.OrchestrationStore.WriteAppliedRows(
+            kit.Layout, "ag", new AppliedRowsRecord { Rows = [new(Id, "open", "something the agent found", "see src/\nmain_x.c", "b.txt") { Priority = "P2" }] });
+        kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["trigger"] = "something more the agent found", ["cross-refs"] = "b.txt" });
+
+        var refused = await kit.FoldAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            refused.Details!,
+            line => line.StartsWith($"  refused: {Id}: the registries changed it after an earlier fold of this agent applied it - its Closing work differs - so", StringComparison.Ordinal));
+    }
+
+    private static async Task<AnchorRow> RowAsync(OrchestrationKit kit)
+        => Assert.Single(Assert.Single((await kit.Harness.AnchorRegistryService.ReadAsync(kit.Main, [Id], AnchorScope.All, Token)).Results).Matches).Row;
 
     private static async Task<string> StatusAsync(OrchestrationKit kit)
         => Assert.Single(Assert.Single((await kit.Harness.AnchorRegistryService.ReadAsync(kit.Main, [Id], AnchorScope.All, Token)).Results).Matches).Row.Status;
@@ -238,8 +396,11 @@ public sealed class AgentRowsTests
         public Task<AnchorChange> SetAsync(string startDirectory, AnchorSetRequest request, bool dryRun, CancellationToken cancellationToken = default)
             => inner.SetAsync(startDirectory, request, dryRun, cancellationToken);
 
-        public Task<AnchorBatch> ApplyAsync(string startDirectory, IReadOnlyList<AnchorRowDeclaration> rows, bool dryRun, CancellationToken cancellationToken = default)
-            => dryRun ? inner.ApplyAsync(startDirectory, rows, dryRun, cancellationToken) : throw new IOException("The registry is being used by another process.");
+        public Task<AnchorBatch> ApplyAsync(string startDirectory, AnchorBatchRequest request, AnchorBatchMode mode, CancellationToken cancellationToken = default)
+            => mode != AnchorBatchMode.Apply ? inner.ApplyAsync(startDirectory, request, mode, cancellationToken) : throw new IOException("The registry is being used by another process.");
+
+        public Task<IReadOnlyList<AnchorDifference>> DifferencesAsync(string startDirectory, IReadOnlyList<AnchorRowDeclaration> rows, CancellationToken cancellationToken = default)
+            => inner.DifferencesAsync(startDirectory, rows, cancellationToken);
 
         public Task<AnchorLookup> ReadAsync(string startDirectory, IReadOnlyList<string> ids, AnchorScope scope, CancellationToken cancellationToken = default)
             => inner.ReadAsync(startDirectory, ids, scope, cancellationToken);

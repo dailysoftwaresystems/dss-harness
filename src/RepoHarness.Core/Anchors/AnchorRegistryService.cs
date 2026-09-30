@@ -16,16 +16,27 @@ public interface IAnchorRegistryService
     Task<AnchorChange> SetAsync(string startDirectory, AnchorSetRequest request, bool dryRun, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Makes the registries hold each of <paramref name="rows"/> as declared, all or nothing: a new id written as
-    /// write-anchor writes one, an existing one changed as set-anchor changes it - naming only the cells that differ - and
-    /// one already as declared left alone. Every row is checked before any is written, and every refusal is named; a write
-    /// that fails, or rows that do not read back as declared, put both registries back byte for byte.
+    /// Makes the registries hold each of the request's rows as declared, all or nothing: a new id written as write-anchor
+    /// writes one, an existing one changed as set-anchor changes it - naming only the cells that differ - and one already
+    /// as declared left alone. A row no registry holds is written only where the request names it new, and a cell whose
+    /// stored text does not survive only where the request accepts losing it. Every row is checked before any is written,
+    /// and every refusal is named; a write that fails, or rows that do not read back as declared, put both registries back
+    /// byte for byte.
     /// </summary>
     /// <param name="startDirectory">A directory in the tree whose registries are written.</param>
-    /// <param name="rows">The rows, applied in order.</param>
-    /// <param name="dryRun">Whether to check and plan them only.</param>
+    /// <param name="request">The rows, and what the person applying them allows.</param>
+    /// <param name="mode">Whether to plan them, check them as applying them would, or write them.</param>
     /// <param name="cancellationToken">Stops it before the registries are opened.</param>
-    Task<AnchorBatch> ApplyAsync(string startDirectory, IReadOnlyList<AnchorRowDeclaration> rows, bool dryRun, CancellationToken cancellationToken = default);
+    Task<AnchorBatch> ApplyAsync(string startDirectory, AnchorBatchRequest request, AnchorBatchMode mode, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Which of <paramref name="rows"/> the registries do not hold as declared, and how each differs, read as they are now:
+    /// nothing is checked against the rules a write is held to, and nothing is written.
+    /// </summary>
+    /// <param name="startDirectory">A directory in the tree whose registries are read.</param>
+    /// <param name="rows">The rows as declared.</param>
+    /// <param name="cancellationToken">Stops it before the registries are read.</param>
+    Task<IReadOnlyList<AnchorDifference>> DifferencesAsync(string startDirectory, IReadOnlyList<AnchorRowDeclaration> rows, CancellationToken cancellationToken = default);
 
     /// <summary>Finds anchors by exact id.</summary>
     Task<AnchorLookup> ReadAsync(string startDirectory, IReadOnlyList<string> ids, AnchorScope scope, CancellationToken cancellationToken = default);
@@ -69,12 +80,12 @@ public sealed class AnchorRegistryService(
 
         // Every value is checked before the registries are opened, so a mistake in the arguments is
         // reported as that and never costs anyone the lock.
-        var row = ComposeNew(request, rules, context.Config.Anchors);
+        var row = ComposeNew(request, rules, context.Config.Anchors, Cuts(context, rules));
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
 
         return _registryLock.RunExclusive(registries, () =>
         {
-            var placement = PlaceNew(row, registries, Load(registries.Pending, rules), Load(registries.Done, rules), written: !dryRun);
+            var placement = PlaceNew(row, registries, Load(registries.Pending, rules), Load(registries.Done, rules), rules, batch: null, written: !dryRun);
 
             if (!dryRun)
             {
@@ -95,7 +106,7 @@ public sealed class AnchorRegistryService(
 
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
         var rules = AnchorIdRules.From(context.Config.Anchors);
-        var cells = ComposeChanges(request, rules);
+        var cells = ComposeChanges(request, rules, Cuts(context, rules));
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
 
         return _registryLock.RunExclusive(registries, () =>
@@ -108,6 +119,7 @@ public sealed class AnchorRegistryService(
                 Load(registries.Done, rules),
                 rules,
                 context.Config.Anchors,
+                batch: null,
                 written: !dryRun);
 
             if (!dryRun)
@@ -121,13 +133,15 @@ public sealed class AnchorRegistryService(
 
     public async Task<AnchorBatch> ApplyAsync(
         string startDirectory,
-        IReadOnlyList<AnchorRowDeclaration> rows,
-        bool dryRun,
+        AnchorBatchRequest request,
+        AnchorBatchMode mode,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(rows);
+        ArgumentNullException.ThrowIfNull(request);
 
-        if (rows.Count == 0)
+        var rows = request.Rows;
+
+        if (rows.Count == 0 && request.New.Count == 0 && request.AcceptLost.Count == 0)
         {
             return new AnchorBatch([], []);
         }
@@ -135,7 +149,12 @@ public sealed class AnchorRegistryService(
         var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
         var rules = AnchorIdRules.From(context.Config.Anchors);
         var settings = context.Config.Anchors;
+        var cuts = Cuts(context, rules);
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
+        var batch = rows.Select(row => row.Id).ToHashSet(StringComparer.Ordinal);
+        var named = request.New.ToHashSet(StringComparer.Ordinal);
+        var accepted = request.AcceptLost.ToHashSet();
+        var written = mode == AnchorBatchMode.Apply;
 
         return _registryLock.RunExclusive(registries, () =>
         {
@@ -146,6 +165,7 @@ public sealed class AnchorRegistryService(
             var outcomes = new List<AnchorRowOutcome>();
             var problems = new List<string>();
             var writes = new List<(AnchorRegistry Registry, string Text)>();
+            var losing = new HashSet<AnchorRowCell>();
 
             foreach (var declared in rows)
             {
@@ -158,12 +178,47 @@ public sealed class AnchorRegistryService(
 
                     if (matches.Count == 0)
                     {
-                        if (declared.Priority is null)
+                        // A row no registry holds is one the batch makes, and a typo in an existing row's id is one too: it is
+                        // made only where the person applying the batch said it is new, as write-anchor is only ever asked to make
+                        // one. Every other refusal of it is named beside that one, so one run shows all there is to correct.
+                        var refusals = new List<string>();
+
+                        if (!named.Contains(declared.Id))
                         {
-                            throw Usage($"'{declared.Id}' has no row yet, and a new anchor needs a priority: declare one of {string.Join(", ", AnchorPriority.Bands)}.");
+                            var similar = SameNamespace(declared.Id, Entries([(pending, registries.Pending), (done, registries.Done)]));
+
+                            refusals.Add(
+                                $"'{declared.Id}' has no row in either registry, and it was not named new: a typo in an existing row's id "
+                                + $"would make it a second row. If it is a new row, pass --new {declared.Id}"
+                                + (similar.Count == 0 ? "." : $"; rows that begin the same way: {string.Join(", ", similar)}."));
                         }
 
-                        placement = PlaceNew(ComposeNew(AsWrite(declared), rules, settings), registries, pending, done, written: !dryRun);
+                        if (declared.Priority is null)
+                        {
+                            refusals.Add($"'{declared.Id}' has no row yet, and a new anchor needs a priority: declare one of {string.Join(", ", AnchorPriority.Bands)}.");
+                        }
+
+                        Placement? made = null;
+
+                        try
+                        {
+                            // Composed with a stand-in priority where it declares none, only so the rest of it is judged too:
+                            // refused for that, it is never written.
+                            var write = AsWrite(declared) with { Priority = declared.Priority ?? AnchorPriority.Bands[0] };
+                            made = PlaceNew(ComposeNew(write, rules, settings, cuts), registries, pending, done, rules, batch, written);
+                        }
+                        catch (HarnessException ex) when (ex.ExitCode is HarnessExit.UsageError or HarnessExit.Refused)
+                        {
+                            refusals.Add(ex.Message);
+                        }
+
+                        if (refusals.Count > 0)
+                        {
+                            problems.AddRange(refusals.Select(refusal => $"{declared.Id}: {refusal}"));
+                            continue;
+                        }
+
+                        placement = made!;
                         outcomes.Add(new AnchorRowOutcome(declared.Id, AnchorRowAction.New, placement.Change));
                     }
                     else
@@ -174,9 +229,10 @@ public sealed class AnchorRegistryService(
                         }
 
                         var (existing, registry) = (matches[0].Entry.Row, matches[0].Entry.Registry);
-                        var request = ChangesTo(declared, existing);
+                        var change = ChangesTo(declared, existing);
 
-                        if (!request.HasChanges)
+                        // A row named new that stands exactly as declared is the batch's own, made by an earlier application.
+                        if (!change.HasChanges)
                         {
                             outcomes.Add(new AnchorRowOutcome(
                                 declared.Id,
@@ -185,8 +241,27 @@ public sealed class AnchorRegistryService(
                             continue;
                         }
 
-                        placement = PlaceChange(request, ComposeChanges(request, rules), registries, pending, done, rules, settings, written: !dryRun);
-                        outcomes.Add(new AnchorRowOutcome(declared.Id, AnchorRowAction.Changed, placement.Change));
+                        if (named.Contains(declared.Id))
+                        {
+                            throw new HarnessException(
+                                HarnessExit.Refused,
+                                $"'{declared.Id}' was named new, but {Locations(matches)} holds it, other than as declared: drop --new "
+                                + $"{declared.Id} to change that row, or give the new row an id of its own.");
+                        }
+
+                        var lost = Lost(declared.Id, change, existing, accepted);
+                        losing.UnionWith(lost.Select(cell => new AnchorRowCell(declared.Id, cell.Cell)));
+
+                        placement = PlaceChange(change, ComposeChanges(change, rules, cuts), registries, pending, done, rules, settings, batch, written);
+                        outcomes.Add(new AnchorRowOutcome(declared.Id, AnchorRowAction.Changed, placement.Change) { Lost = lost });
+
+                        // Planned, a loss is shown for a person to read; checked or written, it is refused until they accept it.
+                        if (mode != AnchorBatchMode.Plan)
+                        {
+                            problems.AddRange(lost.Where(cell => !cell.Accepted).Select(cell =>
+                                $"{declared.Id}: its {cell.Cell} would lose stored text that the declared text does not keep, as its "
+                                + $"word diff shows, so it is written only with --accept-lost {declared.Id}:{cell.Cell}."));
+                        }
                     }
 
                     foreach (var write in placement.Writes)
@@ -201,8 +276,14 @@ public sealed class AnchorRegistryService(
                 }
             }
 
+            // What was allowed and matches nothing is a typo, or left over from a batch before: never silently dropped.
+            problems.AddRange(named.Where(id => !batch.Contains(id)).Order(StringComparer.Ordinal)
+                .Select(id => $"--new {id} names no row of the batch: drop it, or correct the id."));
+            problems.AddRange(accepted.Where(cell => !losing.Contains(cell)).Select(cell => cell.ToString()).Order(StringComparer.Ordinal)
+                .Select(cell => $"--accept-lost {cell} names a cell that loses no stored text here: drop it, or correct it."));
+
             // Every row is checked, and every one refused is named, before any is written.
-            if (problems.Count > 0 || dryRun || writes.Count == 0)
+            if (problems.Count > 0 || !written || writes.Count == 0)
             {
                 return new AnchorBatch(outcomes, problems);
             }
@@ -225,6 +306,26 @@ public sealed class AnchorRegistryService(
                 ? Restored(outcomes, snapshot, $"the rows did not read back as declared: {string.Join("; ", wrong)}")
                 : new AnchorBatch(outcomes, []);
         });
+    }
+
+    public async Task<IReadOnlyList<AnchorDifference>> DifferencesAsync(
+        string startDirectory,
+        IReadOnlyList<AnchorRowDeclaration> rows,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+
+        if (rows.Count == 0)
+        {
+            return [];
+        }
+
+        var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
+        var rules = AnchorIdRules.From(context.Config.Anchors);
+        var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
+
+        // Reading takes no lock: every write replaces a whole file in one rename.
+        return Differing(rows, registries, Load(registries.Pending, rules), Load(registries.Done, rules));
     }
 
     public async Task<AnchorLookup> ReadAsync(
@@ -462,7 +563,7 @@ public sealed class AnchorRegistryService(
     /// Composes and checks a new anchor's row: everything write-anchor checks before the registries are opened, and every
     /// row a batch adds is held to.
     /// </summary>
-    private static NewRow ComposeNew(AnchorWriteRequest request, AnchorIdRules rules, AnchorSettings settings)
+    private static NewRow ComposeNew(AnchorWriteRequest request, AnchorIdRules rules, AnchorSettings settings, AnchorCellCuts cuts)
     {
         if (!rules.IsMintable(request.Id))
         {
@@ -477,25 +578,34 @@ public sealed class AnchorRegistryService(
         var status = AnchorStatus.Render(RequireStatus(request.Status));
         RequireTrigger(request.Trigger);
 
+        ProseCell[] cells =
+        [
+            new(TriggerField, null, request.Trigger),
+            new(ClosingField, null, request.ClosingWork),
+            new(CrossRefsField, null, request.CrossRefs),
+        ];
+
+        RequireWhole(cells, cuts);
+
         var row = ComposeRow(
             $" `{request.Id}` ",
             $" {priority} ",
             $" {status} ",
-            AnchorCells.Format(request.Trigger, "Trigger"),
-            AnchorCells.Format(request.ClosingWork, "Closing work"),
-            AnchorCells.Format(request.CrossRefs, "Cross-refs"));
+            AnchorCells.Format(request.Trigger, TriggerField),
+            AnchorCells.Format(request.ClosingWork, ClosingField),
+            AnchorCells.Format(request.CrossRefs, CrossRefsField));
 
         VerifyRow(row, request.Id, rules);
         RequireOneVerdict(row, settings);
 
-        return new NewRow(request.Id, row, status);
+        return new NewRow(request.Id, row, status, cells);
     }
 
     /// <summary>
     /// Composes and checks the cells a change names: everything set-anchor checks before the registries are opened. Only
     /// the cells named are rebuilt; every other cell is written back exactly as it was read.
     /// </summary>
-    private static CellChanges ComposeChanges(AnchorSetRequest request, AnchorIdRules rules)
+    private static CellChanges ComposeChanges(AnchorSetRequest request, AnchorIdRules rules, AnchorCellCuts cuts)
     {
         if (!rules.IsWellFormed(request.Id))
         {
@@ -514,16 +624,29 @@ public sealed class AnchorRegistryService(
             RequireTrigger(request.Trigger);
         }
 
+        RequireWhole([new(TriggerField, null, request.Trigger), new(ClosingField, null, request.ClosingWork), new(CrossRefsField, null, request.CrossRefs)], cuts);
+
         return new CellChanges(
             request.Priority is null ? null : RequirePriority(request.Priority),
             request.Status is null ? null : AnchorStatus.Render(RequireStatus(request.Status)),
-            request.Trigger is null ? null : AnchorCells.Format(request.Trigger, "Trigger"),
-            request.ClosingWork is null ? null : AnchorCells.Format(request.ClosingWork, "Closing work"),
-            request.CrossRefs is null ? null : AnchorCells.Format(request.CrossRefs, "Cross-refs"));
+            request.Trigger is null ? null : AnchorCells.Format(request.Trigger, TriggerField),
+            request.ClosingWork is null ? null : AnchorCells.Format(request.ClosingWork, ClosingField),
+            request.CrossRefs is null ? null : AnchorCells.Format(request.CrossRefs, CrossRefsField));
     }
 
-    /// <summary>Places a new row in the registry its status belongs in: refused where its id already has a row.</summary>
-    private static Placement PlaceNew(NewRow row, AnchorRegistries registries, AnchorRegistryDocument pending, AnchorRegistryDocument done, bool written)
+    /// <summary>
+    /// Places a new row in the registry its status belongs in: refused where its id already has a row, or where it cites
+    /// an id no row holds - of either registry, or of <paramref name="batch"/>, the ids of the batch it is applied in, null
+    /// for a row written alone.
+    /// </summary>
+    private static Placement PlaceNew(
+        NewRow row,
+        AnchorRegistries registries,
+        AnchorRegistryDocument pending,
+        AnchorRegistryDocument done,
+        AnchorIdRules rules,
+        IReadOnlySet<string>? batch,
+        bool written)
     {
         var existing = Matches(row.Id, (pending, registries.Pending), (done, registries.Done));
 
@@ -535,6 +658,8 @@ public sealed class AnchorRegistryService(
                 + "change an existing one with set-anchor.");
         }
 
+        RequireCitedRows(row.Id, row.Cells, pending, done, rules, batch);
+
         var destination = registries.HomeOf(row.Status);
         var document = destination.Kind == AnchorRegistryKind.Pending ? pending : done;
 
@@ -545,7 +670,8 @@ public sealed class AnchorRegistryService(
 
     /// <summary>
     /// Places a change to an existing row, moving it where its new status belongs: refused where it has no row in scope,
-    /// or more than one anywhere.
+    /// or more than one anywhere, or where a cell it changes newly cites an id no row holds - of either registry, or of
+    /// <paramref name="batch"/>, the ids of the batch it is applied in, null for a change made alone.
     /// </summary>
     private static Placement PlaceChange(
         AnchorSetRequest request,
@@ -555,6 +681,7 @@ public sealed class AnchorRegistryService(
         AnchorRegistryDocument done,
         AnchorIdRules rules,
         AnchorSettings settings,
+        IReadOnlySet<string>? batch,
         bool written)
     {
         var all = Matches(request.Id, (pending, registries.Pending), (done, registries.Done));
@@ -585,6 +712,20 @@ public sealed class AnchorRegistryService(
                 + "then run set-anchor again.");
         }
 
+        // A citation the stored cell already made is history, and is not judged again: a row naming one since retired stays
+        // as it was written.
+        RequireCitedRows(
+            existing.Id,
+            [
+                new(TriggerField, existing.Trigger, request.Trigger),
+                new(ClosingField, existing.ClosingWork, request.ClosingWork),
+                new(CrossRefsField, existing.CrossRefs, request.CrossRefs),
+            ],
+            pending,
+            done,
+            rules,
+            batch);
+
         var row = ComposeRow(
             raw[0],
             cells.Priority is null ? raw[1] : $" {cells.Priority} ",
@@ -597,11 +738,11 @@ public sealed class AnchorRegistryService(
         RequireOneVerdict(row, settings);
 
         var fields = new List<AnchorFieldChange>();
-        AddChange(fields, "priority", existing.Priority, cells.Priority);
-        AddChange(fields, "status", existing.Status, cells.Status);
-        AddChange(fields, "trigger", existing.Trigger, request.Trigger);
-        AddChange(fields, "closing", existing.ClosingWork, request.ClosingWork);
-        AddChange(fields, "cross-refs", existing.CrossRefs, request.CrossRefs);
+        AddChange(fields, AnchorCellNames.Priority, existing.Priority, cells.Priority);
+        AddChange(fields, AnchorCellNames.Status, existing.Status, cells.Status);
+        AddChange(fields, AnchorCellNames.Trigger, existing.Trigger, request.Trigger);
+        AddChange(fields, AnchorCellNames.Closing, existing.ClosingWork, request.ClosingWork);
+        AddChange(fields, AnchorCellNames.CrossRefs, existing.CrossRefs, request.CrossRefs);
 
         var statusAfter = AnchorCells.Split(row)[3].Trim();
         var destination = registries.HomeOf(statusAfter);
@@ -671,21 +812,29 @@ public sealed class AnchorRegistryService(
     /// </summary>
     private IReadOnlyList<string> Verify(IReadOnlyList<AnchorRowDeclaration> rows, AnchorRegistries registries, AnchorIdRules rules)
     {
-        AnchorRegistryDocument pending;
-        AnchorRegistryDocument done;
-
         try
         {
-            pending = Load(registries.Pending, rules);
-            done = Load(registries.Done, rules);
+            return [.. Differing(rows, registries, Load(registries.Pending, rules), Load(registries.Done, rules))
+                .Select(difference => $"'{difference.Id}': {difference.How}")];
         }
         catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
         {
             // A registry that cannot be read back is not one proved to hold the rows: it is put back like any other.
             return [ex.Message.TrimEnd('.')];
         }
+    }
 
-        var wrong = new List<string>();
+    /// <summary>
+    /// Which of <paramref name="rows"/> the registries do not hold as declared, and how: one row for each id, in the
+    /// registry its status belongs in, with every declared cell.
+    /// </summary>
+    private static List<AnchorDifference> Differing(
+        IReadOnlyList<AnchorRowDeclaration> rows,
+        AnchorRegistries registries,
+        AnchorRegistryDocument pending,
+        AnchorRegistryDocument done)
+    {
+        var differing = new List<AnchorDifference>();
 
         foreach (var declared in rows)
         {
@@ -693,7 +842,7 @@ public sealed class AnchorRegistryService(
 
             if (matches.Count != 1)
             {
-                wrong.Add($"'{declared.Id}' has {matches.Count} rows, not one");
+                differing.Add(new AnchorDifference(declared.Id, matches.Count == 0 ? "it has no row in either registry" : $"it has {matches.Count} rows"));
                 continue;
             }
 
@@ -734,11 +883,109 @@ public sealed class AnchorRegistryService(
 
             if (differs.Count > 0)
             {
-                wrong.Add($"'{declared.Id}': {string.Join(", ", differs)}");
+                differing.Add(new AnchorDifference(declared.Id, string.Join(", ", differs)));
             }
         }
 
-        return wrong;
+        return differing;
+    }
+
+    /// <summary>
+    /// The cells of <paramref name="existing"/> that <paramref name="change"/> rewrites and whose stored text does not
+    /// survive in what replaces it, each with its word diff and whether <paramref name="accepted"/> names it.
+    /// </summary>
+    private static IReadOnlyList<AnchorLostCell> Lost(string id, AnchorSetRequest change, AnchorRow existing, IReadOnlySet<AnchorRowCell> accepted)
+    {
+        (string Cell, string Stored, string? Written)[] cells =
+        [
+            (AnchorCellNames.Trigger, existing.Trigger, change.Trigger),
+            (AnchorCellNames.Closing, existing.ClosingWork, change.ClosingWork),
+            (AnchorCellNames.CrossRefs, existing.CrossRefs, change.CrossRefs),
+        ];
+
+        return [.. cells
+            .Where(cell => cell.Written is not null && AnchorCellComparison.Fate(cell.Stored, AnchorCells.Flatten(cell.Written)) == AnchorCellFate.Lost)
+            .Select(cell => new AnchorLostCell(
+                cell.Cell,
+                AnchorCellComparison.WordDiff(cell.Stored, AnchorCells.Flatten(cell.Written!)),
+                accepted.Contains(new AnchorRowCell(id, cell.Cell))))];
+    }
+
+    /// <summary>
+    /// What refuses a cell the door would store broken, for the tree <paramref name="context"/> is in: a path a cell cites
+    /// starts at one of its top directories, which are read now, and one that cannot be read refuses the write - an
+    /// answer of none would pass unseen every path that check exists for.
+    /// </summary>
+    private AnchorCellCuts Cuts(HarnessContext context, AnchorIdRules rules)
+    {
+        var root = context.Layout.RepositoryRoot;
+
+        try
+        {
+            return new AnchorCellCuts(
+                rules,
+                [.. _fileSystem.EnumerateDirectories(root)
+                    .Select(directory => Path.GetFileName(Path.TrimEndingDirectorySeparator(directory)))
+                    .Where(name => !string.Equals(name, ".git", StringComparison.Ordinal))]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"The directories at the top of '{root}' cannot be listed, so whether a cell holds a path cut in two cannot be told: "
+                + $"{ex.Message.TrimEnd('.')}. Nothing was written.");
+        }
+    }
+
+    /// <summary>Refuses every prose cell the door would store broken, naming each problem of each.</summary>
+    private static void RequireWhole(IEnumerable<ProseCell> cells, AnchorCellCuts cuts)
+    {
+        var problems = cells.Where(cell => cell.After is not null).SelectMany(cell => cuts.Of(cell.After!, cell.Field)).ToList();
+
+        if (problems.Count > 0)
+        {
+            throw Usage(string.Join(" ", problems));
+        }
+    }
+
+    /// <summary>
+    /// Refuses a row whose cells newly cite an id no row holds: every id a new row's cell cites, and every id a changed
+    /// cell cites that its stored text did not. The ids of the batch it is applied in resolve too, so rows made together
+    /// may cite one another.
+    /// </summary>
+    private static void RequireCitedRows(
+        string id,
+        IEnumerable<ProseCell> cells,
+        AnchorRegistryDocument pending,
+        AnchorRegistryDocument done,
+        AnchorIdRules rules,
+        IReadOnlySet<string>? batch)
+    {
+        var known = pending.Rows.Concat(done.Rows).Select(row => row.Id).Concat(batch ?? Enumerable.Empty<string>()).Append(id).ToHashSet(StringComparer.Ordinal);
+        var unresolved = new List<string>();
+
+        foreach (var cell in cells.Where(cell => cell.After is not null))
+        {
+            var before = rules.CitedIds(cell.Before ?? string.Empty);
+            var cited = rules.CitedIds(AnchorCells.Flatten(cell.After!))
+                .Where(cited => !before.Contains(cited) && !known.Contains(cited))
+                .Order(StringComparer.Ordinal)
+                .ToList();
+
+            if (cited.Count > 0)
+            {
+                unresolved.Add($"{string.Join(", ", cited)} in its {cell.Field}");
+            }
+        }
+
+        if (unresolved.Count > 0)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"'{id}' cites {string.Join("; ", unresolved)}, which no row of either registry holds"
+                + (batch is null ? string.Empty : ", nor any row of the batch")
+                + ": write the row it names first, or correct the id. An id followed by '-', '*' or '{' names a family of ids, and is not looked up.");
+        }
     }
 
     /// <summary>
@@ -790,8 +1037,20 @@ public sealed class AnchorRegistryService(
             $"'{id}' has {matches.Count} rows ({Locations(matches)}). One id has one row, and which of "
             + "these is the real one is for a person to decide, not a tool.");
 
-    /// <summary>A new anchor's row, composed and checked, and the status that decides where it goes.</summary>
-    private sealed record NewRow(string Id, string Row, string Status);
+    /// <summary>The Trigger cell, as a refusal names it.</summary>
+    private const string TriggerField = "Trigger";
+
+    /// <summary>The Closing work cell, as a refusal names it.</summary>
+    private const string ClosingField = "Closing work";
+
+    /// <summary>The Cross-refs cell, as a refusal names it.</summary>
+    private const string CrossRefsField = "Cross-refs";
+
+    /// <summary>A new anchor's row, composed and checked, the status that decides where it goes, and its prose cells as written.</summary>
+    private sealed record NewRow(string Id, string Row, string Status, IReadOnlyList<ProseCell> Cells);
+
+    /// <summary>A prose cell a write names: what it holds now, null for a new row, and what it is written as, null where it is left.</summary>
+    private sealed record ProseCell(string Field, string? Before, string? After);
 
     /// <summary>The cells a change names, each composed and checked; null for a cell left as it is.</summary>
     private sealed record CellChanges(string? Priority, string? Status, string? Trigger, string? ClosingWork, string? CrossRefs);

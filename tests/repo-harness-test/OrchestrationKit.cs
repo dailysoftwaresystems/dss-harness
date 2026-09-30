@@ -91,10 +91,19 @@ internal sealed class OrchestrationKit
     }
 
     public Task<CommandOutcome> FoldAsync(string agent, bool apply, params string[] settled)
-        => Harness.AgentService.FoldAsync(Main, Orchestrator, agent, settled, apply, Token);
+        => FoldAsync(agent, apply, new FoldAllowances { Settled = settled });
+
+    public Task<CommandOutcome> FoldAsync(string agent, bool apply, FoldAllowances allowances)
+        => Harness.AgentService.FoldAsync(Main, Orchestrator, agent, allowances, apply, Token);
 
     public Task<CommandOutcome> DeleteAsync(string agent, bool apply, bool discard = false, params string[] settled)
-        => Harness.AgentService.DeleteAsync(Main, Orchestrator, agent, settled, apply, discard, Token);
+        => DeleteAsync(agent, apply, new FoldAllowances { Settled = settled }, discard);
+
+    public Task<CommandOutcome> DeleteAsync(string agent, bool apply, FoldAllowances allowances, bool discard = false)
+        => Harness.AgentService.DeleteAsync(Main, Orchestrator, agent, allowances, apply, discard, Token);
+
+    /// <summary>A fold let make the rows <paramref name="ids"/>, as --new names them.</summary>
+    public static FoldAllowances Making(params string[] ids) => new() { New = ids };
 
     /// <summary>The agent's record.</summary>
     public AgentRecord Record(string agent) => Harness.OrchestrationStore.ReadAgent(Layout, agent)!;

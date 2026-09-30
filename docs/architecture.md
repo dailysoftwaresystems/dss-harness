@@ -562,10 +562,18 @@ as write-anchor reads a cell file - and applied through `IAnchorRegistryService.
 row exactly as write-anchor or set-anchor does, one after another under the registries' one lock: every row is
 checked and every refusal named before any is written, a row already as declared is left alone, a change names
 only the cells that differ, a row moving between the registries is written destination first, and a write that
-fails, or rows that do not read back as declared, put both registries back byte for byte. The rows a fold applied are
-recorded as declared then (`applied-rows.json`): one the agent declares as it did then is never applied again, so a
-change the registries took since - the orchestrator closing the row, a sibling's cross-reference - stands; one it
-declares anew over it is refused where the registries no longer hold what the fold applied, as a file the main tree
+fails, or rows that do not read back as declared, put both registries back byte for byte. Every write of a row, alone
+or in a batch, is refused where a cell would be stored cut (`AnchorCellCuts`: an id broken after a hyphen or across a
+line, a path broken after its `/`) or newly cites an id no row holds (`AnchorIdRules.CitedIds`; the batch's own ids
+resolve too). A batch makes a row no registry holds only where the request names it new (`fold-agent --new`), as
+write-anchor is only ever asked to make one, and writes a cell whose stored text does not survive - neither respaced,
+nor kept whole in an addendum, nor filling an empty one (`AnchorCellComparison`) - only where the request accepts it
+(`--accept-lost`); a plan (`AnchorBatchMode.Plan`, the dry run) shows such a cell word by word, and a check or an
+apply refuses it, so a fold refuses before its files are written. The rows a fold applied are recorded as declared
+then (`applied-rows.json`): one the agent declares as it did then is never applied again, so a change the registries
+took since - the orchestrator closing the row, a sibling's cross-reference - stands; one it declares anew over it is
+refused where the registries no longer hold what the fold applied (`DifferencesAsync`, which holds a row to no rule a
+write is held to: one applied before a rule it breaks is still the row that was applied), as a file the main tree
 changed is.
 
 ### Deleting an agent

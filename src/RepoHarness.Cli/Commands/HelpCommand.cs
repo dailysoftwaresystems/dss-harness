@@ -1291,6 +1291,14 @@ internal static class HelpCommand
         builder.AppendLine("value's very start and end. A --<cell>-file is read as UTF-8: one that is not, or");
         builder.AppendLine("that opens with a byte-order mark, is refused.");
         builder.AppendLine();
+        builder.AppendLine("A value that would be stored cut is refused: an id broken after a hyphen, as a line");
+        builder.AppendLine("break stored as a space leaves it, or broken across a line inside a segment; a path");
+        builder.AppendLine("broken across a line after its '/'; and a path stored with a space after a '/'");
+        builder.AppendLine("where it starts at a directory at the top of the tree. So is a value that newly");
+        builder.AppendLine("cites an id no row of either registry holds - a token spelt as a new id is, and not");
+        builder.AppendLine("followed by -, * or {, which name a family of ids. A citation the cell already");
+        builder.AppendLine("held is history, and is not judged again.");
+        builder.AppendLine();
         builder.AppendLine($"check-anchor-balance compares the working tree with --base (default {AnchorBalanceService.DefaultBase}), by id");
         builder.AppendLine("across both registries, so moving a row counts as nothing. It fails when open");
         builder.AppendLine("anchors rose, not counting anchors newly disclosed, and when a closed anchor is in");
@@ -1316,10 +1324,12 @@ internal static class HelpCommand
         builder.AppendLine("Exit codes");
         builder.AppendLine($"  {AnchorExit.Findings,3}  an id was not found, --lint found problems, the balance did not hold,");
         builder.AppendLine("       or a citation resolves to no row or is cut");
-        builder.AppendLine($"  {HarnessExit.UsageError,3}  a value is not valid (an id, a priority, a status, an empty trigger),");
-        builder.AppendLine("       options that cannot be combined, or set-anchor with nothing to change");
+        builder.AppendLine($"  {HarnessExit.UsageError,3}  a value is not valid (an id, a priority, a status, an empty trigger, a");
+        builder.AppendLine("       cell it would store cut), options that cannot be combined, or set-anchor with nothing");
+        builder.AppendLine("       to change");
         builder.AppendLine($"  {HarnessExit.NotInitialized,3}  a registry is missing; run '{ToolPackage.Command} init'");
         builder.AppendLine($"  {HarnessExit.Refused,3}  refused: the id exists, there is no such anchor, an id has two rows,");
+        builder.AppendLine("       a value newly cites a row no registry holds,");
         builder.AppendLine("       the registry is ignored by git, the lock is held, anchors.citationRoots");
         builder.AppendLine("       declares no root, or a file in a root is not named in UTF-8");
         builder.AppendLine($"  {HarnessExit.CommandFailed,3}  a registry is malformed, the base commit cannot be read, or git");
@@ -1348,7 +1358,7 @@ internal static class HelpCommand
             builder,
             [
                 ($"  {OrchestratorLayout.RecordFileName}", "its record: name, model, createdAt, parallel, session"),
-                ($"  {OrchestratorLayout.LogsDirectoryName}/<name>{OrchestratorLayout.LogExtension}", "a JSON line for each run that reached it or one agent, refusals included"),
+                ($"  {OrchestratorLayout.LogsDirectoryName}/<name>{OrchestratorLayout.LogExtension}", "a JSON line for each run that acted, or refused to; a dry run writes none"),
                 ($"  {OrchestratorLayout.LogsDirectoryName}/<agent>/", "the agent's Claude transcripts, kept when it is deleted"),
                 ($"  {OrchestratorLayout.WorkDirectoryName}/<agent>/", "the agent's scratch and task files"),
                 ($"  {OrchestratorLayout.PlansDirectoryName}/<name>/", "plans: its own, and a directory for each agent"),
@@ -1372,8 +1382,9 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>...] [--apply]");
-        builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] [--settled <path>]...");
-        builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] [--settled <path>]... [--discard-uncommitted]");
+        builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] [--settled <path>]... [--new <ID>]... [--accept-lost <ID>:<cell>]...");
+        builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] [--settled <path>]... [--new <ID>]... [--accept-lost <ID>:<cell>]...");
+        builder.AppendLine($"      [--discard-uncommitted]");
         builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--json]");
         builder.AppendLine($"  {command} {OrchestratorService.DeleteCommand} <o> [--delete-evidence]");
         builder.AppendLine();
@@ -1412,9 +1423,15 @@ internal static class HelpCommand
             + "<path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force. A path this process "
             + "cannot look at is never read as absent: the fold fails, nothing written. A file of either tree that changed after "
             + $"it was weighed is never written over: the fold stops there, exit {HarnessExit.Incomplete}, and run again weighs it "
-            + "anew. Then the rows it declares anew are applied, all or nothing: a new id written as write-anchor writes one, an "
-            + "existing row changed in the cells that differ, and one already as declared left alone; a write that fails puts both "
-            + "registries back byte for byte. A row an earlier fold applied, declared as it was then, is never applied again, so a "
+            + "anew. Then the rows it declares anew are applied, all or nothing, each held to what write-anchor and set-anchor "
+            + "refuse - a cell they would store cut, a citation of a row neither registry holds, nor the fold's own rows - and to two "
+            + "rules of its own. A row no registry holds is made only where --new <ID> names it, since a typo in an existing row's "
+            + "id would make it a second row; and a cell of an existing row whose stored text the agent's does not keep - neither "
+            + "respaced, nor kept whole in an addendum, nor filling an empty cell - is written only where --accept-lost <ID>:<cell> "
+            + "names it, once the dry run has shown what it loses word by word, and the command that writes it. A --new or "
+            + "--accept-lost that lets nothing through is refused. An existing row is changed in the cells that differ, and one "
+            + "already as declared left alone; a write that fails puts both registries back byte for byte. A row an earlier fold "
+            + "applied, declared as it was then, is never applied again, so a "
             + "change the registries took since stands; one declared anew over it is refused where the registries changed it "
             + "since, as a file is.");
         builder.AppendLine();

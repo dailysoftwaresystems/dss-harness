@@ -34,6 +34,7 @@ public sealed class AgentServiceTests
         Assert.Equal("one\nmain edit\n", OrchestrationKit.Read(worktree, "a.txt"));
         Assert.True(Directory.Exists(kit.Layout.WorkDirectory("ag")));
         Assert.True(Directory.Exists(kit.Layout.PlansDirectory("ag")));
+        Assert.True(Directory.Exists(kit.Layout.RowsDirectory("ag")));
         Assert.Contains(kit.Harness.OrchestrationLog.Read(kit.Layout.LogFile("ag")), entry => entry.Command == AgentService.CreateCommand && entry.Outcome == nameof(HarnessExit.Success));
     }
 

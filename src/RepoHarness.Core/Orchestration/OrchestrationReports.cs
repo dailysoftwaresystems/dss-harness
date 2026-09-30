@@ -269,7 +269,10 @@ public static class OrchestrationReports
         }
     }
 
-    /// <summary>What applying an agent's rows does, or did: each row, and where it goes.</summary>
+    /// <summary>
+    /// What applying an agent's rows does, or did: each row, and where it goes, with each cell whose stored text it loses
+    /// shown word by word - what it removes and what replaces it - and whether losing it was accepted.
+    /// </summary>
     /// <param name="batch">The rows applied, or planned.</param>
     public static IEnumerable<string> RowLines(AnchorBatch batch)
     {
@@ -283,6 +286,13 @@ public static class OrchestrationReports
                 AnchorRowAction.Changed => $"  {row.Id}: {Changed(row.Change)}",
                 _ => $"  {row.Id}: already as it declares, with nothing to write",
             };
+
+            foreach (var lost in row.Lost)
+            {
+                yield return lost.Accepted
+                    ? $"    its {lost.Cell} loses stored text, accepted with --accept-lost {row.Id}:{lost.Cell}: {lost.Diff}"
+                    : $"    its {lost.Cell} loses stored text, written only with --accept-lost {row.Id}:{lost.Cell}: {lost.Diff}";
+            }
         }
 
         foreach (var problem in batch.Problems)
@@ -336,22 +346,6 @@ public static class OrchestrationReports
     /// <summary>A moment as orchestration messages and listings spell one: UTC, to the second.</summary>
     /// <param name="moment">The moment.</param>
     internal static string Moment(DateTimeOffset moment) => moment.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
-
-    /// <summary>How the registries' row differs from a declaration applied before, as a dry run of that declaration answers.</summary>
-    /// <param name="outcome">What applying the earlier declaration again would do.</param>
-    internal static string Since(AnchorRowOutcome outcome)
-    {
-        ArgumentNullException.ThrowIfNull(outcome);
-
-        if (outcome.Action == AnchorRowAction.New)
-        {
-            return "it is in neither registry now";
-        }
-
-        var change = outcome.Change;
-        var fields = change.Fields.Count == 0 ? "its cells differ" : $"its {string.Join(", ", change.Fields.Select(field => field.Field))} differ";
-        return change.Moved && change.From is { } from ? $"{fields}, and it is in the {from.Name} registry" : fields;
-    }
 
     private static string Changed(AnchorChange change)
     {

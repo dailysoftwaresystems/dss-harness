@@ -117,6 +117,10 @@ public static partial class AnchorCells
     private static readonly string[] LineBreaks =
         ["\r\n", "\r", "\n", "\v", "\f", "\u001c", "\u001d", "\u001e", "\u0085", "\u2028", "\u2029"];
 
+    /// <summary>A regular expression for one line break, each boundary <see cref="Flatten"/> breaks a value at.</summary>
+    internal static string LineBreakPattern { get; } =
+        "(?:" + string.Join('|', LineBreaks.Select(boundary => string.Concat(boundary.Select(character => $@"\u{(int)character:X4}")))) + ")";
+
     /// <summary>Collapses every run of whitespace, line breaks included, to one space, and trims.</summary>
     /// <remarks>For reading a cell and quoting one: never for writing one, which keeps its runs.</remarks>
     public static string Collapse(string text)

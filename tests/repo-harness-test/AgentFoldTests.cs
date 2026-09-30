@@ -1,4 +1,5 @@
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -374,7 +375,7 @@ public sealed class AgentFoldTests
         var shifting = new ShiftingFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "b.txt"), "two\nhalf written\n");
         var agents = kit.Harness.Agents(shifting, kit.Harness.AnchorRegistryService);
 
-        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", [], apply: true, TestContext.Current.CancellationToken);
+        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.StartsWith("Folding agent 'ag' of 'o1' stopped part way, after writing 0 of 1 path(s)", stopped.Message);
@@ -393,7 +394,7 @@ public sealed class AgentFoldTests
         OrchestrationKit.Write(worktree, "new.txt", "new\n");
         var agents = kit.Harness.Agents(new UnaskableFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "b.txt")), kit.Harness.AnchorRegistryService);
 
-        var failed = await agents.FoldAsync(kit.Main, "o1", "ag", [], apply: true, TestContext.Current.CancellationToken);
+        var failed = await agents.FoldAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
         Assert.Contains("what it changed cannot be read", failed.Message);
@@ -508,7 +509,7 @@ public sealed class AgentFoldTests
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         var agents = kit.Harness.Agents(new ShiftingFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt"), "two\nsaved meanwhile\n"), kit.Harness.AnchorRegistryService);
 
-        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", [], apply: true, TestContext.Current.CancellationToken);
+        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.Contains("holds other content in the main tree now than when it was measured, so it was not written over", stopped.Message);
