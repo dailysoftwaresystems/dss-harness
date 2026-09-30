@@ -14,16 +14,18 @@ public sealed record AnchorCitation(string Id, string Path, int LineNumber)
     /// <summary>
     /// Whether the id is cut at the end of its line, as a wrapped line cuts one, with the rest of it
     /// on the next: it runs into a hyphen that ends the line, or it ends the line and the next opens
-    /// with the hyphen that carries it on into the id of a registry row. What it spells is not the id
-    /// it was cut from, so it cannot resolve, whatever rows exist - not even to a row that happens to
-    /// be named by the part before the cut. Cut before it carries the segments of a citation, it is one
-    /// only when the next line carries on with the segments that make it one.
+    /// with what carries it on into the id of a registry row - a hyphen and segments, or segments
+    /// straight on, where the line broke inside one. What it spells is not the id it was cut from, so it
+    /// cannot resolve, whatever rows exist - not even to a row that happens to be named by the part
+    /// before the cut. Cut before it carries the segments of a citation, it is one only when the next
+    /// line carries on with the segments that make it one.
     /// </summary>
     /// <remarks>
-    /// A hyphen that ends a line cuts whatever follows, since no id ends in one. One that opens the
-    /// next line is read as a cut only where the two lines joined spell a row: it opens an option such
-    /// as <c>-Wall</c>, a figure such as <c>(-40</c>, a line a diff removed, as often as it carries an
-    /// id on, and read as a cut each of those failed the check over an id written whole.
+    /// A hyphen that ends a line cuts whatever follows, since no id ends in one. What opens the next line
+    /// is read as carrying an id on only where the two lines joined spell a row: a hyphen opens an option
+    /// such as <c>-Wall</c>, a figure such as <c>(-40</c>, a line a diff removed, and a word in capitals
+    /// and hyphens a figure such as <c>MF-4</c> or the next id of a list, as often as either carries an id
+    /// on, and read as a cut each of those failed the check over an id written whole.
     /// </remarks>
     public bool Cut { get; init; }
 
@@ -54,6 +56,11 @@ public sealed record AnchorCitation(string Id, string Path, int LineNumber)
 /// backslash and not an escape, so <c>"\\nD-SOME-ID"</c> really does glue the id to a letter and is
 /// not a citation: an escaped backslash is a character, not an escape.
 /// </para>
+/// <para>
+/// An id followed by <c>*</c> or <c>{</c>, or by a hyphen and one of those, names a family or a pattern
+/// of ids - <c>D-AREA-TOPIC-*</c>, <c>D-AREA-TOPIC-{A,B}</c> - and no row, so it is no citation; an id in
+/// bold, <c>**D-AREA-TOPIC**</c>, is one.
+/// </para>
 /// </remarks>
 public sealed class AnchorIdScanner
 {
@@ -81,7 +88,7 @@ public sealed class AnchorIdScanner
     /// marker: what an id cut at a hyphen that ends the line before carries on with.
     /// </summary>
     private static readonly Regex Opening = new(
-        @"^[^A-Za-z0-9_]*(?<run>[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*)",
+        $@"^[^A-Za-z0-9_]*(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)",
         RegexOptions.CultureInvariant);
 
     /// <summary>
@@ -91,7 +98,15 @@ public sealed class AnchorIdScanner
     /// the hyphen, and carry nothing on.
     /// </summary>
     private static readonly Regex HyphenOpening = new(
-        @"^[^A-Za-z0-9_-]*-(?<run>[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*)",
+        $@"^[^A-Za-z0-9_-]*-(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The segments a line opens with straight away, past its indentation and a comment's marker but with no hyphen before
+    /// them: what an id cut inside a segment would carry on with - which it does only where the two join into a row's id.
+    /// </summary>
+    private static readonly Regex StraightOpening = new(
+        $@"^[^A-Za-z0-9_-]*(?<run>{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment})*)",
         RegexOptions.CultureInvariant);
 
     private readonly Regex _candidate;
@@ -117,11 +132,11 @@ public sealed class AnchorIdScanner
         // could hold. The separation from what precedes it is decided below rather than here: a
         // regex boundary cannot see the backslash two characters back.
         _candidate = new Regex(
-            $@"{escaped}-[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+){{{CitationSegments - 1},}}",
+            $@"{escaped}-{AnchorIdRules.Segment}(?:-{AnchorIdRules.Segment}){{{CitationSegments - 1},}}",
             RegexOptions.CultureInvariant);
 
         _shortTail = new Regex(
-            $@"(?<id>{escaped}(?:-[A-Za-z0-9_]+){{0,{CitationSegments - 1}}})(?<hyphen>-)?\s*\z",
+            $@"(?<id>{escaped}(?:-{AnchorIdRules.Segment}){{0,{CitationSegments - 1}}})(?<hyphen>-)?\s*\z",
             RegexOptions.CultureInvariant);
     }
 
@@ -174,20 +189,31 @@ public sealed class AnchorIdScanner
 
     /// <summary>
     /// Whether the id ending at <paramref name="end"/> ends <paramref name="line"/>, and
-    /// <paramref name="next"/> opens with the hyphen that carries it on into a row's id: an id a
-    /// wrapped line cut just before a hyphen, which reads here as the shorter id it happens to spell.
+    /// <paramref name="next"/> opens with what carries it on into a row's id: an id a wrapped line cut
+    /// just before a hyphen, or inside a segment, which reads here as the shorter id it happens to spell.
     /// </summary>
-    private static bool IsCutBeforeHyphen(string line, int end, string id, string next, IReadOnlySet<string>? rows)
+    private static bool IsCutAtLineEnd(string line, int end, string id, string next, IReadOnlySet<string>? rows)
         => string.IsNullOrWhiteSpace(line[end..]) && JoinsARow(id, next, rows);
 
     /// <summary>
-    /// Whether <paramref name="id"/>, joined to the hyphen and segments <paramref name="next"/> opens
-    /// with, spells the id of one of <paramref name="rows"/>.
+    /// Whether <paramref name="id"/>, joined to what <paramref name="next"/> opens with - a hyphen and
+    /// segments, or segments straight on - spells the id of one of <paramref name="rows"/>.
     /// </summary>
     private static bool JoinsARow(string id, string next, IReadOnlySet<string>? rows)
         => rows is not null
-            && HyphenOpening.Match(next) is { Success: true } opening
-            && rows.Contains(id + "-" + opening.Groups["run"].Value);
+            && ((HyphenOpening.Match(next) is { Success: true } hyphen && rows.Contains(id + "-" + hyphen.Groups["run"].Value))
+                || (StraightOpening.Match(next) is { Success: true } straight && rows.Contains(id + straight.Groups["run"].Value)));
+
+    /// <summary>
+    /// Whether the id from <paramref name="start"/> to <paramref name="end"/> names a family or a pattern of ids rather than a
+    /// row: followed by <c>*</c> or <c>{</c>, or by a hyphen and one of those - but for a <c>*</c> that closes the emphasis
+    /// one before the id opened, as <c>**D-AREA-TOPIC**</c> writes an id in bold.
+    /// </summary>
+    private static bool IsFamily(string line, int start, int end)
+        => end < line.Length
+            && ((line[end] == '*' && (start == 0 || line[start - 1] != '*'))
+                || line[end] == '{'
+                || (line[end] == '-' && end + 1 < line.Length && line[end + 1] is '*' or '{'));
 
     /// <summary>
     /// Hyphen-separated segments <paramref name="line"/> opens with, as <paramref name="opening"/>
@@ -220,9 +246,12 @@ public sealed class AnchorIdScanner
             {
                 end = match.Index + match.Length;
 
-                yield return IsCutAtHyphen(line, end)
-                    ? (match.Value, match.Value + "-", true)
-                    : (match.Value, match.Value, IsCutBeforeHyphen(line, end, match.Value, next, rows));
+                if (!IsFamily(line, match.Index, end))
+                {
+                    yield return IsCutAtHyphen(line, end)
+                        ? (match.Value, match.Value + "-", true)
+                        : (match.Value, match.Value, IsCutAtLineEnd(line, end, match.Value, next, rows));
+                }
 
                 from = end;
             }

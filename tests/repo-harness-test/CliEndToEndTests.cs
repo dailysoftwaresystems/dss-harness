@@ -61,6 +61,25 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// fold-agent and delete-agent read --new and --accept-lost as often as they are given - the second one here as well as
+    /// the first - and refuse, as usage errors before any repository is looked for, an id no anchor could have, a cell that
+    /// is not ID:cell, and either beside --discard-uncommitted.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { "fold-agent", "o1", "ag", "--accept-lost", "D-X-Y-Z:status" }, "--accept-lost 'D-X-Y-Z:status' is not <ID>:<cell>")]
+    [InlineData(new[] { "delete-agent", "o1", "ag", "--new", "D-X-Y-Z", "--new", "D-X Y" }, "--new 'D-X Y' is not an anchor id")]
+    [InlineData(new[] { "delete-agent", "o1", "ag", "--accept-lost", "D-X-Y-Z:closing", "--discard-uncommitted" }, "--accept-lost lets a fold through what it otherwise refuses, and --discard-uncommitted folds nothing")]
+    public async Task WhatAFoldIsLetThrough_IsReadEachTimeGiven_AndRefusedAsAUsageErrorWhereItCannotBeOne(string[] arguments, string refusal)
+    {
+        using var temp = new TempDirectory();
+
+        var result = await CliRunner.RunAsync(arguments, TestContext.Current.CancellationToken, workingDirectory: temp.Path);
+
+        Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+        Assert.Contains(refusal, result.StandardOutput + result.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// One sync reaches every host, and taking a directory over deletes what the source does not
     /// have. Saying which machine that applies to is the whole point, so the flag cannot be a bare
     /// yes that a reader could take to mean "this one" while it means "all of them".

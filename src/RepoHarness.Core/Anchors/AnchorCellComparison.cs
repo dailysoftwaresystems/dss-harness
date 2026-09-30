@@ -48,8 +48,8 @@ public static class AnchorCellComparison
             return AnchorCellFate.Same;
         }
 
-        var before = Words(stored);
-        var after = Words(written);
+        var before = AnchorCells.Words(stored);
+        var after = AnchorCells.Words(written);
 
         if (before.Length == 0)
         {
@@ -66,7 +66,8 @@ public static class AnchorCellComparison
 
     /// <summary>
     /// What writing <paramref name="written"/> over <paramref name="stored"/> removes, <c>[-like this-]</c>, and writes,
-    /// <c>{+like this+}</c>, word by word, with a few unchanged words either side of each change and a <c>…</c> for the rest.
+    /// <c>{+like this+}</c>, word by word, with a few unchanged words either side of each change and a <c>…</c> for the rest;
+    /// two texts too long to compare word by word are shown the one removed and the other written, and said to be.
     /// </summary>
     /// <param name="stored">The cell as it reads.</param>
     /// <param name="written">The text as the cell would store it.</param>
@@ -75,8 +76,8 @@ public static class AnchorCellComparison
         ArgumentNullException.ThrowIfNull(stored);
         ArgumentNullException.ThrowIfNull(written);
 
-        var before = Words(stored);
-        var after = Words(written);
+        var before = AnchorCells.Words(stored);
+        var after = AnchorCells.Words(written);
         var start = 0;
 
         while (start < before.Length && start < after.Length && before[start] == after[start])
@@ -92,14 +93,13 @@ public static class AnchorCellComparison
         }
 
         var steps = new List<(char Kind, string Word)>();
+        var middle = Middle(before[start..endBefore], after[start..endAfter]);
         steps.AddRange(before[..start].Select(word => ('=', word)));
-        steps.AddRange(Middle(before[start..endBefore], after[start..endAfter]));
+        steps.AddRange(middle.Steps);
         steps.AddRange(before[endBefore..].Select(word => ('=', word)));
 
-        return Render(steps);
+        return middle.Compared ? Render(steps) : $"{Render(steps)} (too long to compare word by word)";
     }
-
-    private static string[] Words(string text) => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
 
     /// <summary>Whether <paramref name="words"/> holds <paramref name="run"/>, its words together and in order.</summary>
     private static bool Holds(string[] words, string[] run)
@@ -115,8 +115,12 @@ public static class AnchorCellComparison
         return false;
     }
 
-    /// <summary>The words of <paramref name="before"/> kept, removed and written to make <paramref name="after"/>: the longest run kept.</summary>
-    private static List<(char Kind, string Word)> Middle(string[] before, string[] after)
+    /// <summary>
+    /// The words of <paramref name="before"/> kept, removed and written to make <paramref name="after"/>: as many kept as
+    /// the two share in order, together or not; and whether they were compared at all, rather than the one shown removed
+    /// and the other written for being too long to compare.
+    /// </summary>
+    private static (List<(char Kind, string Word)> Steps, bool Compared) Middle(string[] before, string[] after)
     {
         var steps = new List<(char Kind, string Word)>();
 
@@ -124,7 +128,7 @@ public static class AnchorCellComparison
         {
             steps.AddRange(before.Select(word => ('-', word)));
             steps.AddRange(after.Select(word => ('+', word)));
-            return steps;
+            return (steps, false);
         }
 
         // kept[i, j] is how many words the rest of each, from i and from j, have in common, in order.
@@ -159,7 +163,7 @@ public static class AnchorCellComparison
 
         steps.AddRange(before[x..].Select(word => ('-', word)));
         steps.AddRange(after[y..].Select(word => ('+', word)));
-        return steps;
+        return (steps, true);
     }
 
     private static string Render(List<(char Kind, string Word)> steps)

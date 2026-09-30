@@ -9,7 +9,7 @@ public sealed class AgentServiceTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>
-    /// An agent is made with its record, its worktree below its orchestrator's directory, its work and plans directories,
+    /// An agent is made with its record, its worktree below its orchestrator's directory, its work, plans and rows directories,
     /// and a seed holding the main tree's uncommitted state, each path with its digest; the base is the commit it was made from.
     /// </summary>
     [Fact]

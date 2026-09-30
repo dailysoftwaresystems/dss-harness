@@ -673,7 +673,7 @@ public sealed class AnchorRegistryServiceTests
     }
 
     /// <summary>
-    /// A batch writes a new id's row, changes an existing row in the cells that differ only - a cell already as declared
+    /// A batch writes a new row named new, changes an existing row in the cells that differ only - a cell already as declared
     /// keeps its stored bytes, runs of spaces and all - and leaves a row already as declared alone.
     /// </summary>
     [Fact]
@@ -726,7 +726,7 @@ public sealed class AnchorRegistryServiceTests
 
     /// <summary>
     /// Every row is checked before any is written, and every one refused is named: one bad row writes none of them, and a
-    /// dry run writes nothing at all.
+    /// plan writes nothing at all.
     /// </summary>
     [Fact]
     public async Task ApplyAsync_ChecksEveryRowFirst_AndWritesNoneWhenOneIsRefused()
@@ -834,7 +834,7 @@ public sealed class AnchorRegistryServiceTests
             temp.Path, new AnchorSetRequest(One) { ClosingWork = "see src/hir/\ntest_x.cpp for the case" }, dryRun: false, cancellationToken));
 
         Assert.Equal(HarnessExit.UsageError, written.ExitCode);
-        Assert.StartsWith("The Trigger holds an anchor id broken after a hyphen ('D-AREA- T', as it would be stored)", written.Message);
+        Assert.StartsWith("The Trigger holds an anchor id cut where a line ends ('D-AREA-')", written.Message);
         Assert.Equal(HarnessExit.UsageError, set.ExitCode);
         Assert.StartsWith(@"The Closing work holds a path broken across a line after a '/' ('src/hir/\ntest_x.cpp')", set.Message);
         Assert.Equal(before, File.ReadAllText(PendingPath(temp)));
@@ -915,7 +915,7 @@ public sealed class AnchorRegistryServiceTests
             refused.Problems,
             problem => Assert.StartsWith($"{Three}: '{Three}' has no row in either registry, and it was not named new", problem),
             problem => Assert.StartsWith($"{Three}: '{Three}' has no row yet, and a new anchor needs a priority", problem),
-            problem => Assert.StartsWith($"{Three}: The Trigger holds an anchor id broken after a hyphen", problem));
+            problem => Assert.StartsWith($"{Three}: The Trigger holds an anchor id cut where a line ends ('D-AREA-')", problem));
     }
 
     /// <summary>
@@ -933,7 +933,7 @@ public sealed class AnchorRegistryServiceTests
         var differs = await harness.AnchorRegistryService.ApplyAsync(
             temp.Path, new AnchorBatchRequest([Declared(One, "gated", "work")]) { New = [One] }, AnchorBatchMode.Plan, cancellationToken);
         var madeBefore = await harness.AnchorRegistryService.ApplyAsync(
-            temp.Path, new AnchorBatchRequest([Declared(One, "open", "work")]) { New = [One] }, AnchorBatchMode.Apply, cancellationToken);
+            temp.Path, new AnchorBatchRequest([Declared(One, "open", "work")]) { New = [One], AcceptLost = [new(One, "closing")] }, AnchorBatchMode.Apply, cancellationToken);
         var stale = await harness.AnchorRegistryService.ApplyAsync(
             temp.Path,
             new AnchorBatchRequest([Declared(One, "open", "work and more")]) { New = ["D-AREA-TOPIC-NINE"], AcceptLost = [new(One, "closing")] },
@@ -946,7 +946,7 @@ public sealed class AnchorRegistryServiceTests
         Assert.Equal(
             [
                 "--new D-AREA-TOPIC-NINE names no row of the batch: drop it, or correct the id.",
-                $"--accept-lost {One}:closing names a cell that loses no stored text here: drop it, or correct it.",
+                $"--accept-lost {One}:closing names a cell that keeps its stored text here: drop it, or correct it.",
             ],
             stale.Problems);
     }
@@ -971,10 +971,10 @@ public sealed class AnchorRegistryServiceTests
         var refused = await harness.AnchorRegistryService.ApplyAsync(temp.Path, losing, AnchorBatchMode.Apply, cancellationToken);
 
         Assert.True(planned.Succeeded, string.Join("; ", planned.Problems));
-        Assert.Equal(new AnchorLostCell("closing", "[-work-] {+a different plan+}", Accepted: false), Assert.Single(planned.Rows[0].Lost));
+        Assert.Equal(new AnchorLostCell(new AnchorRowCell(One, "closing"), "[-work-] {+a different plan+}", Accepted: false), Assert.Single(planned.Rows[0].Lost));
         Assert.Empty(planned.Rows[1].Lost);
         Assert.Equal(
-            $"{One}: its closing would lose stored text that the declared text does not keep, as its word diff shows, so it is written only with --accept-lost {One}:closing.",
+            $"{One}: its closing does not keep its stored text word for word - [-work-] {{+a different plan+}} - so it is written only with --accept-lost {One}:closing.",
             Assert.Single(checkedBatch.Problems));
         Assert.Equal(checkedBatch.Problems, refused.Problems);
         Assert.Equal(before, File.ReadAllText(PendingPath(temp)));
@@ -1043,6 +1043,178 @@ public sealed class AnchorRegistryServiceTests
             [
                 new AnchorDifference(One, $"its status is '{AnchorStatus.Render(AnchorState.Open)}'"),
                 new AnchorDifference(Three, "it has no row in either registry"),
+            ],
+            differences);
+    }
+
+    /// <summary>
+    /// A write reads what a cell cites as check-anchor-citations reads it: an id of two segments after the prefix is a
+    /// citation, as is one written straight after an escape such as <c>\n</c>, and each is refused where no row holds it.
+    /// </summary>
+    [Fact]
+    public async Task EveryWrite_ReadsACitationAsCheckAnchorCitationsReadsOne()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+
+        var shortOne = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.WriteAsync(
+            temp.Path, Anchor(One) with { CrossRefs = "see D-HIR-LOWERNIG" }, dryRun: true, cancellationToken));
+        var escaped = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.WriteAsync(
+            temp.Path, Anchor(One) with { ClosingWork = "prints << \"\\nD-AREA-TOPIC-NOWHERE: failed\"" }, dryRun: true, cancellationToken));
+
+        Assert.StartsWith($"'{One}' cites D-HIR-LOWERNIG in its Cross-refs, which no row", shortOne.Message);
+        Assert.StartsWith($"'{One}' cites D-AREA-TOPIC-NOWHERE in its Closing work, which no row", escaped.Message);
+    }
+
+    /// <summary>
+    /// A path with a space after a '/' is a cut where it starts at a directory the tree has at its top, read as the write
+    /// runs: before the tree has 'src', the same text passes.
+    /// </summary>
+    [Fact]
+    public async Task EveryWrite_RefusesAPathSpacedAfterATopDirectory_OnlyWhereTheTreeHasOne()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var request = new AnchorWriteRequest(One, "P1", "see src/ main_x.c for the case");
+
+        var passed = await harness.AnchorRegistryService.WriteAsync(temp.Path, request, dryRun: true, cancellationToken);
+        Directory.CreateDirectory(temp.Combine("src"));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.WriteAsync(temp.Path, request, dryRun: true, cancellationToken));
+
+        Assert.True(passed.IsNew);
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.StartsWith("The Trigger holds a path with a space after a '/' ('src/ main_x.c', as it would be stored)", refused.Message);
+    }
+
+    /// <summary>
+    /// set-anchor judges each prose cell it rewrites: a Cross-refs cut, and a new citation of no row in its Trigger or its
+    /// Closing work, are each refused naming the cell. A row of the done registry resolves a citation as a row of the
+    /// pending one does.
+    /// </summary>
+    [Fact]
+    public async Task SetAnchor_JudgesEveryProseCellItRewrites_AndARowOfEitherRegistryResolves()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Three, "closed"), dryRun: false, cancellationToken);
+
+        Task<HarnessException> Refused(AnchorSetRequest request) => Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.SetAsync(temp.Path, request, dryRun: true, cancellationToken));
+
+        var cut = await Refused(new AnchorSetRequest(One) { CrossRefs = "see tests/hir/\ntest_x.cpp" });
+        var trigger = await Refused(new AnchorSetRequest(One) { Trigger = "waits on D-AREA-TOPIC-NOWHERE" });
+        var closing = await Refused(new AnchorSetRequest(One) { ClosingWork = "after D-AREA-TOPIC-NOWHERE" });
+        var resolved = await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { CrossRefs = $"closed by {Three}" }, dryRun: true, cancellationToken);
+
+        Assert.StartsWith("The Cross-refs holds a path broken across a line after a '/'", cut.Message);
+        Assert.StartsWith($"'{One}' cites D-AREA-TOPIC-NOWHERE in its Trigger, which no row", trigger.Message);
+        Assert.StartsWith($"'{One}' cites D-AREA-TOPIC-NOWHERE in its Closing work, which no row", closing.Message);
+        Assert.Equal(["cross-refs"], resolved.Fields.Select(field => field.Field));
+    }
+
+    /// <summary>
+    /// Every refusal of a changed row is named at once - a cut, a citation of no row, and the loss of stored text a check
+    /// refuses - and an acceptance of a loss is not called stale for a row refused before its loss could be judged.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_NamesEveryRefusalOfAChangedRowAtOnce_AndNeverCallsAnUnjudgedAcceptanceStale()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+
+        var everything = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([new(One, "open", $"trigger for {One}", "a different plan, see D-AREA-\nTOPIC-TWO", "refs [[D-AREA-TOPIC-NOWHERE]]")]),
+            AnchorBatchMode.Check,
+            cancellationToken);
+        var unread = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([Declared(One, "bogus", "a different plan")]) { AcceptLost = [new(One, "closing")] },
+            AnchorBatchMode.Check,
+            cancellationToken);
+
+        Assert.Collection(
+            everything.Problems,
+            problem => Assert.StartsWith($"{One}: The Closing work holds an anchor id cut where a line ends ('D-AREA-')", problem),
+            problem => Assert.StartsWith($"{One}: '{One}' cites D-AREA-TOPIC-NOWHERE in its Cross-refs", problem),
+            problem => Assert.StartsWith($"{One}: its closing does not keep its stored text word for word - [-work-] {{+a different plan, see D-AREA- TOPIC-TWO+}}", problem));
+        Assert.Equal([$"{One}: 'bogus' is not a status. Use one of {string.Join(", ", AnchorStatus.Words)}."], unread.Problems);
+    }
+
+    /// <summary>
+    /// A cell filled where it was empty, or respaced with its words kept, needs no acceptance; one emptied loses what it
+    /// held, shown as removed, and is written only once accepted. Each lost cell of a row needs its own acceptance.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_LetsAFillOrARespacingThrough_AndHoldsEveryLostCellToItsOwnAcceptance()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One) with { ClosingWork = null }, dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two) with { ClosingWork = "keep  these   runs" }, dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Three), dryRun: false, cancellationToken);
+        var rows = new AnchorBatchRequest(
+        [
+            Declared(One, "open", "the fix"),
+            Declared(Two, "open", "keep these runs"),
+            new(Three, "open", "another trigger", string.Empty, "refs"),
+        ]);
+
+        var checkedBatch = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, AnchorBatchMode.Check, cancellationToken);
+        var half = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows with { AcceptLost = [new(Three, "closing")] }, AnchorBatchMode.Check, cancellationToken);
+        var accepted = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows with { AcceptLost = [new(Three, "closing"), new(Three, "trigger")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.Collection(
+            checkedBatch.Problems,
+            problem => Assert.StartsWith($"{Three}: its trigger does not keep its stored text word for word", problem),
+            problem => Assert.StartsWith($"{Three}: its closing does not keep its stored text word for word - [-work-] - so", problem));
+        Assert.StartsWith($"{Three}: its trigger does not keep", Assert.Single(half.Problems));
+        Assert.True(accepted.Succeeded, string.Join("; ", accepted.Problems));
+        Assert.Equal([string.Empty, string.Empty], accepted.Rows.Take(2).Select(row => string.Concat(row.Lost.Select(cell => cell.Diff))));
+        Assert.Equal(["the fix", "keep these runs", string.Empty], Rows(harness, PendingPath(temp)).Select(row => row.ClosingWork));
+    }
+
+    /// <summary>An acceptance of a loss in a batch of no rows is refused as the typo it is, never dropped unseen.</summary>
+    [Fact]
+    public async Task ApplyAsync_OfNoRows_StillRefusesAnAcceptanceOfNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = await PrepareAsync(temp);
+
+        var batch = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, new AnchorBatchRequest([]) { AcceptLost = [new(One, "closing")] }, AnchorBatchMode.Plan, TestContext.Current.CancellationToken);
+
+        Assert.Equal([$"--accept-lost {One}:closing names a cell that keeps its stored text here: drop it, or correct it."], batch.Problems);
+    }
+
+    /// <summary>
+    /// A row an id has twice is said to have two, and a declaration whose status does not read is said to differ as such:
+    /// comparing holds a row to no rule a write is held to, and refuses nothing.
+    /// </summary>
+    [Fact]
+    public async Task DifferencesAsync_SaysATwiceHeldRow_AndADeclarationThatDoesNotRead_WithoutRefusingEither()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
+        var line = File.ReadAllLines(PendingPath(temp)).Single(text => text.Contains($"`{One}`", StringComparison.Ordinal));
+        var done = File.ReadAllText(DonePath(temp));
+        File.WriteAllText(DonePath(temp), (done.EndsWith('\n') ? done : done + "\n") + line + "\n");
+
+        var differences = await harness.AnchorRegistryService.DifferencesAsync(temp.Path, [Declared(One, "open", "work"), Declared(Two, "bogus", "work")], cancellationToken);
+
+        Assert.Equal(
+            [
+                new AnchorDifference(One, "it has 2 rows"),
+                new AnchorDifference(Two, "what was declared of it, status 'bogus' and priority '', does not read as a row"),
             ],
             differences);
     }

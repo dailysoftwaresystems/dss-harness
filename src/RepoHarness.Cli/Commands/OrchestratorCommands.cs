@@ -1,4 +1,5 @@
 using System.CommandLine;
+using RepoHarness.Core.Anchors;
 using RepoHarness.Core.Orchestration;
 
 namespace RepoHarness.Cli.Commands;
@@ -16,30 +17,46 @@ internal static class OrchestrationArguments
 
     internal static Option<bool> Apply(string description) => new("--apply") { Description = description };
 
-    internal static Option<string[]> Settled() => new("--settled")
+}
+
+/// <summary>The options that let a fold through what it otherwise refuses, which fold-agent and delete-agent both take.</summary>
+internal static class FoldOptions
+{
+    /// <summary>A path reconciled in the main tree by hand, left out of the fold.</summary>
+    internal static Option<string[]> Settled { get; } = new(FoldAllowances.SettledOption)
     {
         HelpName = "path",
         Description = "A path you reconciled in the main tree by hand, left out of the fold so the rest can go in: neither compared nor written. Once for each path.",
     };
 
-    internal static Option<string[]> New() => new("--new")
+    /// <summary>A row the agent filed that the fold may make.</summary>
+    internal static Option<string[]> New { get; } = new(AnchorBatchRequest.NewOption)
     {
         HelpName = "ID",
         Description = "The id of a row the agent filed that the fold may make: a row no registry holds is otherwise refused, as a typo in an existing row's id would make it a second row. Once for each id.",
     };
 
-    internal static Option<string[]> AcceptLost() => new("--accept-lost")
+    /// <summary>A cell of an existing row the fold may write though its stored text does not survive.</summary>
+    internal static Option<string[]> AcceptLost { get; } = new(AnchorBatchRequest.AcceptLostOption)
     {
-        HelpName = "ID:cell",
-        Description = "A cell of an existing row - trigger, closing or cross-refs - the fold may write though its stored text does not survive in the agent's: read its word diff in the dry run first. Once for each cell.",
+        HelpName = AnchorRowCell.Form.Replace("<", string.Empty, StringComparison.Ordinal).Replace(">", string.Empty, StringComparison.Ordinal),
+        Description = $"A cell of an existing row - {string.Join(", ", AnchorCellNames.Text)} - the fold may write though the agent's text does not keep its stored text word for word: read its word diff in the dry run first. Once for each cell.",
     };
 
-    /// <summary>What a fold is let through, as the three options give it.</summary>
-    internal static FoldAllowances Allowances(ParseResult result, Option<string[]> settled, Option<string[]> added, Option<string[]> acceptLost) => new()
+    /// <summary>Adds the options to <paramref name="command"/>, in the order its help lists them.</summary>
+    internal static void AddTo(Command command)
     {
-        Settled = result.GetValue(settled) ?? [],
-        New = result.GetValue(added) ?? [],
-        AcceptLost = result.GetValue(acceptLost) ?? [],
+        command.Options.Add(Settled);
+        command.Options.Add(New);
+        command.Options.Add(AcceptLost);
+    }
+
+    /// <summary>What <paramref name="result"/> lets a fold through.</summary>
+    internal static FoldAllowances Read(ParseResult result) => new()
+    {
+        Settled = result.GetValue(Settled) ?? [],
+        New = result.GetValue(New) ?? [],
+        AcceptLost = result.GetValue(AcceptLost) ?? [],
     };
 }
 

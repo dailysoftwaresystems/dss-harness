@@ -257,11 +257,21 @@ public sealed record AppliedRowsRecord
     /// <summary>Every row applied, as declared then, one for each id.</summary>
     public required List<Anchors.AnchorRowDeclaration> Rows { get; init; }
 
-    /// <summary>What is wrong with it; null when nothing is.</summary>
+    /// <summary>
+    /// What is wrong with it; null when nothing is. A row named twice, or declared with a status or a priority that does not
+    /// read, is no record of a row applied: every one was a row the registries took.
+    /// </summary>
     public string? Problem()
-        => Rows.GroupBy(row => row.Id, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice
-            ? $"it names row '{twice.Key}' {twice.Count()} times"
+    {
+        if (Rows.GroupBy(row => row.Id, Anchors.AnchorIdMatch.Comparer).FirstOrDefault(group => group.Count() > 1) is { } twice)
+        {
+            return $"it names row '{twice.Key}' {twice.Count()} times";
+        }
+
+        return Rows.FirstOrDefault(row => !Anchors.AnchorStatus.TryParse(row.Status, out _) || (row.Priority is { } band && !Anchors.AnchorPriority.TryNormalize(band, out _))) is { } unread
+            ? $"it declares row '{unread.Id}' with status '{unread.Status}' and priority '{unread.Priority}', and one of them is not one"
             : null;
+    }
 }
 
 /// <summary>The rules every orchestration record's values are held to, each spelt once.</summary>
@@ -271,6 +281,19 @@ public static partial class OrchestrationRules
     /// <param name="name">The name.</param>
     public static string? NameProblem(string? name)
         => WorktreeName.ValidateFormat(name).TryGetName(out _, out var error) ? null : error;
+
+    /// <summary>
+    /// What is wrong with the first of <paramref name="paths"/> that could name nothing in the tree - each relative to it,
+    /// a trailing separator allowed - naming <paramref name="what"/>; null where every one could.
+    /// </summary>
+    /// <param name="paths">Paths as a command was given them.</param>
+    /// <param name="what">What they are, as a refusal names them.</param>
+    public static string? PathsProblem(IReadOnlyList<string> paths, string what)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        return paths.Select(path => RelativePathProblem(path.TrimEnd('/', '\\'), what)).FirstOrDefault(problem => problem is not null);
+    }
 
     /// <summary>What is wrong with an agent's name beside its orchestrator's: never the same, since the two would share a log and a plans directory.</summary>
     /// <param name="orchestrator">The orchestrator's name.</param>

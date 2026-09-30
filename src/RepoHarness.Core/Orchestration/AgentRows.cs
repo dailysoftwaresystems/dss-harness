@@ -14,10 +14,6 @@ public sealed record AgentRowsPlan(AnchorBatch Batch, IReadOnlyList<string> Unch
 {
     /// <summary>How many rows applying it writes: new, or changed.</summary>
     public int Planned => Batch.Rows.Count(row => row.Action != AnchorRowAction.AlreadyIn);
-
-    /// <summary>The cells of its rows that would lose stored text, and that nobody accepted losing.</summary>
-    public IReadOnlyList<AnchorRowCell> Unaccepted =>
-        [.. Batch.Rows.SelectMany(row => row.Lost.Where(cell => !cell.Accepted).Select(cell => new AnchorRowCell(row.Id, cell.Cell)))];
 }
 
 /// <summary>
@@ -36,9 +32,6 @@ public static class AgentRows
 {
     /// <summary>The extension of every cell's file.</summary>
     public const string CellExtension = ".txt";
-
-    /// <summary>The cell a row may leave out: an existing row keeps its own, and a new row must declare one.</summary>
-    public const string PriorityCell = AnchorCellNames.Priority;
 
     /// <summary>The cells every row declares.</summary>
     public static IReadOnlyList<string> RequiredCells { get; } = [AnchorCellNames.Status, .. AnchorCellNames.Text];
@@ -105,9 +98,9 @@ public static class AgentRows
                 var name = Path.GetFileName(file);
                 var cell = name.EndsWith(CellExtension, StringComparison.Ordinal) ? name[..^CellExtension.Length] : null;
 
-                if (cell is null || !(RequiredCells.Contains(cell, StringComparer.Ordinal) || cell == PriorityCell))
+                if (cell is null || !(RequiredCells.Contains(cell, StringComparer.Ordinal) || cell == AnchorCellNames.Priority))
                 {
-                    problems.Add($"'{id}' holds '{name}', which is not one of its cells ({string.Join(", ", RequiredCells.Append(PriorityCell).Select(known => known + CellExtension))}): keep drafts out of the rows directory");
+                    problems.Add($"'{id}' holds '{name}', which is not one of its cells ({string.Join(", ", RequiredCells.Append(AnchorCellNames.Priority).Select(known => known + CellExtension))}): keep drafts out of the rows directory");
                     sound = false;
                     continue;
                 }
@@ -149,7 +142,7 @@ public static class AgentRows
                     cells[AnchorCellNames.Closing],
                     cells[AnchorCellNames.CrossRefs])
                 {
-                    Priority = cells.TryGetValue(PriorityCell, out var priority) ? priority.Trim() : null,
+                    Priority = cells.TryGetValue(AnchorCellNames.Priority, out var priority) ? priority.Trim() : null,
                 });
             }
         }

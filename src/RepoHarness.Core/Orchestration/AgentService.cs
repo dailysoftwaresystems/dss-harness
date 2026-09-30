@@ -534,7 +534,7 @@ public sealed class AgentService(
     {
         ArgumentNullException.ThrowIfNull(paths);
 
-        if ((Shape(orchestrator, agent) ?? PathsProblem(paths, "a path to refresh")) is { } shape)
+        if ((Shape(orchestrator, agent) ?? OrchestrationRules.PathsProblem(paths, "a path to refresh")) is { } shape)
         {
             return CommandOutcome.Usage(shape);
         }
@@ -679,7 +679,7 @@ public sealed class AgentService(
     {
         ArgumentNullException.ThrowIfNull(allowances);
 
-        if ((Shape(orchestrator, agent) ?? PathsProblem(allowances.Settled, "--settled") ?? allowances.Problem()) is { } shape)
+        if ((Shape(orchestrator, agent) ?? allowances.Problem()) is { } shape)
         {
             return CommandOutcome.Usage(shape);
         }
@@ -710,13 +710,17 @@ public sealed class AgentService(
         {
             var measured = await MeasureAsync(context, layout, record, path, seed!, allowances, deleting: false, AnchorBatchMode.Plan, cancellationToken).ConfigureAwait(false);
 
-            return measured.Refusal ?? CommandOutcome.Ok(
+            if (measured.Refusal is { } refused)
+            {
+                return refused;
+            }
+
+            var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch.Unaccepted, "write them");
+
+            return CommandOutcome.Ok(
                 $"dry run: folding {Lower(Agent(record))} writes {measured.Plan!.Written.Count} path(s) into the main tree, removes "
-                + $"{measured.Plan.Deleted.Count} and applies {measured.Rows.Planned} row(s); {ToApply(measured.Rows, "write them")}",
-                [
-                    .. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name)),
-                    .. ApplyLine(FoldCommand, record, allowances, measured.Rows),
-                ]);
+                + $"{measured.Plan.Deleted.Count} and applies {measured.Rows.Planned} row(s); {tail}",
+                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name)), .. line]);
         }
 
         // The agent's worktree is held too: a leg building in it would be writing what is being folded.
@@ -757,7 +761,7 @@ public sealed class AgentService(
     {
         ArgumentNullException.ThrowIfNull(allowances);
 
-        if ((Shape(orchestrator, agent) ?? PathsProblem(allowances.Settled, "--settled") ?? allowances.Problem()) is { } shape)
+        if ((Shape(orchestrator, agent) ?? allowances.Problem()) is { } shape)
         {
             return CommandOutcome.Usage(shape);
         }
@@ -868,20 +872,19 @@ public sealed class AgentService(
             var evidence = dry.Evidence.Files.Count == 0
                 ? "its evidence roots hold nothing to keep"
                 : $"{dry.Evidence.Files.Count} evidence file(s), to be kept in a directory named for the run in '{layout.EvidenceDirectory(record.Name)}'";
-            var rows = dry.Fold?.Rows;
+            var (tail, line) = Ending(DeleteCommand, record, allowances, dry.Fold?.Rows.Batch.Unaccepted ?? [], "do it");
 
             return CommandOutcome.Ok(
                 $"dry run: deleting {Lower(Agent(record))} "
                 + (discard ? $"discards {dry.Discarded.Count} changed path(s), folding nothing" : $"folds {dry.Fold!.Plan!.Written.Count} path(s), removes {dry.Fold.Plan.Deleted.Count} and applies {dry.Fold.Rows.Planned} row(s)")
-                + $", keeps its transcripts and {dry.Evidence.Files.Count} evidence file(s), then removes its worktree and its copies on hosts; "
-                + (rows is null ? "pass --apply to do it" : ToApply(rows, "do it")),
+                + $", keeps its transcripts and {dry.Evidence.Files.Count} evidence file(s), then removes its worktree and its copies on hosts; {tail}",
                 [
                     .. discard
                         ? [$"{dry.Discarded.Count} changed path(s) discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
                         : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name)),
                     evidence,
                     TranscriptsPlan(record),
-                    .. rows is null ? [] : ApplyLine(DeleteCommand, record, allowances, rows),
+                    .. line,
                 ]);
         }
 
@@ -1432,16 +1435,47 @@ public sealed class AgentService(
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return new Measured(null, new AnchorBatchRequest([]), [], new AgentRowsPlan(new AnchorBatch([], []), []), CommandOutcome.Failed(
+            return new Measured(null, null, [], new AgentRowsPlan(new AnchorBatch([], []), []), CommandOutcome.Failed(
                 HarnessExit.CommandFailed,
                 $"{Agent(record)} was not {verb}: what it changed cannot be read - {ex.Message.TrimEnd('.')}. {nothing}"));
         }
 
-        var (rows, request, all) = await MeasureRowsAsync(main, layout, record, allowances, mode, cancellationToken).ConfigureAwait(false);
+        // A registry the agent changed as a file would be written over by the fold and then changed again by its rows, which
+        // were weighed against the registry before the fold wrote it: an agent's rows go in through its rows directory only.
+        var registries = new[] { context.Config.Anchors.PendingAnchorsPath, context.Config.Anchors.DoneAnchorsPath }
+            .Select(AnchorRegistryLocator.Normalize)
+            .ToHashSet(StringComparer.Ordinal);
+        var filedAsFiles = plan.Written.Concat(plan.Deleted).Where(registries.Contains).Order(StringComparer.Ordinal)
+            .Select(changed => $"'{changed}' is an anchor registry, which a fold changes only through the rows the agent files in "
+                + $"'{layout.RowsDirectory(record.Name)}', never as a file: file its rows there instead, or reconcile the file by hand")
+            .ToList();
 
-        if (plan.Refusals.Count == 0 && rows.Batch.Succeeded)
+        if (filedAsFiles.Count > 0)
         {
-            return new Measured(plan, request, all, rows, null);
+            plan = plan with { Refusals = [.. plan.Refusals, .. filedAsFiles] };
+        }
+
+        (AgentRowsPlan Plan, AnchorBatchRequest Request, IReadOnlyList<AnchorRowDeclaration> All) rows;
+
+        try
+        {
+            // The directories at the top of the tree its fold makes count as the tree's, before its files are written and
+            // after, so a path a row cites into one of them is judged the same both times.
+            var roots = plan.Written.Where(written => written.Contains('/', StringComparison.Ordinal)).Select(written => written[..written.IndexOf('/', StringComparison.Ordinal)]);
+            rows = await MeasureRowsAsync(main, layout, record, allowances, mode, [.. roots.Distinct(StringComparer.Ordinal)], cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new Measured(plan, null, [], new AgentRowsPlan(new AnchorBatch([], []), []), CommandOutcome.Failed(
+                HarnessExit.CommandFailed,
+                $"{Agent(record)} was not {verb}: its rows, or the registries they go in, cannot be read - {ex.Message.TrimEnd('.')}. {nothing}"));
+        }
+
+        var (rowsPlan, request, all) = rows;
+
+        if (plan.Refusals.Count == 0 && rowsPlan.Batch.Succeeded)
+        {
+            return new Measured(plan, request, all, rowsPlan, null);
         }
 
         var what = new List<string>();
@@ -1451,28 +1485,35 @@ public sealed class AgentService(
             what.Add($"{plan.Refusals.Count} of its paths cannot be folded");
         }
 
-        if (!rows.Batch.Succeeded)
+        if (!rowsPlan.Batch.Succeeded)
         {
-            what.Add($"{rows.Batch.Problems.Count} problem(s) with its rows");
+            what.Add($"{rowsPlan.Batch.Problems.Count} problem(s) with its rows");
         }
 
-        return new Measured(plan, request, all, rows, CommandOutcome.Refused(
+        return new Measured(plan, request, all, rowsPlan, CommandOutcome.Refused(
             $"{Agent(record)} was not {verb}: {string.Join(", and ", what)}. {nothing}",
-            [.. OrchestrationReports.RefusalLines(plan, rows, layout.RowsDirectory(record.Name))]));
+            [.. OrchestrationReports.RefusalLines(plan, rowsPlan, layout.RowsDirectory(record.Name))]));
     }
 
     /// <summary>
-    /// The agent's rows as a fold weighs them: those it declares anew - or never had applied - checked as applying them
-    /// would write them, making only the rows named new and losing no stored text that was not accepted; those an earlier
-    /// fold applied and it declares as it did then, never applied again; and a row it declares anew over one an earlier
-    /// fold applied refused where the registries changed that row since, as a file the main tree changed since is refused.
+    /// The agent's rows as a fold weighs them: those it declares anew - or never had applied - planned or checked as
+    /// applying them would write them (<paramref name="mode"/>), making only the rows named new and losing no stored text
+    /// nobody accepted; those an earlier fold applied and it declares as it did then, never applied again; and a row it
+    /// declares anew over one an earlier fold applied refused where the registries changed that row since, as a file the
+    /// main tree changed since is refused.
     /// </summary>
+    /// <remarks>
+    /// --new and --accept-lost name rows the agent filed; one naming a row it did not file is refused. A row an earlier fold
+    /// of the agent applied is an existing row now - made or changed by that fold - so a --new naming it is let stand, as is
+    /// an --accept-lost naming a row the agent declares as that fold applied it: the command line of that fold runs again.
+    /// </remarks>
     private async Task<(AgentRowsPlan Plan, AnchorBatchRequest Request, IReadOnlyList<AnchorRowDeclaration> All)> MeasureRowsAsync(
         string main,
         OrchestratorLayout layout,
         AgentRecord record,
         FoldAllowances allowances,
         AnchorBatchMode mode,
+        IReadOnlyList<string> roots,
         CancellationToken cancellationToken)
     {
         var directory = layout.RowsDirectory(record.Name);
@@ -1483,28 +1524,34 @@ public sealed class AgentService(
             return (new AgentRowsPlan(new AnchorBatch([], problems), []), new AnchorBatchRequest([]), declared);
         }
 
-        var filed = declared.Select(row => row.Id).ToHashSet(StringComparer.Ordinal);
-        var unfiled = allowances.New.Distinct(StringComparer.Ordinal).Where(id => !filed.Contains(id)).Order(StringComparer.Ordinal)
-            .Select(id => $"--new {id} names no row filed in '{directory}': drop it, or correct the id.")
+        var applied = (_store.ReadAppliedRows(layout, record.Name)?.Rows ?? []).ToDictionary(row => row.Id, AnchorIdMatch.Comparer);
+        var fresh = declared.Where(row => !applied.TryGetValue(row.Id, out var last) || last != row).ToList();
+        var freshIds = fresh.Select(row => row.Id).ToHashSet(AnchorIdMatch.Comparer);
+        var unchanged = declared.Where(row => !freshIds.Contains(row.Id)).Select(row => row.Id).ToList();
+        var filed = declared.Select(row => row.Id).ToHashSet(AnchorIdMatch.Comparer);
+        var named = allowances.New.Distinct(AnchorIdMatch.Comparer).ToList();
+        var accepted = allowances.LostCells;
+
+        var unfiled = named.Where(id => !filed.Contains(id))
+            .Select(id => $"{AnchorBatchRequest.NewOption} {id} names no row filed in '{directory}': drop it, or correct the id.")
+            .Concat(accepted.Where(cell => !filed.Contains(cell.Id))
+                .Select(cell => $"{AnchorBatchRequest.AcceptLostOption} {cell} names no row filed in '{directory}': drop it, or correct the id."))
+            .Order(StringComparer.Ordinal)
             .ToList();
 
-        var applied = (_store.ReadAppliedRows(layout, record.Name)?.Rows ?? []).ToDictionary(row => row.Id, StringComparer.Ordinal);
-        var fresh = declared.Where(row => !applied.TryGetValue(row.Id, out var last) || last != row).ToList();
-        var unchanged = declared.Where(row => applied.TryGetValue(row.Id, out var last) && last == row).Select(row => row.Id).ToList();
-
-        // A row named new that an earlier fold made and the agent declares as it did then is left as it is, like any row
-        // declared as it was: the name stays true of it.
         var request = new AnchorBatchRequest(fresh)
         {
-            New = [.. allowances.New.Distinct(StringComparer.Ordinal).Where(id => fresh.Any(row => row.Id == id))],
-            AcceptLost = allowances.LostCells,
+            New = [.. named.Where(id => freshIds.Contains(id) && !applied.ContainsKey(id))],
+            AcceptLost = [.. accepted.Where(cell => freshIds.Contains(cell.Id))],
+            Roots = roots,
         };
 
         var batch = await _anchors.ApplyAsync(main, request, mode, cancellationToken).ConfigureAwait(false);
-        var redeclared = batch.Rows
-            .Where(outcome => outcome.Action != AnchorRowAction.AlreadyIn && applied.ContainsKey(outcome.Id))
-            .Select(outcome => applied[outcome.Id])
-            .ToList();
+
+        // Every row declared anew over one an earlier fold applied - planned, or refused for something else - but for one the
+        // registries hold as it is declared now.
+        var standing = batch.Rows.Where(outcome => outcome.Action == AnchorRowAction.AlreadyIn).Select(outcome => outcome.Id).ToHashSet(AnchorIdMatch.Comparer);
+        var redeclared = fresh.Where(row => applied.ContainsKey(row.Id) && !standing.Contains(row.Id)).Select(row => applied[row.Id]).ToList();
 
         // What an earlier fold applied is compared with the registries as they are, and held to nothing a write is held to:
         // a row applied before a rule it breaks is still the row that was applied.
@@ -1513,12 +1560,7 @@ public sealed class AgentService(
                 + "applying what it declares now would lose that change. Set the row by hand as it should be; a row already as declared is recorded, not written again")
             .ToList();
 
-        if (unfiled.Count > 0 || moved.Count > 0)
-        {
-            batch = batch with { Problems = [.. unfiled, .. batch.Problems, .. moved] };
-        }
-
-        return (new AgentRowsPlan(batch, unchanged), request, declared);
+        return (new AgentRowsPlan(batch with { Problems = [.. unfiled, .. batch.Problems, .. moved] }, unchanged), request, declared);
     }
 
     /// <summary>That the options <paramref name="allowances"/> gives let a fold through what it otherwise refuses, for a refusal of them.</summary>
@@ -1526,29 +1568,24 @@ public sealed class AgentService(
         => $"{ReportText.Listed(allowances.Given)} {(allowances.Given.Count == 1 ? "lets" : "let")} a fold through what it otherwise refuses";
 
     /// <summary>
-    /// How a dry run of a fold ends: where the rows lose stored text nobody accepted, that --apply writes them only once each
-    /// is named with --accept-lost; otherwise that --apply does it.
+    /// How a dry run of a fold ends, and the line it ends with: where its rows lose stored text nobody accepted, that --apply
+    /// refuses the fold, writing nothing, until each such cell is named with --accept-lost - and, last, the command that
+    /// does it: what the dry run was let through, and an --accept-lost for each; otherwise that --apply does
+    /// <paramref name="what"/>. Like every command line a report names, it runs from where the dry run ran.
     /// </summary>
-    private static string ToApply(AgentRowsPlan rows, string what)
-        => rows.Unaccepted.Count == 0
-            ? $"pass --apply to {what}"
-            : $"{rows.Unaccepted.Count} cell(s) of its rows lose stored text, and --apply writes them only once each is named with --accept-lost, "
-                + "after its word diff above is read: the last line is the command that does it";
-
-    /// <summary>
-    /// The command that applies what a dry run showed, where its rows lose stored text nobody accepted: everything given to
-    /// the dry run, and an --accept-lost for each such cell; nothing where none do.
-    /// </summary>
-    private static IEnumerable<string> ApplyLine(string command, AgentRecord record, FoldAllowances allowances, AgentRowsPlan rows)
+    private static (string Tail, IReadOnlyList<string> Line) Ending(string command, AgentRecord record, FoldAllowances allowances, IReadOnlyList<AnchorRowCell> unaccepted, string what)
     {
-        if (rows.Unaccepted.Count == 0)
+        if (unaccepted.Count == 0)
         {
-            yield break;
+            return ($"pass --apply to {what}", []);
         }
 
-        var accepting = allowances with { AcceptLost = [.. allowances.AcceptLost, .. rows.Unaccepted.Select(cell => cell.ToString())] };
+        var accepting = allowances with { AcceptLost = [.. allowances.AcceptLost, .. unaccepted.Select(cell => cell.ToString())] };
 
-        yield return $"to write them: {OrchestrationReports.Line(command, [record.Orchestrator, record.Name, "--apply", .. accepting.Arguments()])}";
+        return (
+            $"{unaccepted.Count} cell(s) of its rows do not keep their stored text word for word, and --apply refuses it, writing nothing, "
+                + $"until each is named with {AnchorBatchRequest.AcceptLostOption}, once its word diff above is read: the last line is the command that does it",
+            [$"to {what}: {OrchestrationReports.Line(command, [record.Orchestrator, record.Name, "--apply", .. accepting.Arguments()])}"]);
     }
 
     /// <summary>
@@ -1595,7 +1632,7 @@ public sealed class AgentService(
                 folded);
         }
 
-        if (measured.Request.Rows.Count == 0)
+        if (measured.Request is not { Rows.Count: > 0 } request)
         {
             return new Written(null, measured.Rows, folded);
         }
@@ -1604,7 +1641,7 @@ public sealed class AgentService(
 
         try
         {
-            batch = await _anchors.ApplyAsync(main, measured.Request, AnchorBatchMode.Apply, CancellationToken.None).ConfigureAwait(false);
+            batch = await _anchors.ApplyAsync(main, request, AnchorBatchMode.Apply, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (Unfinished(ex))
         {
@@ -1945,8 +1982,6 @@ public sealed class AgentService(
             ?? OrchestrationRules.AgentNameProblem(orchestrator, agent);
 
     /// <summary>What is wrong with paths given on the command line, asked of each as given, before anything tidies it.</summary>
-    private static string? PathsProblem(IReadOnlyList<string> paths, string what)
-        => paths.Select(path => OrchestrationRules.RelativePathProblem(path.TrimEnd('/', '\\'), what)).FirstOrDefault(problem => problem is not null);
 
     /// <summary>
     /// Whether <paramref name="exception"/> is one a step after a first write can meet and must answer, rather than let
@@ -1986,10 +2021,10 @@ public sealed class AgentService(
     private sealed record Target(HarnessContext Context, OrchestratorLayout Layout, AgentRecord Record, WorktreeAddress Address, string Path, WorktreeStanding Standing);
 
     /// <summary>
-    /// An agent's fold and rows, measured: the rows declared anew with what applying them is allowed, every row declared,
-    /// and why they cannot be written where they cannot.
+    /// An agent's fold and rows, measured: the rows declared anew with what applying them is allowed - null where they were
+    /// never weighed - every row declared, and why they cannot be written where they cannot.
     /// </summary>
-    private sealed record Measured(FoldPlan? Plan, AnchorBatchRequest Request, IReadOnlyList<AnchorRowDeclaration> All, AgentRowsPlan Rows, CommandOutcome? Refusal);
+    private sealed record Measured(FoldPlan? Plan, AnchorBatchRequest? Request, IReadOnlyList<AnchorRowDeclaration> All, AgentRowsPlan Rows, CommandOutcome? Refusal);
 
     /// <summary>What writing a fold did: why it stopped where it did, the rows as applied, and the seed as recorded.</summary>
     private sealed record Written(CommandOutcome? Failure, AgentRowsPlan Rows, SeedRecord Seed);

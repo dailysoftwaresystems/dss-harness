@@ -105,7 +105,7 @@ public sealed class AgentDeletionTests
         var late = new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log"));
         var agents = kit.Harness.Agents(late, kit.Harness.AnchorRegistryService);
 
-        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token);
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.StartsWith("Agent 'ag' of 'o1' is closed and not deleted yet: ", stopped.Message);
@@ -114,6 +114,12 @@ public sealed class AgentDeletionTests
         Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
 
         OrchestrationKit.Write(kit.Main, "b.txt", "two\na sibling's fold since\n");
+        var allowed = await kit.DeleteAsync("ag", apply: true, new FoldAllowances { Settled = ["b.txt"], AcceptLost = ["D-TEST-AGENT-ROW:closing"] });
+
+        Assert.Equal(HarnessExit.UsageError, allowed.ExitCode);
+        Assert.StartsWith("--settled, --accept-lost let a fold through what it otherwise refuses, and agent 'ag' of 'o1', closed at ", allowed.Message);
+        Assert.EndsWith(", is never folded again. Nothing was read, written or removed.", allowed.Message);
+
         var finished = await kit.DeleteAsync("ag", apply: true);
 
         Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
@@ -135,7 +141,7 @@ public sealed class AgentDeletionTests
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
-        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
         OrchestrationKit.Write(worktree, "b.txt", "two\nwork after the closing\n");
 
         var left = await kit.DeleteAsync("ag", apply: true);
@@ -159,7 +165,7 @@ public sealed class AgentDeletionTests
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
-        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
         File.Delete(Path.Combine(worktree, ".gitignore"));
 
         var finished = await kit.DeleteAsync("ag", apply: true);
@@ -181,7 +187,7 @@ public sealed class AgentDeletionTests
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
-        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
         File.Delete(Path.Combine(worktree, ".git"));
 
         var left = await kit.DeleteAsync("ag", apply: true);
@@ -202,7 +208,7 @@ public sealed class AgentDeletionTests
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
-        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
         Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
         Assert.True((await kit.Harness.WorktreeService.CreateAtAsync(kit.Main, WorktreeAddress.Nested("o1", "ag"), Token)).Succeeded);
 
@@ -331,7 +337,7 @@ public sealed class AgentDeletionTests
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new UndeletableFileSystem(kit.Harness.FileSystem, held), kit.Harness.AnchorRegistryService);
 
-        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: true, Token);
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: true, Token);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.Contains(stopped.Details!, line => line.StartsWith("1 evidence file(s) were left: evidence/run.log (", StringComparison.Ordinal));
@@ -379,7 +385,7 @@ public sealed class AgentDeletionTests
         var worktree = await kit.CreateAgentAsync("ag", session: "sess1");
         var agents = kit.Harness.Agents(new UnreadableFileSystem(kit.Harness.FileSystem, transcript), kit.Harness.AnchorRegistryService);
 
-        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: true, Token);
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: true, Token);
 
         Assert.Equal(HarnessExit.CommandFailed, stopped.ExitCode);
         Assert.StartsWith("Agent 'ag' of 'o1' was not deleted, because its transcripts could not be kept:", stopped.Message);
@@ -425,6 +431,40 @@ public sealed class AgentDeletionTests
     /// The real file system, except that deleting a kept evidence file writes another into its root, as a run still
     /// writing there would between the evidence being read back and the worktree being removed.
     /// </summary>
+    /// <summary>
+    /// delete-agent holds a row that does not keep its stored text to the fold's checks: its dry run ends with the command
+    /// that deletes it accepting the loss, --apply refuses with nothing written and the agent still live, and the command it
+    /// named deletes it.
+    /// </summary>
+    [Fact]
+    public async Task DeletingAnAgent_WhoseRowLosesStoredText_IsRefusedUntilItIsAccepted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.Harness.AnchorRegistryService.WriteAsync(
+            kit.Main,
+            new Core.Anchors.AnchorWriteRequest("D-TEST-AGENT-ROW", "P2", "something the agent found") { ClosingWork = "the plan we agreed", CrossRefs = "b.txt" },
+            dryRun: false,
+            Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        kit.FileRow("ag", "D-TEST-AGENT-ROW", new Dictionary<string, string>(Row) { ["closing"] = "another plan" });
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+        var refused = await kit.DeleteAsync("ag", apply: true);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal($"to do it: '{Core.Hosts.ToolPackage.Command} delete-agent o1 ag --apply --accept-lost D-TEST-AGENT-ROW:closing'", dry.Details![^1]);
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+
+        var deleted = await kit.DeleteAsync("ag", apply: true, new FoldAllowances { AcceptLost = ["D-TEST-AGENT-ROW:closing"] });
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
+    }
+
     private sealed class LateEvidenceFileSystem(IFileSystem inner, string lateFile) : PassThroughFileSystem(inner)
     {
         private bool _written;
@@ -454,7 +494,7 @@ public sealed class AgentDeletionTests
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         var agents = kit.Harness.Agents(new WritingMeanwhileFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt"), Path.Combine(worktree, "late.txt")), kit.Harness.AnchorRegistryService);
 
-        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token);
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.Contains("after its fold was written, it still differs from the main tree", stopped.Message);
@@ -472,7 +512,7 @@ public sealed class AgentDeletionTests
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
-        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
         Assert.Contains("b.txt", kit.Record("ag").Closing!.Held.Keys);
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\nand more after the closing\n");
 
@@ -493,7 +533,7 @@ public sealed class AgentDeletionTests
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
-        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token)).ExitCode);
+        Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
         Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
 
         var finished = await kit.DeleteAsync("ag", apply: true);
@@ -517,7 +557,7 @@ public sealed class AgentDeletionTests
         OrchestrationKit.Write(worktree, "evidence/run.log", "measured\n");
         var agents = kit.Harness.Agents(new ChangedOnClosingFileSystem(kit.Harness.FileSystem, kit.Layout.AgentRecordFile("ag"), log), kit.Harness.AnchorRegistryService);
 
-        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", FoldAllowances.None, apply: true, discardUncommitted: false, Token);
+        var stopped = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.Contains(stopped.Details!, line => line.StartsWith("1 evidence file(s) were left: evidence/run.log (changed since it was kept)", StringComparison.Ordinal));

@@ -270,8 +270,9 @@ public static class OrchestrationReports
     }
 
     /// <summary>
-    /// What applying an agent's rows does, or did: each row, and where it goes, with each cell whose stored text it loses
-    /// shown word by word - what it removes and what replaces it - and whether losing it was accepted.
+    /// What applying an agent's rows does, or did: each row, and where it goes - each prose cell it changes said with what
+    /// becomes of its stored text - and each cell that does not keep its stored text shown word by word, what it removes
+    /// and what replaces it, with whether that was accepted.
     /// </summary>
     /// <param name="batch">The rows applied, or planned.</param>
     public static IEnumerable<string> RowLines(AnchorBatch batch)
@@ -289,9 +290,8 @@ public static class OrchestrationReports
 
             foreach (var lost in row.Lost)
             {
-                yield return lost.Accepted
-                    ? $"    its {lost.Cell} loses stored text, accepted with --accept-lost {row.Id}:{lost.Cell}: {lost.Diff}"
-                    : $"    its {lost.Cell} loses stored text, written only with --accept-lost {row.Id}:{lost.Cell}: {lost.Diff}";
+                yield return $"    its {lost.Cell.Cell} does not keep its stored text word for word, {(lost.Accepted ? "accepted" : "written only")} with "
+                    + $"{AnchorBatchRequest.AcceptLostOption} {lost.Cell}: {lost.Diff}";
             }
         }
 
@@ -333,6 +333,14 @@ public static class OrchestrationReports
     internal static string DeleteAgentLine(string orchestrator, string agent, string options = "--apply")
         => Line(AgentService.DeleteCommand, orchestrator, agent, options);
 
+    /// <summary>
+    /// <paramref name="argument"/> as a command line takes it: in double quotes where it holds a space, so a path holding one
+    /// is still one argument, and as it is otherwise.
+    /// </summary>
+    /// <param name="argument">One argument, as its command is to receive it.</param>
+    internal static string Argument(string argument)
+        => argument.Any(char.IsWhiteSpace) ? $"\"{argument}\"" : argument;
+
     /// <summary>A command line a message names, quoted: the tool, the command, and its arguments as given.</summary>
     /// <param name="command">The command.</param>
     /// <param name="arguments">Its arguments, each already spelt as the line reads.</param>
@@ -349,9 +357,22 @@ public static class OrchestrationReports
 
     private static string Changed(AnchorChange change)
     {
-        var fields = change.Fields.Count == 0 ? "its cells" : string.Join(", ", change.Fields.Select(field => field.Field));
+        var fields = change.Fields.Count == 0 ? "its cells" : string.Join(", ", change.Fields.Select(Described));
         return change.Moved ? $"changes {fields}, and moves to the {change.To.Name} registry" : $"changes {fields}";
     }
+
+    /// <summary>A changed cell, as a row's line names it: a prose cell with what becomes of its stored text.</summary>
+    private static string Described(AnchorFieldChange field)
+        => !AnchorCellNames.Text.Contains(field.Field, StringComparer.Ordinal)
+            ? field.Field
+            : AnchorCellComparison.Fate(field.Before, field.After) switch
+            {
+                AnchorCellFate.Respaced => $"{field.Field} (respaced)",
+                AnchorCellFate.Kept => $"{field.Field} (its stored text kept whole)",
+                AnchorCellFate.Filled => $"{field.Field} (filled)",
+                AnchorCellFate.Lost => $"{field.Field} (its stored text not kept)",
+                _ => field.Field,
+            };
 
     private static string Session(string? session) => session is null ? string.Empty : $", session {session}";
 }

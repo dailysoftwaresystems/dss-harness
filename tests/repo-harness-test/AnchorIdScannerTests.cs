@@ -90,6 +90,37 @@ public sealed class AnchorIdScannerTests
     }
 
     /// <summary>
+    /// An id cut inside a segment - the next line carrying it straight on, past its indentation and a comment's marker - is
+    /// cut where the two join into a row's id; where they join into none, the line simply ended there: a whole id before the
+    /// next line's figure, or before the next id of a list, carries nothing on.
+    /// </summary>
+    [Fact]
+    public void AnIdCutInsideASegment_IsCut_WhereTheTwoJoinIntoARow()
+    {
+        var found = Scanner.Scan(
+            "notes.md",
+            "cites D-PROBE-EXIS\r\nTING-ROW-ONE across\nsee D-PROB\n  // E-EXISTING-ROW-ONE\nsee D-AREA-TOPIC-ONE\nMF-4 was measured\n"
+            + "D-AREA-TOPIC-ONE\nD-AREA-TOPIC-TWO\n",
+            Rows("D-PROBE-EXISTING-ROW-ONE", "D-AREA-TOPIC-ONE", "D-AREA-TOPIC-TWO"));
+
+        Assert.Equal(
+            [("D-PROBE-EXIS", 1, true), ("D-PROB", 3, true), ("D-AREA-TOPIC-ONE", 5, false), ("D-AREA-TOPIC-ONE", 7, false), ("D-AREA-TOPIC-TWO", 8, false)],
+            found.Select(citation => (citation.Id, citation.LineNumber, citation.Cut)));
+    }
+
+    /// <summary>
+    /// An id followed by '*' or '{', or by a hyphen and one of those, names a family or a pattern of ids and no row, so it is
+    /// no citation; the same id followed by anything else is one, and so is an id in bold, whose '*' closes its emphasis.
+    /// </summary>
+    [Fact]
+    public void AFamilyOrAPatternOfIds_IsNoCitation()
+    {
+        Assert.Equal(
+            ["D-AREA-TOPIC-ONE", "D-AREA-TOPIC-TWO", "D-AREA-TOPIC-THREE"],
+            Scanner.ScanLine("the D-AREA-TOPIC-* family, D-AREA-TOPIC* and D-AREA-TOPIC-{A,B}, D-AREA-TOPIC{1,2}; D-AREA-TOPIC-ONE, [[D-AREA-TOPIC-TWO]] and **D-AREA-TOPIC-THREE**."));
+    }
+
+    /// <summary>
     /// A fragment glued to the word before it is no citation, as a whole id glued there is not; and a
     /// citation cut at its end is reported once, not again as the shorter fragment it ends in.
     /// </summary>
