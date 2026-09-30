@@ -28,7 +28,7 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     strategy:
       # Every platform's result is wanted. Cancelling the others on the first failure
@@ -72,6 +72,7 @@ jobs:
         # Run directly, it says what dotnet test keeps to itself: each test still running after
         # two minutes, named again every two minutes it runs on, and the slowest tests once the
         # run ends. And it is stopped short of the job's own limit: a job that limit ended kept
-        # no log, so nothing said which test had hung.
-        timeout-minutes: 15
+        # no log, so nothing said which test had hung. A slow macOS runner was measured taking
+        # more than fifteen minutes over a suite that hung nowhere.
+        timeout-minutes: 20
         run: ./build/bin/repo-harness-test/release/repo-harness-test${{ runner.os == 'Windows' && '.exe' || '' }} --xunit-diagnostics on --long-running 120 --show-slowest-tests 20
