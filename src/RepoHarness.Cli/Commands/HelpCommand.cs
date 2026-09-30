@@ -1435,15 +1435,15 @@ internal static class HelpCommand
             + "rules of its own. A row no registry holds is made only where --new <ID> names it, since a typo in an existing row's "
             + "id would make it a second row; and a cell of an existing row whose stored text the agent's does not keep word for "
             + "word - neither respaced, nor kept whole in an addendum, nor filling an empty cell - is written only where "
-            + "--accept-lost <ID>:<cell> names it: the dry run shows what each such cell loses, word by word, and ends with the "
-            + "command that writes it, and --apply refuses the fold, writing nothing, until each is named. Every refusal of every "
-            + "row is named in one run. A --new or an --accept-lost naming a row the agent did not file is refused, and so is an "
-            + "--accept-lost naming a cell that keeps its stored text, and a --new naming a row a registry holds other than as "
-            + "declared; one naming a row an earlier fold of the agent applied is let stand, so the command line of that fold "
-            + "runs again. An existing row is changed in the cells that differ, and one already as declared left alone; a write "
-            + "that fails puts both registries back byte for byte. A row an earlier fold applied, declared as it was then, is "
-            + "never applied again, so a change the registries took since stands; one declared anew over it is refused where the "
-            + "registries changed it since, as a file is.");
+            + "--accept-lost <ID>:<cell> names it: the dry run shows what each such cell loses, word by word, and the command that "
+            + "writes it, on its line 'to write them:', and --apply refuses the fold, writing nothing, until each is named. Every "
+            + "refusal of every row is named in one run. A --new or an --accept-lost naming a row the agent did not file is "
+            + "refused, and so is an --accept-lost naming a cell that keeps its stored text, and a --new naming a row a registry "
+            + "holds other than as declared; one naming a row an earlier fold of the agent applied is let stand, so the command "
+            + "line of that fold runs again. An existing row is changed in the cells that differ, and one already as declared left "
+            + "alone; a write that fails puts both registries back byte for byte. A row an earlier fold applied, declared as it was "
+            + "then, is never applied again, so a change the registries took since stands; one declared anew over it is refused "
+            + "where the registries changed it since, as a file is.");
         builder.AppendLine();
         AppendWrapped(
             builder,

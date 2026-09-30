@@ -432,9 +432,9 @@ public sealed class AgentDeletionTests
     /// writing there would between the evidence being read back and the worktree being removed.
     /// </summary>
     /// <summary>
-    /// delete-agent holds a row that does not keep its stored text to the fold's checks: its dry run ends with the command
-    /// that deletes it accepting the loss, --apply refuses with nothing written and the agent still live, and the command it
-    /// named deletes it.
+    /// delete-agent holds a row that does not keep its stored text to the fold's checks: its dry run names the command that
+    /// deletes it accepting the loss, on the line its summary points at, --apply refuses with nothing written and the agent
+    /// still live, and the command it named deletes it.
     /// </summary>
     [Fact]
     public async Task DeletingAnAgent_WhoseRowLosesStoredText_IsRefusedUntilItIsAccepted()
@@ -455,6 +455,7 @@ public sealed class AgentDeletionTests
 
         Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
         Assert.Equal($"to do it: '{Core.Hosts.ToolPackage.Command} delete-agent o1 ag --apply --accept-lost D-TEST-AGENT-ROW:closing'", dry.Details![^1]);
+        Assert.EndsWith("the line 'to do it:' above is the command that does it", dry.Message, StringComparison.Ordinal);
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
         Assert.Equal(AgentStates.Live, kit.Record("ag").State);

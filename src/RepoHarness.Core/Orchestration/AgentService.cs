@@ -1568,9 +1568,11 @@ public sealed class AgentService(
         => $"{ReportText.Listed(allowances.Given)} {(allowances.Given.Count == 1 ? "lets" : "let")} a fold through what it otherwise refuses";
 
     /// <summary>
-    /// How a dry run of a fold ends, and the line it ends with: where its rows lose stored text nobody accepted, that --apply
-    /// refuses the fold, writing nothing, until each such cell is named with --accept-lost - and, last, the command that
-    /// does it: what the dry run was let through, and an --accept-lost for each; otherwise that --apply does
+    /// How the summary of a dry run of a fold ends, and the line it points at: where its rows lose stored text nobody
+    /// accepted, that --apply refuses the fold, writing nothing, until each such cell is named with --accept-lost - and the
+    /// line opening "to <paramref name="what"/>:" with the command that does it: what the dry run was let through, and an
+    /// --accept-lost for each. The summary names that line by its opening words rather than by where it stands: it is the
+    /// last of the details, and every report prints its summary after them. Otherwise, that --apply does
     /// <paramref name="what"/>. Like every command line a report names, it runs from where the dry run ran.
     /// </summary>
     private static (string Tail, IReadOnlyList<string> Line) Ending(string command, AgentRecord record, FoldAllowances allowances, IReadOnlyList<AnchorRowCell> unaccepted, string what)
@@ -1581,11 +1583,13 @@ public sealed class AgentService(
         }
 
         var accepting = allowances with { AcceptLost = [.. allowances.AcceptLost, .. unaccepted.Select(cell => cell.ToString())] };
+        var opening = $"to {what}:";
 
         return (
             $"{unaccepted.Count} cell(s) of its rows do not keep their stored text word for word, and --apply refuses it, writing nothing, "
-                + $"until each is named with {AnchorBatchRequest.AcceptLostOption}, once its word diff above is read: the last line is the command that does it",
-            [$"to {what}: {OrchestrationReports.Line(command, [record.Orchestrator, record.Name, "--apply", .. accepting.Arguments()])}"]);
+                + $"until each is named with {AnchorBatchRequest.AcceptLostOption}, once its word diff above is read: the line '{opening}' above "
+                + "is the command that does it",
+            [$"{opening} {OrchestrationReports.Line(command, [record.Orchestrator, record.Name, "--apply", .. accepting.Arguments()])}"]);
     }
 
     /// <summary>

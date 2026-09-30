@@ -450,11 +450,13 @@ public sealed class AgentRowsTests
     }
 
     /// <summary>
-    /// The command a dry run ends with holds what the dry run was given - a settled path holding a space, quoted, so it is
-    /// still one argument - and an --accept-lost for each cell that needs one; the fold it applies lists the loss accepted.
+    /// The command a dry run names stands on the line just above its summary, which every report prints last and which
+    /// names that line by its opening words - told the command was "the last line", a reader took the summary for it. It
+    /// holds what the dry run was given - a settled path holding a space, quoted, so it is still one argument - and an
+    /// --accept-lost for each cell that needs one; run from where the dry run ran, it folds, listing the loss accepted.
     /// </summary>
     [Fact]
-    public async Task TheCommandADryRunEndsWith_HoldsWhatItWasGiven_QuotingAPathWithASpace()
+    public async Task TheCommandADryRunNames_StandsJustAboveItsSummary_HoldingWhatTheDryRunWasGiven()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -463,14 +465,18 @@ public sealed class AgentRowsTests
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, Path.Combine("notes", "a b.txt"), "reconciled by hand\n");
         kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["closing"] = "another plan" });
-        var given = new FoldAllowances { Settled = ["notes/a b.txt"] };
 
-        var dry = await kit.FoldAsync("ag", apply: false, given);
-        var folded = await kit.FoldAsync("ag", apply: true, given with { AcceptLost = [$"{Id}:closing"] });
+        var dry = await CliRunner.RunAsync(["fold-agent", "o1", "ag", "--settled", "notes/a b.txt"], Token, workingDirectory: kit.Main);
+        var folded = await CliRunner.RunAsync(
+            ["fold-agent", "o1", "ag", "--apply", "--settled", "notes/a b.txt", "--accept-lost", $"{Id}:closing"], Token, workingDirectory: kit.Main);
 
-        Assert.Equal($"to write them: '{ToolPackage.Command} fold-agent o1 ag --apply --settled \"notes/a b.txt\" --accept-lost {Id}:closing'", dry.Details![^1]);
-        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
-        Assert.Contains(folded.Details!, line => line.StartsWith($"    its closing does not keep its stored text word for word, accepted with --accept-lost {Id}:closing: ", StringComparison.Ordinal));
+        var lines = dry.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.True(dry.Succeeded, dry.StandardOutput + dry.StandardError);
+        Assert.StartsWith("fold-agent: OK - dry run: ", lines[^1], StringComparison.Ordinal);
+        Assert.EndsWith("the line 'to write them:' above is the command that does it", lines[^1], StringComparison.Ordinal);
+        Assert.Equal($"fold-agent: to write them: '{ToolPackage.Command} fold-agent o1 ag --apply --settled \"notes/a b.txt\" --accept-lost {Id}:closing'", lines[^2]);
+        Assert.True(folded.Succeeded, folded.StandardOutput + folded.StandardError);
+        Assert.Contains($"    its closing does not keep its stored text word for word, accepted with --accept-lost {Id}:closing: ", folded.StandardOutput, StringComparison.Ordinal);
     }
 
     /// <summary>
