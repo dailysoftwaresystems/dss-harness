@@ -1182,9 +1182,9 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
-    /// A list whose absence means every one of what it names, or a default set, is refused given empty,
-    /// naming the key and both remedies. Read as the key left out, a runner's <c>"legs": []</c> synced the
-    /// tree to every host and ran on all eight legs; <c>--legs</c> given no name was already refused for it.
+    /// A list whose absence means every one of what it names, or a set the tool chooses, is refused given empty, by one
+    /// rule in one wording, naming the key and both remedies. Read as the key left out, a runner's <c>"legs": []</c>
+    /// synced the tree to every host and ran on all eight legs, as <c>--legs</c> given no name would have.
     /// </summary>
     [Theory]
     [InlineData("""{ "predefinedRunners": { "probe": { "legs": [], "action": "probe/probe.yml" } } }""", "predefined runner 'probe' legs", "every declared leg")]
@@ -1194,10 +1194,12 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "tools": [ { "name": "cl", "processors": [] } ] }""", "tool 'cl' processors", "every processor")]
     [InlineData("""{ "tools": [ { "name": "cl", "emulators": [] } ] }""", "tool 'cl' emulators", "every leg, emulated or not")]
     [InlineData("""{ "toolchains": { "gcc": { "platforms": [], "env": { "CC": "gcc" } } } }""", "toolchain 'gcc' platforms", "every platform")]
-    [InlineData("""{ "ci": { "workflows": [] } }""", "ci.workflows", "every workflow under .github/workflows")]
+    [InlineData("""{ "ci": { "workflows": [] } }""", "ci.workflows", "every workflow directly in .github/workflows")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "targets": [] } ] }""", "project 'main' targets", "the project's own default target")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "rebuildableFormats": [] } ] }""", "project 'main' rebuildableFormats", "the set its type 'cmake' uses")]
     [InlineData("""{ "projects": [ { "name": "main", "type": "cmake", "test": { "inputs": [], "all": { "runner": "ctest", "successPattern": "passed" } } } ] }""", "project 'main' test.inputs", "every file git tracks")]
+    [InlineData("""{ "toolSearchDirectories": { "linux": [] } }""", "toolSearchDirectories.linux", "the directories this build already knows to look in")]
+    [InlineData("""{ "predefinedRunners": { "probe": { "steps": [], "action": "probe/probe.yml" } } }""", "predefined runner 'probe' steps", "every step that is not manual")]
     public void Load_RefusesAListGivenEmpty_WhereLeavingItOutMeansEvery(string json, string setting, string leftOut)
     {
         var exception = LoadInvalid(json);
@@ -1207,8 +1209,8 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
-    /// Refused alone: an empty scope covers no leg for that reason only, and a toolchain given no platform is
-    /// said not to lack one, so the one line to fix is the one line said.
+    /// Refused alone: only the empty lists are named, not what follows from them - an empty scope covering no leg, a
+    /// toolchain given no platform lacking one - so the one line to fix is the one line said.
     /// </summary>
     [Fact]
     public void AListGivenEmpty_IsTheOneProblemSaid_NotItsConsequences()
@@ -1248,7 +1250,7 @@ public sealed class ConfigStoreTests
 
     /// <summary>
     /// A test section's <c>configs</c> was written by init and checked against buildConfigs, and nothing read
-    /// it: a file naming release there tested debug alone. Refused as the key nothing reads it is, saying what
+    /// it: a file naming release there tested only the config each leg names. Refused as the key nothing reads it is, saying what
     /// decides the config a leg tests.
     /// </summary>
     [Theory]
@@ -1696,8 +1698,44 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "defaults": { "admission": { "pollSeconds": 5000000 } } }""", "defaults.admission pollSeconds must be from 1 to 3600, found 5000000")]
     [InlineData("""{ "hosts": { "ssh": { "vps": { "repositoryPath": "/r", "admission": { "maxWaitMinutes": 0 } } } }, "sshItems": ["vps"] }""", "hosts.ssh 'vps' admission maxWaitMinutes must be above 0 and at most 10080, found 0")]
     [InlineData("""{ "defaults": { "admission": { "maxWaitMinutes": 1e11 } } }""", "defaults.admission maxWaitMinutes must be above 0 and at most 10080, found 100000000000")]
+    [InlineData("""{ "defaults": { "admission": { "maxWaitMinutes": 10080.5 } } }""", "defaults.admission maxWaitMinutes must be above 0 and at most 10080, found 10080.5")]
+    [InlineData("""{ "defaults": { "admission": { "maxMemoryPercent": 100.5 } } }""", "defaults.admission maxMemoryPercent must be above 0 and at most 100, found 100.5")]
+    [InlineData("""{ "defaults": { "admission": { "pollSeconds": 3601 } } }""", "defaults.admission pollSeconds must be from 1 to 3600, found 3601")]
+    [InlineData("""{ "defaults": { "admission": { "settleSeconds": [-1, 5] } } }""", "found [-1, 5]")]
+    [InlineData("""{ "defaults": { "admission": { "heavyLegs": -2 } } }""", "defaults.admission heavyLegs must be at least 1, found -2")]
     public void Admission_ThatNoMachineCouldAdmitBy_IsRefused(string json, string expected)
         => Assert.Contains(expected, LoadInvalid(json).Message, StringComparison.Ordinal);
+
+    /// <summary>Every bound admits the value at its edge: the least and the most a section may say load, and are the rule.</summary>
+    [Fact]
+    public void Admission_AtEveryBound_Loads()
+    {
+        var most = LoadValid("""{ "defaults": { "admission": { "heavyLegs": 1, "maxMemoryPercent": 100, "settleSeconds": [0, 3600], "pollSeconds": 3600, "maxWaitMinutes": 10080 } } }""");
+        var least = LoadValid("""{ "defaults": { "admission": { "maxMemoryPercent": 0.5, "settleSeconds": [5, 5], "pollSeconds": 1, "maxWaitMinutes": 0.1 } } }""");
+
+        Assert.Equal(
+            new AdmissionRule(1, 100, TimeSpan.Zero, TimeSpan.FromSeconds(3600), TimeSpan.FromSeconds(3600), TimeSpan.FromMinutes(10080)),
+            AdmissionSettings.RuleFor(null, most.Defaults.Admission));
+        Assert.Equal(
+            new AdmissionRule(2, 0.5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(0.1)),
+            AdmissionSettings.RuleFor(null, least.Defaults.Admission));
+    }
+
+    /// <summary>
+    /// A rule built from sections no file was read into is held to the bounds a file is: refused, naming what is out of
+    /// them, rather than waited by - a count of none would hold every leg back, and a settle whose least passes its most
+    /// would fail the leg picking it.
+    /// </summary>
+    [Fact]
+    public void AnAdmissionRuleBuiltInCode_IsHeldToTheBoundsAFileIs()
+    {
+        var refusal = Assert.Throws<ConfigException>(() => AdmissionSettings.RuleFor(
+            new AdmissionSettings { HeavyLegs = 0, SettleSeconds = [20, 10] },
+            null));
+
+        Assert.Contains("admission heavyLegs must be at least 1, found 0", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("admission settleSeconds is [least, most]", refusal.Message, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// A WSL distribution runs on this machine, whose slots and memory its legs share, so a section of its own would be
@@ -1717,7 +1755,7 @@ public sealed class ConfigStoreTests
         Assert.Contains("declare admission under hosts.local or defaults", exception.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>A runner that requires the build is heavy, since its build is: one saying heavy is false says what nothing does.</summary>
+    /// <summary>A runner that requires the build is heavy, since its build is: one saying heavy is false is refused rather than believed.</summary>
     [Fact]
     public void ARunnerSayingItIsNotHeavy_WhileItRequiresTheBuild_IsRefused()
     {
@@ -1744,6 +1782,21 @@ public sealed class ConfigStoreTests
         Assert.True(Core.Legs.LegWorkload.ForRunner(new RunnerConfig { Action = "a/a.yml", Heavy = true }, null).Heavy);
         Assert.False(Core.Legs.LegWorkload.ForRunner(new RunnerConfig { Action = "a/a.yml" }, null).Heavy);
         Assert.True(Core.Legs.LegWorkload.ForRunner(new RunnerConfig { Action = "a/a.yml", Heavy = true }, null).On("linux").Heavy);
+    }
+
+    /// <summary>
+    /// A runner its expected exceptions' run checks name runs within its legs, so one of them heavy - requiring the build,
+    /// or saying so - makes the legs heavy, whatever the runner carrying the checks says of its own work.
+    /// </summary>
+    [Fact]
+    public void ARunnerWhoseRunChecksNameAHeavyRunner_IsHeavy()
+    {
+        var light = new RunnerConfig { Action = "a/a.yml" };
+
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [new RunnerConfig { Action = "b/b.yml", Heavy = true }]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [new RunnerConfig { Action = "b/b.yml", RequireBuild = true }]).Heavy);
+        Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, [new RunnerConfig { Action = "b/b.yml" }]).Heavy);
+        Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, []).Heavy);
     }
 
     private static HarnessConfig LoadValid(string json)

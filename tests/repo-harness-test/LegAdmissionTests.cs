@@ -1,4 +1,5 @@
 using NSubstitute;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -8,8 +9,8 @@ namespace RepoHarness.Tests;
 /// <summary>
 /// A heavy leg waits for its machine to take it: one of the machine's slots, in the order legs asked, then the memory
 /// in use below the limit - read again after a settle where another leg holds a slot. Four worktrees' builds on one machine
-/// drove its committed memory to 81 of 113.7 GB and the process that started them died; the limit is the consumer's
-/// own rule, and a slot is held by the process running the leg, so one that crashed never keeps it.
+/// drove its committed memory to 81 of 113.7 GiB and the process that started them died; the limit of 76% is the one
+/// the consumer's own scripts kept, and a slot is held by the process that asked for it, so one that crashed never keeps it.
 /// </summary>
 public sealed class LegAdmissionTests
 {
@@ -56,7 +57,7 @@ public sealed class LegAdmissionTests
 
         AdmissionKit.Write(record, first, second);
 
-        // The first holder's command ends while this leg waits its second poll.
+        // The first holder gives its slot back while this leg waits its second poll.
         var waits = 0;
         var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock, onWait: () =>
         {
@@ -66,7 +67,7 @@ public sealed class LegAdmissionTests
             }
         });
 
-        // No settle: what the settle is for is the next test's.
+        // No settle: what the settle is for is WhereAnotherLegHoldsASlot_ALegStartsOnlyIfTheMemoryIsStillBelowAfterASettle's.
         using var admitted = await admission.AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 2, settleLeast: 0, settleMost: 0), said), TestContext.Current.CancellationToken);
 
         Assert.True(admitted.Fact.Admitted);
@@ -103,6 +104,8 @@ public sealed class LegAdmissionTests
         Assert.False(admitted.Fact.Admitted);
         Assert.Equal(120, admitted.Fact.WaitedSeconds);
         Assert.StartsWith("not admitted after 2m00s waiting for one of this machine's 2 heavy-leg slot(s), held by '/src/first'", admitted.Refusal, StringComparison.Ordinal);
+        Assert.EndsWith($"; the machine's heavy legs are recorded in '{record}'", admitted.Refusal, StringComparison.Ordinal);
+        Assert.Equal(record, admitted.Fact.Record);
         Assert.Equal(2, admitted.Fact.Holders?.Count);
         Assert.Equal(["first", "second"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
@@ -206,8 +209,9 @@ public sealed class LegAdmissionTests
 
     /// <summary>
     /// A slot held by a command that has ended - crashed, or killed - is reclaimed by the next leg that looks, and said
-    /// to be; one whose command still runs holds its slot whatever name the machine had when it asked, since a Mac
-    /// takes its name from each network it joins, and read by name a renamed machine's slots would all be free.
+    /// to be; one whose command still runs holds its slot whatever name the machine had when it asked. Every entry of
+    /// the record is this machine's, since the record is named by what tells the machine apart, so an entry is told by
+    /// its process alone: a Mac takes its name from each network it joins.
     /// </summary>
     [Fact]
     public async Task ASlotWhoseCommandHasEnded_IsReclaimed_AndOneStillRunningUnderAnOldNameIsNot()
@@ -432,7 +436,7 @@ public sealed class LegAdmissionTests
             harness.Output,
             harness.Identity,
             () => throw new DirectoryNotFoundException("the process was given no home"));
-        var admission = new LegAdmission(slots, new ScriptedGauge(10), new ManualClock(), (_, _) => Task.CompletedTask, (least, _) => least);
+        var admission = AdmissionKit.Admission(slots, new ScriptedGauge(10), new ManualClock());
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => admission.AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), []), TestContext.Current.CancellationToken));
 
@@ -462,5 +466,295 @@ public sealed class LegAdmissionTests
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Contains($"The record of the heavy legs admitted onto this machine '{Path.GetFullPath(record)}' is not readable as JSON", refusal.Message, StringComparison.Ordinal);
         Assert.Contains("Remove it once no heavy leg runs or waits on this machine.", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A leg whose command ended under a name the machine no longer has - a Mac renamed by the network it joined since -
+    /// is reclaimed all the same: every entry of the record is this machine's, so it is told by its process alone.
+    /// </summary>
+    [Fact]
+    public async Task ADeadEntryUnderTheMachinesOldName_IsReclaimed()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "gone", machine: "the-name-it-had", processId: int.MaxValue - 1));
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock())
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1), []), TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(0, admitted.Fact.WaitedSeconds);
+        Assert.Contains("Reclaimed a heavy-leg slot from '/src/gone'", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A holder whose command ends while a leg waits - killed, say, by the very memory this waits on - has its slot
+    /// reclaimed by the waiting leg's next look, and said to be once; the leg is taken then, not after its whole wait.
+    /// </summary>
+    [Fact]
+    public async Task AHolderThatEndsWhileALegWaits_IsReclaimedByItsNextLook()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var identity = new EndingProcesses(harness.Identity, 1001);
+        var clock = new ManualClock();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "killed", processId: 1001, slots: 1));
+
+        var admission = AdmissionKit.Admission(
+            new HeavyLegSlots(harness.FileSystem, harness.Output, identity, record),
+            new ScriptedGauge(10),
+            clock,
+            onWait: () => identity.End(1001));
+
+        using var admitted = await admission.AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1), []), TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(TimeSpan.FromSeconds(AdmissionSettings.DefaultPollSeconds), clock.Moved);
+        Assert.Single(
+            harness.StandardOutput.ToString().Split('\n'),
+            line => line.Contains("Reclaimed a heavy-leg slot from '/src/killed'", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Legs are taken in the order they asked: one that asked later never passes one waiting ahead of it, and each
+    /// waiting line says how many are ahead and who holds the slots.
+    /// </summary>
+    [Fact]
+    public async Task ALegThatAskedLater_NeverPassesOneWaitingAhead()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var identity = new EndingProcesses(harness.Identity, 1001, 1002);
+        var said = new List<string>();
+        var waits = 0;
+
+        AdmissionKit.Write(
+            record,
+            AdmissionKit.Holder(harness, "holding", processId: 1001, slots: 1),
+            AdmissionKit.Holder(harness, "waiting", processId: 1002, slots: 1));
+
+        var admission = AdmissionKit.Admission(
+            new HeavyLegSlots(harness.FileSystem, harness.Output, identity, record),
+            new ScriptedGauge(10),
+            new ManualClock(),
+            onWait: () => identity.End(++waits == 1 ? 1001 : 1002));
+
+        using var admitted = await admission.AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1), said), TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(2 * AdmissionSettings.DefaultPollSeconds, admitted.Fact.WaitedSeconds);
+        Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 2 leg(s) ahead; held by '/src/holding'", said[0], StringComparison.Ordinal);
+        Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead; held by '/src/waiting'", said[1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Commands of repositories declaring different counts share one record: a leg starts only while it is fewer legs
+    /// from the front than every count up to it allows. So a leg allowing three waits while one allowing one runs, one
+    /// allowing one waits while two others run, and a later leg never passes an earlier one whose count holds it back.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { 1 }, 3, 1, 1)]
+    [InlineData(new[] { 3, 3 }, 1, 1, 2)]
+    [InlineData(new[] { 1, 1 }, 3, 1, 2)]
+    public async Task LegsOfCommandsDeclaringDifferentCounts_StartOnlyWhereEveryCountAheadAllows(int[] ahead, int mine, int inForce, int legsAhead)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var said = new List<string>();
+
+        AdmissionKit.Write(record, [.. ahead.Select((slots, index) => AdmissionKit.Holder(harness, $"other{index}", slots: slots))]);
+
+        using var refused = await AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock())
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: mine, maxWaitMinutes: 1), said), TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Fact.Admitted);
+        Assert.StartsWith($"waits for one of this machine's {inForce} heavy-leg slot(s), {legsAhead} leg(s) ahead", said[0], StringComparison.Ordinal);
+        Assert.Equal(ahead.Length, AdmissionKit.Read(record).Count);
+    }
+
+    /// <summary>A leg taking a slot beside others whose counts allow it starts at once, its own count keeping theirs.</summary>
+    [Fact]
+    public async Task ALegWhoseCountAndEveryCountAheadAllowIt_StartsAtOnce()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first", slots: 3), AdmissionKit.Holder(harness, "second", slots: 3));
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock(), settle: TimeSpan.Zero)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 3), []), TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal([3, 3, 3], AdmissionKit.Read(record).Select(entry => entry.Slots));
+    }
+
+    /// <summary>
+    /// However many legs ask at once, no more hold a slot at a time than the machine allows, every one is taken in the
+    /// end, and every slot is given back: the ask, the look and the give-back are each one step under the machine's lock.
+    /// </summary>
+    [Fact]
+    public async Task ManyLegsAskingAtOnce_NeverRunMoreThanTheSlots()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var admission = new LegAdmission(
+            AdmissionKit.Slots(harness, record),
+            new ScriptedGauge(10),
+            TimeProvider.System,
+            (_, token) => Task.Delay(TimeSpan.FromMilliseconds(5), token),
+            (least, _) => least);
+        var rule = AdmissionKit.Rule(heavyLegs: 2, settleLeast: 0, settleMost: 0);
+        var running = 0;
+        var most = 0;
+
+        async Task RunAsync(int leg)
+        {
+            using var admitted = await admission.AdmitAsync(AdmissionKit.Request(rule, [], $"leg{leg}"), TestContext.Current.CancellationToken);
+
+            Assert.True(admitted.Fact.Admitted);
+
+            var now = Interlocked.Increment(ref running);
+
+            lock (admission)
+            {
+                most = Math.Max(most, now);
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(20), TestContext.Current.CancellationToken);
+            Interlocked.Decrement(ref running);
+        }
+
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(leg => Task.Run(() => RunAsync(leg), TestContext.Current.CancellationToken)));
+
+        Assert.InRange(most, 1, 2);
+        Assert.Empty(AdmissionKit.Read(record));
+    }
+
+    /// <summary>The last wait is cut to what is left of the machine's: a poll longer than that never outlasts it.</summary>
+    [Fact]
+    public async Task ALegsLastWait_IsCutToWhatIsLeftOfItsWait()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"), AdmissionKit.Holder(harness, "second"));
+
+        using var refused = await AdmissionKit.Admission(harness, record, new ScriptedGauge(10), clock)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 45, maxWaitMinutes: 1), []), TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Fact.Admitted);
+        Assert.Equal(60, refused.Fact.WaitedSeconds);
+        Assert.Equal(TimeSpan.FromMinutes(1), clock.Moved);
+    }
+
+    /// <summary>
+    /// A leg is let start only at a reading its own line shows below the limit: one of 75.96 against 76 reads as 76.0,
+    /// so it waits, where starting would put 76.0% on a line saying the limit was 76%.
+    /// </summary>
+    [Fact]
+    public async Task AReadingTheLineShowsAtTheLimit_IsNotBelowIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var said = new List<string>();
+
+        using var admitted = await AdmissionKit.Admission(harness, temp.Combine("admission.json"), new ScriptedGauge(75.96, 75.94), new ManualClock())
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said), TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(75.9, admitted.Fact.MemoryPercent);
+        Assert.Equal(AdmissionSettings.DefaultPollSeconds, admitted.Fact.WaitedSeconds);
+        Assert.Contains("holds a heavy-leg slot, and waits for the memory 76.0% in use (75.96 of 100 by the test) to fall below 76%", said);
+    }
+
+    /// <summary>
+    /// A leg whose readings fell below the limit only to rise above it again within a settle is not said to have waited
+    /// on a memory that never fell: its refusal says what happened.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseMemoryFellOnlyToRiseAgain_IsNotTaken_SayingSo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "neighbour"));
+
+        using var refused = await AdmissionKit.Admission(harness, record, new ScriptedGauge(70, 80), new ManualClock(), settle: TimeSpan.FromSeconds(20))
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(maxWaitMinutes: 1), []), TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Fact.Admitted);
+        Assert.Equal(
+            "not admitted after 1m00s: it held a heavy-leg slot, and the memory fell below 76% only to rise above it again "
+            + "within a settle; it last read 80.0% in use (80 of 100 by the test)",
+            refused.Refusal);
+    }
+
+    /// <summary>A place given back is never looked at, nor held, again: a leg that gave its place back asks again.</summary>
+    [Fact]
+    public void APlaceGivenBack_IsNeverHeldAgain()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var slots = AdmissionKit.Slots(harness, record);
+        var place = slots.Ask("run-mine", "build", "mine", "local", "/src/mine", null, 1);
+
+        place.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => slots.Look(place));
+        Assert.Empty(AdmissionKit.Read(record));
+    }
+
+    /// <summary>
+    /// An entry of the record that leaves out what it needs - written by hand, or by something else - is refused as the
+    /// record's not being this build's, never read in as a count of none that would hold every leg back.
+    /// </summary>
+    [Fact]
+    public async Task AnEntryLeavingOutWhatItNeeds_IsRefused_NeverReadAsNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+
+        File.WriteAllText(
+            record,
+            $$"""[{ "machine": "box", "processId": {{harness.Identity.CurrentId}}, "runId": "r", "askedUtc": "2026-09-30T16:29:42+00:00", "command": "build", "leg": "old", "host": "local", "tree": "/src/old" }]""");
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock())
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), []), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("is not readable as JSON", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("slots", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>This process as a test's holders see it: each id it names alive until the test ends it.</summary>
+    /// <param name="real">This process.</param>
+    /// <param name="alive">The ids of the other commands' processes, alive until ended.</param>
+    private sealed class EndingProcesses(IProcessIdentity real, params int[] alive) : IProcessIdentity
+    {
+        private readonly HashSet<int> _alive = [.. alive];
+
+        public int CurrentId => real.CurrentId;
+
+        public string CurrentMachine => real.CurrentMachine;
+
+        public string? Current => real.Current;
+
+        public bool IsAlive(int processId, string? stamp)
+            => processId == real.CurrentId ? real.IsAlive(processId, stamp) : _alive.Contains(processId);
+
+        public void End(int processId) => _alive.Remove(processId);
     }
 }

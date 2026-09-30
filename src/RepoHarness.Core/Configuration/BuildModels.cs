@@ -95,8 +95,9 @@ public sealed class ProjectConfig : VariantOverlay
     public string Path { get; init; } = ".";
 
     /// <summary>
-    /// Targets to build, or <see langword="null"/> for the project's own default target. Given empty, it is
-    /// refused when the file is read: an empty list is never read as the default target.
+    /// Targets to build, or <see langword="null"/> for the project's own default target. Given empty in the file, it
+    /// is refused when the file is read, rather than read as the default target; a list a caller builds empty reads
+    /// as left out.
     /// </summary>
     public List<string>? Targets { get; init; }
 

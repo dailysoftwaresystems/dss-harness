@@ -198,6 +198,32 @@ public sealed class LogOwnershipTests
         Assert.Contains(directoryIsAFile ? "could not be written" : "could not be read", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A log path owned by a run on another machine is held - nothing here can ask that machine whether the run still
+    /// goes - saying --force-lock is the way out, and taken when forced.
+    /// </summary>
+    [Fact]
+    public async Task ALogPathOwnedOnAnotherMachine_IsHeld_UntilForced()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var ownership = new LogOwnership(factory.FileSystem, factory.Output, factory.Identity);
+        var directory = temp.Combine("runs", "shared");
+
+        Write(directory, "another-machine", int.MaxValue - 1, "a-process-elsewhere", "20250101-120000-deadbeef");
+
+        var held = await ownership.ClaimAsync(directory, RunId.New(), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(held.Taken);
+        Assert.Contains("another-machine pid", held.HeldBy, StringComparison.Ordinal);
+        Assert.Contains("--force-lock takes it", held.Verdict()!.Detail, StringComparison.Ordinal);
+
+        var forced = await ownership.ClaimAsync(directory, RunId.New(), force: true, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(forced.Taken);
+        Assert.Contains("because --force-lock was given", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ARunReclaimsItsOwnLogPath()
     {

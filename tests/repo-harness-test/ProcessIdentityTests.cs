@@ -7,10 +7,10 @@ using RepoHarness.Core.Platform;
 namespace RepoHarness.Tests;
 
 /// <summary>
-/// What tells one process from the next holder of its id. This is what a lock and a log claim record,
-/// and the one rule it must keep is that no wall clock is in it: a host this tool serves steps its
-/// clock forward by about 25 seconds every few seconds, and a stamp that moved with it would make
-/// every live holder on that host read as dead at once.
+/// What tells one process from the next holder of its id. This is what a lock, a log claim and a
+/// heavy-leg slot record, and the one rule it must keep is that no clock that steps is in it: a host
+/// this tool serves steps its clock forward by about 25 seconds every few seconds, and a stamp that
+/// moved with it would make every live holder on that host read as dead at once.
 /// </summary>
 public sealed class ProcessIdentityTests
 {
@@ -73,7 +73,7 @@ public sealed class ProcessIdentityTests
     /// Windows and macOS record the start time once, when the process is created, and never work it
     /// out again — so it is already clock-proof. It is kept as the ticks the runtime hands it over in,
     /// never turned back into an instant, so a stamp an earlier build recorded is still read as this
-    /// build's; a time zone that changed since is the next test's.
+    /// build's; a time zone that changed since is OffLinux_AStartReadUnderAnotherTimeZone_IsStillThisProcess's.
     /// </summary>
     [Fact]
     public void OffLinux_TheStampIsTheRecordedStartTicks_WithNoConversion()

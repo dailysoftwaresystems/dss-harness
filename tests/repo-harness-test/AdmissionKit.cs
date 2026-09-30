@@ -12,23 +12,28 @@ namespace RepoHarness.Tests;
 internal sealed class ScriptedGauge(params double?[] percents) : IMemoryGauge
 {
     private readonly Queue<double?> _readings = new(percents);
+    private readonly Lock _reading = new();
     private double? _last;
 
     /// <summary>How many times the memory was read.</summary>
     public int Reads { get; private set; }
 
+    /// <summary>The next reading; read by legs at once, one at a time.</summary>
     public (MemoryReading? Reading, string? Unmeasured) Read()
     {
-        Reads++;
-
-        if (_readings.Count > 0)
+        lock (_reading)
         {
-            _last = _readings.Dequeue();
-        }
+            Reads++;
 
-        return _last is { } percent
-            ? (new MemoryReading(percent, string.Create(CultureInfo.InvariantCulture, $"{percent} of 100 by the test")), null)
-            : (null, "the test gave no reading");
+            if (_readings.Count > 0)
+            {
+                _last = _readings.Dequeue();
+            }
+
+            return _last is { } percent
+                ? (new MemoryReading(percent, string.Create(CultureInfo.InvariantCulture, $"{percent} of 100 by the test")), null)
+                : (null, "the test gave no reading");
+        }
     }
 }
 

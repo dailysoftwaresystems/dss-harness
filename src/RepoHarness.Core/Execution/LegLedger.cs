@@ -152,7 +152,8 @@ public sealed record LegEntry
 
     /// <summary>
     /// How the leg's machine took it, where it is heavy and that machine declares admission: how long it waited, and
-    /// the memory in use it started at. Named on its line with whatever verdict it reached, as the compilers are.
+    /// the memory in use it started at. An admitted leg's line names both, whatever verdict it then reached; a leg not
+    /// admitted says why as its detail.
     /// </summary>
     public AdmissionFact? Admission { get; init; }
 

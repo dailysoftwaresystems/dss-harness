@@ -109,6 +109,51 @@ public sealed class LedgerReportTests
     }
 
     /// <summary>
+    /// A leg's admission travels in the document as the reader is told it - the holders' and the record's paths from the
+    /// home as <c>~</c>, why the memory could not be read - and a leg not admitted says only why, never "admitted" beside it.
+    /// </summary>
+    [Fact]
+    public void ALegsAdmission_IsTheDocumentsAsTheReaderIsTold()
+    {
+        var home = HomeShorthand.For(["/home/alice"], PlatformNames.Linux);
+        var report = LedgerReport.From(
+        [
+            Entry("refused", LegVerdict.NotAdmitted, TimeSpan.FromSeconds(1), "not admitted after 1h00m waiting for one of this machine's 1 heavy-leg slot(s)") with
+            {
+                Admission = new AdmissionFact(
+                    false,
+                    3600,
+                    Holders: ["'/home/alice/repo' on local (leg 'x', build, box pid 7, run r, since 2026-09-30 16:29:42Z)"],
+                    Record: "/home/alice/.local/share/dssharness/admission-x.json"),
+            },
+            Entry("unread", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty) with
+            {
+                Admission = new AdmissionFact(true, 0, Unmeasured: "the gauge gave no reading", Record: "/home/alice/.local/share/dssharness/admission-x.json"),
+            },
+        ],
+        durationWarningFactor: 0);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], runDirectory: "/home/alice/repo/.harness-config/runs/r1", home.Shown));
+        var legs = document.RootElement.GetProperty("legs").EnumerateArray().ToList();
+        var refused = legs[0].GetProperty("admission");
+
+        Assert.False(refused.GetProperty("admitted").GetBoolean());
+        Assert.Equal(
+            "'~/repo' on local (leg 'x', build, box pid 7, run r, since 2026-09-30 16:29:42Z)",
+            Assert.Single(refused.GetProperty("holders").EnumerateArray()).GetString());
+        Assert.Equal("~/.local/share/dssharness/admission-x.json", refused.GetProperty("record").GetString());
+        Assert.Equal("the gauge gave no reading", legs[1].GetProperty("admission").GetProperty("unmeasured").GetString());
+
+        var rows = report.Render();
+
+        Assert.DoesNotContain("; admitted", Assert.Single(rows, row => row.StartsWith("refused", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.Contains(
+            "admitted at once on its slot alone, the memory in use unread: the gauge gave no reading",
+            Assert.Single(rows, row => row.StartsWith("unread", StringComparison.Ordinal)),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Every leg's line names the compilers CMake configured its build with, beside whatever it
     /// said - a failure's reason included - and the document carries them as data; a leg that built
     /// nothing with CMake names none.

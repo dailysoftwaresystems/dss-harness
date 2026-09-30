@@ -319,6 +319,12 @@ public sealed class RunLockTests
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Contains("another-machine", refusal.Message, StringComparison.Ordinal);
 
+        // A machine renamed since - a Mac, by the network it joined - reads as another: the reader is told the way out.
+        Assert.Contains(
+            "(recorded on another machine, or on this one under an earlier name, which cannot be asked whether it still runs; --force-lock takes it)",
+            refusal.Message,
+            StringComparison.Ordinal);
+
         await using var forced = await runLock.AcquireAsync(
             layout,
             Request(LockScope.TreeExclusive, "sync") with { Force = true },

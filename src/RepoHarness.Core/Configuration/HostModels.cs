@@ -51,7 +51,7 @@ public sealed class HostsConfig
     }
 }
 
-/// <summary>Settings every kind of host accepts.</summary>
+/// <summary>Settings every kind of host accepts, save admission, which a WSL distribution refuses.</summary>
 public abstract class HostSettings
 {
     /// <summary>
@@ -97,8 +97,8 @@ public abstract class HostSettings
 
     /// <summary>
     /// How heavy legs are admitted onto this machine, each field replacing <c>defaults.admission</c>'s: see
-    /// <see cref="AdmissionSettings"/>. Refused on a WSL distribution, which runs on this machine and whose legs take
-    /// this machine's slots, under <c>hosts.local</c>'s.
+    /// <see cref="AdmissionSettings"/>. Refused under <c>hosts.wsl</c>: a distribution runs on the machine running the
+    /// harness, whose slots its legs take by <c>hosts.local</c>'s rule.
     /// </summary>
     public AdmissionSettings? Admission { get; init; }
 }

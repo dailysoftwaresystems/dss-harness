@@ -118,12 +118,15 @@ at once, with the line it concerns where the parser knows it:
 - `null` is refused wherever the model does not allow it, including inside lists and
   maps, which the serializer does not check on its own. Loaded, it would fail much later
   as a crash in whatever first read it.
-- A list whose absence means every one of what it names, or a default set, is refused given
-  empty: a runner's `legs`; a tool's `platforms`, `toolchains`, `legs`, `processors` and
-  `emulators`; a toolchain's `platforms`; `ci.workflows`; `test.inputs`; a project's `targets` and
-  `rebuildableFormats`. Read as the key left out, a runner's `"legs": []` synced the tree to every
-  host and ran on every leg, for a list naming none; `--legs` given no name was already refused for
-  the same reason. Left out, each still means what it did.
+- A list whose absence means every one of what it names, or a set the tool chooses, is refused
+  given empty, by one rule and in one wording: a runner's `legs` and `steps`; a tool's `platforms`,
+  `toolchains`, `legs`, `processors` and `emulators`; a toolchain's `platforms`; an emulator's
+  `phases`; `ci.workflows`; `test.inputs`; a project's `targets` and `rebuildableFormats`; a
+  platform's `toolSearchDirectories`. Read as the key left out, a runner's `"legs": []` synced the
+  tree to every host and ran on every leg, for a list naming none, as `--legs` given no name would
+  have. Left out, each still means what it did, and a list a caller builds empty in code reads as
+  left out. A list whose empty form means none - such as `sync.neverTransfer`, `sync.exclude` or
+  `contention.buildTools` - takes `[]` as that.
 - A key nothing reads is refused, saying so: a test section's `configs`, which `init` once wrote
   and nothing ever read - each leg builds and tests the one config its `config` names.
 - References are resolved: a leg naming an undeclared host or emulator, an emulator that
@@ -1117,9 +1120,10 @@ from the report.
 | `poisoned` | The harness could not produce a verdict | **yes** |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
-"the harness broke" call for different responses. `inputs-moved`, `unmeasured` and
-`contended` say nothing about the code at all: the first two call for letting the tree
-settle and running again, the third for waiting for the other run.
+"the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
+`contended` and `not-admitted` say nothing about the code at all: the first two call for
+letting the tree settle and running again, the third for waiting for the other run, and
+the fourth for waiting for the machine's other heavy legs, or freeing its memory.
 
 `refused-locked` and `log-held` are deliberately distinct, though both mean another run got
 there first. A lock is taken for the duration of the work and is released by the run that
@@ -1170,7 +1174,7 @@ the tag is for the terminal, so nothing that reads a log has to know about it.
 Within a leg the order is fixed:
 
 ```
-sync (when the host needs it)  →  build on buildCores  →  test on testCores
+sync (when the host needs it)  →  lock  →  admission (a heavy leg, where declared)  →  build on buildCores  →  test on testCores
 ```
 
 - **A tree is synced once, not once per leg.** Legs on the same host share one
@@ -1210,62 +1214,88 @@ sync (when the host needs it)  →  build on buildCores  →  test on testCores
 
 `maxParallelLegs` is counted by one command. Separate commands - worktrees each running a gate of
 their own - share a machine that no one of them can see the others on: four such builds drove one
-Windows machine's committed memory to 81 of 113.7 GB, and the process that had started them died.
+Windows machine's committed memory to 81 of 113.7 GiB, and the process that had started them died.
 Where a machine declares **admission** - `defaults.admission`, or its own section under
-`hosts.local` or an ssh host, whose fields replace the defaults' one by one - each heavy leg waits,
-before any of its work, for the machine to take it:
+`hosts.local` or an ssh host, whose fields replace the defaults' one by one - each heavy leg, its
+tree synced and its lock taken, waits for the machine to take it:
 
-1. **One of the machine's `heavyLegs` slots** (2), shared by every command this user runs there,
-   given in the order legs asked for one. The slots are kept in `admission-<machine id>.json` among
-   the user's own application data - `LOCALAPPDATA` on Windows, `~/Library/Application Support` on
-   macOS, `~/.local/share` elsewhere - beside the hold that keeps the machine awake: one per user of
-   the machine, whichever repository asks, never in a directory other users can write, and never
-   anywhere else when no such directory can be named. The record is named by the identifier the
-   system keeps for the machine (Windows's `MachineGuid`, Linux's `machine-id`, the Mac's hardware
-   UUID), never by its name, which a Mac takes from each network it joins: read by name, the legs
-   still running under the old one would be another machine's to every command started under the
-   new, and their slots free. One record per machine also keeps a home two machines share from
-   losing entries, since the lock a change is made under holds on one machine.
-2. **Then the memory in use below `maxMemoryPercent`** (76). Where another leg holds a slot, a
-   reading below the limit is read again after a settle - a time picked at random within
-   `settleSeconds` ([15, 90]) - and the leg starts only if it still is, so two legs taking their
-   slots together do not both start on one reading. Looked at again every `pollSeconds` (30); the
-   slot is looked at again too, so a leg whose place went while it waited waits its turn again.
-   Seconds are at most 3600 and the wait at most 10080 minutes, so every wait is one a timer holds.
+1. **One of the machine's `heavyLegs` slots** (2, at least 1), shared by every command this user
+   runs there, given in the order legs asked for one. The slots are kept in
+   `<user data>/dssharness/admission-<machine id>.json` - the user data being `LOCALAPPDATA` on
+   Windows, `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME` or `~/.local/share` on
+   Linux - beside the hold that keeps the machine awake: one per user of the machine, whichever
+   repository asks, never in a directory other users can write, and never anywhere else when no
+   such directory can be named. The record is named by the identifier the system keeps for the
+   machine (Windows's `MachineGuid`, Linux's `machine-id`, the Mac's hardware UUID), never by its
+   name, which a Mac takes from each network it joins: read by name, the legs still running under
+   the old one would be another machine's to every command started under the new, and their slots
+   free. Where the system keeps none - a container its image gave no `machine-id` - the record is
+   named by the machine's name, and the first heavy leg says so and why. One record per machine
+   also keeps a home two machines share from losing entries, since the lock a change is made under
+   holds on one machine.
+2. **Then the memory in use below `maxMemoryPercent`** (76, above 0 and at most 100). Where another
+   leg holds a slot, a reading below the limit is read again after a settle - a time picked at
+   random within `settleSeconds` ([15, 90]; `[0, 0]` reads once) - and the leg starts only if it
+   still is, so two legs taking their slots together do not both start on one reading. Looked at
+   again every `pollSeconds` (30, at least 1); the slot is looked at again too, so a leg whose place
+   went while it waited waits its turn again. Seconds are at most 3600 and the wait at most 10080
+   minutes, so every wait is one a timer holds.
 
-A leg holds its slot until its heavy work ends. A slot is held by the process running the leg,
-never by a timeout: an entry whose process has ended - a command that crashed or was killed
-holding a slot - is reclaimed by the next leg that looks, and said to be, by the liveness rule the
-run lock uses, whatever name the machine had when it asked. A record that cannot be read - one
-this process may not look at included - is refused, naming it, and never read as free: that is the
-one reading that would start every waiting leg at once.
+What a command's own configuration declares is the rule its legs are admitted by: a repository that
+declares none never joins the line. Each entry of the record carries the count its command allows,
+since commands of repositories that declare different counts share one record, and a leg starts
+only while it is fewer legs from the front than the fewest any leg up to it allows: the legs holding
+slots are always the front of the line, no leg runs beside more legs than its own configuration
+allows, and none passes a leg that asked before it.
 
-**Heavy** is what builds or tests: a `build` or `test` leg, and a `run` leg whose runner requires
-the build or says `"heavy": true`. A runner that only reads the tree - a repository guard - is
-light and starts at once. A runner saying `"heavy": false` while it requires the build is refused:
-its build is heavy.
+A leg holds its slot until its work ends - a runner's steps after its build, and a WSL leg's whole
+run there, included - and keeps its lock while it waits, so another run of its variant is
+`refused-locked` meanwhile, as it would be while the leg ran. A waiting leg counts against its
+command's `maxParallelLegs` and `maxParallelLegsTotal` as a running one does, and each leg waits up to
+`maxWaitMinutes` of its own. A slot is held by the process that
+asked for it, never by a timeout: given back when the work ends, and, where that process ended
+first - a command that crashed or was killed holding a slot - reclaimed by the next leg that looks,
+and said to be. Every entry of the record is this machine's, whatever name it carries, so an entry
+is told by its process alone, where the run lock keeps one naming another machine until
+`--force-lock` takes it. A slot this process could not give back - a full disk - is no longer counted
+by its own later legs, and leaves the record with the next change it makes. A record that cannot be
+read, one this process may not look at or one missing a member it needs included, is refused, naming
+it, and never read as free: that is the one reading that would start every waiting leg at once.
+
+**Heavy** is what builds or tests: a `build` or `test` leg, and a `run` leg whose runner - or a
+runner its expected exceptions' run checks name, which run within its legs - requires the build or
+says `"heavy": true`. A runner that only reads the tree - a repository guard - is light and starts
+at once. A runner saying `"heavy": false` while it requires the build is refused: its build is heavy.
 
 **The machine is the physical one.** A WSL distribution runs on this machine, so this machine's
 command takes its heavy legs - by `hosts.local`'s rule, against this machine's slots and memory -
 before it sends them there, and the distribution takes nothing again; a section under `hosts.wsl`
-is refused. An ssh host is a machine of its own: the DssHarness there takes the legs sent to it by
-its own section, and the line it answers with names how.
+is refused. A command typed inside a distribution, rather than sent there, is the distribution's
+own: it keeps a record there and reads the distribution's memory, and cannot see the legs commands
+typed on Windows run, nor they its. An ssh host is a machine of its own: the DssHarness there takes
+the legs sent to it by its own section, and the line it answers with names how.
 
-**The memory in use is each system's own count** of what it can still give, as a share of what it
-could: on Windows the commit charge against the commit limit (`GlobalMemoryStatusEx`), which grows
-with the page file; on Linux `MemTotal` less `MemAvailable`, never `Committed_AS` against
-`CommitLimit`, which under the default overcommit stands above 100% on a healthy machine; on macOS
-what the kernel counts as not free, the share `memory_pressure` reports. A machine whose count
-cannot be read takes a leg on its slot alone, and its line says so, as a leg placed where its room
-could not be measured is.
+**The memory in use is each system's own count** of what it can no longer give, as a share of what
+it could: on Windows the commit charge against the commit limit, read with `GetPerformanceInfo` for
+the whole machine - `GlobalMemoryStatusEx` gives the same figures only as far as a job object the
+asking process runs in allows - and which grows with the page file; on Linux `MemTotal` less
+`MemAvailable`, never `Committed_AS` against `CommitLimit`, which under the default overcommit stands
+above 100% on a healthy machine; on macOS 100 less the free share in `kern.memorystatus_level`,
+which `memory_pressure` reports as free. A WSL leg is admitted by this machine's commit, which
+cannot see a distribution that has reached the cap its own configuration sets. A machine whose
+count could not be read in a leg's wait takes the leg on its slot alone, and its line says so, as a
+leg placed where its room could not be measured is; one that stops giving a reading it gave is read
+again, never taken on the reading it last gave. A leg is let start only at a reading its own line
+shows below the limit.
 
-Unlike a held lock, which refuses at once, admission waits - because what it waits for is certain
-to come, as the legs ahead finish - but never silently and never for ever: while it waits the leg
-says who holds each slot (tree, variant, leg, command, process, run, since) and what the memory
-stands at, and the wait is measured on the monotonic clock. A leg that waited `maxWaitMinutes` (60)
-is `not-admitted`, exit 7, naming what held the slots or the memory it stood at: nothing of it ran,
-and nothing about the code is claimed. Every admitted leg's line names how long it waited and the
-memory it started at, and `--json` gives both, as the leg's `admission`.
+Unlike a held lock, which refuses at once, admission waits - because the slots it waits for come
+free as the legs ahead finish - but never silently and never for ever: while it waits the leg says
+who holds each slot (tree, variant, host, leg, command, machine, process, run, and since when it
+asked) and, once it holds one, what the memory stands at; the wait is measured on the monotonic
+clock. A leg that waited `maxWaitMinutes` (60, above 0) is `not-admitted`, exit 7, naming what held
+the slots and the record they are kept in, or the memory it waited on: nothing of it ran, and nothing
+about the code is claimed. Every admitted leg's line names how long it waited and the memory it
+started at, and `--json` gives both, with the record, as the leg's `admission`.
 
 ## Leg integrity
 
@@ -1868,8 +1898,8 @@ directory here cannot drift apart.
   harness's own directory is searched all the same, though git ignores most of it by design,
   because a `.secrets` there is what the search was written to find - save what the harness writes
   there as it works, each run's records, the record of host copies and each action's own `build`
-  and `artifacts`: the run state of whichever machine made it, which no sync carries and nobody
-  writes, where a name neither counts nor is looked for below. Counted, a fresh worktree's
+  and `artifacts`: the run state of whichever machine made it, which no sync carries and no one
+  edits by hand, where a name neither counts nor is looked for below. Counted, a fresh worktree's
   first run, its own `build` not made yet, was told the `build` entry `init` writes protected
   nothing, having found an action's working space, and to write `**/build`, which would withhold
   every source directory of that name too. A search that still runs out says so; it never reads as

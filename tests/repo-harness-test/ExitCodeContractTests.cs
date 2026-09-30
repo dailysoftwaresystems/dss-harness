@@ -112,7 +112,7 @@ public sealed class ExitCodeContractTests
             Assert.Contains(expected, result.StandardOutput, StringComparison.Ordinal);
         }
 
-        foreach (var verdict in new[] { "inputs-moved", "contended", "unwitnessed", "log-held" })
+        foreach (var verdict in new[] { "inputs-moved", "contended", "unwitnessed", "log-held", "not-admitted" })
         {
             Assert.Contains(verdict, result.StandardOutput, StringComparison.Ordinal);
         }

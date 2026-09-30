@@ -66,7 +66,7 @@ internal static class MisplacedKeys
 
     /// <summary>
     /// A test section's list of build configs to test: written by <c>init</c> and checked against
-    /// <c>buildConfigs</c>, and read by nothing, so a file naming <c>release</c> there tested debug alone.
+    /// <c>buildConfigs</c>, and read by nothing, so a file naming <c>release</c> there tested only the config each leg names.
     /// </summary>
     private const string TestConfigs = "configs";
 

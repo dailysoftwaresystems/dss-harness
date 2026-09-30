@@ -11,9 +11,9 @@ namespace RepoHarness.Core.Execution;
 /// Serialises one file's read-decide-write across every process on the machine.
 /// </summary>
 /// <remarks>
-/// The run lock and the log owner are both decided by reading a file, deciding, and writing it
-/// back. Two runs that each read "free" would each write themselves in, and both would believe they
-/// held it. A named mutex is the machine-wide lock .NET offers on Windows, Linux and macOS alike,
+/// The run lock, a log directory's owner and a machine's heavy-leg slots are each decided by
+/// reading a file, deciding, and writing it back. Two runs that each read "free" would each write
+/// themselves in, and both would believe they held it. A named mutex is the machine-wide lock .NET offers on Windows, Linux and macOS alike,
 /// and it is the same mechanism the anchor registries are changed under.
 /// </remarks>
 internal static class MachineWideFile
@@ -96,7 +96,8 @@ internal static class MachineWideFile
     /// <param name="path">The file being updated, which names the mutex.</param>
     /// <param name="window">
     /// How long to wait for another process's update. It bounds a rewrite that takes microseconds,
-    /// never a run: what the file records is refused at once when it is already taken.
+    /// never what the file records: a held lock is refused at once, and a taken heavy-leg slot is
+    /// waited for between updates, never inside one.
     /// </param>
     /// <param name="work">The read, the decision and the write.</param>
     /// <exception cref="HarnessException">Another process held the file for longer than the window allows.</exception>

@@ -80,8 +80,9 @@ public sealed class TestConfig
     /// Paths or globs, relative to the tree, that the tests read while they run. Their content
     /// is fingerprinted before the tests start and after they end; a difference makes the
     /// verdict <c>inputs-moved</c>, because some tests saw the old files and some the new, and
-    /// the result describes a tree that never existed. Left out, every file git tracks; given empty,
-    /// refused when the file is read, since an empty list is never read as every file.
+    /// the result describes a tree that never existed. Left out, every file git tracks. Given empty in
+    /// the file, it is refused when the file is read, rather than read as every file; a list a caller
+    /// builds empty reads as left out.
     /// </summary>
     public List<string>? Inputs { get; init; }
 

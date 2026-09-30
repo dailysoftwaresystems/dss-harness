@@ -174,7 +174,8 @@ public sealed class HarnessDefaults
     /// processors however differently they are named, while an ssh host shares nothing with either.
     /// A cap across every leg had to be set low enough for the busiest machine, which left every
     /// other host idle. Legs are isolated from one another, so this is never needed for correctness;
-    /// it keeps a machine from being asked for more than it has.
+    /// it keeps one command from asking a machine for more than it has. Separate commands on one
+    /// machine are counted by <see cref="Admission"/>.
     /// </remarks>
     public int? MaxParallelLegs { get; init; }
 
@@ -189,8 +190,9 @@ public sealed class HarnessDefaults
     public string? Project { get; init; }
 
     /// <summary>
-    /// How heavy legs are admitted onto every machine that declares nothing of its own, or <see langword="null"/>
-    /// where only such machines as declare their own admit them: see <see cref="AdmissionSettings"/>.
+    /// The rule heavy legs are admitted by on a machine whose own section declares nothing, and each field such a
+    /// section leaves out; <see langword="null"/> where only machines that declare their own admit heavy legs: see
+    /// <see cref="AdmissionSettings"/>.
     /// </summary>
     public AdmissionSettings? Admission { get; init; }
 

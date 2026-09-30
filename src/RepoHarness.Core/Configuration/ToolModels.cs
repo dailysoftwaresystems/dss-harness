@@ -21,8 +21,9 @@ public sealed class ToolConfig
     /// everywhere: a repository declaring MSVC and a Linux compiler could not have both, because
     /// each was reported missing on the other's hosts and no leg was ever fully provisioned. Left
     /// out, a tool is needed on every platform, which is what every list written before this meant.
-    /// Every scope of a tool is refused given empty, when the file is read: an empty list is never read
-    /// as every platform, toolchain, leg, processor or emulator.
+    /// Every scope of a tool given empty in the file is refused when the file is read, rather than read
+    /// as every platform, toolchain, leg, processor or emulator; a scope a caller builds empty reads as
+    /// left out.
     /// </remarks>
     public List<string>? Platforms { get; init; }
 

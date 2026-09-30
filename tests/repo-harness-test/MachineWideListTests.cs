@@ -74,6 +74,38 @@ public sealed class MachineWideListTests
         Assert.Equal(["kept", "later"], list.Read());
     }
 
+    /// <summary>
+    /// A lock whose entry leaves out a member it needs - written by hand, or by something else - is refused, never read
+    /// in as a holder of no machine that no run could take; one an older build wrote, before stamps, still reads.
+    /// </summary>
+    [Fact]
+    public void AnEntryLeavingOutAMemberItNeeds_IsRefused_AndOneAnOlderBuildWroteStillReads()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var layout = new Core.Repository.HarnessLayout(temp.Path, temp.Path);
+        var runLock = new RunLock(factory.FileSystem, factory.Output, factory.Identity);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(layout.LockFile)!);
+        File.WriteAllText(
+            layout.LockFile,
+            """[{ "host": "local", "tree": "/repo", "scope": "TreeExclusive", "holder": { "processId": 7, "runId": "r", "takenUtc": "2026-09-30T16:29:42+00:00", "command": "test" } }]""");
+
+        var refusal = Assert.Throws<HarnessException>(() => runLock.Read(layout));
+
+        Assert.Contains("is not readable as JSON", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("machine", refusal.Message, StringComparison.Ordinal);
+
+        File.WriteAllText(
+            layout.LockFile,
+            """[{ "host": "local", "tree": "/repo", "scope": "TreeExclusive", "holder": { "machine": "box", "processId": 7, "processStartedUtc": "2026-09-30T16:00:00+00:00", "runId": "r", "takenUtc": "2026-09-30T16:29:42+00:00", "command": "test" } }]""");
+
+        var entry = Assert.Single(runLock.Read(layout));
+
+        Assert.Null(entry.Holder.ProcessStamp);
+        Assert.Null(entry.Variant);
+    }
+
     /// <summary>A file holding null holds no list, and is refused as one that is not this build's JSON, never read as empty.</summary>
     [Fact]
     public void AFileHoldingNull_IsRefused_NeverReadAsEmpty()

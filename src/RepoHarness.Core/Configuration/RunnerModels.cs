@@ -20,7 +20,8 @@ public sealed class RunnerConfig
 
     /// <summary>
     /// Legs this runner executes against when <c>--legs</c> names none, or <see langword="null"/> for every
-    /// declared leg. Given empty, it is refused when the file is read: an empty list is never read as every leg.
+    /// declared leg. Given empty in the file, it is refused when the file is read, rather than read as every leg;
+    /// a list a caller builds empty reads as left out.
     /// </summary>
     [Description("the legs it runs when --legs names none; absent, every leg")]
     public List<string>? Legs { get; init; }

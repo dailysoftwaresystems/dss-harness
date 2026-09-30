@@ -594,7 +594,7 @@ public sealed class TestService(
         }
 
         // Every file git tracks where test.inputs says nothing: a file giving it empty was refused when it
-        // was read, and one a caller builds empty watches the wide way.
+        // was read, and one a caller builds empty watches every file git tracks.
         if (settings.Inputs is { Count: > 0 } declared)
         {
             return Expand(declared, request.TreeRoot);

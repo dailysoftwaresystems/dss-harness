@@ -271,6 +271,41 @@ public sealed class RemoteLegRunnerTests
         Assert.EndsWith("developer environment: vs (Visual Studio 18.0.1, MSVC 14.50.35717, amd64)", row, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A leg a host did not admit is not-admitted here, named by the host this machine knows, carrying what held the
+    /// host's slots, why it could not read its memory, and where it keeps its record - nothing of it ran there.
+    /// </summary>
+    [Fact]
+    public async Task ALegAHostDidNotAdmit_IsNotAdmittedHere_NamedByThatHost()
+    {
+        var fact = new AdmissionFact(
+            false,
+            3600,
+            Unmeasured: "the host gave no reading",
+            Holders: ["'/srv/other' on local (leg 'other', build, box pid 7, run r, since 2026-09-30 16:29:42Z)"],
+            Record: "/var/lib/dssharness/admission-x.json");
+
+        var written = LedgerReport
+            .From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.NotAdmitted, Detail = "not admitted after 1h00m waiting for one of this machine's 1 heavy-leg slot(s)", Admission = fact }], durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, LegExit.NotAdmitted);
+        });
+
+        var entry = await Runner(hosts).RunAsync("build", Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.NotAdmitted, entry.Verdict);
+        Assert.Equal("wsl Example-Linux: not admitted after 1h00m waiting for one of this machine's 1 heavy-leg slot(s)", entry.Detail);
+        Assert.False(entry.Admission!.Admitted);
+        Assert.Equal(fact.Holders, entry.Admission.Holders);
+        Assert.Equal("the host gave no reading", entry.Admission.Unmeasured);
+        Assert.Equal("/var/lib/dssharness/admission-x.json", entry.Admission.Record);
+    }
+
     [Fact]
     public async Task TheVerdictTheHostReached_IsTheVerdictThisRunReports()
     {

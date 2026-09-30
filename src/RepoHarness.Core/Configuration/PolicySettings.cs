@@ -30,8 +30,9 @@ public sealed class CiSettings
 {
     /// <summary>
     /// Workflow files, relative to the repository root, whose jobs carry this repository's legs, or
-    /// <see langword="null"/> for every workflow under <c>.github/workflows</c>. Given empty, it is refused
-    /// when the file is read: an empty list is never read as every workflow.
+    /// <see langword="null"/> for every workflow directly in <c>.github/workflows</c>. Given empty in the file, it is
+    /// refused when the file is read, rather than read as every workflow; a list a caller builds empty reads as left
+    /// out.
     /// </summary>
     public List<string>? Workflows { get; init; }
 

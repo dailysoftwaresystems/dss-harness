@@ -111,12 +111,12 @@ even when its machines do not — a license server, a network share, a sync's ba
 
 Both are counted by one command. Where a machine declares `admission` — under `defaults`, or its own
 under `hosts.local` or an ssh host — its heavy legs (a build, a test, a runner that requires the build
-or says `"heavy": true`) share it across every command run there: each waits for one of its
-`heavyLegs` slots, in the order they asked, then for the memory in use to fall below
+or says `"heavy": true`) share it across every command this user runs there: each waits for one of
+its `heavyLegs` slots, in the order they asked, then for the memory in use to fall below
 `maxMemoryPercent`, says who holds each slot while it waits, and names on its line how long it waited
 and the memory it started at. A WSL distribution's legs take this machine's slots; an ssh host takes
-its own. One that waited `maxWaitMinutes` is `not-admitted`, exit 7, and nothing of it ran. Run
-`dssharness help admission` for the rules.
+its own. One that waited `maxWaitMinutes` is `not-admitted`, exit 7, naming what held the slots and
+where they are recorded, and nothing of it ran. Run `dssharness help admission` for the rules.
 
 ## Design
 
@@ -126,7 +126,7 @@ Three principles the implementation actually holds to:
 never shares an exit code with "the harness could not run" — the remedies differ.
 Run `dssharness help exit-codes` for the full table, which is generated from the
 code rather than written by hand. A configuration file with an unknown key, a key
-written twice, a list given empty where leaving it out means every one, or a reference to
+written twice, a list given empty where leaving it out means every one or a set the tool chooses, or a reference to
 something undeclared is rejected when it is read, with every problem listed at once.
 
 **One behaviour everywhere.** Windows, macOS and Linux run the same code path. The

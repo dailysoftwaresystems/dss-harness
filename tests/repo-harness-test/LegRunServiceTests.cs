@@ -687,7 +687,7 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var record = temp.Combine("state", "admission.json");
+        var record = AdmissionRecord(temp);
         var ran = false;
 
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
@@ -698,8 +698,7 @@ public sealed class LegRunServiceTests
             Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 }),
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
-            ran: _ => ran = true,
-            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
+            ran: _ => ran = true);
 
         Assert.Equal(LegExit.NotAdmitted, outcome.ExitCode);
         Assert.False(ran);
@@ -728,7 +727,7 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var record = temp.Combine("state", "admission.json");
+        var record = AdmissionRecord(temp);
         IReadOnlyList<SlotEntry>? during = null;
 
         var outcome = await OutcomeAsync(
@@ -761,8 +760,8 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
-    /// A leg that builds and tests nothing - a repository guard - is light, and starts at once; and a machine that
-    /// declares no admission takes every leg at once, as before. Neither asks for a slot.
+    /// A leg that builds and tests nothing - a copy of the tree, as a repository guard's is - is light, and starts at
+    /// once; and a machine that declares no admission takes every leg at once. Neither asks for a slot.
     /// </summary>
     [Theory]
     [InlineData(false, true)]
@@ -771,27 +770,27 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var record = temp.Combine("state", "admission.json");
+        var record = AdmissionRecord(temp);
 
-        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+        // Every slot the built-in count gives held, so a leg that asked would not be taken.
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"), AdmissionKit.Holder(harness, "another"));
 
         var verdicts = await RunAsync(
             temp,
             harness,
             declared ? Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 }) : OneLeg(harness),
             SshAndLocal(harness),
-            new LegRunRequest(temp.Path, null, Json: true) { Workload = heavy ? Heavy : LegWorkload.Copy },
-            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = heavy ? Heavy : LegWorkload.Copy });
 
         Assert.Equal("passed", verdicts["native"].Verdict);
-        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+        Assert.Equal(["other", "another"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
 
     /// <summary>
     /// A WSL distribution runs on this machine, so this machine takes its heavy legs - by hosts.local's rule, against its
     /// own slots - before dispatching them; an ssh host is a machine of its own, and takes its legs itself, whose line
     /// comes back naming how. Measured: four worktrees' builds on one Windows machine and its distribution drove its commit
-    /// to 81 of 113.7 GB.
+    /// to 81 of 113.7 GiB.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -800,7 +799,7 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var record = temp.Combine("state", "admission.json");
+        var record = AdmissionRecord(temp);
         var asked = false;
 
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
@@ -808,6 +807,8 @@ public sealed class LegRunServiceTests
         var config = new HarnessConfig
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            // Declared for every machine as well, so a leg this machine took that it should not have is refused here.
+            Defaults = new HarnessDefaults { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
             Hosts = new HostsConfig
             {
                 Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
@@ -846,8 +847,7 @@ public sealed class LegRunServiceTests
             config,
             inspector,
             new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
-            hosts: hosts,
-            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
+            hosts: hosts);
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
         var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
@@ -878,7 +878,7 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var record = temp.Combine("state", "admission.json");
+        var record = AdmissionRecord(temp);
         var platform = harness.Platform;
         var ran = false;
 
@@ -889,6 +889,8 @@ public sealed class LegRunServiceTests
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
             Hosts = new HostsConfig
             {
+                // This machine's own rule would refuse the leg too: a distribution sent one asks by neither.
+                Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
                 Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
                 Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree, Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } } },
             },
@@ -901,15 +903,124 @@ public sealed class LegRunServiceTests
             config,
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: true, Here: wsl ? HostId.Wsl("Ubuntu") : HostId.Ssh(HostName)) { Workload = Heavy },
-            ran: _ => ran = true,
-            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
+            ran: _ => ran = true);
 
         Assert.Equal(wsl ? "passed" : "not-admitted", verdicts["native"].Verdict);
         Assert.Equal(wsl, ran);
     }
 
+    /// <summary>
+    /// A heavy leg whose work throws gives its slot back all the same: kept, the process that asked would stay alive,
+    /// and every later heavy leg on the machine - this run's and every other command's - would wait for it in vain.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyLegWhoseWorkThrows_GivesItsSlotBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var config = Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 });
+
+        var thrown = await RunAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
+            ran: _ => throw new InvalidOperationException("the leg's work failed as nothing else does"));
+
+        Assert.Equal("poisoned", thrown["native"].Verdict);
+        Assert.Empty(AdmissionKit.Read(record));
+
+        var again = await RunAsync(temp, harness, config, SshAndLocal(harness), new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy });
+
+        Assert.Equal("passed", again["native"].Verdict);
+    }
+
+    /// <summary>
+    /// A WSL leg this machine took holds this machine's slot for as long as the distribution runs it, and names the
+    /// memory this machine read - the distribution's own figures do not show this machine's memory.
+    /// </summary>
+    [Fact]
+    public async Task AWslLegTakenHere_HoldsItsSlotWhileTheDistributionRunsIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        IReadOnlyList<SlotEntry>? during = null;
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 2 } },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+            },
+            Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            during = AdmissionKit.Read(record);
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(temp, harness, config, inspector, new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy }, hosts: hosts);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        Assert.Equal("passed", leg.GetProperty("verdict").GetString());
+        Assert.Equal("remote", Assert.Single(during!).Leg);
+        Assert.Empty(AdmissionKit.Read(record));
+        Assert.Equal(10, leg.GetProperty("admission").GetProperty("memoryPercent").GetDouble());
+        Assert.Equal(Path.GetFullPath(record), leg.GetProperty("admission").GetProperty("record").GetString());
+    }
+
+    /// <summary>
+    /// A record of the machine's heavy legs that cannot be read refuses the run, naming it: never a leg reported
+    /// not-admitted as though the machine were busy, and never one started as though it were free.
+    /// </summary>
+    [Fact]
+    public async Task ARecordOfTheHeavyLegsThatCannotBeRead_RefusesTheRun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var ran = false;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+        File.WriteAllText(record, "not a record");
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
+            ran: _ => ran = true);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Contains(Path.GetFullPath(record), outcome.Message, StringComparison.Ordinal);
+        Assert.False(ran);
+    }
+
     /// <summary>A leg that builds and tests nothing but is heavy all the same, as a runner saying so makes it.</summary>
     private static LegWorkload Heavy => new(Build: false, Test: false, []) { DeclaredHeavy = true };
+
+    /// <summary>The record of the heavy legs a test's admission keeps: never this machine's own.</summary>
+    private static string AdmissionRecord(TempDirectory temp) => temp.Combine("state", "admission.json");
 
     /// <summary><paramref name="config"/> with admission declared under defaults, or under hosts.local.</summary>
     private static HarnessConfig Admitting(HarnessConfig config, AdmissionSettings? defaults = null, AdmissionSettings? local = null) => new()
@@ -1087,7 +1198,7 @@ public sealed class LegRunServiceTests
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
 
             // Never this machine's own record of its heavy legs: a test's slots are its own.
-            admission ?? AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), new ScriptedGauge(10), new ManualClock()),
+            admission ?? AdmissionKit.Admission(harness, AdmissionRecord(temp), new ScriptedGauge(10), new ManualClock()),
             new KeepAwake(keepAwake ?? new HeldProcesses(), harness.Output),
             developerEnvironments ?? NoDeveloperEnvironment(harness),
             harness.FileSystem,

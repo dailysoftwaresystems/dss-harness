@@ -6,8 +6,8 @@ namespace RepoHarness.Core.FileSystem;
 
 /// <summary>
 /// How every file of state the harness keeps is written and read: the run lock, a log directory's owner, the record of
-/// the copies hosts keep, and what orchestrators and their agents keep. One set of options, so no two of them can come
-/// to read their files by different rules.
+/// the copies hosts keep, the record of the heavy legs admitted onto a machine, and what orchestrators and their agents
+/// keep. One set of options, so no two of them can come to read their files by different rules.
 /// </summary>
 /// <remarks>
 /// A shape this build does not recognise is a hard failure rather than silent data loss, as it is wherever this tool

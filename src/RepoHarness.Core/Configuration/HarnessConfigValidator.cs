@@ -342,7 +342,7 @@ public static partial class HarnessConfigValidator
 
     private static void ValidateCi(CiSettings ci, List<string> problems)
     {
-        RefuseGivenEmpty(ci.Workflows, "ci.workflows", "name the workflow files", "every workflow under .github/workflows", problems);
+        RefuseGivenEmpty(ci.Workflows, "ci.workflows", "name the workflow files", "every workflow directly in .github/workflows", problems);
         RequireRelativePaths(ci.Workflows ?? [], "ci.workflows", problems);
 
         if (ci.LegBudgetMinutes < 0)
@@ -1270,7 +1270,7 @@ public static partial class HarnessConfigValidator
                 problems.Add($"predefined runner '{name}' has a negative stallSeconds");
             }
 
-            // Its build is heavy whatever the runner says, so a file saying otherwise says what nothing does.
+            // Its build is heavy whatever the runner says, so a file saying it is not is refused rather than believed.
             if (runner.Heavy == false && runner.RequireBuild)
             {
                 problems.Add(

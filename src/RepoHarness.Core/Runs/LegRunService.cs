@@ -437,7 +437,7 @@ public sealed class LegRunService(
     }
 
     /// <summary>
-    /// Asks the machine <paramref name="leg"/>'s heavy work runs on to take it, where this process is on that machine,
+    /// Asks the machine <paramref name="leg"/>'s work runs on to take it, where this process is on that machine,
     /// the leg is heavy and the machine declares admission; <see langword="null"/> where any of those is not so.
     /// </summary>
     /// <remarks>

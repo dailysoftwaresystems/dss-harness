@@ -16,8 +16,8 @@ namespace RepoHarness.Core.Runners;
 /// </remarks>
 /// <param name="RunnerName">The predefined runner carrying the entries.</param>
 /// <param name="Legs">
-/// The legs the entries are available on. Empty means the runner declared none, so the scope
-/// narrows to the runner alone; a caller that has resolved the default leg set passes it instead.
+/// The legs the entries are available on. Empty where the runner leaves its legs out and no caller
+/// passed the legs it resolved: the entries then apply on every leg the runner runs.
 /// </param>
 /// <param name="Entries">The expected exceptions the runner declares, in file order.</param>
 public sealed record RunnerScope(

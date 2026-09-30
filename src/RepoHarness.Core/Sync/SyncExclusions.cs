@@ -151,7 +151,7 @@ public sealed class SyncExclusions
     /// <para>
     /// Save for what the harness writes there as it works - each run's records, the record of host copies, each
     /// action's own <c>build</c> and <c>artifacts</c> - where a name neither counts nor is looked for: the run state
-    /// of whichever machine made it, which no sync carries and nobody writes into the tree, and where a busy tree's
+    /// of whichever machine made it, which no sync carries and no one edits by hand, and where a busy tree's
     /// runs pile up. Counted, a fresh worktree's first run - its tree's own <c>build</c> not made yet, an action's
     /// working space already there - was told the <c>build</c> entry <c>init</c> writes protected nothing, and to
     /// write <c>**/build</c>, which would withhold every source directory of that name as well.

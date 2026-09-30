@@ -125,7 +125,7 @@ public sealed class LegVerdictTests
         foreach (var verdict in new[]
                  {
                      LegVerdict.Failed, LegVerdict.Unwitnessed, LegVerdict.InputsMoved, LegVerdict.Unmeasured,
-                     LegVerdict.Contended, LegVerdict.RefusedLocked, LegVerdict.LogHeld, LegVerdict.Poisoned,
+                     LegVerdict.Contended, LegVerdict.RefusedLocked, LegVerdict.NotAdmitted, LegVerdict.LogHeld, LegVerdict.Poisoned,
                  })
         {
             Assert.True(Verdicts.IsFailure(verdict), $"{verdict} counts as a failure");
@@ -158,6 +158,7 @@ public sealed class LegVerdictTests
         Assert.Equal(LegVerdict.SkippedUnavailable, Verdicts.ForRefusal(HarnessExit.HostUnavailable));
         Assert.Equal(LegVerdict.SkippedToolMissing, Verdicts.ForRefusal(HarnessExit.ToolMissing));
         Assert.Equal(LegVerdict.LogHeld, Verdicts.ForRefusal(LegExit.LogHeld));
+        Assert.Equal(LegVerdict.NotAdmitted, Verdicts.ForRefusal(LegExit.NotAdmitted));
         Assert.Equal(LegVerdict.Poisoned, Verdicts.ForRefusal(HarnessExit.InternalError));
     }
 }
