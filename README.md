@@ -58,8 +58,8 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
 | `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again; refused over changes of its own without `--force` |
 | `refresh-agent <o> <a> [<path>...] [--apply]` | Copy the main tree's changes under the paths - the anchor registries' directory by default - into a live agent, recorded as handed to it |
-| `fold-agent <o> <a> [--apply] [--settled <path>]` | Fold an agent's own work into the main tree and apply the rows it filed, all or nothing; its worktree is kept |
-| `delete-agent <o> <a> [--apply] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
+| `fold-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; its worktree is kept |
+| `delete-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
 | `delete-orchestrator <o> [--delete-evidence]` | Delete an orchestrator once every agent of it is deleted |
 | `check-root-litter` | Report files left loose at the root of the checkout, ignored ones included |
@@ -156,7 +156,7 @@ in `config.json`.
 .worktrees/                                  contents ignored, .gitkeep tracked; the worktrees
 .orchestrators/                              contents ignored, .gitkeep tracked; orchestrators and their agents
 .orchestrators/<o>/agent.json                ignored; the orchestrator's record
-.orchestrators/<o>/logs/<name>.jsonl         ignored; a line for each run that reached it or one agent, refusals included
+.orchestrators/<o>/logs/<name>.jsonl         ignored; a line for each run that reached it or one of its agents, refusals included; a dry run writes none
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
 .orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, rows, the rows applied, kept evidence
@@ -298,7 +298,9 @@ dssharness check-anchor-balance --base main
 
 The Status cell (`🟠 OPEN`, `⏳ GATED`, `🔵 DISCLOSED`, `✅ CLOSED`) is the only verdict a
 row carries. Closing an anchor moves its row to the done registry, and
-`check-anchor-balance` fails a change that leaves more open anchors than it found. Run
+`check-anchor-balance` fails a change that leaves more open anchors than it found. A row is
+one line, so a value's line breaks are stored as spaces: a value that would be stored with an
+id or a path cut in two is refused, and so is one that newly cites an id no row holds. Run
 `dssharness help anchors` for the rules.
 
 ## Building from source

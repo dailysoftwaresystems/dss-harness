@@ -117,14 +117,33 @@ public static partial class AnchorCells
     private static readonly string[] LineBreaks =
         ["\r\n", "\r", "\n", "\v", "\f", "\u001c", "\u001d", "\u001e", "\u0085", "\u2028", "\u2029"];
 
-    /// <summary>Collapses every run of whitespace, line breaks included, to one space, and trims.</summary>
-    /// <remarks>For reading a cell and quoting one: never for writing one, which keeps its runs.</remarks>
-    public static string Collapse(string text)
+    /// <summary>A regular expression for one line break, each boundary <see cref="Flatten"/> breaks a value at.</summary>
+    internal static string LineBreakPattern { get; } =
+        "(?:" + string.Join('|', LineBreaks.Select(boundary => string.Concat(boundary.Select(character => $@"\u{(int)character:X4}")))) + ")";
+
+    /// <summary>
+    /// <paramref name="text"/> with each line break <see cref="Flatten"/> breaks a value at written as a line feed, so a
+    /// reader that splits lines at line feeds alone sees every line the value is stored across.
+    /// </summary>
+    /// <param name="text">A value as its author wrote it.</param>
+    internal static string WithLineFeeds(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        return string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return string.Join('\n', text.Split(LineBreaks, StringSplitOptions.None));
     }
+
+    /// <summary>The words of <paramref name="text"/>: what lies between its runs of whitespace, line breaks included.</summary>
+    internal static string[] Words(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        return text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    /// <summary>Collapses every run of whitespace, line breaks included, to one space, and trims.</summary>
+    /// <remarks>For reading a cell and quoting one: never for writing one, which keeps its runs.</remarks>
+    public static string Collapse(string text) => string.Join(' ', Words(text));
 
     /// <summary>Shortens <paramref name="text"/> for a report, collapsed to one line.</summary>
     public static string Excerpt(string text, int length)

@@ -14,6 +14,9 @@ public sealed class AnchorIdRules
 {
     private const int MaximumFallbackIdentityLength = 80;
 
+    /// <summary>One hyphen-separated segment of an id after its prefix, as every reader of an id spells one.</summary>
+    internal const string Segment = "[A-Za-z0-9_]+";
+
     private readonly Regex _mintable;
     private readonly Regex _wellFormed;
     private readonly Regex _token;
@@ -32,11 +35,11 @@ public sealed class AnchorIdRules
         // \z rather than $: $ also matches before a trailing line break, which would let an id
         // carrying one through and break its row in two.
         _mintable = new Regex(
-            $@"^{escaped}-[A-Z0-9_]+(?:-[A-Za-z0-9_]+){{{minimumSegments - 1},}}\z",
+            $@"^{escaped}-[A-Z0-9_]+(?:-{Segment}){{{minimumSegments - 1},}}\z",
             RegexOptions.CultureInvariant);
-        _wellFormed = new Regex($@"^{escaped}-[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*\z", RegexOptions.CultureInvariant);
-        _token = new Regex($@"{escaped}-[A-Za-z0-9_]+(?:[-.][A-Za-z0-9_]+)+", RegexOptions.CultureInvariant);
-        _backticked = new Regex($@"^`{escaped}-[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*`\z", RegexOptions.CultureInvariant);
+        _wellFormed = new Regex($@"^{escaped}-{Segment}(?:-{Segment})*\z", RegexOptions.CultureInvariant);
+        _token = new Regex($@"{escaped}-{Segment}(?:[-.]{Segment})+", RegexOptions.CultureInvariant);
+        _backticked = new Regex($@"^`{escaped}-{Segment}(?:-{Segment})*`\z", RegexOptions.CultureInvariant);
     }
 
     /// <summary>What every id starts with, before its first hyphen.</summary>

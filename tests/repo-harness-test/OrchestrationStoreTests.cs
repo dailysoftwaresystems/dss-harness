@@ -88,4 +88,36 @@ public sealed class OrchestrationStoreTests
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(kit.Layout.SeedFile("ag"), refused.Message);
     }
+
+    /// <summary>
+    /// A record of the rows an agent's folds applied that names a row twice, or declares one with a status or a priority
+    /// that does not read, is refused naming its file: every row it records was one the registries took.
+    /// </summary>
+    [Theory]
+    [InlineData("bogus", "P2", "D-AREA-TOPIC-TWO")]
+    [InlineData("open", "P9", "D-AREA-TOPIC-TWO")]
+    [InlineData("open", "P2", "D-AREA-TOPIC-ONE")]
+    public async Task AnAppliedRowsRecordThatDoesNotRead_IsRefused_NamingItsFile(string status, string priority, string second)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        var file = kit.Layout.AppliedRowsFile("ag");
+
+        string Record(string status, string priority, string second)
+            => "{\n  \"rows\": [\n"
+                + "    { \"id\": \"D-AREA-TOPIC-ONE\", \"status\": \"open\", \"trigger\": \"t\", \"closingWork\": \"c\", \"crossRefs\": \"r\", \"priority\": \"P2\" },\n"
+                + $"    {{ \"id\": \"{second}\", \"status\": \"{status}\", \"trigger\": \"t\", \"closingWork\": \"c\", \"crossRefs\": \"r\", \"priority\": \"{priority}\" }}\n"
+                + "  ]\n}\n";
+
+        File.WriteAllText(file, Record("closed", "P3", "D-AREA-TOPIC-TWO"));
+        Assert.Equal(2, kit.Harness.OrchestrationStore.ReadAppliedRows(kit.Layout, "ag")!.Rows.Count);
+
+        File.WriteAllText(file, Record(status, priority, second));
+
+        var refused = Assert.Throws<HarnessException>(() => kit.Harness.OrchestrationStore.ReadAppliedRows(kit.Layout, "ag"));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(file, refused.Message);
+    }
 }

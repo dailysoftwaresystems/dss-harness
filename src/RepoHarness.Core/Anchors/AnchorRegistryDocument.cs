@@ -30,7 +30,9 @@ public sealed record AnchorDocumentFinding(int LineNumber, AnchorFindingSeverity
 public sealed partial class AnchorRegistryDocument
 {
     /// <summary>The header row every anchor table starts with.</summary>
-    public const string TableHeader = "| Anchor | Priority | Status | Trigger | Closing work | Cross-refs |";
+    public const string TableHeader =
+        $"| {AnchorCellNames.AnchorHeading} | {AnchorCellNames.PriorityHeading} | {AnchorCellNames.StatusHeading} | "
+        + $"{AnchorCellNames.TriggerHeading} | {AnchorCellNames.ClosingHeading} | {AnchorCellNames.CrossRefsHeading} |";
 
     /// <summary>The separator row written under a new table's header.</summary>
     public const string SeparatorRow = "|---|---|---|---|---|---|";

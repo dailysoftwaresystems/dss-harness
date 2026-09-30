@@ -673,7 +673,7 @@ public sealed class AnchorRegistryServiceTests
     }
 
     /// <summary>
-    /// A batch writes a new id's row, changes an existing row in the cells that differ only - a cell already as declared
+    /// A batch writes a new row named new, changes an existing row in the cells that differ only - a cell already as declared
     /// keeps its stored bytes, runs of spaces and all - and leaves a row already as declared alone.
     /// </summary>
     [Fact]
@@ -687,12 +687,14 @@ public sealed class AnchorRegistryServiceTests
 
         var batch = await harness.AnchorRegistryService.ApplyAsync(
             temp.Path,
+            new AnchorBatchRequest(
             [
                 Declared(One, "open", "work"),
                 Declared(Two, "gated", "keep  these   runs"),
                 Declared(Three, "open", "new work") with { Priority = "P2" },
-            ],
-            dryRun: false,
+            ])
+            { New = [Three] },
+            AnchorBatchMode.Apply,
             cancellationToken);
 
         Assert.True(batch.Succeeded, string.Join("; ", batch.Problems));
@@ -714,7 +716,7 @@ public sealed class AnchorRegistryServiceTests
         var harness = await PrepareAsync(temp);
         await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
 
-        var batch = await harness.AnchorRegistryService.ApplyAsync(temp.Path, [Declared(One, "closed", "work")], dryRun: false, cancellationToken);
+        var batch = await harness.AnchorRegistryService.ApplyAsync(temp.Path, new AnchorBatchRequest([Declared(One, "closed", "work")]), AnchorBatchMode.Apply, cancellationToken);
 
         Assert.True(batch.Succeeded, string.Join("; ", batch.Problems));
         Assert.True(batch.Rows[0].Change.Moved);
@@ -724,7 +726,7 @@ public sealed class AnchorRegistryServiceTests
 
     /// <summary>
     /// Every row is checked before any is written, and every one refused is named: one bad row writes none of them, and a
-    /// dry run writes nothing at all.
+    /// plan writes nothing at all.
     /// </summary>
     [Fact]
     public async Task ApplyAsync_ChecksEveryRowFirst_AndWritesNoneWhenOneIsRefused()
@@ -738,10 +740,14 @@ public sealed class AnchorRegistryServiceTests
 
         var refused = await harness.AnchorRegistryService.ApplyAsync(
             temp.Path,
-            [Declared(Three, "open", "work") with { Priority = "P2" }, Declared(One, "bogus", "work"), Declared("D-AREA-TOPIC-FOUR", "open", "work")],
-            dryRun: false,
+            new AnchorBatchRequest([Declared(Three, "open", "work") with { Priority = "P2" }, Declared(One, "bogus", "work"), Declared("D-AREA-TOPIC-FOUR", "open", "work")])
+            {
+                New = [Three, "D-AREA-TOPIC-FOUR"],
+            },
+            AnchorBatchMode.Apply,
             cancellationToken);
-        var dry = await harness.AnchorRegistryService.ApplyAsync(temp.Path, [Declared(Three, "open", "work") with { Priority = "P2" }], dryRun: true, cancellationToken);
+        var dry = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, new AnchorBatchRequest([Declared(Three, "open", "work") with { Priority = "P2" }]) { New = [Three] }, AnchorBatchMode.Plan, cancellationToken);
 
         Assert.False(refused.Succeeded);
         Assert.Collection(
@@ -776,8 +782,8 @@ public sealed class AnchorRegistryServiceTests
 
         var batch = await crashing.ApplyAsync(
             temp.Path,
-            [Declared(Three, "open", "work") with { Priority = "P2" }, Declared(One, "closed", "work")],
-            dryRun: false,
+            new AnchorBatchRequest([Declared(Three, "open", "work") with { Priority = "P2" }, Declared(One, "closed", "work")]) { New = [Three] },
+            AnchorBatchMode.Apply,
             cancellationToken);
 
         Assert.False(batch.Succeeded);
@@ -798,15 +804,419 @@ public sealed class AnchorRegistryServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareAsync(temp);
-        AnchorRowDeclaration[] rows = [new(Three, "open", "a | b", "x || y", "z|w") { Priority = "P2" }];
+        var rows = new AnchorBatchRequest([new(Three, "open", "a | b", "x || y", "z|w") { Priority = "P2" }]) { New = [Three] };
 
-        var first = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, dryRun: false, cancellationToken);
-        var again = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, dryRun: false, cancellationToken);
+        var first = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, AnchorBatchMode.Apply, cancellationToken);
+        var again = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, AnchorBatchMode.Apply, cancellationToken);
 
         Assert.True(first.Succeeded, first.Failure ?? string.Join("; ", first.Problems));
         Assert.Equal("a | b", Assert.Single(Rows(harness, PendingPath(temp))).Trigger);
         Assert.True(again.Succeeded, again.Failure ?? string.Join("; ", again.Problems));
         Assert.Equal(AnchorRowAction.AlreadyIn, Assert.Single(again.Rows).Action);
+    }
+
+    /// <summary>
+    /// write-anchor and set-anchor refuse a cell they would store cut - an id broken at a line, a path broken after its
+    /// '/' - and write nothing: the cut is the door's own rule, so the door is where it is seen.
+    /// </summary>
+    [Fact]
+    public async Task EveryWrite_RefusesACellItWouldStoreCut_AndWritesNothing()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        var before = File.ReadAllText(PendingPath(temp));
+
+        var written = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.WriteAsync(
+            temp.Path, new AnchorWriteRequest(Two, "P1", "cites D-AREA-\nTOPIC-ONE across a line"), dryRun: false, cancellationToken));
+        var set = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.SetAsync(
+            temp.Path, new AnchorSetRequest(One) { ClosingWork = "see src/hir/\ntest_x.cpp for the case" }, dryRun: false, cancellationToken));
+
+        Assert.Equal(HarnessExit.UsageError, written.ExitCode);
+        Assert.StartsWith("The Trigger holds an anchor id cut where a line ends ('D-AREA-')", written.Message);
+        Assert.Equal(HarnessExit.UsageError, set.ExitCode);
+        Assert.StartsWith(@"The Closing work holds a path broken across a line after a '/' ('src/hir/\ntest_x.cpp')", set.Message);
+        Assert.Equal(before, File.ReadAllText(PendingPath(temp)));
+    }
+
+    /// <summary>
+    /// A write that newly cites an id no row holds is refused, naming it; a row it cites that is there, and a family of ids,
+    /// pass. A citation the stored cell already made is history, and is not judged again when the cell is rewritten.
+    /// </summary>
+    [Fact]
+    public async Task EveryWrite_RefusesANewCitationOfNoRow_ButNeverJudgesOneAlreadyStored()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(
+            temp.Path, Anchor(Two) with { CrossRefs = $"after {One}, and the D-AREA-TOPIC-SUB-* family" }, dryRun: false, cancellationToken);
+        File.WriteAllText(PendingPath(temp), File.ReadAllText(PendingPath(temp)).Replace($"| after {One},", "| after D-RETIRED-HARNESS-ROW,", StringComparison.Ordinal));
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.WriteAsync(
+            temp.Path, Anchor(Three) with { CrossRefs = "[[D-PROBE-NO-SUCH-ROW-ANYWHERE]]" }, dryRun: false, cancellationToken));
+        await harness.AnchorRegistryService.SetAsync(
+            temp.Path, new AnchorSetRequest(Two) { CrossRefs = "after D-RETIRED-HARNESS-ROW, and now more" }, dryRun: false, cancellationToken);
+        var added = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.SetAsync(
+            temp.Path, new AnchorSetRequest(Two) { CrossRefs = "after D-RETIRED-HARNESS-ROW and D-AREA-TOPIC-NOWHERE" }, dryRun: false, cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith($"'{Three}' cites D-PROBE-NO-SUCH-ROW-ANYWHERE in its Cross-refs, which no row of either registry holds: write the row it names first", refused.Message);
+        Assert.Equal(HarnessExit.Refused, added.ExitCode);
+        Assert.StartsWith($"'{Two}' cites D-AREA-TOPIC-NOWHERE in its Cross-refs, which no row", added.Message);
+        Assert.Equal("after D-RETIRED-HARNESS-ROW, and now more", Rows(harness, PendingPath(temp)).Single(row => row.Id == Two).CrossRefs);
+    }
+
+    /// <summary>
+    /// A batch makes only the rows named new: an id no registry holds that nobody named - here a typo of an existing row's
+    /// id, closing it - is refused with the rows that begin the same way, and nothing is written. Named new, it is made.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_MakesOnlyTheRowsNamedNew_RefusingATypoOfAnExistingId()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        var typo = new AnchorBatchRequest([Declared("D-AREA-TOPIC-ONR", "closed", "work") with { Priority = "P2" }]);
+        var done = File.ReadAllText(DonePath(temp));
+
+        var refused = await harness.AnchorRegistryService.ApplyAsync(temp.Path, typo, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.Equal(
+            "D-AREA-TOPIC-ONR: 'D-AREA-TOPIC-ONR' has no row in either registry, and it was not named new: a typo in an existing row's id would make "
+            + $"it a second row. If it is a new row, pass --new D-AREA-TOPIC-ONR; rows that begin the same way: {One}.",
+            Assert.Single(refused.Problems));
+        Assert.Equal(done, File.ReadAllText(DonePath(temp)));
+
+        var made = await harness.AnchorRegistryService.ApplyAsync(temp.Path, typo with { New = ["D-AREA-TOPIC-ONR"] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.True(made.Succeeded, string.Join("; ", made.Problems));
+        Assert.Equal(["D-AREA-TOPIC-ONR"], Rows(harness, DonePath(temp)).Select(row => row.Id));
+    }
+
+    /// <summary>
+    /// A row not named new is refused for everything else wrong with it beside that, so one run shows what there is to
+    /// correct rather than one thing at a time.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_NamesEveryRefusalOfARowNotNamedNew_AtOnce()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+
+        var refused = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, new AnchorBatchRequest([new(Three, "open", "cites D-AREA-\nTOPIC-ONE", "work", "refs")]), AnchorBatchMode.Plan, cancellationToken);
+
+        Assert.Collection(
+            refused.Problems,
+            problem => Assert.StartsWith($"{Three}: '{Three}' has no row in either registry, and it was not named new", problem),
+            problem => Assert.StartsWith($"{Three}: '{Three}' has no row yet, and a new anchor needs a priority", problem),
+            problem => Assert.StartsWith($"{Three}: The Trigger holds an anchor id cut where a line ends ('D-AREA-')", problem));
+    }
+
+    /// <summary>
+    /// A row named new that a registry holds other than as declared is refused; one standing exactly as declared - the
+    /// batch's own, made before - is already in. A name, or an acceptance of a loss, that matches nothing is refused.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_RefusesANameThatDoesNotFit_AndOneThatMatchesNothing()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+
+        var differs = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, new AnchorBatchRequest([Declared(One, "gated", "work")]) { New = [One] }, AnchorBatchMode.Plan, cancellationToken);
+        var madeBefore = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, new AnchorBatchRequest([Declared(One, "open", "work")]) { New = [One], AcceptLost = [new(One, "closing")] }, AnchorBatchMode.Apply, cancellationToken);
+        var stale = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([Declared(One, "open", "work and more")]) { New = ["D-AREA-TOPIC-NINE"], AcceptLost = [new(One, "closing")] },
+            AnchorBatchMode.Plan,
+            cancellationToken);
+
+        Assert.StartsWith($"{One}: '{One}' was named new, but .plans/_deferred-anchor-registry.md:", Assert.Single(differs.Problems));
+        Assert.True(madeBefore.Succeeded, string.Join("; ", madeBefore.Problems));
+        Assert.Equal(AnchorRowAction.AlreadyIn, Assert.Single(madeBefore.Rows).Action);
+        Assert.Equal(
+            [
+                "--new D-AREA-TOPIC-NINE names no row of the batch: drop it, or correct the id.",
+                $"--accept-lost {One}:closing names a cell that keeps its stored text here: drop it, or correct it.",
+            ],
+            stale.Problems);
+    }
+
+    /// <summary>
+    /// A cell whose stored text would not survive is shown with its word diff when a batch is planned, refused when it is
+    /// checked or applied, and written once accepted; an addendum that keeps the stored text needs no acceptance.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_ShowsALosingCellWhenPlanned_RefusesItUntilAccepted_AndLetsAnAddendumThrough()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
+        var losing = new AnchorBatchRequest([Declared(One, "open", "a different plan"), Declared(Two, "open", "work and the test that proves it")]);
+        var before = File.ReadAllText(PendingPath(temp));
+
+        var planned = await harness.AnchorRegistryService.ApplyAsync(temp.Path, losing, AnchorBatchMode.Plan, cancellationToken);
+        var checkedBatch = await harness.AnchorRegistryService.ApplyAsync(temp.Path, losing, AnchorBatchMode.Check, cancellationToken);
+        var refused = await harness.AnchorRegistryService.ApplyAsync(temp.Path, losing, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.True(planned.Succeeded, string.Join("; ", planned.Problems));
+        Assert.Equal(new AnchorLostCell(new AnchorRowCell(One, "closing"), "[-work-] {+a different plan+}", Accepted: false), Assert.Single(planned.Rows[0].Lost));
+        Assert.Empty(planned.Rows[1].Lost);
+        Assert.Equal(
+            $"{One}: its closing does not keep its stored text word for word - [-work-] {{+a different plan+}} - so it is written only with --accept-lost {One}:closing.",
+            Assert.Single(checkedBatch.Problems));
+        Assert.Equal(checkedBatch.Problems, refused.Problems);
+        Assert.Equal(before, File.ReadAllText(PendingPath(temp)));
+
+        var accepted = await harness.AnchorRegistryService.ApplyAsync(temp.Path, losing with { AcceptLost = [new(One, "closing")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.True(accepted.Succeeded, string.Join("; ", accepted.Problems));
+        Assert.True(Assert.Single(accepted.Rows[0].Lost).Accepted);
+        Assert.Equal(["a different plan", "work and the test that proves it"], Rows(harness, PendingPath(temp)).Select(row => row.ClosingWork));
+    }
+
+    /// <summary>
+    /// Rows applied together may cite one another, new rows among them; a citation of a row neither the registries nor the
+    /// batch holds is refused.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_LetsRowsOfOneBatchCiteOneAnother_AndRefusesACitationOfNoRow()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        const string Four = "D-AREA-TOPIC-FOUR";
+        AnchorRowDeclaration[] rows =
+        [
+            new(Three, "open", $"waits on {Four}", "work", "refs") { Priority = "P2" },
+            new(Four, "open", "found first", "work", $"[[{Three}]]") { Priority = "P2" },
+        ];
+
+        var together = await harness.AnchorRegistryService.ApplyAsync(temp.Path, new AnchorBatchRequest(rows) { New = [Three, Four] }, AnchorBatchMode.Plan, cancellationToken);
+        var nowhere = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([rows[0] with { Trigger = "waits on D-AREA-TOPIC-NOWHERE" }]) { New = [Three] },
+            AnchorBatchMode.Plan,
+            cancellationToken);
+
+        Assert.True(together.Succeeded, string.Join("; ", together.Problems));
+        Assert.StartsWith(
+            $"{Three}: '{Three}' cites D-AREA-TOPIC-NOWHERE in its Trigger, which no row of either registry holds, nor any row of the batch",
+            Assert.Single(nowhere.Problems));
+    }
+
+    /// <summary>
+    /// How the registries hold rows other than as declared is read as they are, held to no rule a write is held to: a
+    /// row declared with a value no write would take now - a path cut in two - still compares as the row it is.
+    /// </summary>
+    [Fact]
+    public async Task DifferencesAsync_SaysHowEachRowIsHeldOtherThanDeclared_WhateverAWriteWouldRefuse()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
+        File.WriteAllText(PendingPath(temp), File.ReadAllText(PendingPath(temp)).Replace($"| trigger for {Two} | work |", $"| trigger for {Two} | see src/ main_x.c |", StringComparison.Ordinal));
+
+        var differences = await harness.AnchorRegistryService.DifferencesAsync(
+            temp.Path,
+            [
+                new(One, "gated", $"trigger for {One}", "work", "refs"),
+                new(Two, "open", $"trigger for {Two}", "see src/\nmain_x.c", "refs"),
+                new(Three, "open", "t", "c", "r"),
+            ],
+            cancellationToken);
+
+        Assert.Equal(
+            [
+                new AnchorDifference(One, $"its status is '{AnchorStatus.Render(AnchorState.Open)}'"),
+                new AnchorDifference(Three, "it has no row in either registry"),
+            ],
+            differences);
+    }
+
+    /// <summary>
+    /// A write reads what a cell cites as check-anchor-citations reads it: an id of two segments after the prefix is a
+    /// citation, as is one written straight after an escape such as <c>\n</c>, and each is refused where no row holds it.
+    /// </summary>
+    [Fact]
+    public async Task EveryWrite_ReadsACitationAsCheckAnchorCitationsReadsOne()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+
+        var shortOne = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.WriteAsync(
+            temp.Path, Anchor(One) with { CrossRefs = "see D-HIR-LOWERNIG" }, dryRun: true, cancellationToken));
+        var escaped = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.WriteAsync(
+            temp.Path, Anchor(One) with { ClosingWork = "prints << \"\\nD-AREA-TOPIC-NOWHERE: failed\"" }, dryRun: true, cancellationToken));
+
+        Assert.StartsWith($"'{One}' cites D-HIR-LOWERNIG in its Cross-refs, which no row", shortOne.Message);
+        Assert.StartsWith($"'{One}' cites D-AREA-TOPIC-NOWHERE in its Closing work, which no row", escaped.Message);
+    }
+
+    /// <summary>
+    /// A path with a space after a '/' is a cut where it starts at a directory the tree has at its top, read as the write
+    /// runs: before the tree has 'src', the same text passes.
+    /// </summary>
+    [Fact]
+    public async Task EveryWrite_RefusesAPathSpacedAfterATopDirectory_OnlyWhereTheTreeHasOne()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var request = new AnchorWriteRequest(One, "P1", "see src/ main_x.c for the case");
+
+        var passed = await harness.AnchorRegistryService.WriteAsync(temp.Path, request, dryRun: true, cancellationToken);
+        Directory.CreateDirectory(temp.Combine("src"));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.WriteAsync(temp.Path, request, dryRun: true, cancellationToken));
+
+        Assert.True(passed.IsNew);
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.StartsWith("The Trigger holds a path with a space after a '/' ('src/ main_x.c', as it would be stored)", refused.Message);
+    }
+
+    /// <summary>
+    /// set-anchor judges each prose cell it rewrites: a Cross-refs cut, and a new citation of no row in its Trigger or its
+    /// Closing work, are each refused naming the cell. A row of the done registry resolves a citation as a row of the
+    /// pending one does.
+    /// </summary>
+    [Fact]
+    public async Task SetAnchor_JudgesEveryProseCellItRewrites_AndARowOfEitherRegistryResolves()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Three, "closed"), dryRun: false, cancellationToken);
+
+        Task<HarnessException> Refused(AnchorSetRequest request) => Assert.ThrowsAsync<HarnessException>(() => harness.AnchorRegistryService.SetAsync(temp.Path, request, dryRun: true, cancellationToken));
+
+        var cut = await Refused(new AnchorSetRequest(One) { CrossRefs = "see tests/hir/\ntest_x.cpp" });
+        var trigger = await Refused(new AnchorSetRequest(One) { Trigger = "waits on D-AREA-TOPIC-NOWHERE" });
+        var closing = await Refused(new AnchorSetRequest(One) { ClosingWork = "after D-AREA-TOPIC-NOWHERE" });
+        var resolved = await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { CrossRefs = $"closed by {Three}" }, dryRun: true, cancellationToken);
+
+        Assert.StartsWith("The Cross-refs holds a path broken across a line after a '/'", cut.Message);
+        Assert.StartsWith($"'{One}' cites D-AREA-TOPIC-NOWHERE in its Trigger, which no row", trigger.Message);
+        Assert.StartsWith($"'{One}' cites D-AREA-TOPIC-NOWHERE in its Closing work, which no row", closing.Message);
+        Assert.Equal(["cross-refs"], resolved.Fields.Select(field => field.Field));
+    }
+
+    /// <summary>
+    /// Every refusal of a changed row is named at once - a cut, a citation of no row, and the loss of stored text a check
+    /// refuses - and an acceptance of a loss is not called stale for a row refused before its loss could be judged.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_NamesEveryRefusalOfAChangedRowAtOnce_AndNeverCallsAnUnjudgedAcceptanceStale()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+
+        var everything = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([new(One, "open", $"trigger for {One}", "a different plan, see D-AREA-\nTOPIC-TWO", "refs [[D-AREA-TOPIC-NOWHERE]]")]),
+            AnchorBatchMode.Check,
+            cancellationToken);
+        var unread = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([Declared(One, "bogus", "a different plan")]) { AcceptLost = [new(One, "closing")] },
+            AnchorBatchMode.Check,
+            cancellationToken);
+
+        Assert.Collection(
+            everything.Problems,
+            problem => Assert.StartsWith($"{One}: The Closing work holds an anchor id cut where a line ends ('D-AREA-')", problem),
+            problem => Assert.StartsWith($"{One}: '{One}' cites D-AREA-TOPIC-NOWHERE in its Cross-refs", problem),
+            problem => Assert.StartsWith($"{One}: its closing does not keep its stored text word for word - [-work-] {{+a different plan, see D-AREA- TOPIC-TWO+}}", problem));
+        Assert.Equal([$"{One}: 'bogus' is not a status. Use one of {string.Join(", ", AnchorStatus.Words)}."], unread.Problems);
+    }
+
+    /// <summary>
+    /// A cell filled where it was empty, or respaced with its words kept, needs no acceptance; one emptied loses what it
+    /// held, shown as removed, and is written only once accepted. Each lost cell of a row needs its own acceptance.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_LetsAFillOrARespacingThrough_AndHoldsEveryLostCellToItsOwnAcceptance()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One) with { ClosingWork = null }, dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two) with { ClosingWork = "keep  these   runs" }, dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Three), dryRun: false, cancellationToken);
+        var rows = new AnchorBatchRequest(
+        [
+            Declared(One, "open", "the fix"),
+            Declared(Two, "open", "keep these runs"),
+            new(Three, "open", "another trigger", string.Empty, "refs"),
+        ]);
+
+        var checkedBatch = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows, AnchorBatchMode.Check, cancellationToken);
+        var half = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows with { AcceptLost = [new(Three, "closing")] }, AnchorBatchMode.Check, cancellationToken);
+        var accepted = await harness.AnchorRegistryService.ApplyAsync(temp.Path, rows with { AcceptLost = [new(Three, "closing"), new(Three, "trigger")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.Collection(
+            checkedBatch.Problems,
+            problem => Assert.StartsWith($"{Three}: its trigger does not keep its stored text word for word", problem),
+            problem => Assert.StartsWith($"{Three}: its closing does not keep its stored text word for word - [-work-] - so", problem));
+        Assert.StartsWith($"{Three}: its trigger does not keep", Assert.Single(half.Problems));
+        Assert.True(accepted.Succeeded, string.Join("; ", accepted.Problems));
+        Assert.Equal([string.Empty, string.Empty], accepted.Rows.Take(2).Select(row => string.Concat(row.Lost.Select(cell => cell.Diff))));
+        Assert.Equal(["the fix", "keep these runs", string.Empty], Rows(harness, PendingPath(temp)).Select(row => row.ClosingWork));
+    }
+
+    /// <summary>An acceptance of a loss in a batch of no rows is refused as the typo it is, never dropped unseen.</summary>
+    [Fact]
+    public async Task ApplyAsync_OfNoRows_StillRefusesAnAcceptanceOfNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = await PrepareAsync(temp);
+
+        var batch = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path, new AnchorBatchRequest([]) { AcceptLost = [new(One, "closing")] }, AnchorBatchMode.Plan, TestContext.Current.CancellationToken);
+
+        Assert.Equal([$"--accept-lost {One}:closing names a cell that keeps its stored text here: drop it, or correct it."], batch.Problems);
+    }
+
+    /// <summary>
+    /// A row an id has twice is said to have two, and a declaration whose status does not read is said to differ as such:
+    /// comparing holds a row to no rule a write is held to, and refuses nothing.
+    /// </summary>
+    [Fact]
+    public async Task DifferencesAsync_SaysATwiceHeldRow_AndADeclarationThatDoesNotRead_WithoutRefusingEither()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
+        var line = File.ReadAllLines(PendingPath(temp)).Single(text => text.Contains($"`{One}`", StringComparison.Ordinal));
+        var done = File.ReadAllText(DonePath(temp));
+        File.WriteAllText(DonePath(temp), (done.EndsWith('\n') ? done : done + "\n") + line + "\n");
+
+        var differences = await harness.AnchorRegistryService.DifferencesAsync(temp.Path, [Declared(One, "open", "work"), Declared(Two, "bogus", "work")], cancellationToken);
+
+        Assert.Equal(
+            [
+                new AnchorDifference(One, "it has 2 rows"),
+                new AnchorDifference(Two, "what was declared of it, status 'bogus' and priority '', does not read as a row"),
+            ],
+            differences);
     }
 
     private static AnchorRowDeclaration Declared(string id, string status, string closing)

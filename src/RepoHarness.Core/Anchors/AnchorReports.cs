@@ -32,7 +32,7 @@ public static class AnchorReports
 
         if (change.IsNew)
         {
-            details.Add($"{"status",-11} (new) -> {change.StatusAfter}");
+            details.Add($"{AnchorCellNames.Status,-11} (new) -> {change.StatusAfter}");
             details.Add($"{"registry",-11} (new) -> {change.To.RelativePath}");
         }
         else if (change.Moved)
@@ -164,13 +164,13 @@ public static class AnchorReports
             $"priority    : {Unset(row.Priority)}",
             $"status      : {Unset(row.Status)}   -> {(row.IsClosed ? "CLOSED" : "OPEN")}",
             string.Empty,
-            "Trigger:",
+            $"{AnchorCellNames.TriggerHeading}:",
             $"  {Empty(row.Trigger)}",
             string.Empty,
-            "Closing work:",
+            $"{AnchorCellNames.ClosingHeading}:",
             $"  {Empty(row.ClosingWork)}",
             string.Empty,
-            "Cross-refs:",
+            $"{AnchorCellNames.CrossRefsHeading}:",
             $"  {Empty(row.CrossRefs)}",
         ];
     }

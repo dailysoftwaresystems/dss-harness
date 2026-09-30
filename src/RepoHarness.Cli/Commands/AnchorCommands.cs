@@ -86,41 +86,41 @@ internal static class WriteAnchorCommand
     /// twin, and a parser-level requirement would refuse the file form before the command ever ran.
     /// The requirement is enforced after both options are read, and reports the same usage code.
     /// </summary>
-    private static readonly Option<string?> PriorityOption = new("--priority")
+    private static readonly Option<string?> PriorityOption = new(AnchorCellNames.OptionOf(AnchorCellNames.Priority))
     {
         Description = "P0, the most urgent, to P5.",
     };
 
-    private static readonly Option<string?> PriorityFileOption = AnchorCellArguments.FileFor("--priority", "priority");
+    private static readonly Option<string?> PriorityFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.Priority), AnchorCellNames.Priority);
 
-    private static readonly Option<string?> TriggerOption = new("--trigger")
+    private static readonly Option<string?> TriggerOption = new(AnchorCellNames.OptionOf(AnchorCellNames.Trigger))
     {
         Description = "What is wrong, and what would make it worth doing now.",
     };
 
-    private static readonly Option<string?> TriggerFileOption = AnchorCellArguments.FileFor("--trigger", "Trigger");
+    private static readonly Option<string?> TriggerFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.Trigger), AnchorCellNames.TriggerHeading);
 
-    private static readonly Option<string?> StatusOption = new("--status")
+    private static readonly Option<string?> StatusOption = new(AnchorCellNames.OptionOf(AnchorCellNames.Status))
     {
         Description = "open, gated, disclosed or closed. A closed anchor is filed in the done registry.",
         DefaultValueFactory = _ => "open",
     };
 
-    private static readonly Option<string?> StatusFileOption = AnchorCellArguments.FileFor("--status", "status");
+    private static readonly Option<string?> StatusFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.Status), AnchorCellNames.Status);
 
-    private static readonly Option<string?> ClosingOption = new("--closing")
+    private static readonly Option<string?> ClosingOption = new(AnchorCellNames.OptionOf(AnchorCellNames.Closing))
     {
         Description = "What remains to be done to close it.",
     };
 
-    private static readonly Option<string?> ClosingFileOption = AnchorCellArguments.FileFor("--closing", "Closing work");
+    private static readonly Option<string?> ClosingFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.Closing), AnchorCellNames.ClosingHeading);
 
-    private static readonly Option<string?> CrossRefsOption = new("--cross-refs")
+    private static readonly Option<string?> CrossRefsOption = new(AnchorCellNames.OptionOf(AnchorCellNames.CrossRefs))
     {
         Description = "Where it is cited, and related anchors.",
     };
 
-    private static readonly Option<string?> CrossRefsFileOption = AnchorCellArguments.FileFor("--cross-refs", "Cross-refs");
+    private static readonly Option<string?> CrossRefsFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.CrossRefs), AnchorCellNames.CrossRefsHeading);
 
     private static readonly Option<bool> DryRunOption = new("--anchor-dry-run")
     {
@@ -153,12 +153,12 @@ internal static class WriteAnchorCommand
 
             var request = new AnchorWriteRequest(
                 arguments.GetRequiredValue(IdArgument),
-                AnchorCellArguments.Require(context, "priority", PriorityOption, PriorityFileOption),
-                AnchorCellArguments.Require(context, "Trigger", TriggerOption, TriggerFileOption))
+                AnchorCellArguments.Require(context, AnchorCellNames.Priority, PriorityOption, PriorityFileOption),
+                AnchorCellArguments.Require(context, AnchorCellNames.TriggerHeading, TriggerOption, TriggerFileOption))
             {
-                Status = AnchorCellArguments.Read(context, "status", StatusOption, StatusFileOption) ?? "open",
-                ClosingWork = AnchorCellArguments.Read(context, "Closing work", ClosingOption, ClosingFileOption),
-                CrossRefs = AnchorCellArguments.Read(context, "Cross-refs", CrossRefsOption, CrossRefsFileOption),
+                Status = AnchorCellArguments.Read(context, AnchorCellNames.Status, StatusOption, StatusFileOption) ?? "open",
+                ClosingWork = AnchorCellArguments.Read(context, AnchorCellNames.ClosingHeading, ClosingOption, ClosingFileOption),
+                CrossRefs = AnchorCellArguments.Read(context, AnchorCellNames.CrossRefsHeading, CrossRefsOption, CrossRefsFileOption),
             };
 
             var change = await context.Get<IAnchorRegistryService>()
@@ -186,40 +186,40 @@ internal static class SetAnchorCommand
 
     private static readonly Option<bool> DoneOption = AnchorScopeOptions.Done("Look for the anchor in the done registry only.");
 
-    private static readonly Option<string?> PriorityOption = new("--priority")
+    private static readonly Option<string?> PriorityOption = new(AnchorCellNames.OptionOf(AnchorCellNames.Priority))
     {
         Description = "A new priority: P0, the most urgent, to P5.",
     };
 
-    private static readonly Option<string?> PriorityFileOption = AnchorCellArguments.FileFor("--priority", "priority");
+    private static readonly Option<string?> PriorityFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.Priority), AnchorCellNames.Priority);
 
-    private static readonly Option<string?> StatusOption = new("--status")
+    private static readonly Option<string?> StatusOption = new(AnchorCellNames.OptionOf(AnchorCellNames.Status))
     {
         Description = "A new status: open, gated, disclosed or closed. Closing an anchor moves it to the done registry; any other status moves it back to pending.",
     };
 
-    private static readonly Option<string?> StatusFileOption = AnchorCellArguments.FileFor("--status", "status");
+    private static readonly Option<string?> StatusFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.Status), AnchorCellNames.Status);
 
-    private static readonly Option<string?> TriggerOption = new("--trigger")
+    private static readonly Option<string?> TriggerOption = new(AnchorCellNames.OptionOf(AnchorCellNames.Trigger))
     {
         Description = "Replace the Trigger cell.",
     };
 
-    private static readonly Option<string?> TriggerFileOption = AnchorCellArguments.FileFor("--trigger", "Trigger");
+    private static readonly Option<string?> TriggerFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.Trigger), AnchorCellNames.TriggerHeading);
 
-    private static readonly Option<string?> ClosingOption = new("--closing")
+    private static readonly Option<string?> ClosingOption = new(AnchorCellNames.OptionOf(AnchorCellNames.Closing))
     {
         Description = "Replace the Closing work cell.",
     };
 
-    private static readonly Option<string?> ClosingFileOption = AnchorCellArguments.FileFor("--closing", "Closing work");
+    private static readonly Option<string?> ClosingFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.Closing), AnchorCellNames.ClosingHeading);
 
-    private static readonly Option<string?> CrossRefsOption = new("--cross-refs")
+    private static readonly Option<string?> CrossRefsOption = new(AnchorCellNames.OptionOf(AnchorCellNames.CrossRefs))
     {
         Description = "Replace the Cross-refs cell.",
     };
 
-    private static readonly Option<string?> CrossRefsFileOption = AnchorCellArguments.FileFor("--cross-refs", "Cross-refs");
+    private static readonly Option<string?> CrossRefsFileOption = AnchorCellArguments.FileFor(AnchorCellNames.OptionOf(AnchorCellNames.CrossRefs), AnchorCellNames.CrossRefsHeading);
 
     private static readonly Option<bool> DryRunOption = new("--anchor-dry-run")
     {
@@ -255,11 +255,11 @@ internal static class SetAnchorCommand
             var request = new AnchorSetRequest(arguments.GetRequiredValue(IdArgument))
             {
                 Scope = AnchorScopeOptions.Read(arguments, PendingOption, DoneOption),
-                Priority = AnchorCellArguments.Read(context, "priority", PriorityOption, PriorityFileOption),
-                Status = AnchorCellArguments.Read(context, "status", StatusOption, StatusFileOption),
-                Trigger = AnchorCellArguments.Read(context, "Trigger", TriggerOption, TriggerFileOption),
-                ClosingWork = AnchorCellArguments.Read(context, "Closing work", ClosingOption, ClosingFileOption),
-                CrossRefs = AnchorCellArguments.Read(context, "Cross-refs", CrossRefsOption, CrossRefsFileOption),
+                Priority = AnchorCellArguments.Read(context, AnchorCellNames.Priority, PriorityOption, PriorityFileOption),
+                Status = AnchorCellArguments.Read(context, AnchorCellNames.Status, StatusOption, StatusFileOption),
+                Trigger = AnchorCellArguments.Read(context, AnchorCellNames.TriggerHeading, TriggerOption, TriggerFileOption),
+                ClosingWork = AnchorCellArguments.Read(context, AnchorCellNames.ClosingHeading, ClosingOption, ClosingFileOption),
+                CrossRefs = AnchorCellArguments.Read(context, AnchorCellNames.CrossRefsHeading, CrossRefsOption, CrossRefsFileOption),
             };
 
             var change = await context.Get<IAnchorRegistryService>()

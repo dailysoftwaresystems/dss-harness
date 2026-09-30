@@ -549,7 +549,8 @@ those paths against what the fold left, never against the base: the agent puttin
 to fold. A refusal of a changed main-tree path says whether a commit or an uncommitted edit changed it, since the two
 are reconciled differently. A deletion needs the same baseline proof a copy does. A path reached through a link in
 either tree, a directory - a submodule, a repository of the agent's own - and a HEAD moved past the base are
-refused. `--settled` is the one way out of an all-or-nothing refusal, asked before the deletion branch so a
+refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
+against the registry the fold would otherwise have written over. `--settled` is the one way out of a path's refusal, asked before the deletion branch so a
 deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. A path the main
 tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
 cannot look at is never read as absent, which would take the agent's file for its deletion: the fold fails before
@@ -562,10 +563,19 @@ as write-anchor reads a cell file - and applied through `IAnchorRegistryService.
 row exactly as write-anchor or set-anchor does, one after another under the registries' one lock: every row is
 checked and every refusal named before any is written, a row already as declared is left alone, a change names
 only the cells that differ, a row moving between the registries is written destination first, and a write that
-fails, or rows that do not read back as declared, put both registries back byte for byte. The rows a fold applied are
-recorded as declared then (`applied-rows.json`): one the agent declares as it did then is never applied again, so a
-change the registries took since - the orchestrator closing the row, a sibling's cross-reference - stands; one it
-declares anew over it is refused where the registries no longer hold what the fold applied, as a file the main tree
+fails, or rows that do not read back as declared, put both registries back byte for byte. Every write of a row, alone
+or in a batch, is held to what writing a row is (below). A batch makes a row no registry holds only where the request
+names it new (`--new` of fold-agent and delete-agent), as write-anchor is only ever asked to make one, and writes a cell
+whose stored text does not survive word for word - neither respaced, nor kept whole in an addendum, nor filling an
+empty one (`AnchorCellComparison`) - only where the request accepts it (`--accept-lost`); a plan
+(`AnchorBatchMode.Plan`, the dry run) shows such a cell word by word, and a check or an apply refuses it, so a fold
+refuses before its files are written. Every refusal of a row is collected, so one run names them all. The directories a
+fold makes at the top of the tree are handed to the batch (`AnchorBatchRequest.Roots`), so its rows are judged the same
+before its files are written and after. The rows a fold applied are recorded as declared
+then (`applied-rows.json`): one the agent declares as it did then is never applied again, so a change the registries
+took since - the orchestrator closing the row, a sibling's cross-reference - stands; one it declares anew over it is
+refused where the registries no longer hold what the fold applied (`DifferencesAsync`, which holds a row to no rule a
+write is held to: one applied before a rule it breaks is still the row that was applied), as a file the main tree
 changed is.
 
 ### Deleting an agent
@@ -635,6 +645,15 @@ again would double the backslash, and it usually means someone copied a raw tabl
 cell given in a file is read as UTF-8, and a file that is not, or that opens with a byte-order
 mark, is refused by name rather than cleaned. Every composed row is read back through the same
 parser before anything is written.
+
+A value the door would store cut is refused (`AnchorCellCuts`, exit 10): an id cut where a line ends, found as
+check-anchor-citations finds one (`AnchorIdScanner`: at a hyphen that ends the line, or where the next line carries it
+on into a row's id); an id with a space after one of its hyphens, across the segments a citation carries; a path's
+directory ending a line before a file's name; and a path with a space after a `/` before a file's name, where it starts at
+a directory at the top of the tree - read as the write runs. A value that newly cites an id no row holds is refused
+too (exit 13): every id a new row cites, and every id a changed cell cites that its stored text did not, read as
+check-anchor-citations reads a citation, the ids of the batch a row is applied in resolving too. A cut or a citation the
+stored cell already held is history, and is not judged again.
 
 `set-anchor` rebuilds only the cells it was given and writes every other cell back byte for
 byte; a row whose cell count is wrong is refused rather than guessed at. A new id must match
@@ -706,10 +725,16 @@ it on into a row's id, as `D-LK6-14` before `-INTEGRATION-PAYLOAD` where
 to spell, or to none. Where the two lines joined spell no row, the hyphen opens something else - an
 option such as `-Wall`, a figure such as `(-40`, a line a diff removed - and read as a cut each
 failed the check over an id written whole; a list's `- ` and an option's `--` carry nothing on
-either way. What stays out of reach is a break inside a segment, with no hyphen on either side: it cannot be told from a line
-that simply ends there, so it reads as the shorter id, reported unresolved unless that shorter id
-is a row of its own. The failure says cut citations apart from those no row resolves, since adding
-a row answers only the second.
+either way. A break inside a segment, with no hyphen on either side, is cut the same way where the
+two lines joined spell a row's id, as `D-LK6-14-INTEGRA` before `TION-PAYLOAD`; where they spell
+none it cannot be told from a line that simply ends there - a figure such as `MF-4` or the next id
+of a list opens a line as often - so it reads as the shorter id, reported unresolved unless that
+shorter id is a row of its own. The failure says cut citations apart from those no row resolves,
+since adding a row answers only the second.
+
+An id followed by `*` or `{`, or by a hyphen and one of those, names a family or a pattern of ids -
+`D-AREA-TOPIC-*`, `D-AREA-TOPIC-{A,B}` - and no row, so it is no citation; an id in bold,
+`**D-AREA-TOPIC**`, is one.
 
 `--current-commit` reads every file of the commit through one git process; asked for one at a
 time, each cost two, and 2,385 files took twenty minutes. A file is read as it would be from
