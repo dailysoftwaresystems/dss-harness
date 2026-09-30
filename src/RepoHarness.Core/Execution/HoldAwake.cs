@@ -1,6 +1,7 @@
 using System.Text.Json;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Execution;
 
@@ -27,46 +28,33 @@ public sealed record HoldAwakeState(
 /// Kept among this user's own application data, never in a directory other users can write.
 /// </remarks>
 /// <param name="fileSystem">Reads and writes the state.</param>
-/// <param name="path">The file the state is kept in.</param>
-public sealed class HoldAwakeStore(IFileSystem fileSystem, string path)
+/// <param name="path">
+/// Names the file the state is kept in, asked the first time the state is: a process that can name no directory of
+/// its user's own keeps no hold, which it says as it would a directory it may not write, and nothing else it does
+/// waits on that.
+/// </param>
+public sealed class HoldAwakeStore(IFileSystem fileSystem, Func<string> path)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly Lazy<string> _location = new(path);
 
-    /// <summary>Where a hold is kept for the user running this process.</summary>
-    public static string DefaultPath => Path.Combine(ApplicationData(), "dssharness", "hold-awake.json");
+    /// <summary>A store keeping its state in <paramref name="path"/>.</summary>
+    /// <param name="fileSystem">Reads and writes the state.</param>
+    /// <param name="path">The file the state is kept in.</param>
+    public HoldAwakeStore(IFileSystem fileSystem, string path)
+        : this(fileSystem, () => path)
+    {
+    }
+
+    /// <summary>Names where a hold is kept for the user running this process.</summary>
+    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
+    public static string DefaultPath() => UserState.File("hold-awake.json");
 
     /// <summary>The file the state is kept in.</summary>
-    public string Location { get; } = path;
-
-    /// <summary>This user's own application data directory, below the home directory this process was given.</summary>
-    /// <remarks>
-    /// macOS's lookup of it asks the system for the account's home rather than reading <c>HOME</c>, which every
-    /// other path a process there derives honors - and which a process given another home, as a test gives it,
-    /// then does not reach. Its place below that home is the same. Windows's lookup asks the system for the
-    /// account's folder, which no environment moves, so the <c>LOCALAPPDATA</c> the process was given comes first:
-    /// it names that same folder unless the process was given another.
-    /// </remarks>
-    private static string ApplicationData()
-    {
-        if (OperatingSystem.IsMacOS()
-            && Environment.GetFolderPath(Environment.SpecialFolder.UserProfile, Environment.SpecialFolderOption.DoNotVerify) is { Length: > 0 } home)
-        {
-            return Path.Combine(home, "Library", "Application Support");
-        }
-
-        if (OperatingSystem.IsWindows()
-            && Environment.GetEnvironmentVariable("LOCALAPPDATA") is { Length: > 0 } given
-            && Path.IsPathFullyQualified(given))
-        {
-            return given;
-        }
-
-        return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.DoNotVerify) is { Length: > 0 } own
-            ? own
-            : Path.GetTempPath();
-    }
+    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
+    public string Location => _location.Value;
 
     /// <summary>Makes <paramref name="state"/> the hold that stands, ending any before it.</summary>
     /// <param name="state">The hold.</param>
@@ -168,7 +156,7 @@ public sealed class HoldAwakeService(HoldAwakeStore store, KeepAwake keepAwake, 
 
                 try
                 {
-                    await Task.Delay(left < _pollInterval ? (left > TimeSpan.Zero ? left : TimeSpan.Zero) : _pollInterval, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(Waits.Shorter(_pollInterval, left), cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {

@@ -45,6 +45,16 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// </summary>
     public bool StartsPrograms => Build || Test || Programs.Count > 0 || UnderOwnPath.Count > 0 || OnlyOn.Count > 0;
 
+    /// <summary>Whether the runner the command runs says its legs are heavy, where they build nothing.</summary>
+    public bool DeclaredHeavy { get; init; }
+
+    /// <summary>
+    /// Whether a leg of this workload is heavy: it builds or tests, or its runner says it is. A heavy leg takes one of
+    /// its machine's heavy-leg slots before its work starts, where that machine declares admission; a repository
+    /// guard that only reads the tree is light, and starts at once.
+    /// </summary>
+    public bool Heavy => Build || Test || DeclaredHeavy;
+
     /// <summary>Building and testing: what a leg is for, and what <c>legs</c> answers for.</summary>
     public static LegWorkload BuildAndTest { get; } = new(Build: true, Test: true, []);
 
@@ -65,7 +75,11 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// which no survey can see, so its program is the run's to find rather than a demand on the host,
     /// and is only asked about: see <see cref="UnderOwnPath"/>.
     /// </remarks>
-    public static LegWorkload ForRunner(RunnerConfig runner, ActionFile? action)
+    /// <param name="checks">
+    /// The runners its expected exceptions' run checks name, which run within its legs: any of them heavy - requiring
+    /// the build, or saying so - makes its legs heavy, as the runner itself would.
+    /// </param>
+    public static LegWorkload ForRunner(RunnerConfig runner, ActionFile? action, IEnumerable<RunnerConfig>? checks = null)
     {
         ArgumentNullException.ThrowIfNull(runner);
 
@@ -85,6 +99,7 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
         {
             UnderOwnPath = [.. everywhere.Where(start => start.OwnPath).Select(start => start.Program)],
             OnlyOn = [.. starts.Where(start => start.RunOn.Count > 0)],
+            DeclaredHeavy = runner.Heavy == true || (checks ?? []).Any(check => check.RequireBuild || check.Heavy == true),
         };
     }
 

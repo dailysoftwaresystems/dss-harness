@@ -151,6 +151,18 @@ internal static class HarnessServices
         services.AddSingleton<ProcessSampler>();
         services.AddSingleton<RemoteLegRunner>();
         services.AddSingleton<KeepAwake>();
+
+        // Heavy legs are admitted onto a machine across every command this user runs there, so their slots are kept
+        // among this user's own state rather than in any one tree.
+        services.AddSingleton<IMemoryGauge, MemoryGauge>();
+        services.AddSingleton(provider => new HeavyLegSlots(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHarnessOutput>(),
+            provider.GetRequiredService<IProcessIdentity>(),
+            () => HeavyLegSlots.PathFor(provider.GetRequiredService<IHostPlatform>(), provider.GetRequiredService<IHarnessOutput>())));
+        services.AddSingleton(provider => new LegAdmission(
+            provider.GetRequiredService<HeavyLegSlots>(),
+            provider.GetRequiredService<IMemoryGauge>()));
         services.AddSingleton<LegRunService>();
         services.AddSingleton<CleanService>();
 

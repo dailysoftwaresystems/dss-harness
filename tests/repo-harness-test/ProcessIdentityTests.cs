@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Platform;
@@ -5,10 +7,10 @@ using RepoHarness.Core.Platform;
 namespace RepoHarness.Tests;
 
 /// <summary>
-/// What tells one process from the next holder of its id. This is what a lock and a log claim record,
-/// and the one rule it must keep is that no wall clock is in it: a host this tool serves steps its
-/// clock forward by about 25 seconds every few seconds, and a stamp that moved with it would make
-/// every live holder on that host read as dead at once.
+/// What tells one process from the next holder of its id. This is what a lock, a log claim and a
+/// heavy-leg slot record, and the one rule it must keep is that no clock that steps is in it: a host
+/// this tool serves steps its clock forward by about 25 seconds every few seconds, and a stamp that
+/// moved with it would make every live holder on that host read as dead at once.
 /// </summary>
 public sealed class ProcessIdentityTests
 {
@@ -69,9 +71,9 @@ public sealed class ProcessIdentityTests
 
     /// <summary>
     /// Windows and macOS record the start time once, when the process is created, and never work it
-    /// out again — so it is already clock-proof. It is read as its own ticks rather than converted to
-    /// an instant, because a conversion is the one way a stored value could still come back
-    /// differently twice: the offset a local time converts through is not a fact about the process.
+    /// out again — so it is already clock-proof. It is kept as the ticks the runtime hands it over in,
+    /// never turned back into an instant, so a stamp an earlier build recorded is still read as this
+    /// build's; a time zone that changed since is OffLinux_AStartReadUnderAnotherTimeZone_IsStillThisProcess's.
     /// </summary>
     [Fact]
     public void OffLinux_TheStampIsTheRecordedStartTicks_WithNoConversion()
@@ -86,6 +88,25 @@ public sealed class ProcessIdentityTests
             StringComparer.Ordinal);
     }
 
+    /// <summary>
+    /// A machine whose time zone changed - a laptop set by where it is - reads a live process's start in its new zone,
+    /// apart from the one recorded by whole quarter hours; that is still the process that recorded it, and a holder it
+    /// names is never taken for one that has gone. A start apart by anything else is another process's.
+    /// </summary>
+    [Fact]
+    public void OffLinux_AStartReadUnderAnotherTimeZone_IsStillThisProcess()
+    {
+        Assert.SkipWhen(OperatingSystem.IsLinux(), "Linux's stamp holds no time of day; see the boot-and-ticks test.");
+
+        var identity = Identity();
+        var ticks = long.Parse(identity.Current!, CultureInfo.InvariantCulture);
+
+        Assert.True(identity.IsAlive(Environment.ProcessId, (ticks - TimeSpan.FromHours(3).Ticks).ToString(CultureInfo.InvariantCulture)));
+        Assert.True(identity.IsAlive(Environment.ProcessId, (ticks + TimeSpan.FromMinutes(345).Ticks).ToString(CultureInfo.InvariantCulture)));
+        Assert.False(identity.IsAlive(Environment.ProcessId, (ticks - TimeSpan.FromHours(3).Ticks + 1).ToString(CultureInfo.InvariantCulture)));
+        Assert.False(identity.IsAlive(Environment.ProcessId, (ticks - TimeSpan.FromHours(27).Ticks).ToString(CultureInfo.InvariantCulture)));
+    }
+
     [Fact]
     public void TheStamp_IsTheSameEveryTimeItIsRead()
     {
@@ -94,6 +115,68 @@ public sealed class ProcessIdentityTests
 
         Assert.Equal(first, Identity().Current, StringComparer.Ordinal);
         Assert.Equal(first, identity.Current, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// On Windows a process this user may not open - a service's, one started elevated - is still told apart by its start,
+    /// read from the list Windows keeps of every process, and read exactly as the runtime reads an open one's: an id a dead
+    /// holder left, taken since by such a process, is never read as that holder, and the process itself still is.
+    /// </summary>
+    [Fact]
+    public void OnWindows_AProcessThisUserMayNotOpen_IsStillToldApartByItsStart()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows lists every process's start for whoever asks.");
+
+        using (var current = Process.GetCurrentProcess())
+        {
+            Assert.Equal(current.StartTime.Ticks, SystemProcessList.StartTicks(current.Id));
+        }
+
+        var closed = Unopenable();
+
+        Assert.SkipWhen(closed is null, "Every process here lets this one open it, as it does a process running elevated.");
+
+        var identity = Identity();
+        var start = SystemProcessList.StartTicks(closed.Value)!.Value;
+
+        Assert.True(identity.IsAlive(closed.Value, start.ToString(CultureInfo.InvariantCulture)));
+        Assert.False(identity.IsAlive(closed.Value, (start - 1).ToString(CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>A long-lived process this one may not open, where there is one: a service host's, preferably.</summary>
+    private static int? Unopenable()
+    {
+        var processes = Process.GetProcesses();
+
+        try
+        {
+            return processes
+                .Where(process => process.Id > 4)
+                .OrderBy(process => process.ProcessName is "services" or "wininit" or "lsass" ? 0 : 1)
+                .FirstOrDefault(process =>
+                {
+                    try
+                    {
+                        _ = process.StartTime;
+                        return false;
+                    }
+                    catch (Win32Exception)
+                    {
+                        return true;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        return false;
+                    }
+                })?.Id;
+        }
+        finally
+        {
+            foreach (var process in processes)
+            {
+                process.Dispose();
+            }
+        }
     }
 
     private static IProcessIdentity Identity() => new ProcessIdentity(new HostPlatform());

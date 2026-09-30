@@ -59,13 +59,15 @@ public sealed class HarnessConfig
 
     /// <summary>
     /// Where a program is looked for when the PATH a command sees does not name it, by platform or
-    /// <c>all</c>. A platform's list replaces the built-in one only when it has something in it.
+    /// <c>all</c>. A platform's list replaces the built-in one only where it names something that
+    /// platform can search.
     /// </summary>
     /// <remarks>
-    /// Left out, or declared empty, a host searches the directories this build already knows to look
-    /// in: see <see cref="Hosts.ToolSearchDirectories"/>. Declared, it is the whole list for that
-    /// platform, so a tool installed somewhere unusual is found by naming its directory here rather
-    /// than by editing a shell's startup files on every host.
+    /// Left out, a host searches the directories this build already knows to look in: see
+    /// <see cref="Hosts.ToolSearchDirectories"/>. Declared, it is the whole list for that platform, so a
+    /// tool installed somewhere unusual is found by naming its directory here rather than by editing a
+    /// shell's startup files on every host. Given empty, it is refused when the file is read, rather
+    /// than read as the built-in list; a list a caller builds empty reads as left out.
     /// </remarks>
     public Dictionary<string, List<string>> ToolSearchDirectories { get; init; } = Map<List<string>>();
 
@@ -172,7 +174,8 @@ public sealed class HarnessDefaults
     /// processors however differently they are named, while an ssh host shares nothing with either.
     /// A cap across every leg had to be set low enough for the busiest machine, which left every
     /// other host idle. Legs are isolated from one another, so this is never needed for correctness;
-    /// it keeps a machine from being asked for more than it has.
+    /// it keeps one command from asking a machine for more than it has. Separate commands on one
+    /// machine are counted by <see cref="Admission"/>.
     /// </remarks>
     public int? MaxParallelLegs { get; init; }
 
@@ -185,6 +188,13 @@ public sealed class HarnessDefaults
 
     /// <summary>Project used when a command names none.</summary>
     public string? Project { get; init; }
+
+    /// <summary>
+    /// The rule heavy legs are admitted by on a machine whose own section declares nothing, and each field such a
+    /// section leaves out; <see langword="null"/> where only machines that declare their own admit heavy legs: see
+    /// <see cref="AdmissionSettings"/>.
+    /// </summary>
+    public AdmissionSettings? Admission { get; init; }
 
     /// <summary>
     /// Seconds without output after which a phase is treated as hung; zero disables

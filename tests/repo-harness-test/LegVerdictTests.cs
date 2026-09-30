@@ -39,6 +39,7 @@ public sealed class LegVerdictTests
         Assert.Equal("skipped-tool-missing", Verdicts.Display(LegVerdict.SkippedToolMissing));
         Assert.Equal("refused-locked", Verdicts.Display(LegVerdict.RefusedLocked));
         Assert.Equal("log-held", Verdicts.Display(LegVerdict.LogHeld));
+        Assert.Equal("not-admitted", Verdicts.Display(LegVerdict.NotAdmitted));
         Assert.Equal("poisoned", Verdicts.Display(LegVerdict.Poisoned));
     }
 
@@ -53,6 +54,7 @@ public sealed class LegVerdictTests
             LegVerdict.Contended,
             LegVerdict.LogHeld,
             LegVerdict.RefusedLocked,
+            LegVerdict.NotAdmitted,
             LegVerdict.Failed,
             LegVerdict.Unwitnessed,
         ];
@@ -89,6 +91,7 @@ public sealed class LegVerdictTests
         Assert.Equal(LegExit.Contended, Verdicts.ExitCodeFor(LegVerdict.Contended));
         Assert.Equal(LegExit.Unwitnessed, Verdicts.ExitCodeFor(LegVerdict.Unwitnessed));
         Assert.Equal(LegExit.LogHeld, Verdicts.ExitCodeFor(LegVerdict.LogHeld));
+        Assert.Equal(LegExit.NotAdmitted, Verdicts.ExitCodeFor(LegVerdict.NotAdmitted));
 
         // A warning is not a failure: a switched-off machine is normal, and a command asked for
         // that leg by name decides for itself what to do about it, as `legs` does.
@@ -105,8 +108,9 @@ public sealed class LegVerdictTests
         Assert.InRange(LegExit.Contended, 1, 9);
         Assert.InRange(LegExit.Unwitnessed, 1, 9);
         Assert.InRange(LegExit.LogHeld, 1, 9);
+        Assert.InRange(LegExit.NotAdmitted, 1, 9);
 
-        int[] codes = [LegExit.InputsMoved, LegExit.Contended, LegExit.Unwitnessed, LegExit.LogHeld];
+        int[] codes = [LegExit.InputsMoved, LegExit.Contended, LegExit.Unwitnessed, LegExit.LogHeld, LegExit.NotAdmitted];
         Assert.Equal(codes.Length, codes.Distinct().Count());
 
         foreach (var code in codes)
@@ -121,7 +125,7 @@ public sealed class LegVerdictTests
         foreach (var verdict in new[]
                  {
                      LegVerdict.Failed, LegVerdict.Unwitnessed, LegVerdict.InputsMoved, LegVerdict.Unmeasured,
-                     LegVerdict.Contended, LegVerdict.RefusedLocked, LegVerdict.LogHeld, LegVerdict.Poisoned,
+                     LegVerdict.Contended, LegVerdict.RefusedLocked, LegVerdict.NotAdmitted, LegVerdict.LogHeld, LegVerdict.Poisoned,
                  })
         {
             Assert.True(Verdicts.IsFailure(verdict), $"{verdict} counts as a failure");
@@ -154,6 +158,7 @@ public sealed class LegVerdictTests
         Assert.Equal(LegVerdict.SkippedUnavailable, Verdicts.ForRefusal(HarnessExit.HostUnavailable));
         Assert.Equal(LegVerdict.SkippedToolMissing, Verdicts.ForRefusal(HarnessExit.ToolMissing));
         Assert.Equal(LegVerdict.LogHeld, Verdicts.ForRefusal(LegExit.LogHeld));
+        Assert.Equal(LegVerdict.NotAdmitted, Verdicts.ForRefusal(LegExit.NotAdmitted));
         Assert.Equal(LegVerdict.Poisoned, Verdicts.ForRefusal(HarnessExit.InternalError));
     }
 }

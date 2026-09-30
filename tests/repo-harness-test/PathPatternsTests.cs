@@ -212,6 +212,45 @@ public sealed class SyncExclusionsReachTests
     }
 
     /// <summary>
+    /// What the harness writes as it works - an action's own build and artifacts, each run's records - is the run
+    /// state of whichever machine made it: a name there neither counts nor is looked for below. Measured: in a
+    /// fresh worktree, its own build not made yet, a run's sync said the build entry init writes protected
+    /// nothing, having found an action's working space, and advised **/build, which would withhold every source
+    /// directory of that name. An action's own file of such a name, which a sync carries, still counts.
+    /// </summary>
+    [Fact]
+    public void WhatTheHarnessWritesAsItWorks_IsNotTheTreesName_NorSearched()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var actions = temp.Combine(".harness-config", "runner", "actions");
+
+        for (var index = 0; index < 20; index++)
+        {
+            Directory.CreateDirectory(Path.Combine(actions, "group", "probe", "build", "run", $"o{index}"));
+            Directory.CreateDirectory(temp.Combine(".harness-config", "runs", $"r{index}", "build"));
+        }
+
+        Directory.CreateDirectory(Path.Combine(actions, "census", "artifacts", ".secrets"));
+        Directory.CreateDirectory(Path.Combine(actions, "probe", "build", "step", ".env"));
+        temp.WriteFile(Path.Combine(".harness-config", "runner", "actions", "probe", "node_modules"), "kept\n");
+
+        var exclusions = new SyncExclusions(
+            new SyncConfig { NeverTransfer = ["build", "artifacts", ".secrets", ".env", "node_modules"] },
+            worktreesRoot: ".worktrees");
+
+        var report = exclusions.RootedEntriesMatchingNothing(
+            harness.FileSystem,
+            temp.Path,
+            harness.Platform.PathComparison,
+            mostDirectoriesRead: 12,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["node_modules"], report.MatchingNothing);
+        Assert.Null(report.Incomplete);
+    }
+
+    /// <summary>
     /// Where what is searched holds more directories than the search may read, it says so - never
     /// "found none" - and says what it did not count.
     /// </summary>

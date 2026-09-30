@@ -41,4 +41,12 @@ public static class LegExit
     /// could not be kept.
     /// </summary>
     public const int LogHeld = 6;
+
+    /// <summary>
+    /// A heavy leg waited its machine's <c>maxWaitMinutes</c> for a heavy-leg slot, or holding one for the memory in
+    /// use to fall below the limit, and nothing of it ran. Remedy: wait for the heavy legs its line names, free memory,
+    /// or raise the machine's limits. Distinct from a held lock, which is about one tree and one variant: this is
+    /// about the whole machine.
+    /// </summary>
+    public const int NotAdmitted = 7;
 }

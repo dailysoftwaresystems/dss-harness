@@ -687,6 +687,32 @@ public sealed partial class CliEndToEndTests
         Assert.DoesNotContain(LedgerReport.Headings[2], output, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A heavy runner's leg, through the real binary, on a machine that declares admission, takes a slot in the record
+    /// kept among the user's own data - named by what tells this machine apart - and gives it back as its work ends;
+    /// its line names the record, as every command names where what it keeps lands.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyRunnersLeg_IsAdmittedAgainstThisUsersOwnRecord()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (environment, holds) = OwnUserData(temp);
+        await PrepareRunnerAsync(temp, heavy: true);
+
+        var result = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "--json", "-C", temp.Path], token, environment: environment);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+
+        using var document = JsonDocument.Parse(result.StandardOutput);
+        var admission = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("admission");
+        var record = Path.Combine(Path.GetDirectoryName(holds)!, HeavyLegSlots.FileNameFor(new HostPlatform().MachineId.Id));
+
+        Assert.True(admission.GetProperty("admitted").GetBoolean());
+        Assert.Equal(record, admission.GetProperty("record").GetString());
+        Assert.Equal("[]", File.ReadAllText(record).Trim());
+    }
+
     [Fact]
     public async Task ARunWhereEveryLegReported_IsStillReportedAsPassed()
     {
@@ -2413,7 +2439,7 @@ public sealed partial class CliEndToEndTests
     /// A repository with one leg this machine can run and one no host can, and a runner that does
     /// something trivial on whichever of them runs.
     /// </summary>
-    private static async Task PrepareRunnerAsync(TempDirectory temp)
+    private static async Task PrepareRunnerAsync(TempDirectory temp, bool heavy = false)
     {
         var harness = new HarnessFactory();
         var platform = harness.Platform;
@@ -2421,6 +2447,9 @@ public sealed partial class CliEndToEndTests
         await harness.InitializeHarnessAsync(temp.Path, TestContext.Current.CancellationToken, new HarnessConfig
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
+
+            // Where the runner is heavy, its machine admits it: one slot, so a record left holding it would show.
+            Defaults = heavy ? new HarnessDefaults { Admission = new AdmissionSettings { HeavyLegs = 1 } } : new HarnessDefaults(),
             Tools = { new ToolConfig { Name = "dotnet" } },
             Legs =
             {
@@ -2436,7 +2465,7 @@ public sealed partial class CliEndToEndTests
             },
             PredefinedRunners =
             {
-                ["probe"] = new RunnerConfig { Action = "probe/probe.yml" },
+                ["probe"] = new RunnerConfig { Action = "probe/probe.yml", Heavy = heavy ? true : null },
             },
         });
 

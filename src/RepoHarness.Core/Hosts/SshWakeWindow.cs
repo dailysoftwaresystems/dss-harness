@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Processes;
 
 namespace RepoHarness.Core.Hosts;
@@ -132,6 +133,6 @@ public sealed class SshWakeWindow(INameLookup lookup, TimeProvider clock, TimeSp
     {
         var left = window - Since(started);
 
-        return Task.Delay(left < _pollDelay ? (left > TimeSpan.Zero ? left : TimeSpan.Zero) : _pollDelay, cancellationToken);
+        return Task.Delay(Waits.Shorter(_pollDelay, left), cancellationToken);
     }
 }

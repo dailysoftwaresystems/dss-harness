@@ -80,9 +80,11 @@ public sealed class TestConfig
     /// Paths or globs, relative to the tree, that the tests read while they run. Their content
     /// is fingerprinted before the tests start and after they end; a difference makes the
     /// verdict <c>inputs-moved</c>, because some tests saw the old files and some the new, and
-    /// the result describes a tree that never existed. Empty means every file git tracks.
+    /// the result describes a tree that never existed. Left out, every file git tracks. Given empty in
+    /// the file, it is refused when the file is read, rather than read as every file; a list a caller
+    /// builds empty reads as left out.
     /// </summary>
-    public List<string> Inputs { get; init; } = [];
+    public List<string>? Inputs { get; init; }
 
     /// <summary>Settings applying on every platform.</summary>
     public TestInvocation? All { get; init; }
@@ -95,9 +97,6 @@ public sealed class TestConfig
 
     /// <summary>macOS overrides, merged field by field over <see cref="All"/>.</summary>
     public TestInvocation? Macos { get; init; }
-
-    /// <summary>Build configurations to test against; each is built before it is run.</summary>
-    public List<string> Configs { get; init; } = [];
 }
 
 /// <summary>One concrete test invocation.</summary>

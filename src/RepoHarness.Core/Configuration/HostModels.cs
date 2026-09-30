@@ -51,7 +51,7 @@ public sealed class HostsConfig
     }
 }
 
-/// <summary>Settings every kind of host accepts.</summary>
+/// <summary>Settings every kind of host accepts, save admission, which a WSL distribution refuses.</summary>
 public abstract class HostSettings
 {
     /// <summary>
@@ -94,6 +94,13 @@ public abstract class HostSettings
     /// whose programs are looked for, before it starts, on the PATH that environment builds over this one.
     /// </remarks>
     public Dictionary<string, string> Env { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// How heavy legs are admitted onto this machine, each field replacing <c>defaults.admission</c>'s: see
+    /// <see cref="AdmissionSettings"/>. Refused under <c>hosts.wsl</c>: a distribution runs on the machine running the
+    /// harness, whose slots its legs take by <c>hosts.local</c>'s rule.
+    /// </summary>
+    public AdmissionSettings? Admission { get; init; }
 }
 
 /// <summary>The machine running the harness.</summary>

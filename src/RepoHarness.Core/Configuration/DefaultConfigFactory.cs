@@ -115,7 +115,6 @@ public static class DefaultConfigFactory
 
     private static TestConfig CreateTestConfig(string projectType) => new()
     {
-        Configs = ["debug"],
         All = projectType switch
         {
             "cmake" => new TestInvocation

@@ -80,7 +80,7 @@ public sealed class InitService(
 
             // Run logs, which exist to be read after a run and never to be committed. By name, so a
             // link to where they are kept is ignored as surely as the directory: see the remarks above.
-            new($"/{root}/{HarnessLayout.RunsDirectoryName}", [$"{root}/{HarnessLayout.RunsDirectoryName}/{any}"], Ignores: true),
+            new($"/{HarnessLayout.RunsDirectoryRelative}", [$"{HarnessLayout.RunsDirectoryRelative}/{any}"], Ignores: true),
 
             // Where worktrees are made and where orchestrators keep what they hold: their contents ignored, and a
             // placeholder kept in each (see the remarks above).

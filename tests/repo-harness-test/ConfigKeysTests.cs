@@ -32,7 +32,7 @@ public sealed class ConfigKeysTests
         var runner = ConfigKeys.Of<RunnerConfig>();
 
         Assert.Equal(
-            ["description", "legs", "phases", "action", "steps", "requireBuild", "stallSeconds", "expectedExceptions", "cleanDirectories", "env"],
+            ["description", "legs", "phases", "action", "steps", "requireBuild", "heavy", "stallSeconds", "expectedExceptions", "cleanDirectories", "env"],
             KeyDescription.Names(runner));
         Assert.DoesNotContain(runner, key => key.Required);
 

@@ -151,21 +151,6 @@ public sealed class SshWakeWindowTests
 
     private static ProcessResult Answered() => HostResults.Ok("%COMSPEC%\n");
 
-    /// <summary>A clock that moves only when told, its timestamps with it.</summary>
-    private class ManualClock(DateTimeOffset start) : TimeProvider
-    {
-        private readonly DateTimeOffset _start = start;
-        private DateTimeOffset _now = start;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public override long GetTimestamp() => (_now - _start).Ticks;
-
-        public virtual void Advance(TimeSpan by) => _now += by;
-    }
-
     /// <summary>
     /// A clock whose time of day is set an hour ahead each time it moves, as a machine syncing its time sets it,
     /// while time itself passes as told.

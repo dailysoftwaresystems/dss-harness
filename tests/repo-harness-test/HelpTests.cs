@@ -36,6 +36,47 @@ public sealed partial class HelpTests
         }
     }
 
+    /// <summary>
+    /// The admission topic, under either name, names every key a section may declare with the value it takes when left
+    /// out and its bounds, and the exit a leg not admitted ends with - each read from the code, so none can drift.
+    /// </summary>
+    [Theory]
+    [InlineData("admission")]
+    [InlineData("heavy")]
+    public async Task TheAdmissionTopic_NamesEveryKeyWithItsDefault_FromTheCode(string topic)
+    {
+        var result = await CliRunner.RunAsync(["help", topic], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+
+        var keys = typeof(AdmissionSettings)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Select(property => JsonNamingPolicy.CamelCase.ConvertName(property.Name))
+            .ToList();
+
+        Assert.Equal(["heavyLegs", "maxMemoryPercent", "settleSeconds", "pollSeconds", "maxWaitMinutes"], keys);
+
+        foreach (var key in keys)
+        {
+            Assert.Contains($"  {key}", result.StandardOutput, StringComparison.Ordinal);
+        }
+
+        foreach (var value in new[]
+        {
+            $"({AdmissionSettings.DefaultHeavyLegs})",
+            string.Create(CultureInfo.InvariantCulture, $"({AdmissionSettings.DefaultMaxMemoryPercent})"),
+            $"([{string.Join(", ", AdmissionSettings.DefaultSettleSeconds)}])",
+            $"({AdmissionSettings.DefaultPollSeconds})",
+            string.Create(CultureInfo.InvariantCulture, $"({AdmissionSettings.DefaultMaxWaitMinutes})"),
+            $"at most {AdmissionSettings.MostSeconds}",
+            string.Create(CultureInfo.InvariantCulture, $"at most {AdmissionSettings.MostWaitMinutes} minutes"),
+            $"exit {LegExit.NotAdmitted}",
+        })
+        {
+            Assert.Contains(value, result.StandardOutput, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public async Task EveryListedCommand_HasADescription()
     {

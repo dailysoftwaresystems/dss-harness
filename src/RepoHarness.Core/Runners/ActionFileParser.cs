@@ -526,7 +526,7 @@ public sealed class ActionFileParser(
                 + "unnamed steps would write one file, the second overwriting the first's evidence."));
             name = string.Empty;
         }
-        else if (RunSegments.FileNameFor(name).Trim('.', ' ') is { Length: 0 })
+        else if (FileNames.SafeFor(name).Trim('.', ' ') is { Length: 0 })
         {
             // A step's name becomes a directory under the action's build directory as well as a log
             // file's name. Everything a path cannot carry is already replaced, but a name that is

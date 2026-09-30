@@ -39,6 +39,7 @@ internal static class HelpCommand
         new("config", ["configuration"], "What config.json declares", RenderConfig),
         new("legs", ["hosts", "emulators"], "Hosts, emulators, and how a leg finds where it runs", RenderLegs),
         new("space", ["disk", "clean"], "Freeing a full disk, and the room a build needs", RenderSpace),
+        new("admission", ["heavy"], "How heavy legs share a machine: its slots and its memory", RenderAdmission),
         new("worktrees", ["worktree"], "Naming rules, the path budget, and when deleting refuses", RenderWorktrees),
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
@@ -179,8 +180,8 @@ internal static class HelpCommand
         builder.AppendLine("  \"toolSearchDirectories\": { \"macos\": [\"/opt/local/bin\", \"~/bin\"] }");
         builder.AppendLine();
         builder.AppendLine("replaces the searched directories for a platform, or for 'all', when its list names");
-        builder.AppendLine("something that platform can search; declared empty, or naming only another");
-        builder.AppendLine("platform's directories, the built-in list stays. Each entry is '~/' for the");
+        builder.AppendLine("something that platform can search; naming only another platform's directories, the");
+        builder.AppendLine("built-in list stays there, and given empty it is refused. Each entry is '~/' for the");
         builder.AppendLine("home directory of whoever searches, or absolute for its platform: a drive or a share");
         builder.AppendLine("on Windows, a leading '/' elsewhere. Under 'all', an entry only one kind of machine");
         builder.AppendLine("can name is searched where it can be. The harness's own .NET SDK is always looked for");
@@ -659,6 +660,81 @@ internal static class HelpCommand
         builder.AppendLine($"  {LegExit.Contended}  contended                  Wait for the other run");
         builder.AppendLine($"  {LegExit.Unwitnessed}  unwitnessed                Find out what actually ran");
         builder.AppendLine($"  {LegExit.LogHeld}  log-held                   Find out which run still owns the logs");
+        builder.AppendLine($"  {LegExit.NotAdmitted}  not-admitted               Wait for the heavy legs it names, free memory,");
+        builder.AppendLine("                                or raise the machine's limits ('help admission')");
+
+        return builder.ToString();
+    }
+
+    private static string RenderAdmission()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Heavy legs on one machine");
+        builder.AppendLine();
+        builder.AppendLine("A leg that builds or tests is heavy, and so is a runner's where it, or a runner its");
+        builder.AppendLine("expected exceptions' run checks name, requires the build or says \"heavy\": true; a");
+        builder.AppendLine("runner that only reads the tree is light, and starts at once. Where a machine");
+        builder.AppendLine("declares admission, each heavy leg - its tree synced and its lock taken - waits for");
+        builder.AppendLine("the machine to take it: first one of its slots, shared by every command this user");
+        builder.AppendLine("runs there - worktrees each running a gate of their own, which maxParallelLegs,");
+        builder.AppendLine("counted by one command, cannot see - given in the order legs asked; then the memory");
+        builder.AppendLine("in use below the limit. A leg holds its slot until its work ends, and one whose");
+        builder.AppendLine("command has ended - crashed, killed - is reclaimed by the next leg that looks, and");
+        builder.AppendLine("said to be. A waiting leg keeps its lock: another run of its variant is");
+        builder.AppendLine("refused-locked meanwhile, as it would be while the leg ran.");
+        builder.AppendLine();
+        builder.AppendLine("  \"defaults\": { \"admission\": { \"heavyLegs\": 2, \"maxMemoryPercent\": 76 } },");
+        builder.AppendLine("  \"hosts\": { \"local\": { \"admission\": { \"heavyLegs\": 1 } } }");
+        builder.AppendLine();
+        builder.AppendLine($"  heavyLegs         heavy legs the machine runs at once, at least 1 ({AdmissionSettings.DefaultHeavyLegs})");
+        builder.AppendLine("  maxMemoryPercent  the memory in use a leg holding a slot starts below, above 0");
+        builder.AppendLine($"                    and at most 100 ({AdmissionSettings.DefaultMaxMemoryPercent})");
+        builder.AppendLine("  settleSeconds     [least, most]: where another leg holds a slot, a reading below");
+        builder.AppendLine("                    the limit is read again after a time picked between them, and");
+        builder.AppendLine("                    the leg starts only if it still is, so two legs taking their");
+        builder.AppendLine("                    slots together do not both start on one reading; [0, 0] reads");
+        builder.AppendLine($"                    once ([{string.Join(", ", AdmissionSettings.DefaultSettleSeconds)}])");
+        builder.AppendLine($"  pollSeconds       the time between looks while a leg waits, at least 1 ({AdmissionSettings.DefaultPollSeconds})");
+        builder.AppendLine($"  maxWaitMinutes    how long a leg waits before it is not-admitted, above 0 ({AdmissionSettings.DefaultMaxWaitMinutes})");
+        builder.AppendLine();
+        builder.AppendLine($"Seconds are at most {AdmissionSettings.MostSeconds}, and the wait at most {AdmissionSettings.MostWaitMinutes} minutes.");
+        builder.AppendLine();
+        builder.AppendLine("Declared under defaults, or under hosts.local or an ssh host, whose fields replace");
+        builder.AppendLine("the defaults' one by one; a machine where neither declares one takes every leg at");
+        builder.AppendLine("once. What a command's own configuration declares is what its legs are admitted by:");
+        builder.AppendLine("a repository that declares none never joins the line, and where repositories that");
+        builder.AppendLine("declare different counts share a machine, a leg starts only while it is fewer legs");
+        builder.AppendLine("from the front than every count up to it allows. A WSL distribution runs on this");
+        builder.AppendLine("machine: its heavy legs take this machine's slots, against its memory, before they");
+        builder.AppendLine("are sent there, and admission under hosts.wsl is refused - though a command typed");
+        builder.AppendLine("inside a distribution keeps a record of the distribution's own, apart from those of");
+        builder.AppendLine("the commands typed on Windows. An ssh host is a machine of its own, and takes the");
+        builder.AppendLine("legs sent to it by its own section.");
+        builder.AppendLine();
+        builder.AppendLine("The memory in use is each system's own count of what it can no longer give: on");
+        builder.AppendLine("Windows the commit charge against the commit limit, which grows with the page file;");
+        builder.AppendLine("on Linux MemTotal less MemAvailable; on macOS 100 less the free share memory_pressure");
+        builder.AppendLine("reports. A machine whose count could not be read in a leg's wait takes the leg on");
+        builder.AppendLine("its slot alone, and its line says so; one that stops giving a reading it gave is");
+        builder.AppendLine("read again, never taken on the reading it last gave.");
+        builder.AppendLine();
+        builder.AppendLine("While it waits, a leg says who holds each slot - tree, variant, host, leg, command,");
+        builder.AppendLine("machine, process, run, and since when it asked - and, once it holds one, what the");
+        builder.AppendLine("memory stands at. Its line, and admission in --json, name how long it waited and");
+        builder.AppendLine("the memory it started at; --json also names the record it asked in. One that waited");
+        builder.AppendLine($"maxWaitMinutes is not-admitted, exit {LegExit.NotAdmitted}, naming what held the slots and where they");
+        builder.AppendLine("are recorded, or the memory it waited on: nothing of it ran, and nothing about the");
+        builder.AppendLine("code is claimed.");
+        builder.AppendLine();
+        builder.AppendLine("The slots are kept in <user data>/dssharness/admission-<machine id>.json - the user");
+        builder.AppendLine("data being LOCALAPPDATA on Windows, ~/Library/Application Support on macOS, and");
+        builder.AppendLine("$XDG_DATA_HOME or ~/.local/share on Linux - beside the hold that keeps the machine");
+        builder.AppendLine("awake: one record per machine and per user, whichever repository asks, named by the");
+        builder.AppendLine("identifier the system keeps for the machine rather than by its name, which a Mac");
+        builder.AppendLine("takes from each network it joins. Where the system keeps none - a container its");
+        builder.AppendLine("image gave no machine-id - the record is named by the machine's name, and the first");
+        builder.AppendLine("heavy leg says so. Another user's legs are counted in that user's own.");
 
         return builder.ToString();
     }
@@ -747,6 +823,8 @@ internal static class HelpCommand
         builder.AppendLine($"    {LegExit.Contended,3}  contended: wait for the other run");
         builder.AppendLine($"    {LegExit.Unwitnessed,3}  unwitnessed: find out what actually ran");
         builder.AppendLine($"    {LegExit.LogHeld,3}  log-held: find out which run still owns this leg's logs");
+        builder.AppendLine($"    {LegExit.NotAdmitted,3}  not-admitted: wait for the heavy legs it names, free memory, or raise the");
+        builder.AppendLine("         machine's limits ('help admission')");
         builder.AppendLine();
         builder.AppendLine("host-exec returns the exit code of the command it ran on the host, unchanged, or");
         builder.AppendLine($"{HarnessExit.HostUnavailable} when nothing ran there, or the command never reported how it finished.");
@@ -774,7 +852,7 @@ internal static class HelpCommand
         builder.AppendLine("""    "legBudgetMinutes": 45""");
         builder.AppendLine("  }");
         builder.AppendLine();
-        builder.AppendLine("  workflows              the workflow files whose runs are read; left empty, every");
+        builder.AppendLine("  workflows              the workflow files whose runs are read; left out, every");
         builder.AppendLine("                         .yml and .yaml file directly in .github/workflows");
         builder.AppendLine("  legJobPattern          a .NET regular expression matched against each job's name: a");
         builder.AppendLine("                         job it matches is a leg, named by its 'leg' group, and a");
@@ -876,6 +954,8 @@ internal static class HelpCommand
         builder.AppendLine("machine, so a busy laptop is not asked for more than it has while the remote hosts");
         builder.AppendLine("sit idle; defaults.maxParallelLegsTotal caps the whole fleet on top of that, for");
         builder.AppendLine("what it shares even when its machines do not - a license server, a network share.");
+        builder.AppendLine("Both are counted by one command; where a machine declares admission, its heavy legs");
+        builder.AppendLine("take its slots across every command this user runs there ('help admission').");
         builder.AppendLine("Every line says which leg it came from, and a child's own output under --verbose");
         builder.AppendLine("is tagged '<leg>/<phase>:', so several hosts building at once stay readable.");
         builder.AppendLine();
@@ -985,7 +1065,7 @@ internal static class HelpCommand
         builder.AppendLine("the lock on it, and their legs there run side by side; each worktree's first sync to");
         builder.AppendLine("a host carries its whole tree. A worktree made elsewhere, under the name of one that");
         builder.AppendLine("has a copy, is refused that copy while the other exists. This machine records which");
-        builder.AppendLine($"hosts hold a copy of which worktree, in {HarnessLayout.DirectoryName}/{HarnessLayout.HostCopiesDirectoryName} in the main");
+        builder.AppendLine($"hosts hold a copy of which worktree, in {HarnessLayout.HostCopiesDirectoryRelative} in the main");
         builder.AppendLine("checkout, and delete-worktree asks each of them to remove it.");
         builder.AppendLine();
         builder.AppendLine("An emulator declares the hosts it runs on (hostOs, hostProcessor), the processor it");
@@ -1502,10 +1582,10 @@ internal static class HelpCommand
         builder.AppendLine("                                     orchestrator and its agents keep, in the main");
         builder.AppendLine("                                     checkout, and never sent to a host by sync");
         builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
-        builder.AppendLine("  .harness-config/runs/              ignored; one directory of records per run, in");
+        builder.AppendLine($"  {HarnessLayout.RunsDirectoryRelative}/              ignored; one directory of records per run, in");
         builder.AppendLine("                                     the tree that ran it");
         builder.AppendLine("  .harness-config/lock.json          ignored; records in-progress runs");
-        builder.AppendLine($"  {HarnessLayout.DirectoryName}/{HarnessLayout.HostCopiesDirectoryName}/       ignores itself; which hosts hold a copy of");
+        builder.AppendLine($"  {HarnessLayout.HostCopiesDirectoryRelative}/       ignores itself; which hosts hold a copy of");
         builder.AppendLine("                                     which worktree, in the main checkout");
         builder.AppendLine($"  {AnchorSettings.DefaultPendingAnchorsPath}");
         builder.AppendLine("                                     tracked; live anchors (anchors.pendingAnchorsPath)");
@@ -1565,13 +1645,15 @@ internal static class HelpCommand
         builder.AppendLine($"  defaults       buildCores and testCores ({HarnessDefaults.DefaultCores} each), maxParallelLegs (per");
         builder.AppendLine("                 machine) and maxParallelLegsTotal (the whole fleet), default project,");
         builder.AppendLine("                 stallSeconds, the stall bound nothing more specific replaces");
-        builder.AppendLine("                 ('help runners')");
+        builder.AppendLine("                 ('help runners'), and admission, how heavy legs share a machine");
+        builder.AppendLine("                 ('help admission')");
         builder.AppendLine("  toolchains     compilers, as environment and cache variables (msvc, gcc, clang)");
         builder.AppendLine("  sanitizers     instrumentation overlays composed onto a build");
         builder.AppendLine("  buildConfigs   named configurations (debug, release, o1, o2)");
         builder.AppendLine("  projects       what to build, and with which adapter (cmake, dotnet, dart)");
         builder.AppendLine("  hosts          this machine (local), WSL distributions (wsl) and ssh hosts (ssh),");
-        builder.AppendLine("                 each with its own core counts and environment when they differ");
+        builder.AppendLine("                 each with its own core counts and environment when they differ,");
+        builder.AppendLine("                 and admission for this machine and each ssh host");
         builder.AppendLine("  emulators      ways to run programs for another processor on a host: qemu,");
         builder.AppendLine("                 Rosetta, Prism");
         builder.AppendLine("  developerEnvironments  what a toolchain's legs start in, set up on the host");
@@ -1588,6 +1670,14 @@ internal static class HelpCommand
         builder.AppendLine("  contention     tools that, running against a leg's build directory, void its result");
         builder.AppendLine("  worktrees      naming, path budget and path limit");
         builder.AppendLine("  anchors        the pending and done anchor registries, and how new ids are spelled");
+        builder.AppendLine();
+        builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
+        builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");
+        builder.AppendLine("platforms, toolchains, legs, processors and emulators; a toolchain's platforms; an");
+        builder.AppendLine("emulator's phases; ci.workflows; test.inputs; a project's targets and");
+        builder.AppendLine("rebuildableFormats; a platform's toolSearchDirectories. Leave the key out instead. A");
+        builder.AppendLine("list whose empty form means none - such as sync.neverTransfer, sync.exclude or");
+        builder.AppendLine("contention.buildTools - takes [] as that.");
         builder.AppendLine();
         builder.AppendLine("A toolchain, a build config and a sanitizer overlay compose: each contributes");
         builder.AppendLine("environment and cache variables, so clang x debug x asan needs no entry of its");

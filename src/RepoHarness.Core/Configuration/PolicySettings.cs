@@ -29,10 +29,12 @@ public sealed class LineEndingSettings
 public sealed class CiSettings
 {
     /// <summary>
-    /// Workflow files, relative to the repository root, whose jobs carry this repository's legs.
-    /// Empty means every workflow under <c>.github/workflows</c>.
+    /// Workflow files, relative to the repository root, whose jobs carry this repository's legs, or
+    /// <see langword="null"/> for every workflow directly in <c>.github/workflows</c>. Given empty in the file, it is
+    /// refused when the file is read, rather than read as every workflow; a list a caller builds empty reads as left
+    /// out.
     /// </summary>
-    public List<string> Workflows { get; init; } = [];
+    public List<string>? Workflows { get; init; }
 
     /// <summary>
     /// Minutes a CI leg may take before an overrun is reported, where neither its job's name nor its

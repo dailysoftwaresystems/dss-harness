@@ -349,30 +349,20 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
         });
     }
 
+    /// <summary>
+    /// Every copy the record at <paramref name="path"/> holds. Refused rather than read as empty, as the run lock is, where
+    /// it cannot be read: an empty record forgets every copy it held, and a worktree deleted then leaves its copies on the
+    /// hosts with nothing left that knows where they are.
+    /// </summary>
     /// <exception cref="HarnessException">The record is there and cannot be read.</exception>
     private IReadOnlyList<HostCopyEntry> Read(string path)
-    {
-        if (!_fileSystem.FileExists(path))
-        {
-            return [];
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<Document>(_fileSystem.ReadAllText(path), Options)?.Copies ?? [];
-        }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
-        {
-            // Refused rather than read as empty, as the run lock is: an empty record forgets every copy it held,
-            // and a worktree deleted then leaves its copies on the hosts with nothing left that knows where they are.
-            throw new HarnessException(
-                HarnessExit.Refused,
-                $"'{path}' records which hosts hold a copy of which worktree, and it cannot be read: {ex.Message.TrimEnd('.')}. "
+        => MachineWideFile.Read<Document>(
+            _fileSystem,
+            path,
+            ex => $"'{path}' records which hosts hold a copy of which worktree, and it cannot be read: {ex.Message.TrimEnd('.')}. "
                 + "No worktree is synced to a host, nor has its copies there removed, until it can. Delete it to forget the "
-                + "copies it records, each of which then stays on its host for you to remove.",
-                ex);
-        }
-    }
+                + "copies it records, each of which then stays on its host for you to remove.")?.Copies
+            ?? [];
 
     private static string Whole(string path) => System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(path));
 

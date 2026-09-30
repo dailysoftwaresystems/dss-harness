@@ -71,3 +71,21 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual void ProtectSecretFile(string path) => inner.ProtectSecretFile(path);
 }
+
+/// <summary>The real file system, whose atomic writes fail while <see cref="Full"/> says so, as a full disk's do.</summary>
+/// <param name="inner">The file system every member passes through to.</param>
+internal sealed class FullDiskFileSystem(IFileSystem inner) : PassThroughFileSystem(inner)
+{
+    /// <summary>Whether a write fails.</summary>
+    public bool Full { get; set; }
+
+    public override void WriteAllTextAtomic(string path, string contents)
+    {
+        if (Full)
+        {
+            throw new IOException("There is not enough space on the disk.");
+        }
+
+        base.WriteAllTextAtomic(path, contents);
+    }
+}

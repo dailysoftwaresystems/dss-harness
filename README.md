@@ -78,7 +78,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |
 | `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, worktrees, orchestrators, anchors, layout, secrets, tools, runners, verdicts and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, anchors, layout, secrets, tools, runners, verdicts and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
@@ -109,6 +109,15 @@ run at once *on any one machine*, so a busy laptop is not asked for more than it
 remote hosts sit idle, and `defaults.maxParallelLegsTotal` caps the whole fleet for what it shares
 even when its machines do not — a license server, a network share, a sync's bandwidth.
 
+Both are counted by one command. Where a machine declares `admission` — under `defaults`, or its own
+under `hosts.local` or an ssh host — its heavy legs (a build, a test, a runner that requires the build
+or says `"heavy": true`) share it across every command this user runs there: each waits for one of
+its `heavyLegs` slots, in the order they asked, then for the memory in use to fall below
+`maxMemoryPercent`, says who holds each slot while it waits, and names on its line how long it waited
+and the memory it started at. A WSL distribution's legs take this machine's slots; an ssh host takes
+its own. One that waited `maxWaitMinutes` is `not-admitted`, exit 7, naming what held the slots and
+where they are recorded, and nothing of it ran. Run `dssharness help admission` for the rules.
+
 ## Design
 
 Three principles the implementation actually holds to:
@@ -117,8 +126,8 @@ Three principles the implementation actually holds to:
 never shares an exit code with "the harness could not run" — the remedies differ.
 Run `dssharness help exit-codes` for the full table, which is generated from the
 code rather than written by hand. A configuration file with an unknown key, a key
-written twice, or a reference to something undeclared is rejected when it is read, with
-every problem listed at once.
+written twice, a list given empty where leaving it out means every one or a set the tool chooses, or a reference to
+something undeclared is rejected when it is read, with every problem listed at once.
 
 **One behaviour everywhere.** Windows, macOS and Linux run the same code path. The
 operating system is observed in two tightly scoped places and nowhere else;

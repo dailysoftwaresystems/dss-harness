@@ -304,7 +304,7 @@ public sealed class CMakeAdapter : IBuildAdapter
             "--parallel", request.Cores.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
 
-        foreach (var target in request.Project.Targets)
+        foreach (var target in request.Project.Targets ?? [])
         {
             build.Add("--target");
             build.Add(target);
@@ -455,7 +455,7 @@ public sealed class DartAdapter : IBuildAdapter
 
         var arguments = new List<string> { "compile", "exe" };
 
-        foreach (var target in request.Project.Targets)
+        foreach (var target in request.Project.Targets ?? [])
         {
             arguments.Add(target);
         }

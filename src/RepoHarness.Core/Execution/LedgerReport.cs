@@ -63,6 +63,9 @@ public sealed record LedgerLine(
     /// <summary>The developer environment the leg's processes started in, where it was set up.</summary>
     public Hosts.DeveloperEnvironmentFact? DeveloperEnvironment { get; init; }
 
+    /// <summary>How the leg's machine took it, as <see cref="LegEntry.Admission"/> says.</summary>
+    public AdmissionFact? Admission { get; init; }
+
     /// <summary>What the leg's build directory held and the room on its filesystem, as <see cref="LegEntry.Space"/> says.</summary>
     public BuildSpace? Space { get; init; }
 
@@ -278,6 +281,7 @@ public sealed class LedgerReport
                     LogTail = entry.LogTail,
                     Compilers = entry.Compilers,
                     DeveloperEnvironment = entry.DeveloperEnvironment,
+                    Admission = entry.Admission,
                     Space = entry.Space,
                     KeptOutputs = entry.KeptOutputs,
                     Project = entry.Project,
@@ -345,7 +349,7 @@ public sealed class LedgerReport
             line.Leg,
             Verdicts.Display(line.Verdict),
             FormatDuration(line.Duration),
-            Marked(line.Detail, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.TestCountNote),
+            Marked(line.Detail, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.Admission, line.TestCountNote),
             leg,
             verdict,
             duration)));
@@ -551,6 +555,17 @@ public sealed class LedgerReport
                     ? environment with { InstallationPath = show(environment.InstallationPath) }
                     : null,
 
+                // Only where the leg is heavy and its machine declares admission: taken or not, how long it waited,
+                // the memory in use, what held the slots where it was not taken for want of one, and the record they
+                // are kept in.
+                Admission = line.Admission is { } admission
+                    ? admission with
+                    {
+                        Holders = admission.Holders?.Select(show).ToList(),
+                        Record = admission.Record is { } record ? show(record) : null,
+                    }
+                    : null,
+
                 // Only where the command measured the leg's build directory: clean.
                 Space = line.Space is { } space
                     ? space with { Directory = show(space.Directory), Disk = space.Disk is { } disk ? disk with { Filesystem = show(disk.Filesystem) } : null }
@@ -720,12 +735,14 @@ public sealed class LedgerReport
 
     /// <summary>
     /// <paramref name="detail"/> with the compilers the leg built with, the developer environment it
-    /// started in, a test count that stands apart and the timing mark, for a line that shows one leg.
+    /// started in, how its machine admitted it, a test count that stands apart and the timing mark, for a
+    /// line that shows one leg.
     /// </summary>
     /// <param name="detail">What the leg said.</param>
     /// <param name="notes">Why its timings are suspect, if they are.</param>
     /// <param name="compilers">The compilers CMake configured its build with.</param>
     /// <param name="developerEnvironment">The developer environment its processes started in, if one was set up.</param>
+    /// <param name="admission">How its machine took it, where it is heavy and the machine declares admission.</param>
     /// <param name="testCountNote">Why its test count stands apart from its siblings', if it does.</param>
     /// <remarks>
     /// Composed here, from fields that travel beside the detail rather than inside it, so a ledger a
@@ -736,6 +753,7 @@ public sealed class LedgerReport
         IReadOnlyList<string> notes,
         IReadOnlyList<Build.CompilerFact> compilers,
         Hosts.DeveloperEnvironmentFact? developerEnvironment,
+        AdmissionFact? admission,
         string? testCountNote)
     {
         var parts = new List<string>();
@@ -753,6 +771,12 @@ public sealed class LedgerReport
         if (developerEnvironment is not null)
         {
             parts.Add(developerEnvironment.Describe());
+        }
+
+        // A leg not let start says why as its detail; one let start says how, beside it.
+        if (admission?.Describe() is { } admitted)
+        {
+            parts.Add(admitted);
         }
 
         if (testCountNote is { Length: > 0 })
@@ -774,5 +798,7 @@ public sealed class LedgerReport
     private static string Row(string leg, string verdict, string duration, string detail, int legWidth, int verdictWidth, int durationWidth)
         => (leg.PadRight(legWidth) + "  " + verdict.PadRight(verdictWidth) + "  " + duration.PadLeft(durationWidth) + "  " + detail).TrimEnd();
 
-    private static double Seconds(TimeSpan duration) => Math.Round(duration.TotalSeconds, 3);
+    /// <summary>A duration as every seconds field of <c>--json</c> gives it: to the millisecond.</summary>
+    /// <param name="duration">The duration.</param>
+    internal static double Seconds(TimeSpan duration) => Math.Round(duration.TotalSeconds, 3);
 }
