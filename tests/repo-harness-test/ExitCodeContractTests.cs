@@ -79,6 +79,7 @@ public sealed class ExitCodeContractTests
         Assert.InRange(LegExit.Contended, 1, 9);
         Assert.InRange(LegExit.Unwitnessed, 1, 9);
         Assert.InRange(LegExit.LogHeld, 1, 9);
+        Assert.InRange(LegExit.NotAdmitted, 1, 9);
     }
 
     [Fact]
@@ -91,6 +92,7 @@ public sealed class ExitCodeContractTests
         Assert.Equal(LegExit.Contended, Verdicts.ExitCodeFor(LegVerdict.Contended));
         Assert.Equal(LegExit.Unwitnessed, Verdicts.ExitCodeFor(LegVerdict.Unwitnessed));
         Assert.Equal(LegExit.LogHeld, Verdicts.ExitCodeFor(LegVerdict.LogHeld));
+        Assert.Equal(LegExit.NotAdmitted, Verdicts.ExitCodeFor(LegVerdict.NotAdmitted));
 
         // And the three that reuse a shared code, because their remedy is the shared one.
         Assert.Equal(HarnessExit.CommandFailed, Verdicts.ExitCodeFor(LegVerdict.Failed));

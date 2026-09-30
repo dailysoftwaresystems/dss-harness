@@ -146,7 +146,50 @@ public static partial class HarnessConfigValidator
         {
             problems.Add($"defaults.project '{project}' is not declared in projects");
         }
+
+        ValidateAdmission(defaults.Admission, "defaults.admission", problems);
     }
+
+    /// <summary>Checks one admission section: every field it declares is one a machine can admit legs by.</summary>
+    /// <param name="admission">The section, or <see langword="null"/> where it is left out.</param>
+    /// <param name="owner">Where it is, as a problem names it.</param>
+    /// <param name="problems">Where problems are added.</param>
+    private static void ValidateAdmission(AdmissionSettings? admission, string owner, List<string> problems)
+    {
+        if (admission is null)
+        {
+            return;
+        }
+
+        if (admission.HeavyLegs is { } heavyLegs)
+        {
+            RequireAtLeastOne(heavyLegs, $"{owner} heavyLegs", problems);
+        }
+
+        // A limit of 0 would admit nothing, and one above 100 everything: neither is a limit.
+        if (admission.MaxMemoryPercent is { } percent && !(double.IsFinite(percent) && percent is > 0 and <= 100))
+        {
+            problems.Add($"{owner} maxMemoryPercent must be above 0 and at most 100, found {Number(percent)}");
+        }
+
+        if (admission.SettleSeconds is { } settle && (settle.Count != 2 || settle[0] < 0 || settle[0] > settle[1]))
+        {
+            problems.Add($"{owner} settleSeconds is [least, most], two whole numbers of seconds with the least first, found [{string.Join(", ", settle)}]");
+        }
+
+        if (admission.PollSeconds is { } poll)
+        {
+            RequireAtLeastOne(poll, $"{owner} pollSeconds", problems);
+        }
+
+        if (admission.MaxWaitMinutes is { } wait && !(double.IsFinite(wait) && wait > 0))
+        {
+            problems.Add($"{owner} maxWaitMinutes must be above 0, found {Number(wait)}");
+        }
+    }
+
+    /// <summary>A number as a problem says it, the same on every machine.</summary>
+    private static string Number(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     private static void ValidateWorktrees(WorktreeSettings worktrees, List<string> problems)
     {
@@ -304,7 +347,8 @@ public static partial class HarnessConfigValidator
 
     private static void ValidateCi(CiSettings ci, List<string> problems)
     {
-        RequireRelativePaths(ci.Workflows, "ci.workflows", problems);
+        RefuseGivenEmpty(ci.Workflows, "ci.workflows", "name the workflow files", "every workflow under .github/workflows", problems);
+        RequireRelativePaths(ci.Workflows ?? [], "ci.workflows", problems);
 
         if (ci.LegBudgetMinutes < 0)
         {
@@ -379,7 +423,15 @@ public static partial class HarnessConfigValidator
                     + $"known types are {string.Join(", ", ProjectTypes)}");
             }
 
-            foreach (var format in project.RebuildableFormats)
+            RefuseGivenEmpty(project.Targets, $"project '{project.Name}' targets", "name the targets to build", "the project's own default target", problems);
+            RefuseGivenEmpty(
+                project.RebuildableFormats,
+                $"project '{project.Name}' rebuildableFormats",
+                "name the kinds of file its build reads",
+                $"the set its type '{project.Type}' uses",
+                problems);
+
+            foreach (var format in project.RebuildableFormats ?? [])
             {
                 // A blank entry in a list that is otherwise a statement. Left alone it matches
                 // every file's extension against "." and nothing's name, which is neither what it
@@ -440,7 +492,7 @@ public static partial class HarnessConfigValidator
             }
 
             ValidateBuildOutputs(config, project, problems);
-            ValidateTest(project.Test, $"project '{project.Name}'", config, problems);
+            ValidateTest(project.Test, $"project '{project.Name}'", problems);
         }
     }
 
@@ -569,6 +621,8 @@ public static partial class HarnessConfigValidator
 
         foreach (var (name, toolchain) in config.Toolchains)
         {
+            RefuseGivenEmpty(toolchain.Platforms, $"toolchain '{name}' platforms", "name the platforms it exists on", "every platform", problems);
+
             foreach (var platform in toolchain.Platforms)
             {
                 if (!PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
@@ -604,10 +658,12 @@ public static partial class HarnessConfigValidator
                         + "under developerEnvironments");
                 }
                 else if (string.Equals(environment.Kind, DeveloperEnvironmentKinds.VisualStudio, StringComparison.OrdinalIgnoreCase)
+                    && toolchain.Platforms.Count > 0
                     && !(toolchain.Platforms is [var only] && string.Equals(only, PlatformNames.Windows, StringComparison.OrdinalIgnoreCase)))
                 {
                     // Placed on a host of another system the leg would be turned away there, every
-                    // time, for want of an environment that system never has.
+                    // time, for want of an environment that system never has. Platforms given empty
+                    // are refused on their own account, above.
                     problems.Add(
                         $"toolchain '{name}' names developer environment '{environmentName}', which Visual Studio sets "
                         + $"up on windows alone, and declares platforms {string.Join(", ", toolchain.Platforms)}; declare "
@@ -687,6 +743,7 @@ public static partial class HarnessConfigValidator
     private static void ValidateHosts(HostsConfig hosts, List<string> problems)
     {
         ValidateHostSettings(hosts.Local, "hosts.local", problems);
+        ValidateAdmission(hosts.Local.Admission, "hosts.local admission", problems);
 
         foreach (var (name, host) in hosts.Wsl)
         {
@@ -695,6 +752,15 @@ public static partial class HarnessConfigValidator
             CheckHostName(name, owner, problems);
             ValidateHostSettings(host, owner, problems);
             CheckRepositoryPath(host.RepositoryPath, owner, allowWindowsPaths: false, problems);
+
+            // Its legs are this machine's heavy legs: they take this machine's slots, against this machine's memory,
+            // which the distribution's own figures do not show. Read, a section here would be a second rule for them.
+            if (host.Admission is not null)
+            {
+                problems.Add(
+                    $"{owner} admission: a WSL distribution runs on this machine, and its heavy legs take this machine's "
+                    + "slots against this machine's memory; declare admission under hosts.local or defaults");
+            }
         }
 
         foreach (var (name, host) in hosts.Ssh)
@@ -703,6 +769,7 @@ public static partial class HarnessConfigValidator
 
             CheckHostName(name, owner, problems);
             ValidateHostSettings(host, owner, problems);
+            ValidateAdmission(host.Admission, $"{owner} admission", problems);
             CheckRepositoryPath(host.RepositoryPath, owner, allowWindowsPaths: true, problems);
             RequireAtLeastOne(host.ConnectTimeoutSeconds, $"{owner} connectTimeoutSeconds", problems);
             RequireAtLeastOne(host.KeepAliveSeconds, $"{owner} keepAliveSeconds", problems);
@@ -927,7 +994,7 @@ public static partial class HarnessConfigValidator
                 problems.Add($"{owner} buildSpaceGiB must be a positive number of GiB, found {room.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
             }
 
-            ValidateTest(leg.Test, owner, config, problems);
+            ValidateTest(leg.Test, owner, problems);
         }
 
         foreach (var (setName, legs) in config.LegSets)
@@ -1078,7 +1145,12 @@ public static partial class HarnessConfigValidator
 
             CheckPattern(tool.Probe?.Regex, $"tool '{tool.Name}' probe.regex", problems);
 
-            foreach (var platform in tool.Platforms)
+            foreach (var (key, values, leftOut) in Scopes(tool))
+            {
+                RefuseGivenEmpty(values, $"tool '{tool.Name}' {key}", "name the ones it is needed for", leftOut, problems);
+            }
+
+            foreach (var platform in tool.Platforms ?? [])
             {
                 if (!PlatformKeys.Contains(platform, StringComparer.OrdinalIgnoreCase))
                 {
@@ -1088,13 +1160,13 @@ public static partial class HarnessConfigValidator
                 }
             }
 
-            RequireDeclared(tool, "toolchain", tool.Toolchains, name => config.Toolchains.ContainsKey(name), "is not declared under toolchains", problems);
-            RequireDeclared(tool, "leg", tool.Legs, name => config.Legs.ContainsKey(name) || config.LegSets.ContainsKey(name), "is neither a leg nor a leg set", problems);
-            RequireDeclared(tool, "emulator", tool.Emulators, name => config.Emulators.ContainsKey(name), "is not declared under emulators", problems);
+            RequireDeclared(tool, "toolchain", tool.Toolchains ?? [], name => config.Toolchains.ContainsKey(name), "is not declared under toolchains", problems);
+            RequireDeclared(tool, "leg", tool.Legs ?? [], name => config.Legs.ContainsKey(name) || config.LegSets.ContainsKey(name), "is neither a leg nor a leg set", problems);
+            RequireDeclared(tool, "emulator", tool.Emulators ?? [], name => config.Emulators.ContainsKey(name), "is not declared under emulators", problems);
             RequireDeclared(
                 tool,
                 "processor",
-                tool.Processors,
+                tool.Processors ?? [],
                 name => PlatformNames.Processors.Contains(name, StringComparer.OrdinalIgnoreCase),
                 $"is not a processor; expected one of {string.Join(", ", PlatformNames.Processors)}",
                 problems);
@@ -1148,7 +1220,9 @@ public static partial class HarnessConfigValidator
     {
         foreach (var (name, runner) in config.PredefinedRunners)
         {
-            foreach (var leg in runner.Legs.Where(leg => !config.Legs.ContainsKey(leg)))
+            RefuseGivenEmpty(runner.Legs, $"predefined runner '{name}' legs", "name the legs it runs", "every declared leg", problems);
+
+            foreach (var leg in (runner.Legs ?? []).Where(leg => !config.Legs.ContainsKey(leg)))
             {
                 problems.Add($"predefined runner '{name}' names leg '{leg}', which is not declared");
             }
@@ -1202,6 +1276,14 @@ public static partial class HarnessConfigValidator
             if (runner.StallSeconds is { } runnerStall && runnerStall < 0)
             {
                 problems.Add($"predefined runner '{name}' has a negative stallSeconds");
+            }
+
+            // Its build is heavy whatever the runner says, so a file saying otherwise says what nothing does.
+            if (runner.Heavy == false && runner.RequireBuild)
+            {
+                problems.Add(
+                    $"predefined runner '{name}' says heavy is false and requires the build, which is heavy: "
+                    + "leave heavy out, or drop requireBuild");
             }
 
             ValidateExpectedExceptions(config, name, runner, problems);
@@ -1467,7 +1549,7 @@ public static partial class HarnessConfigValidator
     }
 
     /// <summary>Checks the parts of a test section that can be wrong without being malformed.</summary>
-    private static void ValidateTest(TestConfig? test, string owner, HarnessConfig config, List<string> problems)
+    private static void ValidateTest(TestConfig? test, string owner, List<string> problems)
     {
         if (test is null)
         {
@@ -1479,12 +1561,8 @@ public static partial class HarnessConfigValidator
             problems.Add($"{owner} test declares no invocation; add 'all' or a platform section");
         }
 
-        foreach (var configName in test.Configs.Where(configName => !config.BuildConfigs.ContainsKey(configName)))
-        {
-            problems.Add($"{owner} test names config '{configName}', which is not declared");
-        }
-
-        RequireRelativePaths(test.Inputs, $"{owner} test.inputs", problems);
+        RefuseGivenEmpty(test.Inputs, $"{owner} test.inputs", "name what the tests read", "every file git tracks", problems);
+        RequireRelativePaths(test.Inputs ?? [], $"{owner} test.inputs", problems);
 
         (string Section, TestInvocation? Invocation)[] sections =
         [
@@ -1787,16 +1865,39 @@ public static partial class HarnessConfigValidator
     private static string Scope(ToolConfig tool)
         => string.Join(
             " and ",
-            new (string Name, List<string> Values)[]
-            {
-                ("platforms", tool.Platforms),
-                ("toolchains", tool.Toolchains),
-                ("legs", tool.Legs),
-                ("processors", tool.Processors),
-                ("emulators", tool.Emulators),
-            }
-            .Where(axis => axis.Values.Count > 0)
-            .Select(axis => $"{axis.Name} {string.Join(", ", axis.Values)}"));
+            Scopes(tool)
+                .Where(axis => axis.Values is { Count: > 0 })
+                .Select(axis => $"{axis.Key} {string.Join(", ", axis.Values!)}"));
+
+    /// <summary>Each scope a tool may declare: its key, what it names, and what leaving it out means.</summary>
+    private static (string Key, List<string>? Values, string LeftOut)[] Scopes(ToolConfig tool)
+        =>
+        [
+            ("platforms", tool.Platforms, "every platform"),
+            ("toolchains", tool.Toolchains, "every toolchain"),
+            ("legs", tool.Legs, "every leg"),
+            ("processors", tool.Processors, "every processor"),
+            ("emulators", tool.Emulators, "every leg, emulated or not"),
+        ];
+
+    /// <summary>
+    /// Refuses a list given empty where leaving the key out means every one of what it names, or a default
+    /// set: an empty list is never read as that. Read as the key left out, a runner's <c>"legs": []</c> ran it
+    /// on every declared leg - synced to every host and run on all eight legs for a list naming none - which is
+    /// why <c>--legs</c> given no name is refused too; and read as none, it would say what nothing means.
+    /// </summary>
+    /// <param name="list">The list, or <see langword="null"/> where the key is left out.</param>
+    /// <param name="setting">The key, as a problem names it.</param>
+    /// <param name="name">What to write instead, as the remedy says it: "name the legs it runs".</param>
+    /// <param name="leftOut">What leaving the key out means: "every declared leg".</param>
+    /// <param name="problems">Where the problem is added.</param>
+    private static void RefuseGivenEmpty<T>(IReadOnlyCollection<T>? list, string setting, string name, string leftOut, List<string> problems)
+    {
+        if (list is { Count: 0 })
+        {
+            problems.Add($"{setting} is given empty, which is never read as {leftOut}: {name}, or leave the key out for {leftOut}");
+        }
+    }
 
     /// <summary>Checks a pattern that must compile and capture the named group <paramref name="group"/>.</summary>
     /// <param name="pattern">The pattern, or <see langword="null"/> where none is set.</param>

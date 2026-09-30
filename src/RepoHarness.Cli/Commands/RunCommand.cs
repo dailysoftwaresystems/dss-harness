@@ -140,9 +140,9 @@ internal static class RunCommand
 
             // The runner's own legs when --legs was left out. Resolved here rather than left to the
             // default of every declared leg, because running a benchmark on hosts nobody meant to
-            // measure is not what "no --legs" asks for.
-            var declared = runner.Legs;
-            var selected = named ?? (declared.Count > 0 ? declared : null);
+            // measure is not what "no --legs" asks for. Every declared leg only where the runner
+            // leaves its legs out: a list given empty was refused when the file was read.
+            var selected = named ?? runner.Legs;
 
             // A leg whose operating system no step runs on would run nothing and pass, and one on which
             // none of the steps this run named runs would run only what they need and pass. Refused here,

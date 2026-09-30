@@ -151,6 +151,12 @@ public sealed record LegEntry
     public Hosts.DeveloperEnvironmentFact? DeveloperEnvironment { get; init; }
 
     /// <summary>
+    /// How the leg's machine took it, where it is heavy and that machine declares admission: how long it waited, and
+    /// the memory in use it started at. Named on its line with whatever verdict it reached, as the compilers are.
+    /// </summary>
+    public AdmissionFact? Admission { get; init; }
+
+    /// <summary>
     /// What the leg's build directory held and the room on its filesystem, where the command measured
     /// them: <c>clean</c>, whether it removed the directory or only looked.
     /// </summary>
@@ -233,7 +239,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName)
             _entries.Add(entry);
         }
 
-        var said = LedgerReport.Marked(entry.Detail, [], entry.Compilers, entry.DeveloperEnvironment, testCountNote: null);
+        var said = LedgerReport.Marked(entry.Detail, [], entry.Compilers, entry.DeveloperEnvironment, entry.Admission, testCountNote: null);
 
         Transition(entry.Leg, Verdicts.Display(entry.Verdict) + (said.Length > 0 ? $" ({said})" : string.Empty));
     }

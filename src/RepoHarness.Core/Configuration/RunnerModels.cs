@@ -18,9 +18,12 @@ public sealed class RunnerConfig
     [Description("what the runner is for, shown in help and in the ledger")]
     public string? Description { get; init; }
 
-    /// <summary>Legs this runner executes against. Empty means the default set.</summary>
-    [Description("the legs it runs when --legs names none")]
-    public List<string> Legs { get; init; } = [];
+    /// <summary>
+    /// Legs this runner executes against when <c>--legs</c> names none, or <see langword="null"/> for every
+    /// declared leg. Given empty, it is refused when the file is read: an empty list is never read as every leg.
+    /// </summary>
+    [Description("the legs it runs when --legs names none; absent, every leg")]
+    public List<string>? Legs { get; init; }
 
     /// <summary>Phases executed in order; a failing phase ends that leg.</summary>
     /// <remarks>
@@ -62,6 +65,14 @@ public sealed class RunnerConfig
     /// </remarks>
     [Description("build the leg before it runs")]
     public bool RequireBuild { get; init; }
+
+    /// <summary>
+    /// Whether each leg of this runner is heavy - taking one of its machine's heavy-leg slots before it starts, where
+    /// that machine declares admission - or <see langword="null"/> to be heavy only where it builds, as a runner that
+    /// requires the build is. Given false beside <see cref="RequireBuild"/> it is refused: its build is heavy.
+    /// </summary>
+    [Description("its legs take a heavy-leg slot ('help admission'); absent, only where it builds")]
+    public bool? Heavy { get; init; }
 
     /// <summary>
     /// Seconds without output after which a phase of this runner is treated as hung, replacing

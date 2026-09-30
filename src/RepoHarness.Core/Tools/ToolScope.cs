@@ -29,12 +29,15 @@ public static class ToolScope
             && Within(tool.Toolchains, VariantKey.For(config, leg, leg.Os).Toolchain)
             && Within(tool.Processors, leg.Processor)
             && Within(tool.Emulators, leg.Emulator)
-            && (tool.Legs.Count == 0 || tool.Legs.Any(name => Names(config, name, legName)));
+            && (tool.Legs is not { Count: > 0 } || tool.Legs.Any(name => Names(config, name, legName)));
     }
 
-    /// <summary>Whether a scope admits <paramref name="value"/>: left out it admits everything, and nothing admits no value.</summary>
-    private static bool Within(IReadOnlyList<string> scope, string? value)
-        => scope.Count == 0 || (value is { Length: > 0 } && scope.Contains(value, StringComparer.OrdinalIgnoreCase));
+    /// <summary>
+    /// Whether a scope admits <paramref name="value"/>: left out it admits everything, and nothing admits no value. A file
+    /// giving a scope empty is refused when it is read; one a caller builds empty reads as left out.
+    /// </summary>
+    private static bool Within(IReadOnlyList<string>? scope, string? value)
+        => scope is not { Count: > 0 } || (value is { Length: > 0 } && scope.Contains(value, StringComparer.OrdinalIgnoreCase));
 
     /// <summary>Whether <paramref name="name"/> is the leg, or a leg set holding it.</summary>
     private static bool Names(HarnessConfig config, string name, string legName)

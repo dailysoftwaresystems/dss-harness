@@ -29,16 +29,17 @@ public static class PlatformScope
     /// <paramref name="platformKey"/>.
     /// </summary>
     /// <remarks>
-    /// An empty list applies everywhere, as <see cref="Every"/> does: a setting that named no
-    /// platform at all would otherwise apply nowhere, which is never what leaving a list out means.
-    /// An unmeasured platform also applies, because refusing what cannot be placed would turn a
-    /// host nobody could measure into a host that needs nothing.
+    /// A list left out applies everywhere, as <see cref="Every"/> does: a setting that named no platform
+    /// at all would otherwise apply nowhere, which is never what leaving a list out means. A file giving
+    /// one empty is refused when it is read, since an empty list is never read as every platform; one a
+    /// caller builds empty reads as left out. An unmeasured platform also applies, because refusing what
+    /// cannot be placed would turn a host nobody could measure into a host that needs nothing.
     /// </remarks>
-    /// <param name="platforms">The platforms the entry names, or <see cref="Every"/>.</param>
+    /// <param name="platforms">The platforms the entry names, or <see langword="null"/> where it names none.</param>
     /// <param name="platformKey">The platform being asked about, as <see cref="PlatformNames"/> spells it.</param>
     public static bool Applies(IReadOnlyList<string>? platforms, string? platformKey)
     {
-        if (platforms is null || platforms.Count == 0 || string.IsNullOrWhiteSpace(platformKey))
+        if (platforms is not { Count: > 0 } || string.IsNullOrWhiteSpace(platformKey))
         {
             return true;
         }

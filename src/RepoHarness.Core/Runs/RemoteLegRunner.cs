@@ -231,7 +231,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             // Why a leg did not run there is that host's reason, and is named by the host this
             // machine knows: the host places the leg on itself, and has no name for itself but
             // "this machine".
-            Detail = !string.IsNullOrEmpty(entry.Detail) && (Verdicts.IsSkip(verdict) || verdict is LegVerdict.RefusedLocked or LegVerdict.LogHeld)
+            Detail = !string.IsNullOrEmpty(entry.Detail) && (Verdicts.IsSkip(verdict) || verdict is LegVerdict.RefusedLocked or LegVerdict.LogHeld or LegVerdict.NotAdmitted)
                 ? $"{leg.Host.Host}: {entry.Detail}"
                 : entry.Detail ?? string.Empty,
             Duration = TimeSpan.FromSeconds(entry.DurationSeconds),
@@ -257,6 +257,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             LogTail = [.. entry.LogTail ?? []],
             Compilers = [.. entry.Compilers ?? []],
             DeveloperEnvironment = entry.DeveloperEnvironment,
+
+            // How that host's machine took the leg, as it measured itself.
+            Admission = entry.Admission,
 
             // Measured there, of the directory there: the host's own path and filesystem.
             Space = entry.Space,
@@ -291,5 +294,6 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<string>? UnselectedSteps = null,
         IReadOnlyList<string>? RanSteps = null,
         BuildSpace? Space = null,
-        IReadOnlyList<string>? KeptOutputs = null);
+        IReadOnlyList<string>? KeptOutputs = null,
+        AdmissionFact? Admission = null);
 }

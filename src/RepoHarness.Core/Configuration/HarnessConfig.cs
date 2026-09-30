@@ -187,6 +187,12 @@ public sealed class HarnessDefaults
     public string? Project { get; init; }
 
     /// <summary>
+    /// How heavy legs are admitted onto every machine that declares nothing of its own, or <see langword="null"/>
+    /// where only such machines as declare their own admit them: see <see cref="AdmissionSettings"/>.
+    /// </summary>
+    public AdmissionSettings? Admission { get; init; }
+
+    /// <summary>
     /// Seconds without output after which a phase is treated as hung; zero disables
     /// the check. A stall bound is used rather than a wall clock budget because
     /// output cadence stays stable even when total duration does not.

@@ -1,0 +1,100 @@
+namespace RepoHarness.Core.Configuration;
+
+/// <summary>
+/// How heavy legs are admitted onto one physical machine: at most <see cref="HeavyLegs"/> at once across every
+/// DssHarness this user runs there, each started only once the machine's memory in use is below
+/// <see cref="MaxMemoryPercent"/>. Declared under <c>defaults</c>, or under a host that is a machine of its own - this
+/// one, or an ssh host - whose fields replace the defaults' one by one. A machine where neither declares one admits
+/// every leg at once, as it always did.
+/// </summary>
+/// <remarks>
+/// For a machine that several separate commands build on at once - worktrees each running a gate of their own -
+/// where <c>maxParallelLegs</c>, which one command counts, cannot see the others: four such builds drove one
+/// machine's committed memory to 81 of 113.7 GB, and the process that had started them died.
+/// </remarks>
+public sealed class AdmissionSettings
+{
+    /// <summary>Heavy legs a machine runs at once when a section says nothing.</summary>
+    public const int DefaultHeavyLegs = 2;
+
+    /// <summary>The memory in use, in percent, a heavy leg starts below when a section says nothing.</summary>
+    public const double DefaultMaxMemoryPercent = 76;
+
+    /// <summary>The seconds a settle lasts when a section says nothing: at least the first, at most the second.</summary>
+    public static IReadOnlyList<int> DefaultSettleSeconds { get; } = [15, 90];
+
+    /// <summary>Seconds between looks at the slots and the memory when a section says nothing.</summary>
+    public const int DefaultPollSeconds = 30;
+
+    /// <summary>Minutes a leg waits to be admitted, when a section says nothing, before it is not.</summary>
+    public const double DefaultMaxWaitMinutes = 60;
+
+    /// <summary>
+    /// Heavy legs the machine runs at once, across every command this user runs there: each takes a slot before it
+    /// starts, in the order they asked, and gives it back when its heavy work ends.
+    /// </summary>
+    public int? HeavyLegs { get; init; }
+
+    /// <summary>
+    /// The memory in use, in percent of what the machine can give, a leg holding a slot starts below: on Windows its
+    /// commit charge against its commit limit, on Linux what the kernel counts as not available, and on macOS what it
+    /// counts as not free.
+    /// </summary>
+    public double? MaxMemoryPercent { get; init; }
+
+    /// <summary>
+    /// The least and the most seconds, as <c>[least, most]</c>, a leg waits once the memory is below the limit - a
+    /// time picked at random between them - before it looks again and starts only if it still is; so two legs taking
+    /// their slots together do not both start on one reading. Skipped where no other leg holds a slot there.
+    /// </summary>
+    public List<int>? SettleSeconds { get; init; }
+
+    /// <summary>Seconds between looks at the slots and at the memory while a leg waits.</summary>
+    public int? PollSeconds { get; init; }
+
+    /// <summary>
+    /// Minutes a leg waits, for a slot and then for the memory, before it is reported <c>not-admitted</c>, naming what
+    /// held the slots and the memory in use, and nothing of it runs.
+    /// </summary>
+    public double? MaxWaitMinutes { get; init; }
+
+    /// <summary>
+    /// The rule a machine admits heavy legs by: each field its own section declares, or else the defaults' section's,
+    /// or else the built-in value; <see langword="null"/> where neither section is declared, and every leg is
+    /// admitted at once.
+    /// </summary>
+    /// <param name="machine">The machine's own section, or <see langword="null"/>.</param>
+    /// <param name="defaults">The <c>defaults</c> section, or <see langword="null"/>.</param>
+    public static AdmissionRule? RuleFor(AdmissionSettings? machine, AdmissionSettings? defaults)
+    {
+        if (machine is null && defaults is null)
+        {
+            return null;
+        }
+
+        var settle = machine?.SettleSeconds ?? defaults?.SettleSeconds ?? DefaultSettleSeconds;
+
+        return new AdmissionRule(
+            machine?.HeavyLegs ?? defaults?.HeavyLegs ?? DefaultHeavyLegs,
+            machine?.MaxMemoryPercent ?? defaults?.MaxMemoryPercent ?? DefaultMaxMemoryPercent,
+            TimeSpan.FromSeconds(settle[0]),
+            TimeSpan.FromSeconds(settle[^1]),
+            TimeSpan.FromSeconds(machine?.PollSeconds ?? defaults?.PollSeconds ?? DefaultPollSeconds),
+            TimeSpan.FromMinutes(machine?.MaxWaitMinutes ?? defaults?.MaxWaitMinutes ?? DefaultMaxWaitMinutes));
+    }
+}
+
+/// <summary>The rule one machine admits heavy legs by, every field decided.</summary>
+/// <param name="HeavyLegs">Heavy legs the machine runs at once, across every command.</param>
+/// <param name="MaxMemoryPercent">The memory in use a leg holding a slot starts below.</param>
+/// <param name="SettleLeast">The least a settle lasts.</param>
+/// <param name="SettleMost">The most a settle lasts.</param>
+/// <param name="Poll">The time between looks while a leg waits.</param>
+/// <param name="MaxWait">How long a leg waits before it is not admitted.</param>
+public sealed record AdmissionRule(
+    int HeavyLegs,
+    double MaxMemoryPercent,
+    TimeSpan SettleLeast,
+    TimeSpan SettleMost,
+    TimeSpan Poll,
+    TimeSpan MaxWait);

@@ -79,6 +79,7 @@ public sealed class LegRunService(
     ISyncService syncService,
     ISyncTransportFactory transportFactory,
     RemoteLegRunner remoteLegs,
+    LegAdmission admission,
     KeepAwake keepAwake,
     DeveloperEnvironmentProvider developerEnvironments,
     IFileSystem fileSystem,
@@ -94,6 +95,7 @@ public sealed class LegRunService(
     private readonly ISyncService _syncService = syncService;
     private readonly ISyncTransportFactory _transportFactory = transportFactory;
     private readonly RemoteLegRunner _remoteLegs = remoteLegs;
+    private readonly LegAdmission _admission = admission;
     private readonly KeepAwake _keepAwake = keepAwake;
     private readonly DeveloperEnvironmentProvider _developerEnvironments = developerEnvironments;
     private readonly IFileSystem _fileSystem = fileSystem;
@@ -432,67 +434,149 @@ public sealed class LegRunService(
         // a lock was held.
         await using (handle)
         {
-            // A leg placed on another machine runs on that machine. Doing the work here instead
-            // would produce a verdict about the machine that typed the command, under the name of
-            // the leg that was supposed to check a different one — which is the whole failure a
-            // harness exists to prevent, wearing a green colour.
-            if (leg.Host.Host.Kind != HostKind.Local && request.Here is null)
+            // A heavy leg waits here, before any of its work, until its machine takes it; its slot is given back when
+            // its work ends, and before the lock is.
+            using var admitted = await AdmitAsync(context, leg, request, runId, ledger, cancellationToken).ConfigureAwait(false);
+
+            if (admitted is { Refusal: { } refusal })
             {
-                return await _remoteLegs
-                    .RunAsync(
-                        commandName,
-                        leg,
-                        request.RemoteArguments ?? [],
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                return new LegEntry
+                {
+                    Leg = leg.Name,
+                    Verdict = LegVerdict.NotAdmitted,
+                    Detail = refusal,
+                    Duration = Stopwatch.GetElapsedTime(started),
+                    Emulated = leg.Emulated,
+                    Admission = admitted.Fact,
+                };
             }
 
-            // Held awake for as long as the leg's own work runs here, by the command this machine
-            // declares - under the section the machine that dispatched the leg knows it by.
-            await using var awake = _keepAwake.Hold(commandName, leg.Name, leg.HostSettings, leg.Host.ProgramDirectories, cancellationToken);
+            var entry = await RunTakenLegAsync(context, leg, runId, runDirectory, request, work, commandName, ledger, started, cancellationToken).ConfigureAwait(false);
 
-            var environmentName = LegPrograms.DeveloperEnvironmentOf(context.Config, leg.Leg, request.Workload);
-            DeveloperEnvironmentSetup? setUp = null;
-
-            if (environmentName is not null)
-            {
-                setUp = await SetUpDeveloperEnvironmentAsync(environmentName, leg, ledger, cancellationToken).ConfigureAwait(false);
-
-                if (setUp.HasFailed)
-                {
-                    // The survey found the instance and the leg was placed here for it, so an environment
-                    // that will not set up now is the leg failing, as a program that will not start once a
-                    // leg began is: read as a skip, a gate that accepts an incomplete run passed it.
-                    return new LegEntry
-                    {
-                        Leg = leg.Name,
-                        Verdict = LegVerdict.Failed,
-                        Detail = setUp.Failure,
-                        Duration = Stopwatch.GetElapsedTime(started),
-                        Emulated = leg.Emulated,
-                    };
-                }
-
-                if (MissingInDeveloperEnvironment(context.Config, leg, request.Workload, environmentName, setUp) is { } missing)
-                {
-                    return new LegEntry
-                    {
-                        Leg = leg.Name,
-                        Verdict = missing.Verdict,
-                        Detail = missing.Reason,
-                        Duration = Stopwatch.GetElapsedTime(started),
-                        Emulated = leg.Emulated,
-                        DeveloperEnvironment = setUp.Fact,
-                    };
-                }
-
-                leg = leg with { DeveloperEnvironment = setUp.Environment };
-            }
-
-            var entry = await work(new LegWork(leg, context, runId, runDirectory, request.Time), cancellationToken).ConfigureAwait(false);
-
-            return setUp is null ? entry : entry with { DeveloperEnvironment = setUp.Fact };
+            return admitted is null ? entry : entry with { Admission = admitted.Fact };
         }
+    }
+
+    /// <summary>
+    /// Asks the machine <paramref name="leg"/>'s heavy work runs on to take it, where this process is on that machine,
+    /// the leg is heavy and the machine declares admission; <see langword="null"/> where any of those is not so.
+    /// </summary>
+    /// <remarks>
+    /// Asked by the process on the machine the work runs on, which lives exactly as long as that work: this one, for a
+    /// leg of this machine or of one of its WSL distributions, which run on it and are counted against its memory; the
+    /// host's own, for a leg on an ssh host, which is a machine of its own. A distribution running a leg this machine
+    /// dispatched to it asks nothing: this machine's process took it before dispatching it, and the distribution's own
+    /// figures do not show this machine's memory.
+    /// </remarks>
+    private async Task<Admission?> AdmitAsync(
+        HarnessContext context,
+        PlacedLeg leg,
+        LegRunRequest request,
+        RunId runId,
+        LegLedger ledger,
+        CancellationToken cancellationToken)
+    {
+        if (!request.Workload.Heavy
+            || (request.Here is null && leg.Host.Host.Kind == HostKind.Ssh)
+            || request.Here is { Kind: HostKind.Wsl })
+        {
+            return null;
+        }
+
+        var machine = leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings;
+
+        if (AdmissionSettings.RuleFor(machine.Admission, context.Config.Defaults.Admission) is not { } rule)
+        {
+            return null;
+        }
+
+        return await _admission
+            .AdmitAsync(
+                new AdmissionRequest(
+                    rule,
+                    runId.Value,
+                    ledger.CommandName,
+                    leg.Name,
+                    leg.Host.Host.Kind == HostKind.Local ? $"'{leg.HostTreeRoot}'" : $"'{leg.HostTreeRoot}' on {leg.Named}",
+                    leg.Variant.DirectoryName,
+                    message => ledger.Transition(leg.Name, message)),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>What <paramref name="leg"/> does once its lock is taken and, where it is heavy, its machine has taken it.</summary>
+    private async Task<LegEntry> RunTakenLegAsync(
+        HarnessContext context,
+        PlacedLeg leg,
+        RunId runId,
+        string runDirectory,
+        LegRunRequest request,
+        Func<LegWork, CancellationToken, Task<LegEntry>> work,
+        string commandName,
+        LegLedger ledger,
+        long started,
+        CancellationToken cancellationToken)
+    {
+        // A leg placed on another machine runs on that machine. Doing the work here instead
+        // would produce a verdict about the machine that typed the command, under the name of
+        // the leg that was supposed to check a different one — which is the whole failure a
+        // harness exists to prevent, wearing a green colour.
+        if (leg.Host.Host.Kind != HostKind.Local && request.Here is null)
+        {
+            return await _remoteLegs
+                .RunAsync(
+                    commandName,
+                    leg,
+                    request.RemoteArguments ?? [],
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        // Held awake for as long as the leg's own work runs here, by the command this machine
+        // declares - under the section the machine that dispatched the leg knows it by.
+        await using var awake = _keepAwake.Hold(commandName, leg.Name, leg.HostSettings, leg.Host.ProgramDirectories, cancellationToken);
+
+        var environmentName = LegPrograms.DeveloperEnvironmentOf(context.Config, leg.Leg, request.Workload);
+        DeveloperEnvironmentSetup? setUp = null;
+
+        if (environmentName is not null)
+        {
+            setUp = await SetUpDeveloperEnvironmentAsync(environmentName, leg, ledger, cancellationToken).ConfigureAwait(false);
+
+            if (setUp.HasFailed)
+            {
+                // The survey found the instance and the leg was placed here for it, so an environment
+                // that will not set up now is the leg failing, as a program that will not start once a
+                // leg began is: read as a skip, a gate that accepts an incomplete run passed it.
+                return new LegEntry
+                {
+                    Leg = leg.Name,
+                    Verdict = LegVerdict.Failed,
+                    Detail = setUp.Failure,
+                    Duration = Stopwatch.GetElapsedTime(started),
+                    Emulated = leg.Emulated,
+                };
+            }
+
+            if (MissingInDeveloperEnvironment(context.Config, leg, request.Workload, environmentName, setUp) is { } missing)
+            {
+                return new LegEntry
+                {
+                    Leg = leg.Name,
+                    Verdict = missing.Verdict,
+                    Detail = missing.Reason,
+                    Duration = Stopwatch.GetElapsedTime(started),
+                    Emulated = leg.Emulated,
+                    DeveloperEnvironment = setUp.Fact,
+                };
+            }
+
+            leg = leg with { DeveloperEnvironment = setUp.Environment };
+        }
+
+        var entry = await work(new LegWork(leg, context, runId, runDirectory, request.Time), cancellationToken).ConfigureAwait(false);
+
+        return setUp is null ? entry : entry with { DeveloperEnvironment = setUp.Fact };
     }
 
     /// <summary>

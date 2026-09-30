@@ -118,6 +118,14 @@ at once, with the line it concerns where the parser knows it:
 - `null` is refused wherever the model does not allow it, including inside lists and
   maps, which the serializer does not check on its own. Loaded, it would fail much later
   as a crash in whatever first read it.
+- A list whose absence means every one of what it names, or a default set, is refused given
+  empty: a runner's `legs`; a tool's `platforms`, `toolchains`, `legs`, `processors` and
+  `emulators`; a toolchain's `platforms`; `ci.workflows`; `test.inputs`; a project's `targets` and
+  `rebuildableFormats`. Read as the key left out, a runner's `"legs": []` synced the tree to every
+  host and ran on every leg, for a list naming none; `--legs` given no name was already refused for
+  the same reason. Left out, each still means what it did.
+- A key nothing reads is refused, saying so: a test section's `configs`, which `init` once wrote
+  and nothing ever read - each leg builds and tests the one config its `config` names.
 - References are resolved: a leg naming an undeclared host or emulator, an emulator that
   runs programs for another processor than the leg's, a success pattern that does not
   compile, a commit template placeholder no variable declares.
@@ -1104,6 +1112,7 @@ from the report.
 | `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; or git could not answer in its tree | warning |
 | `skipped-tool-missing` | A required tool is not installed | warning |
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
+| `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, or for the memory in use to fall below the limit, and nothing of it ran | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict | **yes** |
 
@@ -1120,8 +1129,8 @@ waiting for the lock, against finding out which run still holds a finished run's
 reader who cannot tell which fired cannot pick either.
 
 When several apply, the more fundamental one is reported: `poisoned`, then
-`unmeasured`, `inputs-moved`, `contended`, `log-held`, `refused-locked`, `failed`, and
-`unwitnessed`. A leg whose inputs moved is not reported as failed even if its tests
+`unmeasured`, `inputs-moved`, `contended`, `log-held`, `refused-locked`, `not-admitted`,
+`failed`, and `unwitnessed`. A leg whose inputs moved is not reported as failed even if its tests
 failed, because what failed was a tree that never existed.
 
 **A leg that reached no verdict is never counted among the legs that passed.** A skip is not a
@@ -1196,6 +1205,59 @@ sync (when the host needs it)  →  build on buildCores  →  test on testCores
   machine that dispatched it: read that way, a leg on a Mac ran with the Windows machine's
   core counts and environment. The dispatch names the host, and its cores, its `env`, and
   the `{host}` a label records are all read under that name.
+
+### Heavy legs share a machine
+
+`maxParallelLegs` is counted by one command. Separate commands - worktrees each running a gate of
+their own - share a machine that no one of them can see the others on: four such builds drove one
+Windows machine's committed memory to 81 of 113.7 GB, and the process that had started them died.
+Where a machine declares **admission** - `defaults.admission`, or its own section under
+`hosts.local` or an ssh host, whose fields replace the defaults' one by one - each heavy leg waits,
+before any of its work, for the machine to take it:
+
+1. **One of the machine's `heavyLegs` slots** (2), shared by every command this user runs there,
+   given in the order legs asked for one. The slots are kept in `admission.json` among the user's
+   own application data - `LOCALAPPDATA` on Windows, `~/Library/Application Support` on macOS,
+   `~/.local/share` elsewhere - beside the hold that keeps the machine awake: one per user of the
+   machine, whichever repository asks, never in a directory other users can write.
+2. **Then the memory in use below `maxMemoryPercent`** (76). Where another leg holds a slot, a
+   reading below the limit is read again after a settle - a time picked at random within
+   `settleSeconds` ([15, 90]) - and the leg starts only if it still is, so two legs taking their
+   slots together do not both start on one reading. Looked at again every `pollSeconds` (30).
+
+A leg holds its slot until its heavy work ends. A slot is held by the process running the leg,
+which lives exactly as long as that work, never by a timeout: an entry whose process has ended - a
+command that crashed or was killed holding a slot - is reclaimed by the next leg that looks, and
+said to be, by the liveness rule the run lock uses. An entry of another machine's, in a home two
+machines share, counts for nothing there. A record that cannot be read is refused, naming it, and
+never read as free: that is the one reading that would start every waiting leg at once.
+
+**Heavy** is what builds or tests: a `build` or `test` leg, and a `run` leg whose runner requires
+the build or says `"heavy": true`. A runner that only reads the tree - a repository guard - is
+light and starts at once. A runner saying `"heavy": false` while it requires the build is refused:
+its build is heavy.
+
+**The machine is the physical one.** A WSL distribution runs on this machine, so this machine's
+command takes its heavy legs - by `hosts.local`'s rule, against this machine's slots and memory -
+before it sends them there, and the distribution takes nothing again; a section under `hosts.wsl`
+is refused. An ssh host is a machine of its own: the DssHarness there takes the legs sent to it by
+its own section, and the line it answers with names how.
+
+**The memory in use is each system's own count** of what it can still give, as a share of what it
+could: on Windows the commit charge against the commit limit (`GlobalMemoryStatusEx`), which grows
+with the page file; on Linux `MemTotal` less `MemAvailable`, never `Committed_AS` against
+`CommitLimit`, which under the default overcommit stands above 100% on a healthy machine; on macOS
+what the kernel counts as not free, the share `memory_pressure` reports. A machine whose count
+cannot be read takes a leg on its slot alone, and its line says so, as a leg placed where its room
+could not be measured is.
+
+Unlike a held lock, which refuses at once, admission waits - because what it waits for is certain
+to come, as the legs ahead finish - but never silently and never for ever: while it waits the leg
+says who holds each slot (tree, variant, leg, command, process, run, since) and what the memory
+stands at, and the wait is measured on the monotonic clock. A leg that waited `maxWaitMinutes` (60)
+is `not-admitted`, exit 7, naming what held the slots or the memory it stood at: nothing of it ran,
+and nothing about the code is claimed. Every admitted leg's line names how long it waited and the
+memory it started at, and `--json` gives both, as the leg's `admission`.
 
 ## Leg integrity
 
@@ -1793,8 +1855,14 @@ directory here cannot drift apart.
   69,890 directories lay under what its entries name, and a search that went in spent its
   20,000-directory budget before it reached most of the tree, and said so on every sync. The
   harness's own directory is searched all the same, though git ignores most of it by design,
-  because a `.secrets` there is what the search was written to find. A search that still runs out
-  says so; it never reads as having found none.
+  because a `.secrets` there is what the search was written to find - save what the harness writes
+  there as it works, each run's records, the record of host copies and each action's own `build`
+  and `artifacts`: the run state of whichever machine made it, which no sync carries and nobody
+  writes, where a name neither counts nor is looked for below. Counted, a fresh worktree's
+  first run, its own `build` not made yet, was told the `build` entry `init` writes protected
+  nothing, having found an action's working space, and to write `**/build`, which would withhold
+  every source directory of that name too. A search that still runs out says so; it never reads as
+  having found none.
 - **The copy gets `.harness-config/config.json`, and nothing else from that directory.** A leg
   placed on a host runs DssHarness there, and DssHarness in a directory holding no configuration
   refuses as not initialised — so without it the copy is a tree no leg can run in. The rest of the
@@ -2083,7 +2151,7 @@ unchanged, or 15 when that command never reported how it finished.
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the
 per-command codes above, are maintained by hand.
 
-Commands that run legs (`build`, `run`, `test`) use four codes from the range reserved for
+Commands that run legs (`build`, `run`, `test`) use five codes from the range reserved for
 command contracts, because each calls for a different remedy:
 
 | Code | Verdict | Remedy |
@@ -2092,12 +2160,14 @@ command contracts, because each calls for a different remedy:
 | 4 | `contended` | Wait for the other run |
 | 5 | `unwitnessed` | Find out what actually ran |
 | 6 | `log-held` | Find out which run still owns this leg's logs |
+| 7 | `not-admitted` | Wait for the heavy legs its line names, free memory, or raise the machine's limits |
 
 `failed` reports 20, `refused-locked` 13 and `poisoned` 70. When legs disagree, the
 more fundamental verdict decides the code, in the order given under *Verdict vocabulary*.
-Five outcomes therefore carry five codes — refused before starting, the tree moved under the
-run, another run in the build directory, another run holding the logs, and a zero exit code
-with no witness — because a reader who cannot tell which fired cannot pick the remedy.
+Six outcomes therefore carry six codes — refused before starting, the tree moved under the
+run, another run in the build directory, another run holding the logs, a machine with no room
+for another heavy leg, and a zero exit code with no witness — because a reader who cannot tell
+which fired cannot pick the remedy.
 
 ## Success witnesses
 

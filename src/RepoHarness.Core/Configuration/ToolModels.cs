@@ -21,8 +21,10 @@ public sealed class ToolConfig
     /// everywhere: a repository declaring MSVC and a Linux compiler could not have both, because
     /// each was reported missing on the other's hosts and no leg was ever fully provisioned. Left
     /// out, a tool is needed on every platform, which is what every list written before this meant.
+    /// Every scope of a tool is refused given empty, when the file is read: an empty list is never read
+    /// as every platform, toolchain, leg, processor or emulator.
     /// </remarks>
-    public List<string> Platforms { get; init; } = [];
+    public List<string>? Platforms { get; init; }
 
     /// <summary>
     /// Toolchains this tool is needed for: only a leg whose variant builds with one of them needs it.
@@ -32,10 +34,10 @@ public sealed class ToolConfig
     /// The narrower axis two legs of one operating system differ on. <c>cl</c> scoped to Windows alone
     /// was reported missing on a MinGW leg, because that leg is Windows too.
     /// </remarks>
-    public List<string> Toolchains { get; init; } = [];
+    public List<string>? Toolchains { get; init; }
 
     /// <summary>Legs or leg sets this tool is needed for, by name. Left out, every leg.</summary>
-    public List<string> Legs { get; init; } = [];
+    public List<string>? Legs { get; init; }
 
     /// <summary>
     /// Processors this tool is needed for: the processor a leg is built for, which under an emulator
@@ -46,13 +48,13 @@ public sealed class ToolConfig
     /// an arm64 leg. So this reaches a native arm64 host as surely as an emulated leg - scope a tool
     /// the emulating host needs, such as the emulator itself, with <see cref="Emulators"/> instead.
     /// </remarks>
-    public List<string> Processors { get; init; } = [];
+    public List<string>? Processors { get; init; }
 
     /// <summary>
     /// Emulators this tool is needed for: only a leg run under one of them needs it. Left out, every
     /// leg, emulated or not.
     /// </summary>
-    public List<string> Emulators { get; init; } = [];
+    public List<string>? Emulators { get; init; }
 
     /// <summary>How to install or update it, keyed by platform or <c>all</c>.</summary>
     public Dictionary<string, ToolInstall> Install { get; init; } = new(StringComparer.OrdinalIgnoreCase);

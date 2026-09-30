@@ -41,6 +41,10 @@ public static class HarnessDirectorySync
 
     private const string Actions = HarnessLayout.RunnerActionsDirectoryRelative;
 
+    private const string Runs = Harness + "/" + HarnessLayout.RunsDirectoryName;
+
+    private const string HostCopies = Harness + "/" + HarnessLayout.HostCopiesDirectoryName;
+
     /// <summary>
     /// Whether <paramref name="relativePath"/> is inside the harness's own directory and is never
     /// carried by an ordinary sync, nor deleted by one.
@@ -67,13 +71,26 @@ public static class HarnessDirectorySync
             return false;
         }
 
-        if (!relativePath.StartsWith(Actions + "/", StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        return relativePath[(Actions.Length + 1)..].Split('/').Any(ActionPath.Reserved);
+        return !relativePath.StartsWith(Actions + "/", StringComparison.Ordinal) || InAnActionsRunState(relativePath);
     }
+
+    /// <summary>
+    /// Whether <paramref name="relativePath"/> is, or is inside, what the harness writes into its own directory as it
+    /// works: each run's records, the record of the copies hosts keep, and each action's own <c>build</c> and
+    /// <c>artifacts</c>, at whatever depth the action is grouped. The run state of whichever machine made it, which no
+    /// sync carries, and which nobody writes into the tree.
+    /// </summary>
+    /// <param name="relativePath">A path relative to the tree root, with forward separators.</param>
+    public static bool IsRunState(string relativePath)
+    {
+        ArgumentNullException.ThrowIfNull(relativePath);
+
+        return IsAt(relativePath, Runs) || IsAt(relativePath, HostCopies) || InAnActionsRunState(relativePath);
+    }
+
+    private static bool InAnActionsRunState(string relativePath)
+        => relativePath.StartsWith(Actions + "/", StringComparison.Ordinal)
+            && relativePath[(Actions.Length + 1)..].Split('/').Any(ActionPath.Reserved);
 
     private static bool IsAt(string relativePath, string directory)
         => relativePath == directory || relativePath.StartsWith(directory + "/", StringComparison.Ordinal);

@@ -5,8 +5,8 @@ namespace RepoHarness.Core.Configuration;
 
 /// <summary>
 /// Keys <c>config.json</c> refuses where they are written, each said with where what it means is read
-/// instead: a key this tool once read and no longer does, and a key only a step of an action file
-/// takes, written on a runner's phase.
+/// instead: a key this tool once read and no longer does, one it took and never read, and a key only a
+/// step of an action file takes, written on a runner's phase.
 /// </summary>
 /// <remarks>
 /// Each is refused like any unknown key, because a key that loads is a key that is read. The refusal
@@ -57,7 +57,50 @@ internal static class MisplacedKeys
             .Select(section => $"{section.Name} {CompilerCacheDirectory} is no longer read. A compiler "
                 + "cache's store is that cache's own variable: declare it under the host's env - "
                 + "\"env\": { \"CCACHE_DIR\": \"...\" } for ccache - where every process a leg "
-                + "starts on that host sees it, and a build keys the cache against the leg's own tree.");
+                + "starts on that host sees it, and a build keys the cache against the leg's own tree.")
+            .Concat(TestSections(root)
+                .Where(section => Property(section.Test, TestConfigs) is not null)
+                .Select(section => $"{section.Name} test {TestConfigs} is not read, and never was: nothing built or "
+                    + "tested the configs it named. Each leg builds and tests the one build config its 'config' names; "
+                    + "declare a leg for each config to test, and delete the key."));
+
+    /// <summary>
+    /// A test section's list of build configs to test: written by <c>init</c> and checked against
+    /// <c>buildConfigs</c>, and read by nothing, so a file naming <c>release</c> there tested debug alone.
+    /// </summary>
+    private const string TestConfigs = "configs";
+
+    /// <summary>Every test section the file declares - a project's and a leg's - named as a refusal names it.</summary>
+    private static IEnumerable<(string Name, JsonElement Test)> TestSections(JsonElement root)
+    {
+        if (Property(root, "projects") is { ValueKind: JsonValueKind.Array } projects)
+        {
+            var position = 0;
+
+            foreach (var project in projects.EnumerateArray())
+            {
+                position++;
+
+                if (Property(project, "test") is { ValueKind: JsonValueKind.Object } test)
+                {
+                    var name = Property(project, "name") is { ValueKind: JsonValueKind.String } named ? $"'{named.GetString()}'" : $"#{position}";
+
+                    yield return ($"project {name}", test);
+                }
+            }
+        }
+
+        if (Property(root, "legs") is { ValueKind: JsonValueKind.Object } legs)
+        {
+            foreach (var leg in legs.EnumerateObject())
+            {
+                if (Property(leg.Value, "test") is { ValueKind: JsonValueKind.Object } test)
+                {
+                    yield return ($"leg '{leg.Name}'", test);
+                }
+            }
+        }
+    }
 
     /// <summary>
     /// Every phase that declares a key only a step of an action file takes, said with the keys a phase

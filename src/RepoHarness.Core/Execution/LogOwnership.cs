@@ -37,16 +37,7 @@ public sealed record LogOwner(
 
     /// <summary>The owner as a refusal names it.</summary>
     public string Describe()
-        => $"{Machine} pid {ProcessId}, run {RunId}, since {TakenUtc:u}{Unstamped}";
-
-    /// <summary>
-    /// Said of an owner carrying no stamp, which is one an older build wrote. Kept while anything at
-    /// all carries its id, so it can outlive its run once that id comes back around to something else.
-    /// </summary>
-    private string Unstamped
-        => ProcessStamp is { Length: > 0 }
-            ? string.Empty
-            : " (recorded by an older build, so a reused id cannot be told from it; --force-lock takes it)";
+        => ProcessHolders.Describe(Machine, ProcessId, RunId, TakenUtc) + ProcessHolders.OlderBuildNote(ProcessStamp);
 }
 
 /// <summary>What claiming a log directory found.</summary>
@@ -143,8 +134,7 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
         {
             if (Read(file) is { } existing && !Mine(existing, runId))
             {
-                var held = _identity.IsAlive(existing.ProcessId, existing.ProcessStamp)
-                    || !string.Equals(existing.Machine, _identity.CurrentMachine, StringComparison.OrdinalIgnoreCase);
+                var held = _identity.Stands(existing.Machine, existing.ProcessId, existing.ProcessStamp);
 
                 if (held && !force)
                 {
@@ -236,7 +226,7 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
     private bool Mine(LogOwner owner, RunId runId)
         => string.Equals(owner.RunId, runId.Value, StringComparison.Ordinal)
             && owner.ProcessId == _identity.CurrentId
-            && string.Equals(owner.Machine, _identity.CurrentMachine, StringComparison.OrdinalIgnoreCase);
+            && _identity.IsHere(owner.Machine);
 
     private LogOwner? Read(string file)
     {

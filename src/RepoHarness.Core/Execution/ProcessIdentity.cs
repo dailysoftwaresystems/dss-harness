@@ -191,3 +191,59 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
         }
     }
 }
+
+/// <summary>
+/// What a record of the process that took something says of it, as this machine can tell: whether it still stands,
+/// and how a refusal names it.
+/// </summary>
+/// <remarks>
+/// One place for what the run lock, a log directory's owner and a machine's heavy-leg slots each decide the same way,
+/// so no two of them can come to disagree about which holder is gone.
+/// </remarks>
+public static class ProcessHolders
+{
+    /// <summary>
+    /// Whether what the process <paramref name="processId"/> on <paramref name="machine"/> took still stands: on this
+    /// machine, while that process runs; on another, until somebody takes it over, since nothing here can ask that
+    /// machine whether it still runs.
+    /// </summary>
+    /// <param name="identity">This process, and how the liveness of another is told.</param>
+    /// <param name="machine">The machine the record names.</param>
+    /// <param name="processId">The process id it names.</param>
+    /// <param name="stamp">The stamp it names, or <see langword="null"/> where it carries none.</param>
+    public static bool Stands(this IProcessIdentity identity, string machine, int processId, string? stamp)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        return !identity.IsHere(machine) || identity.IsAlive(processId, stamp);
+    }
+
+    /// <summary>Whether <paramref name="machine"/>, as a record names it, is the one this process runs on.</summary>
+    /// <param name="identity">This process.</param>
+    /// <param name="machine">The machine a record names.</param>
+    public static bool IsHere(this IProcessIdentity identity, string machine)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        return string.Equals(machine, identity.CurrentMachine, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A holder as a refusal names it: <c>HOST pid 12, run R, since 2026-09-30 16:32:14Z</c>.</summary>
+    /// <param name="machine">The machine it runs on.</param>
+    /// <param name="processId">Its process id.</param>
+    /// <param name="runId">Its run.</param>
+    /// <param name="since">When it took what it holds.</param>
+    public static string Describe(string machine, int processId, string runId, DateTimeOffset since)
+        => string.Create(CultureInfo.InvariantCulture, $"{machine} pid {processId}, run {runId}, since {since:u}");
+
+    /// <summary>
+    /// What a holder's description ends with where the record carries no stamp, which is one an older build wrote.
+    /// Such a record is kept while anything at all carries its id, so it can outlive its run once that id comes back
+    /// around to something else; saying so tells the reader <c>--force-lock</c> is the answer rather than waiting.
+    /// </summary>
+    /// <param name="stamp">The record's stamp.</param>
+    public static string OlderBuildNote(string? stamp)
+        => stamp is { Length: > 0 }
+            ? string.Empty
+            : " (recorded by an older build, so a reused id cannot be told from it; --force-lock takes it)";
+}

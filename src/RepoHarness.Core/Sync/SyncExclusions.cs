@@ -149,6 +149,14 @@ public sealed class SyncExclusions
     /// tree's connection data, and a <c>.secrets</c> there is the one this was written to find.
     /// </para>
     /// <para>
+    /// Save for what the harness writes there as it works - each run's records, the record of host copies, each
+    /// action's own <c>build</c> and <c>artifacts</c> - where a name neither counts nor is looked for: the run state
+    /// of whichever machine made it, which no sync carries and nobody writes into the tree, and where a busy tree's
+    /// runs pile up. Counted, a fresh worktree's first run - its tree's own <c>build</c> not made yet, an action's
+    /// working space already there - was told the <c>build</c> entry <c>init</c> writes protected nothing, and to
+    /// write <c>**/build</c>, which would withhold every source directory of that name as well.
+    /// </para>
+    /// <para>
     /// The walk skips links, and stops at a depth no tree reaches honestly, because this runs before
     /// every sync and a check that is only advisory must not be able to end the command it precedes.
     /// A directory link aimed at an ancestor would otherwise recurse until the stack went, which is a
@@ -315,9 +323,10 @@ public sealed class SyncExclusions
 
     /// <summary>
     /// Whether a name found at <paramref name="relativePath"/> counts: not where a <c>sync.neverTransfer</c>
-    /// entry, or the worktrees root, covers the path.
+    /// entry, or the worktrees root, covers the path, nor in what the harness writes as it works.
     /// </summary>
-    private bool Counts(string relativePath) => !Matches(_coveredByConfiguration, relativePath);
+    private bool Counts(string relativePath)
+        => !Matches(_coveredByConfiguration, relativePath) && !HarnessDirectorySync.IsRunState(relativePath);
 
     /// <summary>
     /// Whether the search goes into the directory at <paramref name="relativePath"/>: where a sync goes,

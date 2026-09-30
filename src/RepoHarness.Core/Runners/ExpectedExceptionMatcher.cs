@@ -31,8 +31,8 @@ public sealed record RunnerScope(
     /// <param name="runnerName">The runner's name, as <c>predefinedRunners</c> keys it.</param>
     /// <param name="runner">The runner's configuration.</param>
     /// <param name="resolvedLegs">
-    /// The legs the run actually selected, for a runner whose own <c>legs</c> list is empty and
-    /// therefore means the default set. Leaving it out keeps the scope at the runner alone.
+    /// The legs the run actually selected, for a runner that leaves its own <c>legs</c> out and so
+    /// runs the default set. Leaving it out keeps the scope at the runner alone.
     /// </param>
     public static RunnerScope From(
         string runnerName,
@@ -42,7 +42,7 @@ public sealed record RunnerScope(
         ArgumentException.ThrowIfNullOrWhiteSpace(runnerName);
         ArgumentNullException.ThrowIfNull(runner);
 
-        var legs = runner.Legs.Count > 0 ? runner.Legs : resolvedLegs ?? [];
+        var legs = runner.Legs ?? resolvedLegs ?? [];
 
         return new RunnerScope(runnerName, [.. legs], runner.ExpectedExceptions);
     }

@@ -57,6 +57,12 @@ public enum LegVerdict
     RefusedLocked,
 
     /// <summary>
+    /// A heavy leg waited as long as its machine allows for a heavy-leg slot, or holding one for the memory in use to
+    /// fall below the machine's limit, and nothing of it ran. Never a failure of the code: the machine had no room.
+    /// </summary>
+    NotAdmitted,
+
+    /// <summary>
     /// Another live run owns this run's log path. Distinct from <see cref="RefusedLocked"/> because
     /// the remedies differ: one waits for the other run, the other points this run elsewhere.
     /// </summary>
@@ -126,7 +132,7 @@ public static class Verdicts
 {
     private static readonly IReadOnlyDictionary<LegVerdict, VerdictInfo> Table = new Dictionary<LegVerdict, VerdictInfo>
     {
-        // Ranks 0-7 are the order docs/architecture.md gives for disagreeing legs. The rest exist
+        // Ranks 0-8 are the order docs/architecture.md gives for disagreeing legs. The rest exist
         // only so that Worst is total, and none of them decides a non-zero exit code: a warning
         // outranks a pass so that a run with an unavailable leg summarises as that warning rather
         // than as an unqualified success, and a leg nobody asked for outranks nothing at all.
@@ -136,12 +142,13 @@ public static class Verdicts
         [LegVerdict.Contended] = new(LegVerdict.Contended, "contended", true, 3, LegExit.Contended),
         [LegVerdict.LogHeld] = new(LegVerdict.LogHeld, "log-held", true, 4, LegExit.LogHeld),
         [LegVerdict.RefusedLocked] = new(LegVerdict.RefusedLocked, "refused-locked", true, 5, HarnessExit.Refused),
-        [LegVerdict.Failed] = new(LegVerdict.Failed, "failed", true, 6, HarnessExit.CommandFailed),
-        [LegVerdict.Unwitnessed] = new(LegVerdict.Unwitnessed, "unwitnessed", true, 7, LegExit.Unwitnessed),
-        [LegVerdict.SkippedUnavailable] = new(LegVerdict.SkippedUnavailable, "skipped-unavailable", false, 8, HarnessExit.Success),
-        [LegVerdict.SkippedToolMissing] = new(LegVerdict.SkippedToolMissing, "skipped-tool-missing", false, 9, HarnessExit.Success),
-        [LegVerdict.Passed] = new(LegVerdict.Passed, "passed", false, 10, HarnessExit.Success),
-        [LegVerdict.SkippedNotSelected] = new(LegVerdict.SkippedNotSelected, "skipped-not-selected", false, 11, HarnessExit.Success),
+        [LegVerdict.NotAdmitted] = new(LegVerdict.NotAdmitted, "not-admitted", true, 6, LegExit.NotAdmitted),
+        [LegVerdict.Failed] = new(LegVerdict.Failed, "failed", true, 7, HarnessExit.CommandFailed),
+        [LegVerdict.Unwitnessed] = new(LegVerdict.Unwitnessed, "unwitnessed", true, 8, LegExit.Unwitnessed),
+        [LegVerdict.SkippedUnavailable] = new(LegVerdict.SkippedUnavailable, "skipped-unavailable", false, 9, HarnessExit.Success),
+        [LegVerdict.SkippedToolMissing] = new(LegVerdict.SkippedToolMissing, "skipped-tool-missing", false, 10, HarnessExit.Success),
+        [LegVerdict.Passed] = new(LegVerdict.Passed, "passed", false, 11, HarnessExit.Success),
+        [LegVerdict.SkippedNotSelected] = new(LegVerdict.SkippedNotSelected, "skipped-not-selected", false, 12, HarnessExit.Success),
     };
 
     /// <summary>Every verdict, most fundamental first.</summary>
@@ -258,6 +265,7 @@ public static class Verdicts
         LegExit.Contended => LegVerdict.Contended,
         LegExit.Unwitnessed => LegVerdict.Unwitnessed,
         LegExit.LogHeld => LegVerdict.LogHeld,
+        LegExit.NotAdmitted => LegVerdict.NotAdmitted,
         _ => LegVerdict.Poisoned,
     };
 }

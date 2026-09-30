@@ -94,6 +94,13 @@ public abstract class HostSettings
     /// whose programs are looked for, before it starts, on the PATH that environment builds over this one.
     /// </remarks>
     public Dictionary<string, string> Env { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// How heavy legs are admitted onto this machine, each field replacing <c>defaults.admission</c>'s: see
+    /// <see cref="AdmissionSettings"/>. Refused on a WSL distribution, which runs on this machine and whose legs take
+    /// this machine's slots, under <c>hosts.local</c>'s.
+    /// </summary>
+    public AdmissionSettings? Admission { get; init; }
 }
 
 /// <summary>The machine running the harness.</summary>

@@ -678,6 +678,249 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A heavy leg on a machine that declares admission waits for one of its slots before any of its work, and one that
+    /// waited as long as the machine allows is not-admitted - exit 7, never failed - naming what held the slots, with
+    /// nothing of it run.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyLegThatWaitedAsLongAsItsMachineAllows_IsNotAdmitted_NamingTheHolders_AndNothingOfItRuns()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ledger = temp.Combine("state", "admission.json");
+        var ran = false;
+
+        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "other"));
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
+            ran: _ => ran = true,
+            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock()));
+
+        Assert.Equal(LegExit.NotAdmitted, outcome.ExitCode);
+        Assert.False(ran);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        Assert.Equal("not-admitted", leg.GetProperty("verdict").GetString());
+        Assert.StartsWith(
+            "not admitted after 1m00s waiting for one of this machine's 1 heavy-leg slot(s), held by '/src/other'",
+            leg.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+        Assert.False(leg.GetProperty("admission").GetProperty("admitted").GetBoolean());
+        Assert.Single(leg.GetProperty("admission").GetProperty("holders").EnumerateArray());
+        Assert.Equal(["other"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A heavy leg its machine took holds its slot while its work runs, gives it back as the work ends, and names on its
+    /// line how long it waited and the memory it started at - in the table and in --json.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AHeavyLegTaken_HoldsItsSlotWhileItsWorkRuns_AndNamesTheWaitAndTheMemory(bool json)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ledger = temp.Combine("state", "admission.json");
+        IReadOnlyList<SlotEntry>? during = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), local: new AdmissionSettings { HeavyLegs = 2 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: json) { Workload = Heavy },
+            ran: _ => during = AdmissionKit.Read(ledger),
+            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(12.5), new ManualClock()));
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("native", Assert.Single(during!).Leg);
+        Assert.Empty(AdmissionKit.Read(ledger));
+
+        if (json)
+        {
+            using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+            var admission = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("admission");
+
+            Assert.True(admission.GetProperty("admitted").GetBoolean());
+            Assert.Equal(0, admission.GetProperty("waitedSeconds").GetDouble());
+            Assert.Equal(12.5, admission.GetProperty("memoryPercent").GetDouble());
+            Assert.Equal("12.5% in use (12.5 of 100 by the test)", admission.GetProperty("memory").GetString());
+        }
+        else
+        {
+            Assert.Contains(outcome.Details ?? [], line => line.Contains("admitted at once, memory 12.5% in use (12.5 of 100 by the test)", StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>
+    /// A leg that builds and tests nothing - a repository guard - is light, and starts at once; and a machine that
+    /// declares no admission takes every leg at once, as before. Neither asks for a slot.
+    /// </summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task ALightLeg_OrAMachineDeclaringNoAdmission_AsksForNoSlot(bool heavy, bool declared)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ledger = temp.Combine("state", "admission.json");
+
+        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "other"));
+
+        var verdicts = await RunAsync(
+            temp,
+            harness,
+            declared ? Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 }) : OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = heavy ? Heavy : LegWorkload.Copy },
+            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock()));
+
+        Assert.Equal("passed", verdicts["native"].Verdict);
+        Assert.Equal(["other"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A WSL distribution runs on this machine, so this machine takes its heavy legs - by hosts.local's rule, against its
+    /// own slots - before dispatching them; an ssh host is a machine of its own, and takes its legs itself, whose line
+    /// comes back naming how. Measured: four worktrees' builds on one Windows machine and its distribution drove its commit
+    /// to 81 of 113.7 GB.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWslLegIsTakenByThisMachine_AndAnSshLegByItsHost(bool wsl)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ledger = temp.Combine("state", "admission.json");
+        var asked = false;
+
+        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "other"));
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+                Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree } },
+            },
+            Legs =
+            {
+                ["remote"] = wsl
+                    ? new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" }
+                    : new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = HostName },
+            },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            asked = true;
+            ScriptedHostCommands.Answer(
+                command,
+                """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1, "admission": {"admitted": true, "waitedSeconds": 42, "memoryPercent": 50.5, "memory": "50.5% in use (on the host)"}}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = host.Kind == HostKind.Ssh ? "arm64" : "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
+            hosts: hosts,
+            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock()));
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        if (wsl)
+        {
+            Assert.Equal("not-admitted", leg.GetProperty("verdict").GetString());
+            Assert.False(asked);
+        }
+        else
+        {
+            Assert.Equal("passed", leg.GetProperty("verdict").GetString());
+            Assert.Equal(42, leg.GetProperty("admission").GetProperty("waitedSeconds").GetDouble());
+            Assert.True(asked);
+        }
+
+        Assert.Equal(["other"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A host running a leg another machine dispatched to it takes it by its own section, as a machine of its own; a WSL
+    /// distribution running one takes nothing, since the machine that dispatched it - the one it runs on - did.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AHostSentALeg_TakesItByItsOwnSection_AndADistributionNever(bool wsl)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ledger = temp.Combine("state", "admission.json");
+        var platform = harness.Platform;
+        var ran = false;
+
+        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "other"));
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+                Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree, Admission = new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 } } },
+            },
+            Legs = { ["native"] = HostDoubles.Leg(platform.PlatformKey, platform.Processor) },
+        };
+
+        var verdicts = await RunAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, Here: wsl ? HostId.Wsl("Ubuntu") : HostId.Ssh(HostName)) { Workload = Heavy },
+            ran: _ => ran = true,
+            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock()));
+
+        Assert.Equal(wsl ? "passed" : "not-admitted", verdicts["native"].Verdict);
+        Assert.Equal(wsl, ran);
+    }
+
+    /// <summary>A leg that builds and tests nothing but is heavy all the same, as a runner saying so makes it.</summary>
+    private static LegWorkload Heavy => new(Build: false, Test: false, []) { DeclaredHeavy = true };
+
+    /// <summary><paramref name="config"/> with admission declared under defaults, or under hosts.local.</summary>
+    private static HarnessConfig Admitting(HarnessConfig config, AdmissionSettings? defaults = null, AdmissionSettings? local = null) => new()
+    {
+        BuildConfigs = config.BuildConfigs,
+        Legs = config.Legs,
+        Defaults = new HarnessDefaults { Admission = defaults },
+        Hosts = new HostsConfig { Local = new LocalHostConfig { Admission = local } },
+    };
+
+    /// <summary>
     /// A Windows leg built with msvc, whose toolchain names the Visual Studio environment, on a
     /// machine whose own env declares a compiler cache - and a PATH, unless <paramref name="hostSetsPath"/>
     /// says it declares none.
@@ -794,9 +1037,10 @@ public sealed class LegRunServiceTests
         ISyncService? sync = null,
         Action<PlacedLeg>? ran = null,
         IProcessRunner? keepAwake = null,
-        DeveloperEnvironmentProvider? developerEnvironments = null)
+        DeveloperEnvironmentProvider? developerEnvironments = null,
+        LegAdmission? admission = null)
     {
-        var outcome = await OutcomeAsync(temp, harness, config, inspector, request, runLock, sync, ran, keepAwake, developerEnvironments: developerEnvironments);
+        var outcome = await OutcomeAsync(temp, harness, config, inspector, request, runLock, sync, ran, keepAwake, developerEnvironments: developerEnvironments, admission: admission);
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
 
@@ -824,7 +1068,8 @@ public sealed class LegRunServiceTests
         Func<LegWork, LegEntry>? work = null,
         LogOwnership? logs = null,
         ScriptedHostCommands? hosts = null,
-        DeveloperEnvironmentProvider? developerEnvironments = null)
+        DeveloperEnvironmentProvider? developerEnvironments = null,
+        LegAdmission? admission = null)
     {
         var loader = HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
 
@@ -837,6 +1082,9 @@ public sealed class LegRunServiceTests
             sync ?? Substitute.For<ISyncService>(),
             Substitute.For<ISyncTransportFactory>(),
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
+
+            // Never this machine's own record of its heavy legs: a test's slots are its own.
+            admission ?? AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), new ScriptedGauge(10), new ManualClock()),
             new KeepAwake(keepAwake ?? new HeldProcesses(), harness.Output),
             developerEnvironments ?? NoDeveloperEnvironment(harness),
             harness.FileSystem,

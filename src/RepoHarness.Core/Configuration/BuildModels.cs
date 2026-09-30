@@ -94,8 +94,11 @@ public sealed class ProjectConfig : VariantOverlay
     /// </summary>
     public string Path { get; init; } = ".";
 
-    /// <summary>Targets to build. Empty builds the project's own default target.</summary>
-    public List<string> Targets { get; init; } = [];
+    /// <summary>
+    /// Targets to build, or <see langword="null"/> for the project's own default target. Given empty, it is
+    /// refused when the file is read: an empty list is never read as the default target.
+    /// </summary>
+    public List<string>? Targets { get; init; }
 
     /// <summary>
     /// Files, relative to the build directory, that must exist after a build for it to count
@@ -114,15 +117,15 @@ public sealed class ProjectConfig : VariantOverlay
 
     /// <summary>
     /// The kinds of file whose content decides whether a warm build directory can be kept:
-    /// extensions or whole file names, such as <c>[".cpp", ".h", "CMakeLists.txt"]</c>. Declared
-    /// and non-empty, it replaces the set this project's type would use; absent or empty, the
-    /// type's own set applies.
+    /// extensions or whole file names, such as <c>[".cpp", ".h", "CMakeLists.txt"]</c>. Declared, it
+    /// replaces the set this project's type would use; absent, the type's own set applies.
     /// </summary>
     /// <remarks>
     /// Declared where a build reads something its language would not suggest: a schema compiled in,
-    /// a document a <c>configure_file</c> embeds. Empty means "say nothing", not "match nothing" —
-    /// a list that matched nothing would compare equal every time, which is exactly the answer that
-    /// keeps a stale binary, so the only way to say less is to say something narrower.
+    /// a document a <c>configure_file</c> embeds. Given empty it is refused when the file is read,
+    /// rather than read as either answer: as "match nothing" it would compare equal every time, which is
+    /// exactly the answer that keeps a stale binary, and as the type's own set it would be an empty list
+    /// read as a full one. The only way to say less is to say something narrower.
     /// <para>
     /// It replaces rather than extends: a project saying what its build reads is making a
     /// statement, and half-inheriting a list is how a file ends up watched by nobody's intention.
@@ -134,7 +137,7 @@ public sealed class ProjectConfig : VariantOverlay
     /// file carrying none carries no signal.
     /// </para>
     /// </remarks>
-    public List<string> RebuildableFormats { get; init; } = [];
+    public List<string>? RebuildableFormats { get; init; }
 
     /// <summary>How to run this project's tests, unless a leg overrides it.</summary>
     public TestConfig? Test { get; init; }

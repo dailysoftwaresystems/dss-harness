@@ -891,11 +891,11 @@ public sealed class BuildService(
                 + "tree held still. A host's copy has what each sync carries staged by that sync.");
         }
 
-        // What the project says replaces what its type reads, and only when it says something:
-        // an empty list is a project that declared the key and left it blank, which is not a
-        // statement that nothing affects its build.
-        var kinds = request.Project.RebuildableFormats.Count > 0
-            ? new BuildInputKinds(request.Project.RebuildableFormats)
+        // What the project says replaces what its type reads, and only where it says something: a
+        // file giving the list empty was refused when it was read, and one a caller builds empty is
+        // no statement that nothing affects its build.
+        var kinds = request.Project.RebuildableFormats is { Count: > 0 } formats
+            ? new BuildInputKinds(formats)
             : BuildAdapters.For(request.Project.Type).InputKinds;
 
         if (!kinds.Narrows)
@@ -912,7 +912,7 @@ public sealed class BuildService(
         // a guard that is off must never be off quietly.
         if (narrowed.Count == 0 && tracked.Count > 0)
         {
-            var source = request.Project.RebuildableFormats.Count > 0
+            var source = request.Project.RebuildableFormats is { Count: > 0 }
                 ? "this project's rebuildableFormats"
                 : $"the kinds a '{request.Project.Type}' project reads";
 
