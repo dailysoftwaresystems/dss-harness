@@ -1652,7 +1652,10 @@ while their sources are being replaced. A lock is released only by the run that 
   human decision.
 - A clock-free process stamp is recorded alongside the pid so a recycled pid is not
   mistaken for a live holder, and so a clock that steps cannot turn a live one into a
-  dead one. Compared exactly: there is no clock in it for a tolerance to absorb.
+  dead one. Compared exactly: there is no clock in it for a tolerance to absorb - save
+  that Windows and macOS hand a start over in the machine's time zone as it is now, so a
+  machine whose zone changed reads a live holder's start whole quarter hours apart from
+  the one recorded, and that is read as the same start.
 - `--force-lock` takes any lock actually in the way, on this host or another. On this
   host it is the only way out of an id that has come back around to something live,
   which would otherwise hold a tree until the file was edited by hand. It takes the log

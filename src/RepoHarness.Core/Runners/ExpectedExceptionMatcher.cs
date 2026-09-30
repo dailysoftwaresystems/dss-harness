@@ -42,7 +42,7 @@ public sealed record RunnerScope(
         ArgumentException.ThrowIfNullOrWhiteSpace(runnerName);
         ArgumentNullException.ThrowIfNull(runner);
 
-        var legs = runner.Legs ?? resolvedLegs ?? [];
+        var legs = runner.Legs is { Count: > 0 } declared ? declared : resolvedLegs ?? [];
 
         return new RunnerScope(runnerName, [.. legs], runner.ExpectedExceptions);
     }

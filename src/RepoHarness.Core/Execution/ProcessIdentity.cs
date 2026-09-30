@@ -99,7 +99,34 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
             return Carried(processId);
         }
 
-        return string.Equals(now, stamp, StringComparison.Ordinal);
+        return string.Equals(now, stamp, StringComparison.Ordinal) || ZonesApart(now, stamp);
+    }
+
+    /// <summary>The finest step between two time zones' offsets: every zone's is a whole number of them.</summary>
+    private static readonly TimeSpan ZoneStep = TimeSpan.FromMinutes(15);
+
+    /// <summary>The farthest two time zones' offsets are apart: from UTC-12 to UTC+14.</summary>
+    private static readonly TimeSpan ZonesSpan = TimeSpan.FromHours(26);
+
+    /// <summary>
+    /// Whether two start-time stamps are one start read under two time zones. Windows and macOS keep a process's start
+    /// once, but hand it over converted to the local time of whoever asks, so a machine whose zone changed - a laptop
+    /// set by where it is - reads a live process's start apart from the one recorded by exactly the difference between
+    /// the two zones' offsets: a whole number of quarter hours, no more than a day and two hours. A later process given
+    /// the same id would have had to start exactly that far apart, to the tick.
+    /// </summary>
+    private bool ZonesApart(string now, string recorded)
+    {
+        if (_platform.Current == PlatformId.Linux
+            || !long.TryParse(now, NumberStyles.None, CultureInfo.InvariantCulture, out var nowTicks)
+            || !long.TryParse(recorded, NumberStyles.None, CultureInfo.InvariantCulture, out var recordedTicks))
+        {
+            return false;
+        }
+
+        var apart = Math.Abs(nowTicks - recordedTicks);
+
+        return apart <= ZonesSpan.Ticks && apart % ZoneStep.Ticks == 0;
     }
 
     /// <summary>
@@ -142,8 +169,10 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
 
     /// <summary>
     /// The start time Windows and macOS record once, when the process is created, and never work out
-    /// again. Read as its own ticks rather than converted to an instant: a conversion is the only way
-    /// a stored value could still come back differently twice.
+    /// again, as its ticks. The runtime hands it over in the local time of the machine's zone as it is
+    /// now, so a zone that changed moves it by whole quarter hours: <see cref="ZonesApart"/> reads that
+    /// as the same start. Kept in that form, rather than turned back into an instant, so a stamp an
+    /// earlier build recorded is still this build's, and one this build records is still an earlier one's.
     /// </summary>
     private static string? StartTimeStamp(int processId)
     {

@@ -69,9 +69,9 @@ public sealed class ProcessIdentityTests
 
     /// <summary>
     /// Windows and macOS record the start time once, when the process is created, and never work it
-    /// out again — so it is already clock-proof. It is read as its own ticks rather than converted to
-    /// an instant, because a conversion is the one way a stored value could still come back
-    /// differently twice: the offset a local time converts through is not a fact about the process.
+    /// out again — so it is already clock-proof. It is kept as the ticks the runtime hands it over in,
+    /// never turned back into an instant, so a stamp an earlier build recorded is still read as this
+    /// build's; a time zone that changed since is the next test's.
     /// </summary>
     [Fact]
     public void OffLinux_TheStampIsTheRecordedStartTicks_WithNoConversion()
@@ -84,6 +84,25 @@ public sealed class ProcessIdentityTests
             current.StartTime.Ticks.ToString(CultureInfo.InvariantCulture),
             Identity().Current,
             StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// A machine whose time zone changed - a laptop set by where it is - reads a live process's start in its new zone,
+    /// apart from the one recorded by whole quarter hours; that is still the process that recorded it, and a holder it
+    /// names is never taken for one that has gone. A start apart by anything else is another process's.
+    /// </summary>
+    [Fact]
+    public void OffLinux_AStartReadUnderAnotherTimeZone_IsStillThisProcess()
+    {
+        Assert.SkipWhen(OperatingSystem.IsLinux(), "Linux's stamp holds no time of day; see the boot-and-ticks test.");
+
+        var identity = Identity();
+        var ticks = long.Parse(identity.Current!, CultureInfo.InvariantCulture);
+
+        Assert.True(identity.IsAlive(Environment.ProcessId, (ticks - TimeSpan.FromHours(3).Ticks).ToString(CultureInfo.InvariantCulture)));
+        Assert.True(identity.IsAlive(Environment.ProcessId, (ticks + TimeSpan.FromMinutes(345).Ticks).ToString(CultureInfo.InvariantCulture)));
+        Assert.False(identity.IsAlive(Environment.ProcessId, (ticks - TimeSpan.FromHours(3).Ticks + 1).ToString(CultureInfo.InvariantCulture)));
+        Assert.False(identity.IsAlive(Environment.ProcessId, (ticks - TimeSpan.FromHours(27).Ticks).ToString(CultureInfo.InvariantCulture)));
     }
 
     [Fact]
