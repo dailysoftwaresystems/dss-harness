@@ -59,13 +59,15 @@ public sealed class HarnessConfig
 
     /// <summary>
     /// Where a program is looked for when the PATH a command sees does not name it, by platform or
-    /// <c>all</c>. A platform's list replaces the built-in one only when it has something in it.
+    /// <c>all</c>. A platform's list replaces the built-in one only where it names something that
+    /// platform can search.
     /// </summary>
     /// <remarks>
-    /// Left out, or declared empty, a host searches the directories this build already knows to look
-    /// in: see <see cref="Hosts.ToolSearchDirectories"/>. Declared, it is the whole list for that
-    /// platform, so a tool installed somewhere unusual is found by naming its directory here rather
-    /// than by editing a shell's startup files on every host.
+    /// Left out, a host searches the directories this build already knows to look in: see
+    /// <see cref="Hosts.ToolSearchDirectories"/>. Declared, it is the whole list for that platform, so a
+    /// tool installed somewhere unusual is found by naming its directory here rather than by editing a
+    /// shell's startup files on every host. Given empty, it is refused when the file is read, rather
+    /// than read as the built-in list; a list a caller builds empty reads as left out.
     /// </remarks>
     public Dictionary<string, List<string>> ToolSearchDirectories { get; init; } = Map<List<string>>();
 

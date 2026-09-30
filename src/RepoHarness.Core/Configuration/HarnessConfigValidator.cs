@@ -101,15 +101,8 @@ public static partial class HarnessConfigValidator
         RequireAtLeastOne(defaults.BuildCores, "defaults.buildCores", problems);
         RequireAtLeastOne(defaults.TestCores, "defaults.testCores", problems);
 
-        if (defaults.MaxParallelLegs is { } maxParallelLegs)
-        {
-            RequireAtLeastOne(maxParallelLegs, "defaults.maxParallelLegs", problems);
-        }
-
-        if (defaults.MaxParallelLegsTotal is { } maxParallelLegsTotal)
-        {
-            RequireAtLeastOne(maxParallelLegsTotal, "defaults.maxParallelLegsTotal", problems);
-        }
+        RequireAtLeastOne(defaults.MaxParallelLegs, "defaults.maxParallelLegs", problems);
+        RequireAtLeastOne(defaults.MaxParallelLegsTotal, "defaults.maxParallelLegsTotal", problems);
 
         // A ceiling below the per-machine cap makes the per-machine number a claim nothing can
         // honour: no machine could ever reach it, and a reader comparing the two would be told one
@@ -131,7 +124,7 @@ public static partial class HarnessConfigValidator
         var factor = defaults.DurationWarningFactor;
         if (!double.IsFinite(factor) || (factor != 0 && factor < 1))
         {
-            problems.Add($"defaults.durationWarningFactor must be 0 (off) or at least 1, found {factor}");
+            problems.Add($"defaults.durationWarningFactor must be 0 (off) or at least 1, found {Number(factor)}");
         }
 
         if (defaults.ClockStepToleranceMilliseconds < 0)
@@ -154,23 +147,17 @@ public static partial class HarnessConfigValidator
     /// <param name="admission">The section, or <see langword="null"/> where it is left out.</param>
     /// <param name="owner">Where it is, as a problem names it.</param>
     /// <param name="problems">Where problems are added.</param>
-    private static void ValidateAdmission(AdmissionSettings? admission, string owner, List<string> problems)
+    internal static void ValidateAdmission(AdmissionSettings? admission, string owner, List<string> problems)
     {
         if (admission is null)
         {
             return;
         }
 
-        if (admission.HeavyLegs is { } heavyLegs)
-        {
-            RequireAtLeastOne(heavyLegs, $"{owner} heavyLegs", problems);
-        }
+        RequireAtLeastOne(admission.HeavyLegs, $"{owner} heavyLegs", problems);
 
         // A limit of 0 would admit nothing, and one above 100 everything: neither is a limit.
-        if (admission.MaxMemoryPercent is { } percent && !(double.IsFinite(percent) && percent is > 0 and <= 100))
-        {
-            problems.Add($"{owner} maxMemoryPercent must be above 0 and at most 100, found {Number(percent)}");
-        }
+        RequireAboveZeroAtMost(admission.MaxMemoryPercent, 100, $"{owner} maxMemoryPercent", problems);
 
         // Bounded above as well: every wait is one the clock and the timers can hold, so a value this accepts is one a
         // leg can wait by, never an overflow in the middle of a run.
@@ -187,14 +174,20 @@ public static partial class HarnessConfigValidator
             problems.Add($"{owner} pollSeconds must be from 1 to {AdmissionSettings.MostSeconds}, found {poll}");
         }
 
-        if (admission.MaxWaitMinutes is { } wait && !(double.IsFinite(wait) && wait is > 0 and <= AdmissionSettings.MostWaitMinutes))
-        {
-            problems.Add($"{owner} maxWaitMinutes must be above 0 and at most {AdmissionSettings.MostWaitMinutes}, found {Number(wait)}");
-        }
+        RequireAboveZeroAtMost(admission.MaxWaitMinutes, AdmissionSettings.MostWaitMinutes, $"{owner} maxWaitMinutes", problems);
     }
 
     /// <summary>A number as a problem says it, the same on every machine.</summary>
     private static string Number(double value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>Refuses a number given that is not above 0 and at most <paramref name="most"/>; one left out is not checked.</summary>
+    private static void RequireAboveZeroAtMost(double? value, double most, string setting, List<string> problems)
+    {
+        if (value is { } given && !(double.IsFinite(given) && given > 0 && given <= most))
+        {
+            problems.Add($"{setting} must be above 0 and at most {Number(most)}, found {Number(given)}");
+        }
+    }
 
     private static void ValidateWorktrees(WorktreeSettings worktrees, List<string> problems)
     {
@@ -246,10 +239,7 @@ public static partial class HarnessConfigValidator
             problems.Add("worktrees.pathBudgetMargin cannot be negative");
         }
 
-        if (worktrees.PathLimit is { } pathLimit)
-        {
-            RequireAtLeastOne(pathLimit, "worktrees.pathLimit", problems);
-        }
+        RequireAtLeastOne(worktrees.PathLimit, "worktrees.pathLimit", problems);
     }
 
     private static void ValidateAnchors(AnchorSettings anchors, List<string> problems)
@@ -797,15 +787,8 @@ public static partial class HarnessConfigValidator
 
     private static void ValidateHostSettings(HostSettings host, string owner, List<string> problems)
     {
-        if (host.BuildCores is { } buildCores)
-        {
-            RequireAtLeastOne(buildCores, $"{owner} buildCores", problems);
-        }
-
-        if (host.TestCores is { } testCores)
-        {
-            RequireAtLeastOne(testCores, $"{owner} testCores", problems);
-        }
+        RequireAtLeastOne(host.BuildCores, $"{owner} buildCores", problems);
+        RequireAtLeastOne(host.TestCores, $"{owner} testCores", problems);
 
         if (host.KeepAwake is { } keepAwake)
         {
@@ -874,10 +857,7 @@ public static partial class HarnessConfigValidator
                 CheckProgram(requirement, $"{owner} requires", problems);
             }
 
-            if (emulator.Phases.Count == 0)
-            {
-                problems.Add($"{owner} phases is empty; list test, build or both");
-            }
+            RefuseGivenEmpty(emulator.Phases, $"{owner} phases", "list test, build or both", "the test phase alone", problems);
 
             foreach (var phase in emulator.Phases.Where(phase => !LegPhases.Contains(phase, StringComparer.OrdinalIgnoreCase)))
             {
@@ -996,7 +976,7 @@ public static partial class HarnessConfigValidator
             // Not a number, or no room at all, is no need anybody measured: zero is left out instead.
             if (leg.BuildSpaceGiB is { } room && !(room > 0 && double.IsFinite(room)))
             {
-                problems.Add($"{owner} buildSpaceGiB must be a positive number of GiB, found {room.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+                problems.Add($"{owner} buildSpaceGiB must be a positive number of GiB, found {Number(room)}");
             }
 
             ValidateTest(leg.Test, owner, problems);
@@ -1098,6 +1078,13 @@ public static partial class HarnessConfigValidator
             }
 
             var every = string.Equals(platform, PlatformScope.Every, StringComparison.OrdinalIgnoreCase);
+
+            RefuseGivenEmpty(
+                directories,
+                $"toolSearchDirectories.{platform}",
+                "name the directories to look in",
+                "the directories this build already knows to look in",
+                problems);
 
             foreach (var directory in directories ?? [])
             {
@@ -1262,9 +1249,9 @@ public static partial class HarnessConfigValidator
                 {
                     problems.Add($"predefined runner '{name}' names steps, which only an action file has; its phases all run");
                 }
-                else if (steps.Count == 0)
+                else
                 {
-                    problems.Add($"predefined runner '{name}' names no step under steps, so it would run nothing; leave the key out to run every step that is not manual");
+                    RefuseGivenEmpty(steps, $"predefined runner '{name}' steps", "name the steps it runs", "every step that is not manual", problems);
                 }
 
                 if (steps.Any(string.IsNullOrWhiteSpace))
@@ -1530,7 +1517,7 @@ public static partial class HarnessConfigValidator
         if (!double.IsFinite(sync.MaxDeleteFraction) || sync.MaxDeleteFraction is < 0 or > 1)
         {
             problems.Add(
-                $"sync.maxDeleteFraction must be between 0 (no bound) and 1, found {sync.MaxDeleteFraction}");
+                $"sync.maxDeleteFraction must be between 0 (no bound) and 1, found {Number(sync.MaxDeleteFraction)}");
         }
     }
 
@@ -1586,10 +1573,7 @@ public static partial class HarnessConfigValidator
 
             var setting = $"{owner} test.{section}";
 
-            if (invocation.Cores is { } cores)
-            {
-                RequireAtLeastOne(cores, $"{setting}.cores", problems);
-            }
+            RequireAtLeastOne(invocation.Cores, $"{setting}.cores", problems);
 
             CheckPattern(invocation.SuccessPattern, $"{setting}.successPattern", problems);
             CheckGroupPattern(invocation.CountPattern, $"{setting}.countPattern", "total", "to capture how many tests ran", problems);
@@ -1886,10 +1870,11 @@ public static partial class HarnessConfigValidator
         ];
 
     /// <summary>
-    /// Refuses a list given empty where leaving the key out means every one of what it names, or a default
-    /// set: an empty list is never read as that. Read as the key left out, a runner's <c>"legs": []</c> ran it
-    /// on every declared leg - synced to every host and run on all eight legs for a list naming none - which is
-    /// why <c>--legs</c> given no name is refused too; and read as none, it would say what nothing means.
+    /// Refuses a list given empty where leaving the key out means every one of what it names, or a set the tool
+    /// chooses: an empty list could only be misread as that, or as asking for nothing, which no such key is for. Read
+    /// as the key left out, a runner's <c>"legs": []</c> ran it on every declared leg - synced to every host and run on
+    /// all eight legs for a list naming none. One rule and one wording for every such key, as <c>--legs</c> given no
+    /// name is refused on the command line.
     /// </summary>
     /// <param name="list">The list, or <see langword="null"/> where the key is left out.</param>
     /// <param name="setting">The key, as a problem names it.</param>
@@ -1939,9 +1924,10 @@ public static partial class HarnessConfigValidator
     private static bool SameName(string? first, string? second)
         => string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
 
-    private static void RequireAtLeastOne(int value, string setting, List<string> problems)
+    /// <summary>Refuses a count given below 1; one left out is not checked.</summary>
+    private static void RequireAtLeastOne(int? value, string setting, List<string> problems)
     {
-        if (value < 1)
+        if (value is < 1)
         {
             problems.Add($"{setting} must be at least 1, found {value}");
         }

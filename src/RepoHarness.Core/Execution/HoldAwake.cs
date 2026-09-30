@@ -156,7 +156,7 @@ public sealed class HoldAwakeService(HoldAwakeStore store, KeepAwake keepAwake, 
 
                 try
                 {
-                    await Task.Delay(left < _pollInterval ? (left > TimeSpan.Zero ? left : TimeSpan.Zero) : _pollInterval, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(Waits.Shorter(_pollInterval, left), cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {

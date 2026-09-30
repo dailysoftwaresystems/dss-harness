@@ -184,7 +184,7 @@ public sealed class LogOwnershipTests
         }
         else
         {
-            // The owner file replaced by a directory: nothing can be written where it goes.
+            // The owner file replaced by a directory: nothing can be read, nor written, where it goes.
             Directory.CreateDirectory(LogOwnership.OwnerFile(directory));
         }
 
@@ -195,7 +195,7 @@ public sealed class LogOwnershipTests
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.Contains("The log owner file", refusal.Message, StringComparison.Ordinal);
-        Assert.Contains("could not be written", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(directoryIsAFile ? "could not be written" : "could not be read", refusal.Message, StringComparison.Ordinal);
     }
 
     [Fact]

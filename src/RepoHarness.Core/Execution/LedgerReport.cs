@@ -556,9 +556,14 @@ public sealed class LedgerReport
                     : null,
 
                 // Only where the leg is heavy and its machine declares admission: taken or not, how long it waited,
-                // the memory in use, and what held the slots where it was not taken.
+                // the memory in use, what held the slots where it was not taken for want of one, and the record they
+                // are kept in.
                 Admission = line.Admission is { } admission
-                    ? admission with { Holders = admission.Holders?.Select(show).ToList() }
+                    ? admission with
+                    {
+                        Holders = admission.Holders?.Select(show).ToList(),
+                        Record = admission.Record is { } record ? show(record) : null,
+                    }
                     : null,
 
                 // Only where the command measured the leg's build directory: clean.
@@ -769,9 +774,9 @@ public sealed class LedgerReport
         }
 
         // A leg not let start says why as its detail; one let start says how, beside it.
-        if (admission is { Admitted: true })
+        if (admission?.Describe() is { } admitted)
         {
-            parts.Add(admission.Describe());
+            parts.Add(admitted);
         }
 
         if (testCountNote is { Length: > 0 })
@@ -793,5 +798,7 @@ public sealed class LedgerReport
     private static string Row(string leg, string verdict, string duration, string detail, int legWidth, int verdictWidth, int durationWidth)
         => (leg.PadRight(legWidth) + "  " + verdict.PadRight(verdictWidth) + "  " + duration.PadLeft(durationWidth) + "  " + detail).TrimEnd();
 
-    private static double Seconds(TimeSpan duration) => Math.Round(duration.TotalSeconds, 3);
+    /// <summary>A duration as every seconds field of <c>--json</c> gives it: to the millisecond.</summary>
+    /// <param name="duration">The duration.</param>
+    internal static double Seconds(TimeSpan duration) => Math.Round(duration.TotalSeconds, 3);
 }

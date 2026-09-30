@@ -1,4 +1,6 @@
+using NSubstitute;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -17,11 +19,11 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("state", "admission.json");
+        var record = temp.Combine("state", "admission.json");
         var clock = new ManualClock();
         var said = new List<string>();
 
-        using (var admitted = await AdmissionKit.Admission(harness, ledger, new ScriptedGauge(41.25), clock)
+        using (var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(41.25), clock)
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said), TestContext.Current.CancellationToken))
         {
             Assert.Null(admitted.Refusal);
@@ -29,11 +31,11 @@ public sealed class LegAdmissionTests
             Assert.Equal(0, admitted.Fact.WaitedSeconds);
             Assert.Equal(41.3, admitted.Fact.MemoryPercent);
             Assert.Equal("admitted at once, memory 41.3% in use (41.25 of 100 by the test)", admitted.Fact.Describe());
-            Assert.Equal("mine", Assert.Single(AdmissionKit.Read(ledger)).Leg);
+            Assert.Equal("mine", Assert.Single(AdmissionKit.Read(record)).Leg);
         }
 
         // Given back as the leg's work ends, and the settle skipped: nothing else held a slot.
-        Assert.Empty(AdmissionKit.Read(ledger));
+        Assert.Empty(AdmissionKit.Read(record));
         Assert.Equal(TimeSpan.Zero, clock.Moved);
     }
 
@@ -46,21 +48,21 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
         var clock = new ManualClock();
         var said = new List<string>();
         var first = AdmissionKit.Holder(harness, "first");
         var second = AdmissionKit.Holder(harness, "second");
 
-        AdmissionKit.Write(ledger, first, second);
+        AdmissionKit.Write(record, first, second);
 
         // The first holder's command ends while this leg waits its second poll.
         var waits = 0;
-        var admission = AdmissionKit.Admission(harness, ledger, new ScriptedGauge(30), clock, onWait: () =>
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock, onWait: () =>
         {
             if (++waits == 2)
             {
-                AdmissionKit.Write(ledger, [.. AdmissionKit.Read(ledger).Where(entry => entry.Leg != "first")]);
+                AdmissionKit.Write(record, [.. AdmissionKit.Read(record).Where(entry => entry.Leg != "first")]);
             }
         });
 
@@ -73,11 +75,11 @@ public sealed class LegAdmissionTests
         var waiting = Assert.Single(said, line => line.StartsWith("waits for", StringComparison.Ordinal));
 
         Assert.Contains("one of this machine's 2 heavy-leg slot(s), 2 leg(s) ahead", waiting, StringComparison.Ordinal);
-        Assert.Contains($"'/src/first' variant 'x86_64-gcc-release' (leg 'first', test, {harness.Identity.CurrentMachine} pid {harness.Identity.CurrentId}, run run-first, since 2026-09-30 16:29:42Z)", waiting, StringComparison.Ordinal);
+        Assert.Contains($"'/src/first' variant 'x86_64-gcc-release' on local (leg 'first', test, {harness.Identity.CurrentMachine} pid {harness.Identity.CurrentId}, run run-first, since 2026-09-30 16:29:42Z)", waiting, StringComparison.Ordinal);
         Assert.Contains("'/src/second'", waiting, StringComparison.Ordinal);
 
         // Taken after the other two, and holding one of the two slots with the second.
-        Assert.Equal(["second", "mine"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+        Assert.Equal(["second", "mine"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
 
     /// <summary>
@@ -89,20 +91,20 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
         var clock = new ManualClock();
         var said = new List<string>();
 
-        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "first"), AdmissionKit.Holder(harness, "second"));
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"), AdmissionKit.Holder(harness, "second"));
 
-        using var admitted = await AdmissionKit.Admission(harness, ledger, new ScriptedGauge(30), clock)
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock)
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30, maxWaitMinutes: 2), said), TestContext.Current.CancellationToken);
 
         Assert.False(admitted.Fact.Admitted);
         Assert.Equal(120, admitted.Fact.WaitedSeconds);
         Assert.StartsWith("not admitted after 2m00s waiting for one of this machine's 2 heavy-leg slot(s), held by '/src/first'", admitted.Refusal, StringComparison.Ordinal);
         Assert.Equal(2, admitted.Fact.Holders?.Count);
-        Assert.Equal(["first", "second"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+        Assert.Equal(["first", "second"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
 
     /// <summary>
@@ -114,11 +116,11 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
         var clock = new ManualClock();
         var said = new List<string>();
 
-        using var admitted = await AdmissionKit.Admission(harness, ledger, new ScriptedGauge(84.1, 80, 75.9), clock)
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(84.1, 80, 75.9), clock)
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said), TestContext.Current.CancellationToken);
 
         Assert.True(admitted.Fact.Admitted);
@@ -140,16 +142,16 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
         var clock = new ManualClock();
         var said = new List<string>();
 
-        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "neighbour"));
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "neighbour"));
 
         // Below, then above once the neighbour's build has grown, then below twice.
         var gauge = new ScriptedGauge(60, 79, 70, 71);
 
-        using var admitted = await AdmissionKit.Admission(harness, ledger, gauge, clock, settle: TimeSpan.FromSeconds(20))
+        using var admitted = await AdmissionKit.Admission(harness, record, gauge, clock, settle: TimeSpan.FromSeconds(20))
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said), TestContext.Current.CancellationToken);
 
         Assert.True(admitted.Fact.Admitted);
@@ -167,10 +169,10 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
         var said = new List<string>();
 
-        using var admitted = await AdmissionKit.Admission(harness, ledger, new ScriptedGauge(90), new ManualClock())
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(90), new ManualClock())
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 60, maxWaitMinutes: 3), said), TestContext.Current.CancellationToken);
 
         Assert.False(admitted.Fact.Admitted);
@@ -179,7 +181,7 @@ public sealed class LegAdmissionTests
         Assert.Equal(
             "not admitted after 3m00s: it held a heavy-leg slot, and the memory 90.0% in use (90 of 100 by the test) never fell below 76%",
             admitted.Refusal);
-        Assert.Empty(AdmissionKit.Read(ledger));
+        Assert.Empty(AdmissionKit.Read(record));
     }
 
     /// <summary>
@@ -212,19 +214,19 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
 
         AdmissionKit.Write(
-            ledger,
+            record,
             AdmissionKit.Holder(harness, "crashed", processId: int.MaxValue - 1),
             AdmissionKit.Holder(harness, "renamed", machine: "the-name-it-had"));
 
-        using var admitted = await AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock())
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock())
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, maxWaitMinutes: 1), []), TestContext.Current.CancellationToken);
 
         Assert.False(admitted.Fact.Admitted);
         Assert.Contains("held by '/src/renamed'", admitted.Refusal, StringComparison.Ordinal);
-        Assert.Equal(["renamed"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+        Assert.Equal(["renamed"], AdmissionKit.Read(record).Select(entry => entry.Leg));
         Assert.Contains("Reclaimed a heavy-leg slot from '/src/crashed'", harness.StandardOutput.ToString(), StringComparison.Ordinal);
         Assert.Contains("which is no longer running", harness.StandardOutput.ToString(), StringComparison.Ordinal);
     }
@@ -238,16 +240,16 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
         var said = new List<string>();
         var waits = 0;
 
         // While it waits for the memory, its record is removed and another leg takes the machine's one slot.
-        var admission = AdmissionKit.Admission(harness, ledger, new ScriptedGauge(90, 10), new ManualClock(), onWait: () =>
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(90, 10), new ManualClock(), onWait: () =>
         {
             if (++waits == 1)
             {
-                AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "newcomer"));
+                AdmissionKit.Write(record, AdmissionKit.Holder(harness, "newcomer"));
             }
         });
 
@@ -268,13 +270,132 @@ public sealed class LegAdmissionTests
     [Fact]
     public void EachMachine_KeepsARecordOfItsOwn_NamedByWhatTellsItApart()
     {
-        Assert.Equal("admission-4c4c4544-0036-3510-8052-b4c04f4d4d32.json", HeavyLegSlots.FileNameFor("4c4c4544-0036-3510-8052-b4c04f4d4d32"));
-        Assert.Equal("admission-a_b_c.json", HeavyLegSlots.FileNameFor("a/b\\c"));
+        Assert.Equal("admission-0f0e0d0c-0b0a-4908-8706-050403020100.json", HeavyLegSlots.FileNameFor("0f0e0d0c-0b0a-4908-8706-050403020100"));
+        Assert.Equal("admission-a-b-c.json", HeavyLegSlots.FileNameFor("a/b\\c"));
 
         var machine = new HarnessFactory().Platform.MachineId;
 
-        Assert.Matches("^[0-9A-Fa-f-]{32,36}$", machine);
+        // What the system keeps for it, or - a container its image gave none - its name, and why.
+        if (machine.ByName is null)
+        {
+            Assert.Matches("^[0-9A-Fa-f-]{32,36}$", machine.Id);
+        }
+        else
+        {
+            Assert.Equal(Environment.MachineName, machine.Id);
+        }
+
         Assert.Equal(machine, new HarnessFactory().Platform.MachineId);
+    }
+
+    /// <summary>
+    /// A machine whose system keeps no identifier for it - a container its image gave none - is told by its name, and
+    /// that is said with why, since a command started after the name changes keeps a record of its own.
+    /// </summary>
+    [Fact]
+    public void AMachineToldOnlyByItsName_SaysSo_WithWhy()
+    {
+        var named = new HarnessFactory();
+        var platform = Substitute.For<IHostPlatform>();
+        platform.MachineId.Returns(new MachineIdentity("build-box", "neither /etc/machine-id nor /var/lib/dbus/machine-id holds one"));
+
+        var path = HeavyLegSlots.PathFor(platform, named.Output);
+
+        Assert.Equal("admission-build-box.json", Path.GetFileName(path));
+        Assert.Contains(
+            "This machine's heavy legs are recorded under its name, 'build-box', since neither /etc/machine-id nor "
+            + "/var/lib/dbus/machine-id holds one; a command started after that name changes keeps a record of its own",
+            named.StandardOutput.ToString(),
+            StringComparison.Ordinal);
+
+        var identified = new HarnessFactory();
+        platform.MachineId.Returns(new MachineIdentity("0f0e0d0c-0b0a-4908-8706-050403020100", null));
+
+        HeavyLegSlots.PathFor(platform, identified.Output);
+
+        Assert.Empty(identified.StandardOutput.ToString());
+        Assert.Empty(identified.StandardError.ToString());
+    }
+
+    /// <summary>
+    /// A slot this process could not give back - a full disk - is never counted by this process's own later legs, which
+    /// would otherwise wait behind a leg of their own command that had ended; it leaves the record with the next change.
+    /// </summary>
+    [Fact]
+    public async Task ASlotThatCouldNotBeGivenBack_NeverHoldsThisProcessesOwnLaterLegs()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var disk = new FullDiskFileSystem(harness.FileSystem);
+        var clock = new ManualClock();
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(10), clock, fileSystem: disk);
+        var rule = AdmissionKit.Rule(heavyLegs: 1);
+
+        var first = await admission.AdmitAsync(AdmissionKit.Request(rule, [], "first"), TestContext.Current.CancellationToken);
+        disk.Full = true;
+        first.Dispose();
+        disk.Full = false;
+
+        Assert.Contains("admission: WARN - leg 'first' could not give its heavy-leg slot back", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Equal("first", Assert.Single(AdmissionKit.Read(record)).Leg);
+
+        using var second = await admission.AdmitAsync(AdmissionKit.Request(rule, [], "second"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("admitted at once, memory 10.0% in use (10 of 100 by the test)", second.Fact.Describe());
+        Assert.Equal("second", Assert.Single(AdmissionKit.Read(record)).Leg);
+        Assert.Equal(TimeSpan.Zero, clock.Moved);
+    }
+
+    /// <summary>
+    /// A count that fails once it has been read decides nothing: a leg waiting for the memory to fall is not let start the
+    /// moment the count fails, but reads it again next time round, and starts once it reads below the limit.
+    /// </summary>
+    [Fact]
+    public async Task ACountThatFailsOnceRead_DecidesNothing_AndIsReadAgain()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+        var gauge = new ScriptedGauge(90, null, 50);
+
+        using var admitted = await AdmissionKit.Admission(harness, record, gauge, clock)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said), TestContext.Current.CancellationToken);
+
+        Assert.Null(admitted.Refusal);
+        Assert.Equal(50, admitted.Fact.MemoryPercent);
+        Assert.Null(admitted.Fact.Unmeasured);
+        Assert.Equal(3, gauge.Reads);
+        Assert.Equal(TimeSpan.FromSeconds(60), clock.Moved);
+        Assert.Contains(
+            "holds a heavy-leg slot, and could not read the memory in use again: the test gave no reading; it last read 90.0% in use (90 of 100 by the test)",
+            said);
+    }
+
+    /// <summary>
+    /// One that never reads again is not let start past the machine's wait, naming the count it last read and why it could
+    /// not read it again - never let start on a count that stopped while it stood above the limit.
+    /// </summary>
+    [Fact]
+    public async Task ACountThatNeverReadsAgain_IsNotAdmitted_NamingWhatItLastRead()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+
+        using var refused = await AdmissionKit.Admission(harness, record, new ScriptedGauge(90, null), new ManualClock())
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(maxWaitMinutes: 1), []), TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Fact.Admitted);
+        Assert.Equal(
+            "not admitted after 1m00s: it held a heavy-leg slot, and the memory in use, last read as 90.0% in use "
+            + "(90 of 100 by the test), could not be read again: the test gave no reading",
+            refused.Refusal);
+        Assert.Equal(90, refused.Fact.MemoryPercent);
+        Assert.Equal("the test gave no reading", refused.Fact.Unmeasured);
+        Assert.Empty(AdmissionKit.Read(record));
     }
 
     /// <summary>A leg stopped while it waits gives its place back, and says no verdict.</summary>
@@ -283,19 +404,19 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
         using var stop = new CancellationTokenSource();
 
-        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "first"));
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"));
 
-        var admission = AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock(), onWait: stop.Cancel);
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock(), onWait: stop.Cancel);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
             using var admitted = await admission.AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1), []), stop.Token);
         });
 
-        Assert.Equal(["first"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+        Assert.Equal(["first"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
 
     /// <summary>
@@ -331,15 +452,15 @@ public sealed class LegAdmissionTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("admission.json");
+        var record = temp.Combine("admission.json");
 
-        File.WriteAllText(ledger, "not a record");
+        File.WriteAllText(record, "not a record");
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock())
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock())
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), []), TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
-        Assert.Contains($"The record of the heavy legs admitted onto this machine '{Path.GetFullPath(ledger)}' is not readable as JSON", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains($"The record of the heavy legs admitted onto this machine '{Path.GetFullPath(record)}' is not readable as JSON", refusal.Message, StringComparison.Ordinal);
         Assert.Contains("Remove it once no heavy leg runs or waits on this machine.", refusal.Message, StringComparison.Ordinal);
     }
 }

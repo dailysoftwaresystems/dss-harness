@@ -687,10 +687,10 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("state", "admission.json");
+        var record = temp.Combine("state", "admission.json");
         var ran = false;
 
-        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "other"));
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
 
         var outcome = await OutcomeAsync(
             temp,
@@ -699,7 +699,7 @@ public sealed class LegRunServiceTests
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
             ran: _ => ran = true,
-            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock()));
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
 
         Assert.Equal(LegExit.NotAdmitted, outcome.ExitCode);
         Assert.False(ran);
@@ -714,7 +714,7 @@ public sealed class LegRunServiceTests
             StringComparison.Ordinal);
         Assert.False(leg.GetProperty("admission").GetProperty("admitted").GetBoolean());
         Assert.Single(leg.GetProperty("admission").GetProperty("holders").EnumerateArray());
-        Assert.Equal(["other"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
 
     /// <summary>
@@ -728,7 +728,7 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("state", "admission.json");
+        var record = temp.Combine("state", "admission.json");
         IReadOnlyList<SlotEntry>? during = null;
 
         var outcome = await OutcomeAsync(
@@ -737,12 +737,12 @@ public sealed class LegRunServiceTests
             Admitting(OneLeg(harness), local: new AdmissionSettings { HeavyLegs = 2 }),
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: json) { Workload = Heavy },
-            ran: _ => during = AdmissionKit.Read(ledger),
-            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(12.5), new ManualClock()));
+            ran: _ => during = AdmissionKit.Read(record),
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(12.5), new ManualClock()));
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("native", Assert.Single(during!).Leg);
-        Assert.Empty(AdmissionKit.Read(ledger));
+        Assert.Empty(AdmissionKit.Read(record));
 
         if (json)
         {
@@ -771,9 +771,9 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("state", "admission.json");
+        var record = temp.Combine("state", "admission.json");
 
-        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "other"));
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
 
         var verdicts = await RunAsync(
             temp,
@@ -781,10 +781,10 @@ public sealed class LegRunServiceTests
             declared ? Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 }) : OneLeg(harness),
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: true) { Workload = heavy ? Heavy : LegWorkload.Copy },
-            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock()));
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
 
         Assert.Equal("passed", verdicts["native"].Verdict);
-        Assert.Equal(["other"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
 
     /// <summary>
@@ -800,10 +800,10 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("state", "admission.json");
+        var record = temp.Combine("state", "admission.json");
         var asked = false;
 
-        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "other"));
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
 
         var config = new HarnessConfig
         {
@@ -847,7 +847,7 @@ public sealed class LegRunServiceTests
             inspector,
             new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
             hosts: hosts,
-            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock()));
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
 
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
         var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
@@ -864,7 +864,7 @@ public sealed class LegRunServiceTests
             Assert.True(asked);
         }
 
-        Assert.Equal(["other"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+        Assert.Equal(["other"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
 
     /// <summary>
@@ -878,11 +878,11 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ledger = temp.Combine("state", "admission.json");
+        var record = temp.Combine("state", "admission.json");
         var platform = harness.Platform;
         var ran = false;
 
-        AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "other"));
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
 
         var config = new HarnessConfig
         {
@@ -902,7 +902,7 @@ public sealed class LegRunServiceTests
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: true, Here: wsl ? HostId.Wsl("Ubuntu") : HostId.Ssh(HostName)) { Workload = Heavy },
             ran: _ => ran = true,
-            admission: AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock()));
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock()));
 
         Assert.Equal(wsl ? "passed" : "not-admitted", verdicts["native"].Verdict);
         Assert.Equal(wsl, ran);
@@ -992,11 +992,14 @@ public sealed class LegRunServiceTests
     private sealed class LogsOwnedElsewhere(IFileSystem inner) : PassThroughFileSystem(inner)
     {
         private static readonly string Owner = JsonSerializer.Serialize(
-            new LogOwner("another-machine", 4242, null, "20260101-000000-00000000", DateTimeOffset.UnixEpoch),
+            new LogOwner("another-machine", 4242, "20260101-000000-00000000", DateTimeOffset.UnixEpoch),
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
 
         public override bool FileExists(string path)
             => path.EndsWith(LogOwnership.OwnerSuffix, StringComparison.Ordinal) || base.FileExists(path);
+
+        public override PathKind KindOf(string path)
+            => path.EndsWith(LogOwnership.OwnerSuffix, StringComparison.Ordinal) ? PathKind.File : base.KindOf(path);
 
         public override string ReadAllText(string path)
             => path.EndsWith(LogOwnership.OwnerSuffix, StringComparison.Ordinal) ? Owner : base.ReadAllText(path);

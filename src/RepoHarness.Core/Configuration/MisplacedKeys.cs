@@ -83,7 +83,7 @@ internal static class MisplacedKeys
 
                 if (Property(project, "test") is { ValueKind: JsonValueKind.Object } test)
                 {
-                    var name = Property(project, "name") is { ValueKind: JsonValueKind.String } named ? $"'{named.GetString()}'" : $"#{position}";
+                    var name = NameOrPlace(project, position);
 
                     yield return ($"project {name}", test);
                 }
@@ -140,7 +140,7 @@ internal static class MisplacedKeys
                     continue;
                 }
 
-                var name = Property(phase, "name") is { ValueKind: JsonValueKind.String } named ? $"'{named.GetString()}'" : $"#{position}";
+                var name = NameOrPlace(phase, position);
                 var them = declared.Count == 1 ? "it" : "them";
 
                 yield return $"predefined runner '{runner.Name}' phase {name} declares {Quoted(declared)}, which only a step "
@@ -187,4 +187,10 @@ internal static class MisplacedKeys
                 .Select(property => (JsonElement?)property.Value)
                 .FirstOrDefault()
             : null;
+
+    /// <summary>An entry of a list as a message names it: by its name where it has one, else by its place, from 1.</summary>
+    /// <param name="entry">The entry.</param>
+    /// <param name="position">Its place in the list, from 1.</param>
+    private static string NameOrPlace(JsonElement entry, int position)
+        => Property(entry, "name") is { ValueKind: JsonValueKind.String } named ? $"'{named.GetString()}'" : $"#{position}";
 }

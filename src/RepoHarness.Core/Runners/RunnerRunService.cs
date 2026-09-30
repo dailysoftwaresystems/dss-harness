@@ -495,7 +495,7 @@ public sealed class RunnerRunService(
     /// so two steps whose names differ only in such a character still name two different files.
     /// </remarks>
     /// <param name="phase">The step's name, as the ledger shows it.</param>
-    public static string LogNameFor(string phase) => RunSegments.FileNameFor(phase);
+    public static string LogNameFor(string phase) => FileNames.SafeFor(phase);
 
     /// <summary>
     /// What a host running one of a run's legs is given after the command's name, so it runs what

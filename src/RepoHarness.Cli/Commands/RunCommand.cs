@@ -141,8 +141,9 @@ internal static class RunCommand
             // The runner's own legs when --legs was left out. Resolved here rather than left to the
             // default of every declared leg, because running a benchmark on hosts nobody meant to
             // measure is not what "no --legs" asks for. Every declared leg only where the runner
-            // leaves its legs out: a list given empty was refused when the file was read.
-            var selected = named ?? runner.Legs;
+            // leaves its legs out: a list given empty was refused when the file was read, and one a caller
+            // builds empty reads as left out.
+            var selected = named ?? (runner.Legs is { Count: > 0 } declared ? declared : null);
 
             // A leg whose operating system no step runs on would run nothing and pass, and one on which
             // none of the steps this run named runs would run only what they need and pass. Refused here,
@@ -169,7 +170,10 @@ internal static class RunCommand
                         // Built only where the runner requires it, and never tested: a host needs
                         // cmake for a runner that measures a build product, and not for one that
                         // only runs a script.
-                        Workload = LegWorkload.ForRunner(runner, file?.File),
+                        Workload = LegWorkload.ForRunner(
+                            runner,
+                            file?.File,
+                            runner.ExpectedExceptions.SelectMany(entry => entry.RunChecks).Select(check => Resolve(harness.Config, check.PredefinedRunner))),
                     },
                     (work, token) => RunLegAsync(runners, builds, runnerName, inputs, manualSteps, work, token),
                     cancellationToken)

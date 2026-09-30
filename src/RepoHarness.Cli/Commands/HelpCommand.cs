@@ -180,8 +180,8 @@ internal static class HelpCommand
         builder.AppendLine("  \"toolSearchDirectories\": { \"macos\": [\"/opt/local/bin\", \"~/bin\"] }");
         builder.AppendLine();
         builder.AppendLine("replaces the searched directories for a platform, or for 'all', when its list names");
-        builder.AppendLine("something that platform can search; declared empty, or naming only another");
-        builder.AppendLine("platform's directories, the built-in list stays. Each entry is '~/' for the");
+        builder.AppendLine("something that platform can search; naming only another platform's directories, the");
+        builder.AppendLine("built-in list stays there, and given empty it is refused. Each entry is '~/' for the");
         builder.AppendLine("home directory of whoever searches, or absolute for its platform: a drive or a share");
         builder.AppendLine("on Windows, a leading '/' elsewhere. Under 'all', an entry only one kind of machine");
         builder.AppendLine("can name is searched where it can be. The harness's own .NET SDK is always looked for");
@@ -1050,7 +1050,7 @@ internal static class HelpCommand
         builder.AppendLine("the lock on it, and their legs there run side by side; each worktree's first sync to");
         builder.AppendLine("a host carries its whole tree. A worktree made elsewhere, under the name of one that");
         builder.AppendLine("has a copy, is refused that copy while the other exists. This machine records which");
-        builder.AppendLine($"hosts hold a copy of which worktree, in {HarnessLayout.DirectoryName}/{HarnessLayout.HostCopiesDirectoryName} in the main");
+        builder.AppendLine($"hosts hold a copy of which worktree, in {HarnessLayout.HostCopiesDirectoryRelative} in the main");
         builder.AppendLine("checkout, and delete-worktree asks each of them to remove it.");
         builder.AppendLine();
         builder.AppendLine("An emulator declares the hosts it runs on (hostOs, hostProcessor), the processor it");
@@ -1567,10 +1567,10 @@ internal static class HelpCommand
         builder.AppendLine("                                     orchestrator and its agents keep, in the main");
         builder.AppendLine("                                     checkout, and never sent to a host by sync");
         builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
-        builder.AppendLine("  .harness-config/runs/              ignored; one directory of records per run, in");
+        builder.AppendLine($"  {HarnessLayout.RunsDirectoryRelative}/              ignored; one directory of records per run, in");
         builder.AppendLine("                                     the tree that ran it");
         builder.AppendLine("  .harness-config/lock.json          ignored; records in-progress runs");
-        builder.AppendLine($"  {HarnessLayout.DirectoryName}/{HarnessLayout.HostCopiesDirectoryName}/       ignores itself; which hosts hold a copy of");
+        builder.AppendLine($"  {HarnessLayout.HostCopiesDirectoryRelative}/       ignores itself; which hosts hold a copy of");
         builder.AppendLine("                                     which worktree, in the main checkout");
         builder.AppendLine($"  {AnchorSettings.DefaultPendingAnchorsPath}");
         builder.AppendLine("                                     tracked; live anchors (anchors.pendingAnchorsPath)");

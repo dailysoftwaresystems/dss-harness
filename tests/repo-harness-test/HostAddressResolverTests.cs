@@ -40,7 +40,7 @@ public sealed class HostAddressResolverTests
     [Fact]
     public async Task AnAnswer_IsKeptBriefly_SoOneCommandDoesNotPayTheSameMissForEveryProbe()
     {
-        var clock = new SteppedClock();
+        var clock = new ManualClock();
         var lookup = new ScriptedLookup(_ => ["192.0.2.10"]);
         var resolver = new HostAddressResolver(lookup, clock, TimeSpan.Zero);
 
@@ -106,7 +106,7 @@ public sealed class HostAddressResolverTests
     }
 
     private static HostAddressResolver Resolver(INameLookup lookup)
-        => new(lookup, new SteppedClock(), TimeSpan.Zero);
+        => new(lookup, new ManualClock(), TimeSpan.Zero);
 
     /// <summary>Answers each lookup by its number, so a miss followed by a hit is exactly expressible.</summary>
     private sealed class ScriptedLookup(Func<int, IReadOnlyList<string>> answer) : INameLookup
@@ -118,15 +118,5 @@ public sealed class HostAddressResolverTests
             Calls++;
             return Task.FromResult(answer(Calls));
         }
-    }
-
-    /// <summary>A clock that moves only when a test moves it, so a cache lifetime is tested in no time at all.</summary>
-    private sealed class SteppedClock : TimeProvider
-    {
-        private DateTimeOffset _now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void Advance(TimeSpan by) => _now += by;
     }
 }

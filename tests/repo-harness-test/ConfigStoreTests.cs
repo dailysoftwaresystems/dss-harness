@@ -496,7 +496,7 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "hostOs": "linux", "hostProcessor": "x86_64", "processor": "x86_64", "witness": { "command": ["w"], "pattern": "x" } }""", "which needs no emulator")]
     [InlineData("""{ "hostOs": "linux", "hostProcessor": "x86_64", "processor": "arm64", "launcher": [], "witness": { "command": ["w"], "pattern": "x" } }""", "launcher is empty")]
     [InlineData("""{ "hostOs": "linux", "hostProcessor": "x86_64", "processor": "arm64", "phases": ["deploy"], "witness": { "command": ["w"], "pattern": "x" } }""", "phases names 'deploy'")]
-    [InlineData("""{ "hostOs": "linux", "hostProcessor": "x86_64", "processor": "arm64", "phases": [], "witness": { "command": ["w"], "pattern": "x" } }""", "phases is empty")]
+    [InlineData("""{ "hostOs": "linux", "hostProcessor": "x86_64", "processor": "arm64", "phases": [], "witness": { "command": ["w"], "pattern": "x" } }""", "phases is given empty, which is never read as the test phase alone: list test, build or both")]
     [InlineData("""{ "hostOs": "linux", "hostProcessor": "x86_64", "processor": "arm64", "witness": { "command": [], "pattern": "x" } }""", "witness has an empty command")]
     [InlineData("""{ "hostOs": "linux", "hostProcessor": "x86_64", "processor": "arm64", "witness": { "command": ["w"], "pattern": "(" } }""", "witness.pattern is not a valid regular expression")]
     [InlineData("""{ "hostOs": "linux", "hostProcessor": "x86_64", "processor": "arm64", "tool": "qemu", "witness": { "command": ["w"], "pattern": "x" } }""", "names tool 'qemu', which is not declared")]
@@ -990,7 +990,7 @@ public sealed class ConfigStoreTests
     /// </summary>
     [Theory]
     [InlineData("""{ "phases": [ { "name": "go", "command": ["dotnet", "--info"] } ], "steps": ["go"] }""", "names steps, which only an action file has")]
-    [InlineData("""{ "action": "corpus/corpus.yml", "steps": [] }""", "names no step under steps, so it would run nothing")]
+    [InlineData("""{ "action": "corpus/corpus.yml", "steps": [] }""", "steps is given empty, which is never read as every step that is not manual: name the steps it runs")]
     [InlineData("""{ "action": "corpus/corpus.yml", "steps": [" "] }""", "names a blank step under steps")]
     [InlineData("""{ "action": "corpus/corpus.yml", "steps": ["bench", "bench"] }""", "names step 'bench' more than once under steps")]
     public void Load_RejectsARunnersStepsThatCannotBeRun(string runner, string expected)

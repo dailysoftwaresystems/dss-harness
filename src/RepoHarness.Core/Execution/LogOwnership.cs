@@ -9,18 +9,19 @@ namespace RepoHarness.Core.Execution;
 /// <summary>The run that owns a log directory.</summary>
 /// <param name="Machine">The machine it runs on.</param>
 /// <param name="ProcessId">Its process id.</param>
-/// <param name="ProcessStamp">
-/// What tells that process from another that inherits its id, so a recycled id is not read as a live
-/// owner. Holds no clock, so a clock that steps cannot turn a live owner into a dead one.
-/// </param>
 /// <param name="RunId">Its run id.</param>
 /// <param name="TakenUtc">When it claimed the directory, for display.</param>
+/// <param name="ProcessStamp">
+/// What tells that process from another that inherits its id, so a recycled id is not read as a live
+/// owner. Holds no clock, so a clock that steps cannot turn a live owner into a dead one. Left out by
+/// a build before stamps, and where the platform would not say.
+/// </param>
 public sealed record LogOwner(
     string Machine,
     int ProcessId,
-    string? ProcessStamp,
     string RunId,
-    DateTimeOffset TakenUtc)
+    DateTimeOffset TakenUtc,
+    string? ProcessStamp = null)
 {
     /// <summary>
     /// The wall-clock start time a build before this one recorded here, kept only so such a file is
@@ -46,6 +47,9 @@ public sealed record LogOwner(
 /// <param name="OwnerFile">Where the ownership is recorded.</param>
 public sealed record LogClaim(bool Taken, LogOwner? Holder, string OwnerFile)
 {
+    /// <summary>The run that owns it instead, as a refusal names it, where one does.</summary>
+    public string? HeldBy { get; init; }
+
     /// <summary>
     /// The verdict this forces on the leg, or <see langword="null"/> when the claim succeeded. A run
     /// that cannot own its log path cannot keep the evidence for its own verdict, and a verdict with
@@ -56,7 +60,7 @@ public sealed record LogClaim(bool Taken, LogOwner? Holder, string OwnerFile)
             ? null
             : ReachedVerdict.Of(
                 LegVerdict.LogHeld,
-                Holder is null ? "another run owns this log path" : $"another run owns this log path: {Holder.Describe()}");
+                HeldBy is null ? "another run owns this log path" : $"another run owns this log path: {HeldBy}");
 }
 
 /// <summary>
@@ -81,13 +85,6 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
     /// so that wiping a run directory cannot quietly free a directory a live run still owns.
     /// </summary>
     public const string OwnerSuffix = ".owner.json";
-
-    /// <summary>How long one update of the owner file waits for another process's; see <see cref="MachineWideFile"/>.</summary>
-    private static readonly TimeSpan UpdateWindow = TimeSpan.FromSeconds(10);
-
-    // Every state file's rules (JsonStateFile): a shape this build does not recognise is refused. The one field an older
-    // build wrote is declared, so upgrading reads its own owner file rather than refusing it.
-    private static readonly JsonSerializerOptions JsonOptions = JsonStateFile.Options;
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
@@ -130,7 +127,7 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
         // an error that reads as a defect in this tool.
         Written(file, () => _fileSystem.CreateDirectory(Path.GetDirectoryName(file)!));
 
-        var claim = MachineWideFile.Update(file, UpdateWindow, () =>
+        var claim = MachineWideFile.Update(file, MachineWideFile.Window, afterwards =>
         {
             if (Read(file) is { } existing && !Mine(existing, runId))
             {
@@ -140,27 +137,23 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
                 {
                     // A holder on another machine cannot be asked whether it is still running, so
                     // it stands. Liveness, never a timeout, is what decides for one on this machine.
-                    return new LogClaim(false, existing, file);
+                    return new LogClaim(false, existing, file) { HeldBy = existing.Describe() + _identity.ElsewhereNote(existing.Machine) };
                 }
 
-                if (held)
-                {
-                    _output.Warn(CommandName, $"Taking the log path '{logDirectory}' from {existing.Describe()} because --force-lock was given.");
-                }
-                else
-                {
-                    _output.Info(CommandName, $"Reclaimed the log path '{logDirectory}' from {existing.Describe()}, which is no longer running.");
-                }
+                // Said once the owner file is let go, as every line about a machine-wide file is.
+                afterwards(held
+                    ? () => _output.Warn(CommandName, ProcessHolders.TakenByForce($"the log path '{logDirectory}'", existing.Describe()))
+                    : () => _output.Info(CommandName, ProcessHolders.Reclaimed($"the log path '{logDirectory}'", existing.Describe())));
             }
 
             var owner = new LogOwner(
                 _identity.CurrentMachine,
                 _identity.CurrentId,
-                _identity.Current,
                 runId.Value,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                _identity.Current);
 
-            Written(file, () => _fileSystem.WriteAllTextAtomic(file, JsonSerializer.Serialize(owner, JsonOptions) + "\n"));
+            Written(file, () => _fileSystem.WriteAllTextAtomic(file, JsonSerializer.Serialize(owner, JsonStateFile.Options) + "\n"));
 
             // Made as it is claimed: a run names this directory as where its records are, and one
             // whose legs wrote nothing would otherwise have named a directory that did not exist.
@@ -195,7 +188,7 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
         // has ended.
         try
         {
-            MachineWideFile.Update<object?>(file, UpdateWindow, () =>
+            MachineWideFile.Update<object?>(file, MachineWideFile.Window, () =>
             {
                 if (Read(file) is { } existing && Mine(existing, runId))
                 {
@@ -228,26 +221,15 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
             && owner.ProcessId == _identity.CurrentId
             && _identity.IsHere(owner.Machine);
 
+    /// <summary>
+    /// The owner <paramref name="file"/> records, by every state file's rules: an owner file that cannot be read says a
+    /// run claimed this path and nothing more, so the claim is refused rather than granted - never read as free, the one
+    /// reading that lets two runs write one set of logs. The one field an older build wrote is declared, so upgrading
+    /// reads its own owner file rather than refusing it.
+    /// </summary>
     private LogOwner? Read(string file)
-    {
-        if (!_fileSystem.FileExists(file))
-        {
-            return null;
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<LogOwner>(_fileSystem.ReadAllText(file), JsonOptions);
-        }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
-        {
-            // An owner file that cannot be read says a run claimed this path and nothing more, so
-            // the claim is refused rather than granted. Never read as free: that is the one reading
-            // that lets two runs write one set of logs.
-            throw new HarnessException(
-                HarnessExit.Refused,
-                $"The log owner file '{file}' could not be read: {ex.Message.TrimEnd('.')}. Remove it once no run is using that path.",
-                ex);
-        }
-    }
+        => MachineWideFile.Read<LogOwner>(
+            _fileSystem,
+            file,
+            ex => $"The log owner file '{file}' could not be read: {ex.Message.TrimEnd('.')}. Remove it once no run is using that path.");
 }

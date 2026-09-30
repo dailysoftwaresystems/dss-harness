@@ -45,13 +45,15 @@ public sealed class HostPlatform : IHostPlatform
         return Path.HasExtension(command) ? command : command + ".exe";
     }
 
-    public string MachineId => _machineId ??= ReadMachineId() is { Length: > 0 } id ? id : Environment.MachineName;
+    public MachineIdentity MachineId => _machineId ??= ReadMachineId();
 
-    private string? _machineId;
+    private MachineIdentity? _machineId;
 
-    /// <summary>The identifier this machine's system keeps for it, or <see langword="null"/> where it gives none.</summary>
-    private static string? ReadMachineId()
+    /// <summary>The identifier this machine's system keeps for it; where it gives none, the machine's name and why.</summary>
+    private static MachineIdentity ReadMachineId()
     {
+        string byName;
+
         try
         {
             if (OperatingSystem.IsWindows())
@@ -60,27 +62,44 @@ public sealed class HostPlatform : IHostPlatform
                     .OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64)
                     .OpenSubKey(@"SOFTWARE\Microsoft\Cryptography");
 
-                return (cryptography?.GetValue("MachineGuid") as string)?.Trim();
-            }
+                if ((cryptography?.GetValue("MachineGuid") as string)?.Trim() is { Length: > 0 } guid)
+                {
+                    return new(guid, null);
+                }
 
-            if (OperatingSystem.IsMacOS())
+                byName = @"the registry holds no MachineGuid under HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography";
+            }
+            else if (OperatingSystem.IsMacOS())
             {
                 var uuid = new byte[16];
                 var wait = new Timespec { Seconds = 5 };
 
-                return GetHostUuid(uuid, ref wait) == 0 ? Convert.ToHexString(uuid) : null;
-            }
+                if (GetHostUuid(uuid, ref wait) == 0)
+                {
+                    return new(Convert.ToHexString(uuid), null);
+                }
 
-            // systemd's, and before it D-Bus's, which a system without systemd keeps.
-            return new[] { "/etc/machine-id", "/var/lib/dbus/machine-id" }
-                .Where(File.Exists)
-                .Select(path => File.ReadAllText(path).Trim())
-                .FirstOrDefault(id => id.Length > 0);
+                byName = $"gethostuuid failed with error {Marshal.GetLastPInvokeError()}";
+            }
+            else
+            {
+                // systemd's, and before it D-Bus's, which a system without systemd keeps.
+                string[] kept = ["/etc/machine-id", "/var/lib/dbus/machine-id"];
+
+                if (kept.Where(File.Exists).Select(path => File.ReadAllText(path).Trim()).FirstOrDefault(id => id.Length > 0) is { } id)
+                {
+                    return new(id, null);
+                }
+
+                byName = $"neither {kept[0]} nor {kept[1]} holds one";
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or DllNotFoundException or EntryPointNotFoundException)
         {
-            return null;
+            byName = ex.Message.TrimEnd('.');
         }
+
+        return new(Environment.MachineName, byName);
     }
 
     [StructLayout(LayoutKind.Sequential)]

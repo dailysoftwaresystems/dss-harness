@@ -267,7 +267,7 @@ public sealed class CiLegsService(
     /// </summary>
     private IReadOnlyList<CiWorkflow> ReadWorkflows(string root, CiSettings settings)
     {
-        var paths = settings.Workflows is { } named
+        var paths = settings.Workflows is { Count: > 0 } named
             ? named.Select(path => Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar))).ToList()
             : Enumerate(Path.Combine(root, WorkflowsDirectory.Replace('/', Path.DirectorySeparatorChar)));
 

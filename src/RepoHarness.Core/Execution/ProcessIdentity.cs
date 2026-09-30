@@ -15,7 +15,7 @@ namespace RepoHarness.Core.Execution;
 /// allocations — so something that tells one process from the next holder of its id is recorded
 /// with it.
 /// <para>
-/// That something is never a wall-clock instant. This repository does not trust a clock to order
+/// That something is never recomputed from the clock as it stands. This repository does not trust a clock to order
 /// anything, for a reason it states elsewhere: one host it serves steps its clock forward by about
 /// 25 seconds every few seconds. A start time that is recomputed from the current clock — which is
 /// what Linux hands back, being ticks since boot added to a boot time derived from the clock as it
@@ -33,8 +33,9 @@ public interface IProcessIdentity
 
     /// <summary>
     /// What tells this process from another that inherits its id, or <see langword="null"/> when this
-    /// platform would not say. Recorded beside the id, and compared exactly: it holds no clock, so
-    /// there is nothing for a tolerance to absorb.
+    /// platform would not say. Recorded beside the id. Compared exactly on Linux, whose stamp holds no
+    /// clock; on Windows and macOS it is the start as the machine's local time, and a start read whole
+    /// quarter hours apart, up to 26 hours, is the same start read under another time zone.
     /// </summary>
     string? Current { get; }
 
@@ -95,7 +96,8 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
 
         if (now is not { Length: > 0 })
         {
-            // Nothing carries that id, or this process may not ask about it. Told apart below.
+            // Nothing carries that id, or - off Windows, where every process's start can be read - this process may
+            // not ask about it. Told apart below.
             return Carried(processId);
         }
 
@@ -174,7 +176,7 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
     /// as the same start. Kept in that form, rather than turned back into an instant, so a stamp an
     /// earlier build recorded is still this build's, and one this build records is still an earlier one's.
     /// </summary>
-    private static string? StartTimeStamp(int processId)
+    private string? StartTimeStamp(int processId)
     {
         try
         {
@@ -189,7 +191,13 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
         }
         catch (Exception ex) when (ex is Win32Exception or NotSupportedException)
         {
-            return null;
+            // This user may not open it: a service's process, or one started elevated. On Windows its start is read
+            // from the list Windows keeps of every process instead, so an id a dead holder left, taken since by such a
+            // process, is never read as that holder. macOS keeps a process of another user's to itself, and its id is
+            // only given out again once every other has been.
+            return _platform.Current == PlatformId.Windows
+                ? SystemProcessList.StartTicks(processId)?.ToString(CultureInfo.InvariantCulture)
+                : null;
         }
     }
 
@@ -223,11 +231,14 @@ public sealed class ProcessIdentity(IHostPlatform platform) : IProcessIdentity
 
 /// <summary>
 /// What a record of the process that took something says of it, as this machine can tell: whether it still stands,
-/// and how a refusal names it.
+/// how a refusal names it, and what is said when it is reclaimed or taken.
 /// </summary>
 /// <remarks>
-/// One place for what the run lock, a log directory's owner and a machine's heavy-leg slots each decide the same way,
-/// so no two of them can come to disagree about which holder is gone.
+/// One place for what the run lock and a log directory's owner decide the same way - a holder on this machine stands
+/// while its process runs, and one naming another machine until <c>--force-lock</c> takes it - so neither can come to
+/// disagree with the other about which holder is gone. A machine's heavy-leg slots are told by
+/// <see cref="IProcessIdentity.IsAlive"/> alone, every entry of their record being this machine's whatever name it
+/// carries; they name their holders, and say what was reclaimed, as the other two do.
 /// </remarks>
 public static class ProcessHolders
 {
@@ -261,9 +272,31 @@ public static class ProcessHolders
     /// <param name="machine">The machine it runs on.</param>
     /// <param name="processId">Its process id.</param>
     /// <param name="runId">Its run.</param>
-    /// <param name="since">When it took what it holds.</param>
+    /// <param name="since">When it took what it holds, or asked for it.</param>
     public static string Describe(string machine, int processId, string runId, DateTimeOffset since)
         => string.Create(CultureInfo.InvariantCulture, $"{machine} pid {processId}, run {runId}, since {since:u}");
+
+    /// <summary>What is said when a dead holder's <paramref name="what"/> is taken back.</summary>
+    /// <param name="what">What it held, as a line names it.</param>
+    /// <param name="holder">The holder, as <see cref="Describe"/> names it.</param>
+    public static string Reclaimed(string what, string holder) => $"Reclaimed {what} from {holder}, which is no longer running.";
+
+    /// <summary>What is said when <c>--force-lock</c> takes <paramref name="what"/> from a holder that may still run.</summary>
+    /// <param name="what">What it held, as a line names it.</param>
+    /// <param name="holder">The holder, as <see cref="Describe"/> names it.</param>
+    public static string TakenByForce(string what, string holder) => $"Taking {what} from {holder} because --force-lock was given.";
+
+    /// <summary>
+    /// What a refusal adds for a holder recorded on a machine by another name: nothing here can ask that machine whether
+    /// it still runs - nor tell a machine from this one renamed since, as a Mac is by each network it joins - so the
+    /// reader is told <c>--force-lock</c> is the answer once it does not, rather than waiting for ever.
+    /// </summary>
+    /// <param name="identity">This process.</param>
+    /// <param name="machine">The machine the record names.</param>
+    public static string ElsewhereNote(this IProcessIdentity identity, string machine)
+        => identity.IsHere(machine)
+            ? string.Empty
+            : " (recorded on another machine, or on this one under an earlier name, which cannot be asked whether it still runs; --force-lock takes it)";
 
     /// <summary>
     /// What a holder's description ends with where the record carries no stamp, which is one an older build wrote.

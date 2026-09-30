@@ -126,6 +126,34 @@ public sealed class RunLockTests
         Assert.Contains("could not be released", factory.StandardError.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A lock this run could not release - a full disk - never refuses this run's own later legs, which would otherwise
+    /// be refused by a lock their own run has done with; it leaves the lock file with the next change this run makes.
+    /// </summary>
+    [Fact]
+    public async Task ALockThatCouldNotBeReleased_NeverRefusesThisRunsOwnLaterLegs()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var disk = new FullDiskFileSystem(factory.FileSystem);
+        var runLock = new RunLock(disk, factory.Output, factory.Identity);
+        var layout = Layout(temp);
+
+        var sync = (await runLock.TryAcquireAsync(layout, Request(LockScope.TreeExclusive, "sync"), TestContext.Current.CancellationToken)).Handle!;
+        disk.Full = true;
+        await sync.DisposeAsync();
+        disk.Full = false;
+
+        Assert.Contains("could not be released", factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Equal("sync", Assert.Single(runLock.Read(layout)).Holder.Command);
+
+        var build = await runLock.TryAcquireAsync(layout, Request(LockScope.TreeShared, "build") with { Variant = "debug" }, TestContext.Current.CancellationToken);
+
+        Assert.Null(build.HeldBy);
+        Assert.Equal("build", Assert.Single(runLock.Read(layout)).Holder.Command);
+        await build.Handle!.DisposeAsync();
+    }
+
     [Fact]
     public async Task ARecycledProcessId_IsNotMistakenForALiveHolder()
     {

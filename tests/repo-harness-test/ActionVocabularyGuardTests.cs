@@ -1,4 +1,5 @@
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
 
@@ -320,7 +321,7 @@ public sealed class ActionVocabularyGuardTests
     [InlineData("../../../etc")]
     public void AStepNamedAfterAPath_StaysInsideItsOwnDirectory(string name)
     {
-        var safe = RunSegments.FileNameFor(name);
+        var safe = FileNames.SafeFor(name);
 
         Assert.DoesNotContain('/', safe);
         Assert.DoesNotContain('\\', safe);

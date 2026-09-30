@@ -75,7 +75,11 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// which no survey can see, so its program is the run's to find rather than a demand on the host,
     /// and is only asked about: see <see cref="UnderOwnPath"/>.
     /// </remarks>
-    public static LegWorkload ForRunner(RunnerConfig runner, ActionFile? action)
+    /// <param name="checks">
+    /// The runners its expected exceptions' run checks name, which run within its legs: any of them heavy - requiring
+    /// the build, or saying so - makes its legs heavy, as the runner itself would.
+    /// </param>
+    public static LegWorkload ForRunner(RunnerConfig runner, ActionFile? action, IEnumerable<RunnerConfig>? checks = null)
     {
         ArgumentNullException.ThrowIfNull(runner);
 
@@ -95,7 +99,7 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
         {
             UnderOwnPath = [.. everywhere.Where(start => start.OwnPath).Select(start => start.Program)],
             OnlyOn = [.. starts.Where(start => start.RunOn.Count > 0)],
-            DeclaredHeavy = runner.Heavy == true,
+            DeclaredHeavy = runner.Heavy == true || (checks ?? []).Any(check => check.RequireBuild || check.Heavy == true),
         };
     }
 

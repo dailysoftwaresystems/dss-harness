@@ -18,7 +18,7 @@ public sealed record OrchestrationEvent(
     string Outcome,
     int ExitCode,
     string Message,
-    IReadOnlyList<string>? Details);
+    IReadOnlyList<string>? Details = null);
 
 /// <summary>
 /// Appends to an orchestrator's logs: <c>logs/&lt;name&gt;.jsonl</c>, one JSON object to a line, for the orchestrator

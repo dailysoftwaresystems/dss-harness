@@ -36,19 +36,27 @@ internal sealed class ScriptedGauge(params double?[] percents) : IMemoryGauge
 internal static class AdmissionKit
 {
     /// <summary>
-    /// An admission over the slots at <paramref name="ledger"/>, whose every wait moves <paramref name="clock"/> by what
-    /// it waits and then does <paramref name="onWait"/>, and whose every settle lasts <paramref name="settle"/>, or its
-    /// least where none is given.
+    /// An admission over the slots kept at <paramref name="record"/>, on <paramref name="fileSystem"/> or the real one;
+    /// see <see cref="Admission(HeavyLegSlots, IMemoryGauge, ManualClock, TimeSpan?, Action?)"/>.
     /// </summary>
     public static LegAdmission Admission(
         HarnessFactory harness,
-        string ledger,
+        string record,
         IMemoryGauge gauge,
         ManualClock clock,
         TimeSpan? settle = null,
-        Action? onWait = null)
+        Action? onWait = null,
+        IFileSystem? fileSystem = null)
+        => Admission(Slots(harness, record, fileSystem), gauge, clock, settle, onWait);
+
+    /// <summary>
+    /// An admission over <paramref name="slots"/>, whose every wait moves <paramref name="clock"/> by what it waits and
+    /// then does <paramref name="onWait"/>, and whose every settle lasts <paramref name="settle"/>, or its least where
+    /// none is given.
+    /// </summary>
+    public static LegAdmission Admission(HeavyLegSlots slots, IMemoryGauge gauge, ManualClock clock, TimeSpan? settle = null, Action? onWait = null)
         => new(
-            Slots(harness, ledger),
+            slots,
             gauge,
             clock,
             (delay, token) =>
@@ -60,11 +68,18 @@ internal static class AdmissionKit
             },
             (least, _) => settle ?? least);
 
-    /// <summary>The slots kept at <paramref name="ledger"/>.</summary>
-    public static HeavyLegSlots Slots(HarnessFactory harness, string ledger) => new(harness.FileSystem, harness.Output, harness.Identity, ledger);
+    /// <summary>The slots kept at <paramref name="record"/>, on <paramref name="fileSystem"/> or the real one.</summary>
+    public static HeavyLegSlots Slots(HarnessFactory harness, string record, IFileSystem? fileSystem = null)
+        => new(fileSystem ?? harness.FileSystem, harness.Output, harness.Identity, record);
 
-    /// <summary>A rule with the numbers a test gives, the rest the defaults'.</summary>
-    public static AdmissionRule Rule(int heavyLegs = 2, double maxMemoryPercent = 76, int settleLeast = 15, int settleMost = 90, int pollSeconds = 30, double maxWaitMinutes = 60)
+    /// <summary>A rule with the numbers a test gives, the rest the built-in values a section left out takes.</summary>
+    public static AdmissionRule Rule(
+        int heavyLegs = AdmissionSettings.DefaultHeavyLegs,
+        double maxMemoryPercent = AdmissionSettings.DefaultMaxMemoryPercent,
+        int settleLeast = AdmissionSettings.DefaultSettleLeastSeconds,
+        int settleMost = AdmissionSettings.DefaultSettleMostSeconds,
+        int pollSeconds = AdmissionSettings.DefaultPollSeconds,
+        double maxWaitMinutes = AdmissionSettings.DefaultMaxWaitMinutes)
         => new(
             heavyLegs,
             maxMemoryPercent,
@@ -75,32 +90,35 @@ internal static class AdmissionKit
 
     /// <summary>A leg asking by <paramref name="rule"/>, whose every line of progress goes to <paramref name="said"/>.</summary>
     public static AdmissionRequest Request(AdmissionRule rule, List<string> said, string leg = "mine")
-        => new(rule, $"run-{leg}", "build", leg, $"'/src/{leg}'", "x86_64-gcc-debug", said.Add);
+        => new(rule, $"run-{leg}", "build", leg, "local", $"/src/{leg}", "x86_64-gcc-debug", said.Add);
 
     /// <summary>
-    /// A leg of another command holding a slot, or waiting for one: this process stands for that command, so the entry
-    /// stands for as long as the test runs, unless it names another machine or a process that has gone.
+    /// A leg of another command holding a slot, or waiting for one, whose command allows <paramref name="slots"/> at once:
+    /// this process stands for that command, so the entry stands for as long as the test runs, whatever machine name it
+    /// carries, unless it names a process that has gone.
     /// </summary>
-    public static SlotEntry Holder(HarnessFactory harness, string leg, string? machine = null, int? processId = null)
+    public static SlotEntry Holder(HarnessFactory harness, string leg, string? machine = null, int? processId = null, int slots = AdmissionSettings.DefaultHeavyLegs)
         => new(
             machine ?? harness.Identity.CurrentMachine,
             processId ?? harness.Identity.CurrentId,
-            processId is null ? harness.Identity.Current : "a-process-that-has-gone",
             $"run-{leg}",
             new DateTimeOffset(2026, 9, 30, 16, 29, 42, TimeSpan.Zero),
             "test",
             leg,
-            $"'/src/{leg}'",
+            "local",
+            $"/src/{leg}",
+            slots,
+            processId is null ? harness.Identity.Current : "a-process-that-has-gone",
             "x86_64-gcc-release");
 
     /// <summary>Writes <paramref name="entries"/> as the slots' record, as another command would have left it.</summary>
-    public static void Write(string ledger, params SlotEntry[] entries)
+    public static void Write(string record, params SlotEntry[] entries)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(ledger)!);
-        File.WriteAllText(ledger, JsonSerializer.Serialize(entries, JsonStateFile.Options));
+        Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+        File.WriteAllText(record, JsonSerializer.Serialize(entries, JsonStateFile.Options));
     }
 
     /// <summary>What the slots' record holds now.</summary>
-    public static IReadOnlyList<SlotEntry> Read(string ledger)
-        => File.Exists(ledger) ? JsonSerializer.Deserialize<List<SlotEntry>>(File.ReadAllText(ledger), JsonStateFile.Options) ?? [] : [];
+    public static IReadOnlyList<SlotEntry> Read(string record)
+        => File.Exists(record) ? JsonSerializer.Deserialize<List<SlotEntry>>(File.ReadAllText(record), JsonStateFile.Options) ?? [] : [];
 }

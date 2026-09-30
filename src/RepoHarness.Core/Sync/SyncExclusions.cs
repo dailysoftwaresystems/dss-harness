@@ -334,9 +334,7 @@ public sealed class SyncExclusions
     /// </summary>
     private bool Searches(string relativePath)
         => Counts(relativePath)
-            && (relativePath == HarnessLayout.DirectoryName
-                || relativePath.StartsWith(HarnessLayout.DirectoryName + "/", StringComparison.Ordinal)
-                || !IsWithheldFromTransfer(relativePath));
+            && (HarnessDirectorySync.IsAt(relativePath, HarnessLayout.DirectoryName) || !IsWithheldFromTransfer(relativePath));
 
     /// <summary><paramref name="path"/> relative to <paramref name="root"/>, with forward separators.</summary>
     private static string Relative(string root, string path) => Normalize(Path.GetRelativePath(root, path));

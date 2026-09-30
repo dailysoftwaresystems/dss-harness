@@ -159,13 +159,13 @@ public sealed class LegRunService(
             // Two runs writing one set of logs would each read the other's output as its own, which
             // is why this is its own verdict and its own exit code rather than a lock refusal - and
             // the verdict of every leg this run would have started.
-            var held = $"another run owns '{runDirectory}': {claim.Holder?.Describe()}";
+            var held = $"another run owns '{runDirectory}': {claim.HeldBy}";
 
             return Stopped(
                 request,
                 LegExit.LogHeld,
                 held,
-                [.. skipped, .. placed.Select(leg => new LegEntry { Leg = leg.Name, Verdict = LegVerdict.LogHeld, Detail = held, Emulated = leg.Emulated })],
+                [.. skipped, .. placed.Select(leg => leg.Entry(LegVerdict.LogHeld, held))],
                 factor,
                 [$"logs: {runDirectory}"],
                 runDirectory);
@@ -393,14 +393,7 @@ public sealed class LegRunService(
 
         if (lockedTrees.TryGetValue(leg.TreeKey, out var treeHeld))
         {
-            return new LegEntry
-            {
-                Leg = leg.Name,
-                Verdict = LegVerdict.RefusedLocked,
-                Detail = treeHeld,
-                Duration = Stopwatch.GetElapsedTime(started),
-                Emulated = leg.Emulated,
-            };
+            return Ended(leg, LegVerdict.RefusedLocked, treeHeld, started);
         }
 
         // The tree shared and this variant exclusive: variants build side by side, but never while
@@ -417,14 +410,7 @@ public sealed class LegRunService(
             // The one refusal that is a verdict rather than an end to the run: it is about this leg
             // and this moment, so the other legs still report, and one locked leg never hides them.
             // A lock file nobody can use is raised instead, as the refusal of the run it is.
-            return new LegEntry
-            {
-                Leg = leg.Name,
-                Verdict = LegVerdict.RefusedLocked,
-                Detail = attempt.HeldBy!,
-                Duration = Stopwatch.GetElapsedTime(started),
-                Emulated = leg.Emulated,
-            };
+            return Ended(leg, LegVerdict.RefusedLocked, attempt.HeldBy!, started);
         }
 
         // Every other refusal is left to propagate. A configuration a leg cannot satisfy — an
@@ -434,21 +420,14 @@ public sealed class LegRunService(
         // a lock was held.
         await using (handle)
         {
-            // A heavy leg waits here, before any of its work, until its machine takes it; its slot is given back when
-            // its work ends, and before the lock is.
+            // A heavy leg waits here, once its tree is synced and its lock taken, until its machine takes it: another run of
+            // its variant is refused-locked meanwhile, as it would be while it ran. Its slot is given back when its work
+            // ends, and before the lock is.
             using var admitted = await AdmitAsync(context, leg, request, runId, ledger, cancellationToken).ConfigureAwait(false);
 
             if (admitted is { Refusal: { } refusal })
             {
-                return new LegEntry
-                {
-                    Leg = leg.Name,
-                    Verdict = LegVerdict.NotAdmitted,
-                    Detail = refusal,
-                    Duration = Stopwatch.GetElapsedTime(started),
-                    Emulated = leg.Emulated,
-                    Admission = admitted.Fact,
-                };
+                return Ended(leg, LegVerdict.NotAdmitted, refusal, started) with { Admission = admitted.Fact };
             }
 
             var entry = await RunTakenLegAsync(context, leg, runId, runDirectory, request, work, commandName, ledger, started, cancellationToken).ConfigureAwait(false);
@@ -462,11 +441,11 @@ public sealed class LegRunService(
     /// the leg is heavy and the machine declares admission; <see langword="null"/> where any of those is not so.
     /// </summary>
     /// <remarks>
-    /// Asked by the process on the machine the work runs on, which lives exactly as long as that work: this one, for a
-    /// leg of this machine or of one of its WSL distributions, which run on it and are counted against its memory; the
-    /// host's own, for a leg on an ssh host, which is a machine of its own. A distribution running a leg this machine
-    /// dispatched to it asks nothing: this machine's process took it before dispatching it, and the distribution's own
-    /// figures do not show this machine's memory.
+    /// Asked by a process on the machine the work runs on, which outlives that work: this one, for a leg of this machine
+    /// or of one of its WSL distributions, which run on it and are counted against its memory; the host's own, for a leg
+    /// on an ssh host, which is a machine of its own. A distribution running a leg this machine dispatched to it asks
+    /// nothing: this machine's process took it before dispatching it, and the distribution's own figures do not show this
+    /// machine's memory.
     /// </remarks>
     private async Task<Admission?> AdmitAsync(
         HarnessContext context,
@@ -497,12 +476,20 @@ public sealed class LegRunService(
                     runId.Value,
                     ledger.CommandName,
                     leg.Name,
-                    leg.Host.Host.Kind == HostKind.Local ? $"'{leg.HostTreeRoot}'" : $"'{leg.HostTreeRoot}' on {leg.Named}",
+                    leg.Host.Host.ToString(),
+                    leg.HostTreeRoot,
                     leg.Variant.DirectoryName,
                     message => ledger.Transition(leg.Name, message)),
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// <paramref name="leg"/>'s line, reaching <paramref name="verdict"/> for <paramref name="detail"/> before its own work
+    /// ran, and how long it took since it was <paramref name="started"/>.
+    /// </summary>
+    private static LegEntry Ended(PlacedLeg leg, LegVerdict verdict, string detail, long started)
+        => leg.Entry(verdict, detail) with { Duration = Stopwatch.GetElapsedTime(started) };
 
     /// <summary>What <paramref name="leg"/> does once its lock is taken and, where it is heavy, its machine has taken it.</summary>
     private async Task<LegEntry> RunTakenLegAsync(
@@ -548,27 +535,12 @@ public sealed class LegRunService(
                 // The survey found the instance and the leg was placed here for it, so an environment
                 // that will not set up now is the leg failing, as a program that will not start once a
                 // leg began is: read as a skip, a gate that accepts an incomplete run passed it.
-                return new LegEntry
-                {
-                    Leg = leg.Name,
-                    Verdict = LegVerdict.Failed,
-                    Detail = setUp.Failure,
-                    Duration = Stopwatch.GetElapsedTime(started),
-                    Emulated = leg.Emulated,
-                };
+                return Ended(leg, LegVerdict.Failed, setUp.Failure, started);
             }
 
             if (MissingInDeveloperEnvironment(context.Config, leg, request.Workload, environmentName, setUp) is { } missing)
             {
-                return new LegEntry
-                {
-                    Leg = leg.Name,
-                    Verdict = missing.Verdict,
-                    Detail = missing.Reason,
-                    Duration = Stopwatch.GetElapsedTime(started),
-                    Emulated = leg.Emulated,
-                    DeveloperEnvironment = setUp.Fact,
-                };
+                return Ended(leg, missing.Verdict, missing.Reason, started) with { DeveloperEnvironment = setUp.Fact };
             }
 
             leg = leg with { DeveloperEnvironment = setUp.Environment };

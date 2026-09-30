@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Platform;
@@ -113,6 +115,68 @@ public sealed class ProcessIdentityTests
 
         Assert.Equal(first, Identity().Current, StringComparer.Ordinal);
         Assert.Equal(first, identity.Current, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// On Windows a process this user may not open - a service's, one started elevated - is still told apart by its start,
+    /// read from the list Windows keeps of every process, and read exactly as the runtime reads an open one's: an id a dead
+    /// holder left, taken since by such a process, is never read as that holder, and the process itself still is.
+    /// </summary>
+    [Fact]
+    public void OnWindows_AProcessThisUserMayNotOpen_IsStillToldApartByItsStart()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows lists every process's start for whoever asks.");
+
+        using (var current = Process.GetCurrentProcess())
+        {
+            Assert.Equal(current.StartTime.Ticks, SystemProcessList.StartTicks(current.Id));
+        }
+
+        var closed = Unopenable();
+
+        Assert.SkipWhen(closed is null, "Every process here lets this one open it, as it does a process running elevated.");
+
+        var identity = Identity();
+        var start = SystemProcessList.StartTicks(closed.Value)!.Value;
+
+        Assert.True(identity.IsAlive(closed.Value, start.ToString(CultureInfo.InvariantCulture)));
+        Assert.False(identity.IsAlive(closed.Value, (start - 1).ToString(CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>A long-lived process this one may not open, where there is one: a service host's, preferably.</summary>
+    private static int? Unopenable()
+    {
+        var processes = Process.GetProcesses();
+
+        try
+        {
+            return processes
+                .Where(process => process.Id > 4)
+                .OrderBy(process => process.ProcessName is "services" or "wininit" or "lsass" ? 0 : 1)
+                .FirstOrDefault(process =>
+                {
+                    try
+                    {
+                        _ = process.StartTime;
+                        return false;
+                    }
+                    catch (Win32Exception)
+                    {
+                        return true;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        return false;
+                    }
+                })?.Id;
+        }
+        finally
+        {
+            foreach (var process in processes)
+            {
+                process.Dispose();
+            }
+        }
     }
 
     private static IProcessIdentity Identity() => new ProcessIdentity(new HostPlatform());

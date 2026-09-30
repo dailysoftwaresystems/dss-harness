@@ -161,14 +161,14 @@ public sealed class CleanService(
         // long as it runs: asked here first, the host is never sent a command a run of this machine's holds off.
         if (!request.DryRun && _runLock.HeldBy(context.Layout, building) is { } held)
         {
-            return Entry(leg, LegVerdict.RefusedLocked, held) with { Duration = Stopwatch.GetElapsedTime(started) };
+            return leg.Entry(LegVerdict.RefusedLocked, held) with { Duration = Stopwatch.GetElapsedTime(started) };
         }
 
         // Asked before the host is sent the command: DssHarness there runs a command in the tree's copy, and
         // refuses one for a copy that is not there as a host it could not run it on.
         if (!await _transports.For(leg.Host).RootExistsAsync(leg.HostTreeRoot, cancellationToken).ConfigureAwait(false))
         {
-            return Entry(leg, LegVerdict.Passed, $"nothing to remove: {leg.Named} holds no copy of this tree at '{leg.HostTreeRoot}'")
+            return leg.Entry(LegVerdict.Passed, $"nothing to remove: {leg.Named} holds no copy of this tree at '{leg.HostTreeRoot}'")
                 with { Duration = Stopwatch.GetElapsedTime(started) };
         }
 
@@ -189,7 +189,7 @@ public sealed class CleanService(
             // alone would free nothing and have the next build fill this disk instead.
             if (_fileSystem.IsLink(directory))
             {
-                return Entry(leg, LegVerdict.Failed, $"'{directory}' is a link, so nothing was removed: what it holds is wherever it points, and yours to remove");
+                return leg.Entry(LegVerdict.Failed, $"'{directory}' is a link, so nothing was removed: what it holds is wherever it points, and yours to remove");
             }
 
             if (dryRun)
@@ -205,7 +205,7 @@ public sealed class CleanService(
                     said += $", and {DiskSpace.Size(left)} a removal that did not finish left at '{aside}'";
                 }
 
-                return Entry(leg, LegVerdict.Passed, $"{said}; {room?.Describe() ?? Unmeasured(unmeasured)}") with
+                return leg.Entry(LegVerdict.Passed, $"{said}; {room?.Describe() ?? Unmeasured(unmeasured)}") with
                 {
                     Space = new BuildSpace(directory, holds + left, Removed: false, room),
                 };
@@ -227,8 +227,7 @@ public sealed class CleanService(
 
             if (holder is not null)
             {
-                return Entry(
-                    leg,
+                return leg.Entry(
                     LegVerdict.RefusedLocked,
                     removed > 0 ? $"{holder} What an earlier removal had left at '{aside}' was removed: {DiskSpace.Size(removed)}." : holder);
             }
@@ -242,7 +241,7 @@ public sealed class CleanService(
             var (after, why) = DiskSpace.Measure(_fileSystem, directory);
             var done = moved || removed > 0 ? $"removed {DiskSpace.Size(removed)} from '{directory}'" : $"nothing to remove at '{directory}'";
 
-            return Entry(leg, LegVerdict.Passed, $"{done}; {after?.Describe() ?? Unmeasured(why)}") with
+            return leg.Entry(LegVerdict.Passed, $"{done}; {after?.Describe() ?? Unmeasured(why)}") with
             {
                 Space = new BuildSpace(directory, removed, Removed: moved || removed > 0, after),
             };
@@ -253,17 +252,13 @@ public sealed class CleanService(
                 ? $"; what is left of it is at '{aside}', which the next clean of this leg tries again to remove"
                 : string.Empty;
 
-            return Entry(
-                leg,
+            return leg.Entry(
                 LegVerdict.Failed,
                 $"'{directory}' could not be {(dryRun ? "measured" : "removed")}: {ex.Message.TrimEnd('.')}{remains}");
         }
     }
 
     private static string Unmeasured(string? why) => $"the room on its filesystem could not be measured: {why}";
-
-    private static LegEntry Entry(PlacedLeg leg, LegVerdict verdict, string detail)
-        => new() { Leg = leg.Name, Verdict = verdict, Detail = detail, Emulated = leg.Emulated };
 
     /// <summary>
     /// What the command ends with when something other than its legs ended it, with the legs that had a line

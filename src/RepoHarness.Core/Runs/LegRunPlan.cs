@@ -209,6 +209,15 @@ public sealed record PlacedLeg(
         };
     }
 
+    /// <summary>
+    /// This leg's line, reaching <paramref name="verdict"/> for <paramref name="detail"/>, as a command writes one for a
+    /// leg it decides itself: one refused, one its machine would not take, one whose directory it removed.
+    /// </summary>
+    /// <param name="verdict">The verdict.</param>
+    /// <param name="detail">Why, as the line says it.</param>
+    public LegEntry Entry(LegVerdict verdict, string detail)
+        => new() { Leg = Name, Verdict = verdict, Detail = detail, Emulated = Emulated };
+
     /// <summary>The lock a build of this leg takes: the tree it works in shared, and its variant its own.</summary>
     /// <param name="runId">The run taking it.</param>
     /// <param name="command">The command taking it.</param>

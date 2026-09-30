@@ -291,6 +291,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// </summary>
     public const string RunnerActionsDirectoryRelative = RunnerDirectoryRelative + "/" + RunnerActionsDirectoryName;
 
+    /// <summary>The runs directory, relative to a tree root, with forward separators.</summary>
+    public const string RunsDirectoryRelative = DirectoryName + "/" + RunsDirectoryName;
+
+    /// <summary>The host copies' record directory, relative to the main checkout's root, with forward separators.</summary>
+    public const string HostCopiesDirectoryRelative = DirectoryName + "/" + HostCopiesDirectoryName;
+
     /// <summary>
     /// Where the values actions read live, resolved against the main checkout because they are
     /// gitignored and therefore absent from a worktree's checkout.
