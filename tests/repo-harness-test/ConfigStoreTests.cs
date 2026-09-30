@@ -1689,10 +1689,13 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "defaults": { "admission": { "heavyLegs": 0 } } }""", "defaults.admission heavyLegs must be at least 1, found 0")]
     [InlineData("""{ "defaults": { "admission": { "maxMemoryPercent": 0 } } }""", "defaults.admission maxMemoryPercent must be above 0 and at most 100, found 0")]
     [InlineData("""{ "hosts": { "local": { "admission": { "maxMemoryPercent": 101 } } } }""", "hosts.local admission maxMemoryPercent must be above 0 and at most 100, found 101")]
-    [InlineData("""{ "defaults": { "admission": { "settleSeconds": [90, 15] } } }""", "defaults.admission settleSeconds is [least, most], two whole numbers of seconds with the least first, found [90, 15]")]
+    [InlineData("""{ "defaults": { "admission": { "settleSeconds": [90, 15] } } }""", "defaults.admission settleSeconds is [least, most], two whole numbers of seconds from 0 to 3600 with the least first, found [90, 15]")]
     [InlineData("""{ "defaults": { "admission": { "settleSeconds": [15] } } }""", "defaults.admission settleSeconds is [least, most]")]
-    [InlineData("""{ "defaults": { "admission": { "pollSeconds": 0 } } }""", "defaults.admission pollSeconds must be at least 1, found 0")]
-    [InlineData("""{ "hosts": { "ssh": { "vps": { "repositoryPath": "/r", "admission": { "maxWaitMinutes": 0 } } } }, "sshItems": ["vps"] }""", "hosts.ssh 'vps' admission maxWaitMinutes must be above 0, found 0")]
+    [InlineData("""{ "defaults": { "admission": { "settleSeconds": [0, 2147483647] } } }""", "found [0, 2147483647]")]
+    [InlineData("""{ "defaults": { "admission": { "pollSeconds": 0 } } }""", "defaults.admission pollSeconds must be from 1 to 3600, found 0")]
+    [InlineData("""{ "defaults": { "admission": { "pollSeconds": 5000000 } } }""", "defaults.admission pollSeconds must be from 1 to 3600, found 5000000")]
+    [InlineData("""{ "hosts": { "ssh": { "vps": { "repositoryPath": "/r", "admission": { "maxWaitMinutes": 0 } } } }, "sshItems": ["vps"] }""", "hosts.ssh 'vps' admission maxWaitMinutes must be above 0 and at most 10080, found 0")]
+    [InlineData("""{ "defaults": { "admission": { "maxWaitMinutes": 1e11 } } }""", "defaults.admission maxWaitMinutes must be above 0 and at most 10080, found 100000000000")]
     public void Admission_ThatNoMachineCouldAdmitBy_IsRefused(string json, string expected)
         => Assert.Contains(expected, LoadInvalid(json).Message, StringComparison.Ordinal);
 

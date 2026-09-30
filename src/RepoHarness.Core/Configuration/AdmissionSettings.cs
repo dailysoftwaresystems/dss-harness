@@ -29,6 +29,12 @@ public sealed class AdmissionSettings
     /// <summary>Minutes a leg waits to be admitted, when a section says nothing, before it is not.</summary>
     public const double DefaultMaxWaitMinutes = 60;
 
+    /// <summary>The most seconds a settle or a poll may last: an hour, which no machine's wait needs more than.</summary>
+    public const int MostSeconds = 3600;
+
+    /// <summary>The most minutes a leg may wait to be admitted: a week.</summary>
+    public const double MostWaitMinutes = 10080;
+
     /// <summary>
     /// Heavy legs the machine runs at once, across every command this user runs there: each takes a slot before it
     /// starts, in the order they asked, and gives it back when its heavy work ends.

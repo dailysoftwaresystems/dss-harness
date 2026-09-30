@@ -694,6 +694,8 @@ internal static class HelpCommand
         builder.AppendLine($"  pollSeconds       the time between looks while a leg waits ({AdmissionSettings.DefaultPollSeconds})");
         builder.AppendLine($"  maxWaitMinutes    how long a leg waits before it is not-admitted ({AdmissionSettings.DefaultMaxWaitMinutes})");
         builder.AppendLine();
+        builder.AppendLine($"Seconds are at most {AdmissionSettings.MostSeconds}, and the wait at most {AdmissionSettings.MostWaitMinutes} minutes.");
+        builder.AppendLine();
         builder.AppendLine("Declared under defaults, or under hosts.local or an ssh host, whose fields replace");
         builder.AppendLine("the defaults' one by one; a machine where neither declares one takes every leg at");
         builder.AppendLine("once. A WSL distribution runs on this machine: its heavy legs take this machine's");
@@ -713,9 +715,11 @@ internal static class HelpCommand
         builder.AppendLine($"maxWaitMinutes is not-admitted, exit {LegExit.NotAdmitted}, naming what held the slots or the memory");
         builder.AppendLine("it stood at: nothing of it ran, and nothing about the code is claimed.");
         builder.AppendLine();
-        builder.AppendLine($"The slots are kept in {Path.GetFileName(HeavyLegSlots.DefaultPath)} among this user's own application data,");
-        builder.AppendLine("beside the hold that keeps the machine awake: one per user of the machine, whichever");
-        builder.AppendLine("repository asks. Another user's legs are counted in that user's own.");
+        builder.AppendLine("The slots are kept in admission-<machine id>.json among this user's own application");
+        builder.AppendLine("data, beside the hold that keeps the machine awake: one record per machine and per user,");
+        builder.AppendLine("whichever repository asks, named by the identifier the system keeps for the machine");
+        builder.AppendLine("rather than by its name, which a Mac takes from each network it joins. Another user's");
+        builder.AppendLine("legs are counted in that user's own.");
 
         return builder.ToString();
     }

@@ -1216,21 +1216,29 @@ Where a machine declares **admission** - `defaults.admission`, or its own sectio
 before any of its work, for the machine to take it:
 
 1. **One of the machine's `heavyLegs` slots** (2), shared by every command this user runs there,
-   given in the order legs asked for one. The slots are kept in `admission.json` among the user's
-   own application data - `LOCALAPPDATA` on Windows, `~/Library/Application Support` on macOS,
-   `~/.local/share` elsewhere - beside the hold that keeps the machine awake: one per user of the
-   machine, whichever repository asks, never in a directory other users can write.
+   given in the order legs asked for one. The slots are kept in `admission-<machine id>.json` among
+   the user's own application data - `LOCALAPPDATA` on Windows, `~/Library/Application Support` on
+   macOS, `~/.local/share` elsewhere - beside the hold that keeps the machine awake: one per user of
+   the machine, whichever repository asks, never in a directory other users can write, and never
+   anywhere else when no such directory can be named. The record is named by the identifier the
+   system keeps for the machine (Windows's `MachineGuid`, Linux's `machine-id`, the Mac's hardware
+   UUID), never by its name, which a Mac takes from each network it joins: read by name, the legs
+   still running under the old one would be another machine's to every command started under the
+   new, and their slots free. One record per machine also keeps a home two machines share from
+   losing entries, since the lock a change is made under holds on one machine.
 2. **Then the memory in use below `maxMemoryPercent`** (76). Where another leg holds a slot, a
    reading below the limit is read again after a settle - a time picked at random within
    `settleSeconds` ([15, 90]) - and the leg starts only if it still is, so two legs taking their
-   slots together do not both start on one reading. Looked at again every `pollSeconds` (30).
+   slots together do not both start on one reading. Looked at again every `pollSeconds` (30); the
+   slot is looked at again too, so a leg whose place went while it waited waits its turn again.
+   Seconds are at most 3600 and the wait at most 10080 minutes, so every wait is one a timer holds.
 
 A leg holds its slot until its heavy work ends. A slot is held by the process running the leg,
-which lives exactly as long as that work, never by a timeout: an entry whose process has ended - a
-command that crashed or was killed holding a slot - is reclaimed by the next leg that looks, and
-said to be, by the liveness rule the run lock uses. An entry of another machine's, in a home two
-machines share, counts for nothing there. A record that cannot be read is refused, naming it, and
-never read as free: that is the one reading that would start every waiting leg at once.
+never by a timeout: an entry whose process has ended - a command that crashed or was killed
+holding a slot - is reclaimed by the next leg that looks, and said to be, by the liveness rule the
+run lock uses, whatever name the machine had when it asked. A record that cannot be read - one
+this process may not look at included - is refused, naming it, and never read as free: that is the
+one reading that would start every waiting leg at once.
 
 **Heavy** is what builds or tests: a `build` or `test` leg, and a `run` leg whose runner requires
 the build or says `"heavy": true`. A runner that only reads the tree - a repository guard - is

@@ -28,18 +28,33 @@ public sealed record HoldAwakeState(
 /// Kept among this user's own application data, never in a directory other users can write.
 /// </remarks>
 /// <param name="fileSystem">Reads and writes the state.</param>
-/// <param name="path">The file the state is kept in.</param>
-public sealed class HoldAwakeStore(IFileSystem fileSystem, string path)
+/// <param name="path">
+/// Names the file the state is kept in, asked the first time the state is: a process that can name no directory of
+/// its user's own keeps no hold, which it says as it would a directory it may not write, and nothing else it does
+/// waits on that.
+/// </param>
+public sealed class HoldAwakeStore(IFileSystem fileSystem, Func<string> path)
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly Lazy<string> _location = new(path);
 
-    /// <summary>Where a hold is kept for the user running this process.</summary>
-    public static string DefaultPath => UserState.File("hold-awake.json");
+    /// <summary>A store keeping its state in <paramref name="path"/>.</summary>
+    /// <param name="fileSystem">Reads and writes the state.</param>
+    /// <param name="path">The file the state is kept in.</param>
+    public HoldAwakeStore(IFileSystem fileSystem, string path)
+        : this(fileSystem, () => path)
+    {
+    }
+
+    /// <summary>Names where a hold is kept for the user running this process.</summary>
+    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
+    public static string DefaultPath() => UserState.File("hold-awake.json");
 
     /// <summary>The file the state is kept in.</summary>
-    public string Location { get; } = path;
+    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
+    public string Location => _location.Value;
 
     /// <summary>Makes <paramref name="state"/> the hold that stands, ending any before it.</summary>
     /// <param name="state">The hold.</param>

@@ -139,39 +139,45 @@ public sealed class LegAdmission(
 
         try
         {
-            IReadOnlyList<SlotEntry>? said = null;
-            SlotStanding standing;
-
-            // A slot, in the order legs asked for one.
-            while (!(standing = _slots.Look(place, rule.HeavyLegs)).Holding)
-            {
-                if (said is null || !said.SequenceEqual(standing.Holders))
-                {
-                    request.Progress(
-                        $"waits for one of this machine's {rule.HeavyLegs} heavy-leg slot(s), {standing.Ahead} leg(s) ahead; "
-                        + $"held by {Holders(standing)}");
-                    said = standing.Holders;
-                }
-
-                if (Left(started, rule) <= TimeSpan.Zero)
-                {
-                    return Refuse(
-                        place,
-                        started,
-                        null,
-                        standing,
-                        $"not admitted after {Waited(started)} waiting for one of this machine's {rule.HeavyLegs} heavy-leg "
-                        + $"slot(s), held by {Holders(standing)}");
-                }
-
-                await _wait(Shorter(rule.Poll, Left(started, rule)), cancellationToken).ConfigureAwait(false);
-            }
-
-            // Then the memory, read again after a settle where another leg holds a slot.
-            var waiting = false;
+            IReadOnlyList<SlotEntry>? heldBy = null;
+            var waitingForMemory = false;
+            var settled = false;
 
             while (true)
             {
+                // Looked at every time round, the memory's wait included: a leg whose place went - its record removed
+                // by hand - is back in line, and waits its turn again rather than starting on a slot it no longer holds.
+                var standing = _slots.Look(place, rule.HeavyLegs);
+
+                if (!standing.Holding)
+                {
+                    if (heldBy is null || !heldBy.SequenceEqual(standing.Holders))
+                    {
+                        request.Progress(
+                            $"waits for one of this machine's {rule.HeavyLegs} heavy-leg slot(s), {standing.Ahead} leg(s) ahead; "
+                            + $"held by {Holders(standing)}");
+                        heldBy = standing.Holders;
+                    }
+
+                    (waitingForMemory, settled) = (false, false);
+
+                    if (Left(started, rule) <= TimeSpan.Zero)
+                    {
+                        return Refuse(
+                            place,
+                            started,
+                            null,
+                            standing,
+                            $"not admitted after {Waited(started)} waiting for one of this machine's {rule.HeavyLegs} heavy-leg "
+                            + $"slot(s), held by {Holders(standing)}");
+                    }
+
+                    await _wait(Shorter(rule.Poll, Left(started, rule)), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                heldBy = null;
+
                 var (reading, unmeasured) = _gauge.Read();
 
                 if (reading is null)
@@ -181,36 +187,28 @@ public sealed class LegAdmission(
 
                 if (reading.Percent < rule.MaxMemoryPercent)
                 {
-                    if (!OthersHold(place, rule) || rule.SettleMost <= TimeSpan.Zero)
+                    // Where another leg holds a slot, read again after a settle, and started only if still below: two legs
+                    // taking their slots together would otherwise both start on one reading.
+                    if (settled || rule.SettleMost <= TimeSpan.Zero || !standing.Holders.Any(holder => holder != place.Entry))
                     {
                         return Admit(request, place, started, reading);
                     }
 
                     var settling = Shorter(_settle(rule.SettleLeast, rule.SettleMost), Left(started, rule));
 
-                    request.Progress($"memory {reading.Describe()}; another leg holds a slot, so it looks again in {LedgerReport.FormatDuration(settling)}");
+                    request.Progress($"memory {reading.Describe()}; another leg holds a slot, so it looks again in {Said(settling)}");
                     await _wait(settling, cancellationToken).ConfigureAwait(false);
-
-                    var (again, unreadAgain) = _gauge.Read();
-
-                    if (again is null)
-                    {
-                        return Unread(request, place, started, unreadAgain);
-                    }
-
-                    if (again.Percent < rule.MaxMemoryPercent)
-                    {
-                        return Admit(request, place, started, again);
-                    }
-
-                    reading = again;
+                    settled = true;
+                    continue;
                 }
 
-                if (!waiting)
+                settled = false;
+
+                if (!waitingForMemory)
                 {
                     request.Progress(
                         string.Create(CultureInfo.InvariantCulture, $"holds a heavy-leg slot, and waits for the memory {reading.Describe()} to fall below {rule.MaxMemoryPercent:0.#}%"));
-                    waiting = true;
+                    waitingForMemory = true;
                 }
 
                 if (Left(started, rule) <= TimeSpan.Zero)
@@ -270,17 +268,16 @@ public sealed class LegAdmission(
             refusal);
     }
 
-    /// <summary>Whether a leg other than the one at <paramref name="place"/> holds one of the machine's slots.</summary>
-    private bool OthersHold(SlotPlace place, AdmissionRule rule)
-        => _slots.Look(place, rule.HeavyLegs).Holders.Any(holder => holder != place.Entry);
-
     private static string Holders(SlotStanding standing) => string.Join("; ", standing.Holders.Select(holder => holder.Describe()));
 
     private TimeSpan Left(long started, AdmissionRule rule) => rule.MaxWait - _clock.GetElapsedTime(started);
 
     private double Seconds(long started) => Math.Round(_clock.GetElapsedTime(started).TotalSeconds, 3);
 
-    private string Waited(long started) => LedgerReport.FormatDuration(_clock.GetElapsedTime(started)) is { Length: > 0 } said ? said : "0s";
+    private string Waited(long started) => Said(_clock.GetElapsedTime(started));
+
+    /// <summary>A time as a line says it, as the ledger's table does, and a time of none as <c>0s</c>.</summary>
+    private static string Said(TimeSpan time) => LedgerReport.FormatDuration(time) is { Length: > 0 } said ? said : "0s";
 
     /// <summary>
     /// <paramref name="wanted"/>, or what is <paramref name="left"/> of the wait where that is less - never below nothing,

@@ -43,4 +43,15 @@ public interface IHostPlatform
 
     /// <summary>Appends the platform's executable suffix when one is required.</summary>
     string ExecutableName(string command);
+
+    /// <summary>
+    /// What tells this machine from every other, whatever it is called now: the identifier its system keeps for it -
+    /// Windows's <c>MachineGuid</c>, Linux's <c>machine-id</c>, the Mac's hardware UUID - or, where the system gives
+    /// none, the machine's name.
+    /// </summary>
+    /// <remarks>
+    /// Not the name, which a Mac takes from each network it joins: what is kept per machine and read by name would be
+    /// another machine's to a process started after the name changed, while the processes that wrote it still ran.
+    /// </remarks>
+    string MachineId { get; }
 }

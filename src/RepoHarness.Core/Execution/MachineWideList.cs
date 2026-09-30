@@ -67,15 +67,18 @@ internal sealed class MachineWideList<TEntry>(IFileSystem fileSystem, string pat
     /// <exception cref="HarnessException">The file could not be read, or is not this build's JSON.</exception>
     public IReadOnlyList<TEntry> Read()
     {
-        if (!_fileSystem.FileExists(Path))
-        {
-            return [];
-        }
-
         string text;
 
         try
         {
+            // Asked what is there rather than whether a file is: that answers false for a file this process may
+            // not look at, or could not look at just then, and an empty list read from it would be written back
+            // over every entry it held.
+            if (_fileSystem.KindOf(Path) == PathKind.None)
+            {
+                return [];
+            }
+
             text = _fileSystem.ReadAllText(Path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

@@ -8,12 +8,15 @@ namespace RepoHarness.Core.Platform;
 /// </summary>
 /// <remarks>
 /// Among this user's own application data, never in a directory other users can write: whoever could write there
-/// could hold a machine awake, or keep every other user's legs waiting.
+/// could hold a machine awake, or keep every other user's legs waiting. A process that can name no such directory -
+/// given no home, as a program started under an id no account has - keeps nothing there, and is told why, rather than
+/// being sent to the directory every user shares.
 /// </remarks>
 public static class UserState
 {
     /// <summary>The file <paramref name="name"/> in this user's own directory for this tool.</summary>
     /// <param name="name">The file's name.</param>
+    /// <exception cref="DirectoryNotFoundException">No directory of this user's own could be named.</exception>
     public static string File(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -46,6 +49,8 @@ public static class UserState
 
         return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.DoNotVerify) is { Length: > 0 } own
             ? own
-            : Path.GetTempPath();
+            : throw new DirectoryNotFoundException(
+                "no directory of this user's own application data could be named: the process was given no home, and the "
+                + "system has none for its account");
     }
 }

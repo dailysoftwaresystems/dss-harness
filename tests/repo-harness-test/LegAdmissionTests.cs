@@ -204,29 +204,77 @@ public sealed class LegAdmissionTests
 
     /// <summary>
     /// A slot held by a command that has ended - crashed, or killed - is reclaimed by the next leg that looks, and said
-    /// to be; one another machine holds, in a home two machines share, counts for nothing here and is left alone.
+    /// to be; one whose command still runs holds its slot whatever name the machine had when it asked, since a Mac
+    /// takes its name from each network it joins, and read by name a renamed machine's slots would all be free.
     /// </summary>
     [Fact]
-    public async Task ASlotWhoseCommandHasEnded_IsReclaimed_AndAnotherMachinesCountsForNothingHere()
+    public async Task ASlotWhoseCommandHasEnded_IsReclaimed_AndOneStillRunningUnderAnOldNameIsNot()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ledger = temp.Combine("admission.json");
+
+        AdmissionKit.Write(
+            ledger,
+            AdmissionKit.Holder(harness, "crashed", processId: int.MaxValue - 1),
+            AdmissionKit.Holder(harness, "renamed", machine: "the-name-it-had"));
+
+        using var admitted = await AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock())
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, maxWaitMinutes: 1), []), TestContext.Current.CancellationToken);
+
+        Assert.False(admitted.Fact.Admitted);
+        Assert.Contains("held by '/src/renamed'", admitted.Refusal, StringComparison.Ordinal);
+        Assert.Equal(["renamed"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+        Assert.Contains("Reclaimed a heavy-leg slot from '/src/crashed'", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.Contains("which is no longer running", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A leg holding a slot and waiting for the memory whose place went - its record removed by hand - waits its turn
+    /// again, rather than starting on a slot it no longer holds.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhosePlaceWentWhileItWaitedForTheMemory_WaitsItsTurnAgain()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var ledger = temp.Combine("admission.json");
         var said = new List<string>();
+        var waits = 0;
 
-        AdmissionKit.Write(
-            ledger,
-            AdmissionKit.Holder(harness, "crashed", processId: int.MaxValue - 1),
-            AdmissionKit.Holder(harness, "elsewhere", machine: "another-machine"));
+        // While it waits for the memory, its record is removed and another leg takes the machine's one slot.
+        var admission = AdmissionKit.Admission(harness, ledger, new ScriptedGauge(90, 10), new ManualClock(), onWait: () =>
+        {
+            if (++waits == 1)
+            {
+                AdmissionKit.Write(ledger, AdmissionKit.Holder(harness, "newcomer"));
+            }
+        });
 
-        using var admitted = await AdmissionKit.Admission(harness, ledger, new ScriptedGauge(10), new ManualClock())
-            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1), said), TestContext.Current.CancellationToken);
+        using var admitted = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, maxWaitMinutes: 2), said),
+            TestContext.Current.CancellationToken);
 
-        Assert.True(admitted.Fact.Admitted);
-        Assert.Equal(0, admitted.Fact.WaitedSeconds);
-        Assert.Equal(["elsewhere", "mine"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
-        Assert.Contains("Reclaimed a heavy-leg slot from '/src/crashed'", harness.StandardOutput.ToString(), StringComparison.Ordinal);
-        Assert.Contains("which is no longer running", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.False(admitted.Fact.Admitted);
+        Assert.StartsWith("not admitted after 2m00s waiting for one of this machine's 1 heavy-leg slot(s), held by '/src/newcomer'", admitted.Refusal, StringComparison.Ordinal);
+        Assert.Contains(said, line => line.StartsWith("holds a heavy-leg slot", StringComparison.Ordinal));
+        Assert.Contains(said, line => line.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Each machine keeps its own record, named by what tells it from every other rather than by its name, so a home
+    /// two machines share holds one for each, and neither's change can lose an entry the other wrote.
+    /// </summary>
+    [Fact]
+    public void EachMachine_KeepsARecordOfItsOwn_NamedByWhatTellsItApart()
+    {
+        Assert.Equal("admission-4c4c4544-0036-3510-8052-b4c04f4d4d32.json", HeavyLegSlots.FileNameFor("4c4c4544-0036-3510-8052-b4c04f4d4d32"));
+        Assert.Equal("admission-a_b_c.json", HeavyLegSlots.FileNameFor("a/b\\c"));
+
+        var machine = new HarnessFactory().Platform.MachineId;
+
+        Assert.Matches("^[0-9A-Fa-f-]{32,36}$", machine);
+        Assert.Equal(machine, new HarnessFactory().Platform.MachineId);
     }
 
     /// <summary>A leg stopped while it waits gives its place back, and says no verdict.</summary>
@@ -248,6 +296,30 @@ public sealed class LegAdmissionTests
         });
 
         Assert.Equal(["first"], AdmissionKit.Read(ledger).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A process that can name no directory of its user's own keeps no slots anywhere else - never in the directory every
+    /// user shares - and refuses its heavy legs, saying why.
+    /// </summary>
+    [Fact]
+    public async Task ARecordWithNowhereToBeKept_RefusesTheLeg_NeverKeptWhereEveryUserCanWrite()
+    {
+        var harness = new HarnessFactory();
+        var slots = new HeavyLegSlots(
+            harness.FileSystem,
+            harness.Output,
+            harness.Identity,
+            () => throw new DirectoryNotFoundException("the process was given no home"));
+        var admission = new LegAdmission(slots, new ScriptedGauge(10), new ManualClock(), (_, _) => Task.CompletedTask, (least, _) => least);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => admission.AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), []), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            "The record of the heavy legs admitted onto this machine has nowhere to be kept: the process was given no home. "
+            + "Until it can be, no heavy leg is admitted onto this machine.",
+            refusal.Message);
     }
 
     /// <summary>

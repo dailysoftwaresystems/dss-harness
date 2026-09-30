@@ -172,19 +172,24 @@ public static partial class HarnessConfigValidator
             problems.Add($"{owner} maxMemoryPercent must be above 0 and at most 100, found {Number(percent)}");
         }
 
-        if (admission.SettleSeconds is { } settle && (settle.Count != 2 || settle[0] < 0 || settle[0] > settle[1]))
+        // Bounded above as well: every wait is one the clock and the timers can hold, so a value this accepts is one a
+        // leg can wait by, never an overflow in the middle of a run.
+        if (admission.SettleSeconds is { } settle
+            && (settle.Count != 2 || settle[0] < 0 || settle[0] > settle[1] || settle[1] > AdmissionSettings.MostSeconds))
         {
-            problems.Add($"{owner} settleSeconds is [least, most], two whole numbers of seconds with the least first, found [{string.Join(", ", settle)}]");
+            problems.Add(
+                $"{owner} settleSeconds is [least, most], two whole numbers of seconds from 0 to {AdmissionSettings.MostSeconds} "
+                + $"with the least first, found [{string.Join(", ", settle)}]");
         }
 
-        if (admission.PollSeconds is { } poll)
+        if (admission.PollSeconds is { } poll && poll is < 1 or > AdmissionSettings.MostSeconds)
         {
-            RequireAtLeastOne(poll, $"{owner} pollSeconds", problems);
+            problems.Add($"{owner} pollSeconds must be from 1 to {AdmissionSettings.MostSeconds}, found {poll}");
         }
 
-        if (admission.MaxWaitMinutes is { } wait && !(double.IsFinite(wait) && wait > 0))
+        if (admission.MaxWaitMinutes is { } wait && !(double.IsFinite(wait) && wait is > 0 and <= AdmissionSettings.MostWaitMinutes))
         {
-            problems.Add($"{owner} maxWaitMinutes must be above 0, found {Number(wait)}");
+            problems.Add($"{owner} maxWaitMinutes must be above 0 and at most {AdmissionSettings.MostWaitMinutes}, found {Number(wait)}");
         }
     }
 
