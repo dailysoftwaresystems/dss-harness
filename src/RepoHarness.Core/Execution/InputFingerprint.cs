@@ -213,7 +213,7 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
             return new InputComparison(
                 InputChange.Unmeasured,
                 unmeasured,
-                $"{Describe(unmeasured.Count, "input")} could not be read: {List(unmeasured)}");
+                $"{Counted(unmeasured.Count, "input")} could not be read: {Named(unmeasured)}");
         }
 
         if (watch?.Failure is { } failure)
@@ -235,7 +235,7 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
             : new InputComparison(
                 InputChange.Moved,
                 moved,
-                $"{Describe(moved.Count, "input")} changed: {List(moved)}");
+                $"{Counted(moved.Count, "input")} changed: {Named(moved)}");
     }
 
     private static IEnumerable<string> Differences(InputSnapshot before, InputSnapshot after)
@@ -291,9 +291,14 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
         }
     }
 
-    private static string Describe(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+    /// <summary>A count of things as a detail says it: <c>1 input</c>, <c>3 inputs</c>.</summary>
+    /// <param name="count">How many.</param>
+    /// <param name="noun">What they are, one of them.</param>
+    internal static string Counted(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
 
-    private static string List(IReadOnlyList<string> paths)
+    /// <summary>Files as a detail names them: the first three, and how many more.</summary>
+    /// <param name="paths">The files, relative to the tree.</param>
+    internal static string Named(IReadOnlyList<string> paths)
         => paths.Count <= NamedInDetail
             ? string.Join(", ", paths)
             : string.Join(", ", paths.Take(NamedInDetail)) + $", and {paths.Count - NamedInDetail} more";

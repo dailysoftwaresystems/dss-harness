@@ -171,13 +171,25 @@ public sealed class LegRunService(
                 runDirectory);
         }
 
-        // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
-        // another run holds is, and no end to the legs that do not.
-        var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
+        // Trees whose legs reached a verdict before any of their work, by tree: one another run holds, as a variant
+        // another run holds is, and one that moved after the run began, before a host's copy was made of it. A verdict
+        // for the legs that need it, and no end to the legs that do not.
+        var stoppedTrees = new ConcurrentDictionary<string, ReachedVerdict>(LegPlan.TreeKeyComparer);
+
+        // Where nothing is remote, or the copies are taken as they stand, nothing is carried and nothing is recorded.
+        var syncing = !request.UseStaged && placed.Any(leg => leg.Host.Host.Kind != HostKind.Local);
 
         try
         {
             _output.Info(commandName, $"run {runId.Value}, {placed.Count} leg(s)");
+
+            // Each tree a host's copy is made of, recorded once as the run begins, before any leg's work: every host is
+            // given the tree as it was then, or its legs are inputs-moved. Taken from the tree as each sync came round,
+            // a file edited for seconds mid-run - and restored before the run ended, so that every reading this machine
+            // took saw the tree the run began with - was built and tested on a host as though it were the run's tree.
+            var recorded = syncing
+                ? await RecordAsync(placed, cancellationToken).ConfigureAwait(false)
+                : new Dictionary<string, SyncSource>();
 
             LegExecution execution;
 
@@ -195,11 +207,11 @@ public sealed class LegRunService(
                             // made to do nothing: the executor reports a sync transition per tree,
                             // and a run that never leaves this machine should not announce a
                             // transfer it did not make.
-                            SyncTree = request.UseStaged || !placed.Any(leg => leg.Host.Host.Kind != HostKind.Local)
-                                ? null
-                                : (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, lockedTrees, token),
+                            SyncTree = syncing
+                                ? (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, recorded, stoppedTrees, token)
+                                : null,
                             RunLeg = (plan, token) => RunLegAsync(
-                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, token),
+                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, stoppedTrees, token),
                         },
                         ledger,
                         cancellationToken)
@@ -274,7 +286,8 @@ public sealed class LegRunService(
         string treeKey,
         RunId runId,
         bool force,
-        ConcurrentDictionary<string, string> lockedTrees,
+        IReadOnlyDictionary<string, SyncSource> recorded,
+        ConcurrentDictionary<string, ReachedVerdict> stoppedTrees,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => LegPlan.TreeKeyComparer.Equals(candidate.TreeKey, treeKey));
@@ -310,7 +323,7 @@ public sealed class LegRunService(
             // the tree records it as refused-locked, and the legs on other trees still report. Raised
             // from here it ended the whole run, as though it were a configuration every leg shares.
             // A lock file nobody can use is not this, and is raised as the refusal of the run it is.
-            lockedTrees[treeKey] = attempt.HeldBy!;
+            stoppedTrees[treeKey] = ReachedVerdict.Of(LegVerdict.RefusedLocked, attempt.HeldBy!);
             return;
         }
 
@@ -320,10 +333,44 @@ public sealed class LegRunService(
             // worktree measures that worktree; sending the main checkout instead would report the
             // worktree's name over the main checkout's sources. A transport that will not start is
             // reported by the runner that starts it, as that host being unavailable.
-            await _syncService
-                .SyncAsync(leg.TreeRoot, _transportFactory.For(leg.Host), leg.HostTreeRoot, new SyncOptions(), cancellationToken)
+            var synced = await _syncService
+                .SyncAsync(
+                    leg.TreeRoot,
+                    _transportFactory.For(leg.Host),
+                    leg.HostTreeRoot,
+                    new SyncOptions { Source = recorded[leg.TreeRoot] },
+                    cancellationToken)
                 .ConfigureAwait(false);
+
+            // The copy could not be made the tree the run began with, so its legs would test content no reading of the
+            // run recorded: inputs-moved, as a leg whose tree moved under its own work is, and nothing of them runs.
+            if (synced is { Moved: { Count: > 0 } moved })
+            {
+                stoppedTrees[treeKey] = ReachedVerdict.Of(
+                    LegVerdict.InputsMoved,
+                    $"{InputFingerprint.Counted(moved.Count, "input")} changed after this run began, before {leg.Named}'s copy "
+                    + $"was made of it: {InputFingerprint.Named(moved)}. The copy could not be the tree the run began with, "
+                    + "so nothing of this leg ran");
+            }
         }
+    }
+
+    /// <summary>
+    /// Records each tree the remote legs among <paramref name="placed"/> are synced from, once, by the tree they declare.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, SyncSource>> RecordAsync(IReadOnlyList<PlacedLeg> placed, CancellationToken cancellationToken)
+    {
+        var recorded = new Dictionary<string, SyncSource>(StringComparer.FromComparison(_platform.PathComparison));
+
+        foreach (var tree in placed.Where(leg => leg.Host.Host.Kind != HostKind.Local).Select(leg => leg.TreeRoot))
+        {
+            if (!recorded.ContainsKey(tree))
+            {
+                recorded[tree] = await _syncService.RecordAsync(tree, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return recorded;
     }
 
     /// <summary>
@@ -385,15 +432,15 @@ public sealed class LegRunService(
         Func<LegWork, CancellationToken, Task<LegEntry>> work,
         string commandName,
         LegLedger ledger,
-        ConcurrentDictionary<string, string> lockedTrees,
+        ConcurrentDictionary<string, ReachedVerdict> stoppedTrees,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => candidate.Name == plan.Name);
         var started = Stopwatch.GetTimestamp();
 
-        if (lockedTrees.TryGetValue(leg.TreeKey, out var treeHeld))
+        if (stoppedTrees.TryGetValue(leg.TreeKey, out var stopped))
         {
-            return Ended(leg, LegVerdict.RefusedLocked, treeHeld, started);
+            return Ended(leg, stopped.Verdict, stopped.Detail, started);
         }
 
         // The tree shared and this variant exclusive: variants build side by side, but never while

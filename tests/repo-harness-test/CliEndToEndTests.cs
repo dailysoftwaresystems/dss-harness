@@ -2448,8 +2448,10 @@ public sealed partial class CliEndToEndTests
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
 
-            // Where the runner is heavy, its machine admits it: one slot, so a record left holding it would show.
-            Defaults = heavy ? new HarnessDefaults { Admission = new AdmissionSettings { HeavyLegs = 1 } } : new HarnessDefaults(),
+            // Where the runner is heavy, its machine admits it: one slot, so a record left holding it would show, and a limit
+            // every reading is below, since this machine's own memory is whatever it is - at the 76% the built-in limit
+            // allows, the leg would wait for it, and the test with it.
+            Defaults = heavy ? new HarnessDefaults { Admission = new AdmissionSettings { HeavyLegs = 1, MaxMemoryPercent = 100 } } : new HarnessDefaults(),
             Tools = { new ToolConfig { Name = "dotnet" } },
             Legs =
             {

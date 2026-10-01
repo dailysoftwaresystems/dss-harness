@@ -72,9 +72,7 @@ public sealed record SyncPlan(
             var entry = source.Entries[path];
             var had = destination.Entries.TryGetValue(path, out var existing);
 
-            if (had
-                && existing!.Size == entry.Size
-                && string.Equals(existing.ContentHash, entry.ContentHash, StringComparison.Ordinal))
+            if (had && existing!.SameContent(entry))
             {
                 unchanged++;
                 continue;

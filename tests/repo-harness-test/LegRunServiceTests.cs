@@ -1016,6 +1016,89 @@ public sealed class LegRunServiceTests
         Assert.False(ran);
     }
 
+    /// <summary>
+    /// A file edited after the run began never reaches a host's copy as the run's tree: the copy is made the tree the run
+    /// began with - an edit put back before the sync came round leaves no trace there - or, where the file still holds
+    /// the edit when it is to be carried, the legs on that copy are inputs-moved and nothing of them runs. Measured: a
+    /// mutant present for 7.3 s of a run was built and tested on a Mac and reported failed, while the tree was the same
+    /// at the run's start and end.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AFileEditedAfterTheRunBegan_NeverReachesAHostsCopyAsTheRunsTree(bool stillEditedWhenSynced)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var copy = temp.Combine("host-copy");
+        var source = Path.Combine(temp.Path, "src", "a.c");
+        string? tested = null;
+
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        await File.WriteAllTextAsync(source, "a\n", token);
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig { Ssh = { [HostName] = new SshHostConfig { RepositoryPath = copy } } },
+            Legs = { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = HostName } },
+        };
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        // The edit lands once the run has begun, as the sync comes round, and is put back at once where the test says.
+        var transports = Substitute.For<ISyncTransportFactory>();
+        transports.For(Arg.Any<HostReport>()).Returns(call =>
+        {
+            File.WriteAllText(source, "mutant\n");
+
+            if (!stillEditedWhenSynced)
+            {
+                File.WriteAllText(source, "a\n");
+            }
+
+            return new RecordingTransport(SyncKit.Transport(harness), reports: call.Arg<HostReport>().Host);
+        });
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            tested = File.ReadAllText(Path.Combine(copy, "src", "a.c"));
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy },
+            sync: SyncKit.Service(harness, loader: HostDoubles.Loader(config, temp.Path, temp.Path), transports: transports),
+            hosts: hosts,
+            transports: transports);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        if (stillEditedWhenSynced)
+        {
+            Assert.Equal("inputs-moved", leg.GetProperty("verdict").GetString());
+            Assert.Equal(
+                $"1 input changed after this run began, before {HostId.Ssh(HostName)}'s copy was made of it: src/a.c. The copy "
+                + "could not be the tree the run began with, so nothing of this leg ran",
+                leg.GetProperty("detail").GetString());
+            Assert.Null(tested);
+        }
+        else
+        {
+            Assert.Equal("passed", leg.GetProperty("verdict").GetString());
+            Assert.Equal("a\n", tested);
+        }
+    }
+
     /// <summary>A leg that builds and tests nothing but is heavy all the same, as a runner saying so makes it.</summary>
     private static LegWorkload Heavy => new(Build: false, Test: false, []) { DeclaredHeavy = true };
 
@@ -1183,7 +1266,8 @@ public sealed class LegRunServiceTests
         LogOwnership? logs = null,
         ScriptedHostCommands? hosts = null,
         DeveloperEnvironmentProvider? developerEnvironments = null,
-        LegAdmission? admission = null)
+        LegAdmission? admission = null,
+        ISyncTransportFactory? transports = null)
     {
         var loader = HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
 
@@ -1194,7 +1278,7 @@ public sealed class LegRunServiceTests
             runLock ?? new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             logs ?? new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
             sync ?? Substitute.For<ISyncService>(),
-            Substitute.For<ISyncTransportFactory>(),
+            transports ?? Substitute.For<ISyncTransportFactory>(),
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
 
             // Never this machine's own record of its heavy legs: a test's slots are its own.

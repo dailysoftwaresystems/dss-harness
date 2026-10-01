@@ -1108,7 +1108,7 @@ from the report.
 | `passed` | Ran to completion, succeeded, and its success pattern matched | no |
 | `failed` | Ran to completion and reported failure | **yes** |
 | `unwitnessed` | Exited 0, but its success pattern never matched | **yes** |
-| `inputs-moved` | Files the tests read changed while they ran | **yes** |
+| `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, its tree changed after the run began, before that machine's copy was made of it | **yes** |
 | `unmeasured` | Whether those files held still could not be established | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
 | `skipped-not-selected` | Filtered out by `--legs` | no |
@@ -1403,6 +1403,19 @@ both ends and was something else while they ran. What goes unseen on macOS is a 
 undone before word of it is looked at, and one of the same size undone in place by a
 tool that also puts the old time back. The times are compared for equality alone, never
 ordered.
+
+A leg on another machine tests that machine's copy, which holds still under it; what can
+move is the tree here, before the copy is made of it. So a run records each tree its hosts'
+copies are made of once, as it begins - every file a sync carries, and the configuration
+placed beside them, by content - and every copy is made that tree: each file carried is
+checked against the record as it is read, an edit put back before a host's sync comes round
+leaves no trace there, and a file added since is not carried. Where a file to be carried no
+longer holds what was recorded - edited, or gone - the copy cannot be the tree the run began
+with: that sync stops, and the legs on that copy are `inputs-moved`, naming the files, with
+nothing of them run. Measured: a mutant present in the tree for 7.3 seconds of a run was built
+and tested on a Mac and reported `failed`, while the tree was the same at the run's start and
+end. A leg on this machine is held to its own spans, as above: a lasting edit made after the
+run began reaches a leg here that starts later, which tests it whole.
 
 ### Clocks are never trusted to order anything
 
@@ -1794,6 +1807,12 @@ it, as each host's `space` and a WSL distribution's `diskImageSpace`.
 `sync` puts a host's copy of the repository in step with this tree. It is the same code path
 for this machine, a WSL distribution and an ssh host, so a sync to a host and a sync to a
 directory here cannot drift apart.
+
+- **A copy is made of what was read.** Each file carried is checked, as it is read for carrying,
+  against the manifest the plan was made from; one that changed or went since stops the sync,
+  naming it, rather than reaching the copy as content no reading recorded - and a copy is never
+  verified as though it were the tree. A run hands every host's sync the record of the tree it
+  took as it began, so each copy is the tree the run began with, or its legs are `inputs-moved`.
 
 - **The copy is the tool's.** Sync creates it, records that it did, and refuses to write into a
   directory it did not create. It deletes whatever the source does not have, so taking over a

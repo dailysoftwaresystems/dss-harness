@@ -12,7 +12,27 @@ namespace RepoHarness.Core.Sync;
 /// modification times, so a file written after a marker can carry a stamp from before it. Equality
 /// of content carries the same distortion on both sides and a clock cannot bend it.
 /// </param>
-public sealed record SyncEntry(string Path, long Size, string ContentHash);
+public sealed record SyncEntry(string Path, long Size, string ContentHash)
+{
+    /// <summary>The entry for <paramref name="contents"/>, read whole, at <paramref name="path"/>.</summary>
+    /// <param name="path">The file's path relative to the tree root, with forward separators.</param>
+    /// <param name="contents">Its bytes.</param>
+    public static SyncEntry Of(string path, byte[] contents)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+
+        return new SyncEntry(path, contents.LongLength, FileContentHash.Of(contents));
+    }
+
+    /// <summary>Whether <paramref name="other"/> records the same content, wherever it is: the same size and the same hash.</summary>
+    /// <param name="other">Another entry.</param>
+    public bool SameContent(SyncEntry other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        return Size == other.Size && string.Equals(ContentHash, other.ContentHash, StringComparison.Ordinal);
+    }
+}
 
 /// <summary>The content of a tree, as the identity sync compares and confirms.</summary>
 /// <param name="Root">The tree this manifest describes.</param>
