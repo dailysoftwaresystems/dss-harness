@@ -645,6 +645,58 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// A run check whose runner's steps cannot be read leaves the run to go on, its legs counted heavy, and says so as the
+    /// run begins: refused here, a run was refused for a check that may never run, and the check that runs it refuses it
+    /// as it always did; taken as light, its legs could build with no slot at all.
+    /// </summary>
+    [Fact]
+    public async Task ARunCheckWhoseStepsCannotBeRead_CountsHeavy_SayingSo_AndTheRunGoesOn()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Tools = { new ToolConfig { Name = "dotnet" } },
+            Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug" } },
+            PredefinedRunners =
+            {
+                ["probe"] = new RunnerConfig
+                {
+                    Action = "probe/probe.yml",
+                    ExpectedExceptions =
+                    [
+                        ExpectedExceptionMatcherTests.Entry(
+                            messages: ["the device was busy"],
+                            runChecks: [new RunCheck { PredefinedRunner = "confirm", Expects = new RunCheckExpectation { Success = true } }]),
+                    ],
+                },
+                ["confirm"] = new RunnerConfig { Action = "confirm/confirm.yml" },
+            },
+        });
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
+            """
+            name: probe
+            steps:
+              - name: version
+                run: dotnet --version
+            """);
+
+        var run = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "--json", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.Success, run.ExitCode);
+        Assert.Contains(
+            "run check 'confirm' of runner 'probe' could not be read to know how heavy it is, so its legs count as heavy: ",
+            run.StandardError,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Through 'run', the runner the command line names is offered --input for an input with no value
     /// that its step names: the command line reaches that runner, and only that one.
     /// </summary>
@@ -2448,8 +2500,11 @@ public sealed partial class CliEndToEndTests
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
 
-            // Where the runner is heavy, its machine admits it: one slot, so a record left holding it would show.
-            Defaults = heavy ? new HarnessDefaults { Admission = new AdmissionSettings { HeavyLegs = 1 } } : new HarnessDefaults(),
+            // Where the runner is heavy, its machine admits it: one slot, so a record left holding it would show, and a limit
+            // of 100%, which any reading short of a full machine is below. This machine's memory in use is whatever it is:
+            // above the built-in limit (AdmissionSettings.DefaultMaxMemoryPercent), the leg would wait for it to fall, and
+            // the test with it.
+            Defaults = heavy ? new HarnessDefaults { Admission = new AdmissionSettings { HeavyLegs = 1, MaxMemoryPercent = 100 } } : new HarnessDefaults(),
             Tools = { new ToolConfig { Name = "dotnet" } },
             Legs =
             {

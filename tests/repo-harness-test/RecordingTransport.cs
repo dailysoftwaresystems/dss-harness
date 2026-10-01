@@ -81,8 +81,14 @@ internal sealed class RecordingTransport(
         return Answers is { } answer ? Task.FromResult(answer.Mark) : inner.ReadMarkAsync(root, cancellationToken);
     }
 
+    /// <summary>Every mark the copy was given, in order.</summary>
+    public List<CopyMark> Marked { get; } = [];
+
     public Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default)
-        => inner.CreateRootAsync(root, mark, cancellationToken);
+    {
+        Marked.Add(mark);
+        return inner.CreateRootAsync(root, mark, cancellationToken);
+    }
 
     public Task InitialiseRepositoryAsync(string root, CancellationToken cancellationToken = default)
         => inner.InitialiseRepositoryAsync(root, cancellationToken);

@@ -41,7 +41,7 @@ internal static class SyncCommand
     {
         var command = new Command(
             Name,
-            "Put each host's copy of this repository in step with this tree: files whose content changed are written, files the source no longer has are deleted, and the copy is verified afterwards.");
+            "Put each host's copy of this repository in step with this tree: files whose content changed are written, files the source no longer has are deleted, and the copy is verified afterwards. The tree is read once for every host; a file that changes before it is carried fails the sync.");
 
         command.Options.Add(LegsOption);
         command.Options.Add(DryRunOption);

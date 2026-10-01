@@ -308,6 +308,7 @@ public sealed class ArtifactCarryTests
     [InlineData(false, CopyMark.None, "is not there")]
     [InlineData(true, CopyMark.None, "did not create")]
     [InlineData(true, CopyMark.AdoptionStopped, "stopped before it finished")]
+    [InlineData(true, CopyMark.Unfinished, "is a copy whose sync began and did not finish, so it holds part of one tree and part of another: sync it, then carry")]
     public async Task AHostWithNoCopyThisHarnessMade_IsRefused_AndNothingIsWrittenToIt(
         bool exists,
         CopyMark mark,
@@ -516,11 +517,7 @@ public sealed class ArtifactCarryTests
             await File.WriteAllTextAsync(Path.Combine(kept, $"payload-{index.ToString(CultureInfo.InvariantCulture)}.txt"), "carried", cancellationToken);
         }
 
-        var local = new LocalSyncTransport(
-            harness.FileSystem,
-            new ManifestBuilder(harness.FileSystem, harness.Platform),
-            harness.GitClient,
-            harness.Platform);
+        var local = SyncKit.Transport(harness);
 
         // A copy this harness made, which is what a carry requires, unless a test says otherwise.
         await local.CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
@@ -535,18 +532,13 @@ public sealed class ArtifactCarryTests
         var factory = Substitute.For<ISyncTransportFactory>();
         factory.For(Arg.Any<HostReport>()).Returns(transport);
 
-        var service = new SyncService(
-            harness.ContextLoader,
-            new ManifestBuilder(harness.FileSystem, harness.Platform),
-            local,
-            factory,
-            new LegsService(harness.ContextLoader, new RecordingInspector(host => host.Kind == HostKind.Local
-                    ? new HostReport { Host = host, Os = "windows", Processor = "x86_64" }
-                    : new HostReport { Host = host, Os = "linux", Processor = "arm64" }), harness.Platform, harness.Output),
-            harness.GitClient,
-            harness.FileSystem,
-            harness.Platform,
-            harness.Output);
+        var service = SyncKit.Service(
+            harness,
+            inspector: new RecordingInspector(host => host.Kind == HostKind.Local
+                ? new HostReport { Host = host, Os = "windows", Processor = "x86_64" }
+                : new HostReport { Host = host, Os = "linux", Processor = "arm64" }),
+            transports: factory,
+            local: local);
 
         return new Carriage(harness, service, transport, copy);
     }
@@ -563,20 +555,7 @@ public sealed class ArtifactCarryTests
         await harness.InitializeHarnessAsync(temp.Path, cancellationToken, new HarnessConfig());
         await harness.CommitAllAsync(temp.Path, "initial", cancellationToken);
 
-        var service = new SyncService(
-            harness.ContextLoader,
-            new ManifestBuilder(harness.FileSystem, harness.Platform),
-            new LocalSyncTransport(
-                harness.FileSystem,
-                new ManifestBuilder(harness.FileSystem, harness.Platform),
-                harness.GitClient,
-                harness.Platform),
-            Substitute.For<ISyncTransportFactory>(),
-            new LegsService(harness.ContextLoader, Substitute.For<IHostInspector>(), harness.Platform, harness.Output),
-            harness.GitClient,
-            harness.FileSystem,
-            harness.Platform,
-            harness.Output);
+        var service = SyncKit.Service(harness);
 
         return (harness, service);
     }

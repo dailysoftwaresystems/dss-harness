@@ -556,13 +556,14 @@ public sealed class LedgerReport
                     : null,
 
                 // Only where the leg is heavy and its machine declares admission: taken or not, how long it waited,
-                // the memory in use, what held the slots where it was not taken for want of one, and the record they
-                // are kept in.
+                // the memory in use, the room it claimed, what held the slots or claimed the room where it was not taken
+                // for want of either, and the record they are kept in.
                 Admission = line.Admission is { } admission
                     ? admission with
                     {
                         Holders = admission.Holders?.Select(show).ToList(),
                         Record = admission.Record is { } record ? show(record) : null,
+                        Room = admission.Room is { } room ? show(room) : null,
                     }
                     : null,
 

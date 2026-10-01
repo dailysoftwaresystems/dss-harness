@@ -44,12 +44,12 @@ public sealed class LocalSyncTransport(
         // would write one claiming the copy was both taken over and finished — the most permissive
         // thing this file can say, and the one nobody asked for. Checked before anything is created,
         // so a caller that gets this wrong leaves nothing behind.
-        if (mark is not (CopyMark.Complete or CopyMark.AdoptionStopped))
+        if (mark is not (CopyMark.Complete or CopyMark.AdoptionStopped or CopyMark.Unfinished))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(mark),
                 mark,
-                "A copy is created as a complete one or as a takeover that has begun, never as unmarked.");
+                "A copy is marked complete, as a takeover that has begun, or as a sync that has begun, never as unmarked.");
         }
 
         // A file where the directory should be is named rather than worked around. Creating the
@@ -72,33 +72,79 @@ public sealed class LocalSyncTransport(
                 $"'{root}' could not be created: {ex.Message}");
         }
 
-        _fileSystem.WriteAllTextAtomic(
-            MarkerPath(root),
-            JsonSerializer.Serialize(
-                new SyncedCopyMarker(
-                    DateTimeOffset.UtcNow.ToString("O"),
-                    Environment.MachineName,
-                    Adopted: mark == CopyMark.AdoptionStopped || Adopted(root),
-                    Completed: mark != CopyMark.AdoptionStopped),
-                MarkerOptions));
+        // Read whenever a marker is written over one - a takeover begun or finished, a sync begun or finished - so that
+        // rewriting it never erases how the copy came to be: when it was made, by which machine, and whether somebody's
+        // directory was taken over to make it. A marker that cannot be read refuses, as it would anywhere: answering
+        // 'not taken over' would write one indistinguishable from a copy made in an empty directory.
+        var before = Marker(root);
+
+        try
+        {
+            _fileSystem.WriteAllTextAtomic(
+                MarkerPath(root),
+                JsonSerializer.Serialize(
+                    new SyncedCopyMarker(
+                        before?.CreatedUtc ?? DateTimeOffset.UtcNow.ToString("O"),
+                        before?.CreatedBy ?? Environment.MachineName,
+                        Adopted: mark == CopyMark.AdoptionStopped || before is { Adopted: true },
+                        Completed: mark != CopyMark.AdoptionStopped,
+                        Unfinished: mark == CopyMark.Unfinished),
+                    MarkerOptions));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Named, as a file a sync writes is: raised raw, a full disk on a host arrived as a defect in this tool.
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{MarkerPath(root)}', which records how '{root}' came to be and whether its last sync finished, could not "
+                + $"be written: {ex.Message}",
+                ex);
+        }
 
         return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
     public async Task<SyncInspectAnswer> InspectAsync(string root, CancellationToken cancellationToken = default)
-        => new(
-            await RootExistsAsync(root, cancellationToken).ConfigureAwait(false),
-            await ReadMarkAsync(root, cancellationToken).ConfigureAwait(false));
+    {
+        var exists = await RootExistsAsync(root, cancellationToken).ConfigureAwait(false);
+
+        return new(
+            exists,
+            await ReadMarkAsync(root, cancellationToken).ConfigureAwait(false),
+            exists ? await ConfigurationInAsync(root, cancellationToken).ConfigureAwait(false) : null);
+    }
+
+    /// <summary>
+    /// What the configuration the copy at <paramref name="root"/> holds, by content; <see langword="null"/> where it holds
+    /// none, or one that cannot be read, which a sync reads as one its own differs from.
+    /// </summary>
+    private async Task<string?> ConfigurationInAsync(string root, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(Home(root), HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName);
+
+        try
+        {
+            return _fileSystem.FileExists(path)
+                ? (await FileContentHash.OfAsync(_fileSystem, path, cancellationToken).ConfigureAwait(false)).Content
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     /// <inheritdoc/>
     public Task<CopyMark> ReadMarkAsync(string root, CancellationToken cancellationToken = default)
         => Task.FromResult(Marker(root) switch
         {
             // An unfinished takeover is told apart from a finished copy, because only one of them
-            // still needs somebody to say go ahead.
+            // still needs somebody to say go ahead; and a copy whose sync has not finished from both,
+            // because it is this tool's own and the next sync puts it right.
             null => CopyMark.None,
             { Adopted: true, Completed: false } => CopyMark.AdoptionStopped,
+            { Unfinished: true } => CopyMark.Unfinished,
             _ => CopyMark.Complete,
         });
 
@@ -560,15 +606,27 @@ public sealed class LocalSyncTransport(
     /// one of them destroyed something.
     /// </param>
     /// <param name="Completed">
-    /// Whether the run that made it got to the end. A takeover that stopped part way is marked but
-    /// not complete, which is neither the checkout somebody had nor a copy of the source.
+    /// Whether a takeover of it got to the end: false only for a takeover that stopped part way, which
+    /// is neither the checkout somebody had nor a copy of the source. A sync that has not finished is
+    /// said by <c>Unfinished</c>, never here, so the members a build from before that one reads keep
+    /// their meaning.
+    /// </param>
+    /// <param name="Unfinished">
+    /// Whether a sync began writing it and has not finished: written before a sync's first write, and
+    /// cleared once the copy is verified. Written only where true, so a copy every sync finished carries
+    /// the marker a build from before it reads.
     /// </param>
     /// <remarks>
     /// Both strings are nullable because deserialising decides that, not this declaration: a file
     /// holding <c>{}</c> parses into a marker with neither, and that is one of the shapes that has
     /// to be told from a marker this tool wrote. Every marker it has ever written carries both.
     /// </remarks>
-    private sealed record SyncedCopyMarker(string? CreatedUtc, string? CreatedBy, bool Adopted, bool Completed);
+    private sealed record SyncedCopyMarker(
+        string? CreatedUtc,
+        string? CreatedBy,
+        bool Adopted,
+        bool Completed,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Unfinished = false);
 
     /// <summary>
     /// What the marker at <paramref name="root"/> says, or null where there is none.
@@ -625,18 +683,6 @@ public sealed class LocalSyncTransport(
             + "as one this tool did not make, which '--adopt' can then take over after listing what "
             + "it would cost.",
             inner);
-
-    /// <summary>
-    /// Whether the marker already there says this copy was taken over. Read when one is being
-    /// written to say a takeover finished, so finishing does not erase how the copy came to be.
-    /// </summary>
-    /// <remarks>
-    /// Refuses rather than answering no when the marker cannot be read. By the time this runs the
-    /// takeover has already succeeded, so failing costs an exit code; answering no would write a
-    /// marker indistinguishable from one for a copy made in an empty directory, and this file is
-    /// the only thing left that can say somebody's files were deleted to make it.
-    /// </remarks>
-    private bool Adopted(string root) => Marker(root) is { Adopted: true };
 
     /// <summary>A withheld-path test over a list put into its comparison form once.</summary>
     /// <remarks>

@@ -11,6 +11,18 @@ namespace RepoHarness.Core.Platform;
 public static class PlatformPaths
 {
     /// <summary>
+    /// How paths compare on <paramref name="platform"/>, for a collection keyed or ordered by them: case insensitive on
+    /// Windows.
+    /// </summary>
+    /// <param name="platform">The platform.</param>
+    public static StringComparer PathComparer(this IHostPlatform platform)
+    {
+        ArgumentNullException.ThrowIfNull(platform);
+
+        return StringComparer.FromComparison(platform.PathComparison);
+    }
+
+    /// <summary>
     /// Whether <paramref name="path"/> is absolute on a <paramref name="platformKey"/> machine: a
     /// drive or a share on Windows, a leading <c>/</c> everywhere else.
     /// </summary>

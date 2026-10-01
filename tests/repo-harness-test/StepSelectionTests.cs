@@ -220,10 +220,5 @@ public sealed class StepSelectionTests
         selected.RequireANamedStepOn("corpus", [("win-debug", "windows")]);
     }
 
-    private static ActionFile Parse(string text)
-        => new ActionFileParser(
-                new PhysicalFileSystem(FilePermissionsFactory.Create()),
-                new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false),
-                new HostPlatform())
-            .Parse("actions/corpus/corpus.yml", text);
+    private static ActionFile Parse(string text) => ActionKit.Parse("actions/corpus/corpus.yml", text);
 }

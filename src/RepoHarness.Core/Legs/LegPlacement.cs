@@ -25,6 +25,12 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
     public LegVerdict Verdict { get; init; } = LegVerdict.SkippedUnavailable;
 
     /// <summary>
+    /// What the leg's build still needs where it was placed, where something says; <see langword="null"/> where nothing
+    /// does, or the command builds nothing.
+    /// </summary>
+    public RoomNeed? Need { get; init; }
+
+    /// <summary>
     /// The hosts that may run <paramref name="leg"/>, in the order they are tried: the one host it names,
     /// or else this machine, then the WSL distributions when the leg runs on Linux, then the ssh hosts, each
     /// in the order the configuration declares them, and each named as the configuration declares it.

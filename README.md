@@ -111,12 +111,15 @@ even when its machines do not — a license server, a network share, a sync's ba
 
 Both are counted by one command. Where a machine declares `admission` — under `defaults`, or its own
 under `hosts.local` or an ssh host — its heavy legs (a build, a test, a runner that requires the build
-or says `"heavy": true`) share it across every command this user runs there: each waits for one of
-its `heavyLegs` slots, in the order they asked, then for the memory in use to fall below
-`maxMemoryPercent`, says who holds each slot while it waits, and names on its line how long it waited
-and the memory it started at. A WSL distribution's legs take this machine's slots; an ssh host takes
-its own. One that waited `maxWaitMinutes` is `not-admitted`, exit 7, naming what held the slots and
-where they are recorded, and nothing of it ran. Run `dssharness help admission` for the rules.
+or says `"heavy": true`, a run of an action step that says `heavy: true`) share it across every command
+this user runs there: each waits for one of its `heavyLegs` slots, in the order they asked, then for
+the memory in use to fall below `maxMemoryPercent`, then - where its build's need is known - for room
+on the filesystem it fills beside what the other admitted legs claim, says who holds each slot while
+it waits, and names on its line how long it waited, the memory it started at and the room it claimed.
+A WSL distribution's legs take this machine's slots, and claim room on the drive where WSL keeps its
+disk; an ssh host takes its own. One that waited `maxWaitMinutes` is `not-admitted`, exit 7, naming
+what held the slots and where they are recorded, the memory it waited on, or the room and who claimed
+it, and nothing of it ran. Run `dssharness help admission` for the rules.
 
 ## Design
 

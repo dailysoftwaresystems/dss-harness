@@ -4,7 +4,10 @@ using RepoHarness.Core.Runs;
 
 namespace RepoHarness.Cli;
 
-/// <summary>What a machine dispatching a leg tells the host that runs it.</summary>
+/// <summary>
+/// Options every command that runs legs reads alike: what a machine dispatching a leg tells the host that runs it, and
+/// what a run on what is already staged means.
+/// </summary>
 internal static class DispatchOptions
 {
     /// <summary>
@@ -33,5 +36,16 @@ internal static class DispatchOptions
                 + $"and '{spelled}' is none of them.");
             return null;
         },
+    };
+
+    /// <summary>
+    /// <c>--use-staged</c>, as each command that runs legs takes it: <paramref name="verb"/> what each host already holds,
+    /// without syncing again. One spelling for every such command, so none can say less than the others about the copy
+    /// it refuses.
+    /// </summary>
+    /// <param name="verb">What the command does with the copy, as its description starts: <c>Build</c>.</param>
+    internal static Option<bool> UseStaged(string verb) => new("--use-staged")
+    {
+        Description = $"{verb} what is already staged on each host, without syncing again. Legs on a copy a sync or a takeover began and did not finish are inputs-moved.",
     };
 }

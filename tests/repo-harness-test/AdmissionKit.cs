@@ -3,6 +3,7 @@ using System.Text.Json;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Tests;
@@ -33,6 +34,44 @@ internal sealed class ScriptedGauge(params double?[] percents) : IMemoryGauge
             return _last is { } percent
                 ? (new MemoryReading(percent, string.Create(CultureInfo.InvariantCulture, $"{percent} of 100 by the test")), null)
                 : (null, "the test gave no reading");
+        }
+    }
+}
+
+/// <summary>
+/// The real file system, save that every path's room is on one filesystem, holding what the test says it does now, and
+/// every path whose room is asked about is remembered.
+/// </summary>
+/// <param name="inner">The real file system.</param>
+/// <param name="freeBytes">What is free there at first.</param>
+/// <param name="filesystem">The filesystem every path is on.</param>
+internal sealed class ScriptedRoom(Core.FileSystem.IFileSystem inner, long freeBytes, string filesystem = "/data") : PassThroughFileSystem(inner)
+{
+    private readonly Lock _asking = new();
+
+    /// <summary>What is free there now.</summary>
+    public long FreeBytes { get; set; } = freeBytes;
+
+    /// <summary>Why the room cannot be read, where the test says it cannot.</summary>
+    public string? Unreadable { get; set; }
+
+    /// <summary>How many readings succeed before every later one fails as <see cref="Unreadable"/> says; all, where null.</summary>
+    public int? ReadsBeforeUnreadable { get; set; }
+
+    /// <summary>Every path whose room was asked about, in order.</summary>
+    public List<string> Asked { get; } = [];
+
+    public override DiskSpace SpaceAt(string path)
+    {
+        lock (_asking)
+        {
+            Asked.Add(path);
+
+            var unreadable = Unreadable is not null && (ReadsBeforeUnreadable is not { } reads || Asked.Count > reads);
+
+            return unreadable
+                ? throw new IOException(Unreadable)
+                : new DiskSpace(FreeBytes, 100 * AdmissionKit.Gibibyte, filesystem);
         }
     }
 }
@@ -93,9 +132,34 @@ internal static class AdmissionKit
             TimeSpan.FromSeconds(pollSeconds),
             TimeSpan.FromMinutes(maxWaitMinutes));
 
-    /// <summary>A leg asking by <paramref name="rule"/>, whose every line of progress goes to <paramref name="said"/>.</summary>
-    public static AdmissionRequest Request(AdmissionRule rule, List<string> said, string leg = "mine")
-        => new(rule, $"run-{leg}", "build", leg, "local", $"/src/{leg}", "x86_64-gcc-debug", said.Add);
+    /// <summary>
+    /// A leg asking by <paramref name="rule"/>, whose every line of progress goes to <paramref name="said"/>, and whose
+    /// build needs <paramref name="room"/> where it says.
+    /// </summary>
+    public static AdmissionRequest Request(AdmissionRule rule, List<string> said, string leg = "mine", RoomNeed? room = null)
+        => new(rule, $"run-{leg}", "build", leg, "local", $"/src/{leg}", "x86_64-gcc-debug", said.Add, room);
+
+    /// <summary>What a test's leg's build needs: <paramref name="gibibytes"/> on the filesystem of its build directory.</summary>
+    public static RoomNeed Room(double gibibytes, string leg = "mine")
+        => new((long)(gibibytes * Gibibyte), "as the test says", $"/src/{leg}/build", string.Empty);
+
+    /// <summary>Writes <paramref name="claims"/> as the room's record beside the slots' at <paramref name="record"/>.</summary>
+    public static void WriteClaims(string record, params RoomClaim[] claims)
+    {
+        var path = HeavyLegSlots.RoomPathFor(record);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, JsonSerializer.Serialize(claims, JsonStateFile.Options));
+    }
+
+    /// <summary>What the room's record beside the slots' at <paramref name="record"/> holds now.</summary>
+    public static IReadOnlyList<RoomClaim> ReadClaims(string record)
+        => File.Exists(HeavyLegSlots.RoomPathFor(record))
+            ? JsonSerializer.Deserialize<List<RoomClaim>>(File.ReadAllText(HeavyLegSlots.RoomPathFor(record)), JsonStateFile.Options) ?? []
+            : [];
+
+    /// <summary>A gibibyte, as a test counts room.</summary>
+    public const long Gibibyte = 1L << 30;
 
     /// <summary>
     /// A leg of another command holding a slot, or waiting for one, whose command allows <paramref name="slots"/> at once:

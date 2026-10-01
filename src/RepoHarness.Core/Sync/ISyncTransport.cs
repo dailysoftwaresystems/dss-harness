@@ -23,19 +23,23 @@ public interface ISyncTransport
     Task<bool> RootExistsAsync(string root, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Creates the copy's root and every missing parent, and records that the harness made it.
+    /// Creates the copy's root and every missing parent, and records that the harness made it; on a copy
+    /// already there, marks it again, keeping how it came to be.
     /// </summary>
     /// <param name="root">The copy's root.</param>
     /// <param name="mark">
     /// What to record about how this copy came to be. A takeover is marked before it starts and
     /// again when it finishes, because the two are indistinguishable afterwards and one of them
-    /// deleted files that were already there.
+    /// deleted files that were already there. A sync is marked unfinished before its first write or
+    /// deletion and complete once the copy is verified, because a copy part written is no tree a run
+    /// began with.
     /// </param>
     /// <param name="cancellationToken">Stops the work.</param>
     /// <exception cref="Results.HarnessException">
-    /// The path exists and is not a directory, or it could not be created. Never a silent fallback
-    /// to somewhere else: a sync that writes to a directory nobody named is worse than one that
-    /// refuses, because the leg's verdict then describes a tree the reader cannot find.
+    /// The path exists and is not a directory, it could not be created, or its marker could not be
+    /// read or written. Never a silent fallback to somewhere else: a sync that writes to a directory
+    /// nobody named is worse than one that refuses, because the leg's verdict then describes a tree
+    /// the reader cannot find.
     /// </exception>
     Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default);
 

@@ -226,7 +226,9 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
     {
         if (OperatingSystem.IsWindows())
         {
-            return Path.GetPathRoot(path) ?? path;
+            // In upper case, as Windows spells a drive: as a path spelled it - 'c:\' where somebody typed it so - one drive
+            // would be two filesystems to everything that keys room by its name.
+            return (Path.GetPathRoot(path) ?? path).ToUpperInvariant();
         }
 
         try

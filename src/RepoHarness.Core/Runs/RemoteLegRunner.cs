@@ -47,7 +47,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <summary>Runs <paramref name="commandName"/> for one leg on its host, and returns its entry.</summary>
     /// <param name="commandName">The command to run there, which is the one running here.</param>
     /// <param name="leg">The placed leg: its host, and the host's copy of its tree, which sync made, that it runs in.</param>
-    /// <param name="arguments">The command's own options, without <c>--legs</c> or <c>--json</c>.</param>
+    /// <param name="arguments">The command's own options, without <c>--legs</c>, <c>--json</c>, <c>--here</c> or <c>--verbose</c>, which this adds.</param>
     /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
     /// <exception cref="HarnessException">
     /// The host could not be reached - its transport would not start - or never reported how the
@@ -72,12 +72,18 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
         var nonce = HostAgentProtocol.NewNonce();
 
+        // The leg's own command verbose where this one is: what -v shows - each step's output - is that command's to
+        // write, and the agent's own --verbose below reaches the agent alone, so a leg on a host printed its verdict and
+        // nothing else while a leg here streamed its steps. Written to the host's standard error under --json, it is
+        // relayed from there like every line of it.
+        string[] verbosity = _output.IsVerbose ? [HostAgentProtocol.VerboseOption] : [];
+
         var request = JsonSerializer.Serialize(
             new HostAgentRequest
             {
                 Kind = HostAgentRequestKind.Run,
                 Directory = leg.HostTreeRoot,
-                Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. arguments],
+                Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. verbosity, .. arguments],
                 Nonce = nonce,
             },
             HostAgentProtocol.JsonOptions);

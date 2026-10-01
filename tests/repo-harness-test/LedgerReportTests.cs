@@ -124,7 +124,8 @@ public sealed class LedgerReportTests
                     false,
                     3600,
                     Holders: ["'/home/alice/repo' on local (leg 'x', build, box pid 7, run r, since 2026-09-30 16:29:42Z)"],
-                    Record: "/home/alice/.local/share/dssharness/admission-x.json"),
+                    Record: "/home/alice/.local/share/dssharness/admission-x.json",
+                    Room: "40 GiB free on '/home/alice', and this leg needs ~8 GiB, as its buildSpaceGiB, 8, declares"),
             },
             Entry("unread", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty) with
             {
@@ -142,13 +143,14 @@ public sealed class LedgerReportTests
             "'~/repo' on local (leg 'x', build, box pid 7, run r, since 2026-09-30 16:29:42Z)",
             Assert.Single(refused.GetProperty("holders").EnumerateArray()).GetString());
         Assert.Equal("~/.local/share/dssharness/admission-x.json", refused.GetProperty("record").GetString());
+        Assert.Equal("40 GiB free on '~', and this leg needs ~8 GiB, as its buildSpaceGiB, 8, declares", refused.GetProperty("room").GetString());
         Assert.Equal("the gauge gave no reading", legs[1].GetProperty("admission").GetProperty("unmeasured").GetString());
 
         var rows = report.Render();
 
         Assert.DoesNotContain("; admitted", Assert.Single(rows, row => row.StartsWith("refused", StringComparison.Ordinal)), StringComparison.Ordinal);
         Assert.Contains(
-            "admitted at once on its slot alone, the memory in use unread: the gauge gave no reading",
+            "admitted at once without the memory in use, which could not be read: the gauge gave no reading",
             Assert.Single(rows, row => row.StartsWith("unread", StringComparison.Ordinal)),
             StringComparison.Ordinal);
     }

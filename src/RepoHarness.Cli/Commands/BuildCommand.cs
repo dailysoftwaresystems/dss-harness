@@ -33,10 +33,7 @@ internal static class BuildCommand
         Description = "Take a lock a run on another host holds. Always a human decision.",
     };
 
-    private static readonly Option<bool> UseStagedOption = new("--use-staged")
-    {
-        Description = "Build what is already staged on each host, without syncing again.",
-    };
+    private static readonly Option<bool> UseStagedOption = DispatchOptions.UseStaged("Build");
 
     internal static Command Create()
     {

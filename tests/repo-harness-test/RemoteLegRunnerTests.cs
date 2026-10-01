@@ -53,6 +53,43 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// A command run with -v has the host run the leg's command with it too, so the leg's step output reaches the reader
+    /// as a leg run here shows it, relayed from the host's standard error: with the host's agent alone verbose, a leg on a
+    /// host printed its verdict and nothing of its steps. Without -v, neither is.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AVerboseCommand_HasTheHostRunTheLegsCommandVerboseToo(bool verbose)
+    {
+        HostCommand? sent = null;
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+
+            // What the leg's command writes of its steps where it is verbose, to its standard error under --json.
+            var steps = Request(command).Arguments.Contains(HostAgentProtocol.VerboseOption) ? "test: step 'compile': cc -c a.c\n" : string.Empty;
+
+            return HostResults.Finished(command, 0, steps);
+        });
+
+        var error = new StringWriter();
+        var output = new ConsoleHarnessOutput(new StringWriter(), error, verbose);
+
+        await new RemoteLegRunner(hosts, output).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            verbose
+                ? ["test", "--legs", "wsl-debug", "--json", RemoteLegRunner.HereOption, "wsl Example-Linux", HostAgentProtocol.VerboseOption]
+                : ["test", "--legs", "wsl-debug", "--json", RemoteLegRunner.HereOption, "wsl Example-Linux"],
+            Request(sent).Arguments);
+        Assert.Equal(verbose, sent!.Arguments.Contains(HostAgentProtocol.VerboseOption));
+        Assert.Equal(verbose, error.ToString().Contains("test: step 'compile': cc -c a.c", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// A host runs the leg under a run of its own, and says where that run keeps its records: the
     /// leg's line carries it, so the caller is told where its records are as for a leg run here. A
     /// host that says nothing about it names nothing.

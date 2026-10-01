@@ -115,7 +115,7 @@ public sealed class HarnessContextLoader(
             {
                 _output.Warn(
                     "config",
-                    $"this worktree has no '{HarnessLayout.DirectoryName}/{HarnessLayout.ConfigFileName}', "
+                    $"this worktree has no '{HarnessLayout.ConfigFileRelative}', "
                     + $"so the main checkout's is being used: '{fallback}'. Anything this tree changes "
                     + "about its configuration is not what is running.");
 

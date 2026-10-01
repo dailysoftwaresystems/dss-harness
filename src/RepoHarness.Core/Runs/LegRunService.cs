@@ -175,9 +175,25 @@ public sealed class LegRunService(
         // another run holds is, and no end to the legs that do not.
         var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
 
+        // What each host's copy is marked, read once per copy, for a run on what is already staged there.
+        var stagedMarks = new ConcurrentDictionary<string, Lazy<Task<CopyMark>>>(LegPlan.TreeKeyComparer);
+
         try
         {
             _output.Info(commandName, $"run {runId.Value}, {placed.Count} leg(s)");
+
+            // Left out entirely where nothing is remote, or where the run acts on what each host already holds
+            // (--use-staged), rather than supplied and made to do nothing: the executor reports a sync transition per
+            // tree, and a run that never leaves this machine should not announce a transfer it did not make. Nothing is
+            // read for carrying then either.
+            Func<string, CancellationToken, Task>? syncTree = null;
+
+            if (!request.UseStaged && placed.Any(leg => leg.Remote))
+            {
+                var sources = await ReadSourcesAsync(placed, commandName, cancellationToken).ConfigureAwait(false);
+
+                syncTree = (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, sources, lockedTrees, token);
+            }
 
             LegExecution execution;
 
@@ -190,16 +206,9 @@ public sealed class LegRunService(
                             Legs = [.. placed.Select(leg => leg.ToPlan())],
                             MaxParallelLegs = context.Config.Defaults.MaxParallelLegs,
                             MaxParallelLegsTotal = context.Config.Defaults.MaxParallelLegsTotal,
-
-                            // Left out entirely where nothing is remote, rather than supplied and
-                            // made to do nothing: the executor reports a sync transition per tree,
-                            // and a run that never leaves this machine should not announce a
-                            // transfer it did not make.
-                            SyncTree = request.UseStaged || !placed.Any(leg => leg.Host.Host.Kind != HostKind.Local)
-                                ? null
-                                : (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, lockedTrees, token),
+                            SyncTree = syncTree,
                             RunLeg = (plan, token) => RunLegAsync(
-                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, token),
+                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, stagedMarks, token),
                         },
                         ledger,
                         cancellationToken)
@@ -274,15 +283,22 @@ public sealed class LegRunService(
         string treeKey,
         RunId runId,
         bool force,
+        IReadOnlyDictionary<string, Task<SyncSource>> sources,
         ConcurrentDictionary<string, string> lockedTrees,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => LegPlan.TreeKeyComparer.Equals(candidate.TreeKey, treeKey));
 
-        if (leg.Host.Host.Kind == HostKind.Local)
+        if (!leg.Remote)
         {
             return;
         }
+
+        // The tree this leg declares, as the run read it when it began - not whatever tree the command was typed in. A
+        // leg naming a worktree measures that worktree; sending the main checkout instead would report the worktree's
+        // name over the main checkout's sources. A tree that could not be read raises its failure here, in the sync of
+        // each copy made from it, where that copy's legs report it.
+        var source = await sources[leg.TreeRoot].ConfigureAwait(false);
 
         var attempt = await _runLock
             .TryAcquireAsync(
@@ -316,14 +332,49 @@ public sealed class LegRunService(
 
         await using (handle)
         {
-            // The tree this leg declares, not whatever tree the command was typed in. A leg naming a
-            // worktree measures that worktree; sending the main checkout instead would report the
-            // worktree's name over the main checkout's sources. A transport that will not start is
-            // reported by the runner that starts it, as that host being unavailable.
+            // A transport that will not start is reported by the runner that starts it, as that host
+            // being unavailable. A file that moved since the run began raises as inputs-moved, the
+            // verdict of this copy's legs alone, and nothing of them runs.
             await _syncService
-                .SyncAsync(leg.TreeRoot, _transportFactory.For(leg.Host), leg.HostTreeRoot, new SyncOptions(), cancellationToken)
+                .SyncAsync(source, _transportFactory.For(leg.Host), leg.HostTreeRoot, new SyncOptions(), cancellationToken)
                 .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Reads, once each, the trees the remote legs among <paramref name="placed"/> are synced from, all of them before
+    /// any leg's work, so every host's copy of a tree is made from the one reading (see
+    /// <see cref="ISyncService.ReadSourceAsync"/>).
+    /// </summary>
+    /// <returns>Each tree's reading by its root, or what stopped it.</returns>
+    /// <remarks>
+    /// Read side by side, and waited for whether each was read or not: a tree that could not be read - git would not
+    /// answer in it, a file in it could not be opened - raises nothing here, but in the sync of each copy made from it,
+    /// while the legs on other trees and on this machine still run.
+    /// </remarks>
+    private async Task<IReadOnlyDictionary<string, Task<SyncSource>>> ReadSourcesAsync(
+        IReadOnlyList<PlacedLeg> placed,
+        string commandName,
+        CancellationToken cancellationToken)
+    {
+        var comparer = _platform.PathComparer();
+        var trees = placed
+            .Where(leg => leg.Remote)
+            .Select(leg => leg.TreeRoot)
+            .Distinct(comparer)
+            .ToList();
+
+        // Said, because a large tree takes a while to read, and nothing else is said until it is.
+        _output.Info(commandName, $"reading {ReportText.Listed(trees)} for the copies on other machines");
+
+        var sources = trees.ToDictionary(
+            tree => tree,
+            tree => Task.Run(() => _syncService.ReadSourceAsync(tree, cancellationToken), cancellationToken),
+            comparer);
+
+        await Task.WhenAll(sources.Values.Cast<Task>()).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        return sources;
     }
 
     /// <summary>
@@ -386,6 +437,7 @@ public sealed class LegRunService(
         string commandName,
         LegLedger ledger,
         ConcurrentDictionary<string, string> lockedTrees,
+        ConcurrentDictionary<string, Lazy<Task<CopyMark>>> stagedMarks,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => candidate.Name == plan.Name);
@@ -394,6 +446,30 @@ public sealed class LegRunService(
         if (lockedTrees.TryGetValue(leg.TreeKey, out var treeHeld))
         {
             return Ended(leg, LegVerdict.RefusedLocked, treeHeld, started);
+        }
+
+        // A run on what each host already holds tests that copy as it is: one a sync or a takeover of began and did not
+        // finish holds no tree a run began with, and its legs are inputs-moved, as a copy whose tree moved before it was
+        // carried is - before a slot is taken, and nothing of them runs. Read by this machine, which would have synced it,
+        // once per copy: a host is never told a run is on what is staged, since the staging is this machine's decision.
+        if (request.UseStaged && leg.Remote && request.Here is null)
+        {
+            var mark = await stagedMarks
+                .GetOrAdd(leg.TreeKey, _ => new Lazy<Task<CopyMark>>(() => _transportFactory.For(leg.Host).ReadMarkAsync(leg.HostTreeRoot, cancellationToken)))
+                .Value
+                .ConfigureAwait(false);
+
+            if (SyncService.PartMade(mark) is { } partMade)
+            {
+                return Ended(
+                    leg,
+                    LegVerdict.InputsMoved,
+                    $"{leg.Named}: '{leg.HostTreeRoot}' {partMade}: --use-staged has nothing current to run there. "
+                    + (mark == CopyMark.AdoptionStopped
+                        ? $"Finish taking it over with '{ToolPackage.Command} sync --adopt \"{leg.Named}\"', and run again."
+                        : "Run without --use-staged, which syncs it first."),
+                    started);
+            }
         }
 
         // The tree shared and this variant exclusive: variants build side by side, but never while
@@ -455,7 +531,8 @@ public sealed class LegRunService(
         LegLedger ledger,
         CancellationToken cancellationToken)
     {
-        if (!request.Workload.Heavy
+        // Heavy as it is on this leg's system: a heavy step limited by runOn makes the legs of those systems alone heavy.
+        if (!request.Workload.On(leg.Leg.Os).Heavy
             || (request.Here is null && leg.Host.Host.Kind == HostKind.Ssh)
             || request.Here is { Kind: HostKind.Wsl })
         {
@@ -479,7 +556,8 @@ public sealed class LegRunService(
                     leg.Host.Host.ToString(),
                     leg.HostTreeRoot,
                     leg.Variant.DirectoryName,
-                    message => ledger.Transition(leg.Name, message)),
+                    message => ledger.Transition(leg.Name, message),
+                    leg.Need),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -508,7 +586,7 @@ public sealed class LegRunService(
         // would produce a verdict about the machine that typed the command, under the name of
         // the leg that was supposed to check a different one — which is the whole failure a
         // harness exists to prevent, wearing a green colour.
-        if (leg.Host.Host.Kind != HostKind.Local && request.Here is null)
+        if (leg.Remote && request.Here is null)
         {
             return await _remoteLegs
                 .RunAsync(

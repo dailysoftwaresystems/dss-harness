@@ -24,8 +24,9 @@ public static class ActionFileKeys
     ];
 
     /// <summary>
-    /// What only a step's <c>run</c> block reads. A step that performs a predefined action runs no
-    /// program, so nothing would read any of these, and it is refused with them.
+    /// What only a step that runs a program takes: what its <c>run</c> block reads, and whether that work is heavy. A
+    /// step that performs a predefined action runs no program, so nothing would read any of these, and it is refused
+    /// with them.
     /// </summary>
     public static IReadOnlyList<KeyDescription> RunBlock { get; } =
     [
@@ -39,6 +40,7 @@ public static class ActionFileKeys
         Phase("requireInputsUnmoved"),
         new("outputs", "what it writes, relative to its build directory, {stepBuild}"),
         new("persist", "keep its outputs when the action finishes"),
+        new("heavy", "a run that runs it takes a heavy-leg slot ('help admission'), whatever its runner says"),
         new("inputs", "values this step alone reads, declared as the action's are") { Keys = Input },
     ];
 

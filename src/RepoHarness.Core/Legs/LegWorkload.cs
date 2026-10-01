@@ -45,8 +45,18 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// </summary>
     public bool StartsPrograms => Build || Test || Programs.Count > 0 || UnderOwnPath.Count > 0 || OnlyOn.Count > 0;
 
-    /// <summary>Whether the runner the command runs says its legs are heavy, where they build nothing.</summary>
+    /// <summary>
+    /// Whether what the command runs says its legs are heavy, where they build nothing: the runner, a step of it this run
+    /// runs on every system, or a runner its expected exceptions' run checks name - requiring the build, saying so, or
+    /// running such a step.
+    /// </summary>
     public bool DeclaredHeavy { get; init; }
+
+    /// <summary>
+    /// The operating systems whose legs a heavy step limited by <c>runOn</c> makes heavy: a leg of any other system never
+    /// runs it, and is as light as the rest of the command leaves it. Read through <see cref="On"/>.
+    /// </summary>
+    public IReadOnlyList<string> HeavyOnlyOn { get; init; } = [];
 
     /// <summary>
     /// Whether a leg of this workload is heavy: it builds or tests, or its runner says it is. A heavy leg takes one of
@@ -76,10 +86,14 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// and is only asked about: see <see cref="UnderOwnPath"/>.
     /// </remarks>
     /// <param name="checks">
-    /// The runners its expected exceptions' run checks name, which run within its legs: any of them heavy - requiring
-    /// the build, or saying so - makes its legs heavy, as the runner itself would.
+    /// The runners its expected exceptions' run checks name, which run within its legs, each with the action steps a
+    /// run of it runs, or whether those could not be read: any of them heavy - requiring the build, or saying so, itself
+    /// or by a step - makes its legs heavy, as the runner itself would, and so does one whose steps could not be read.
     /// </param>
-    public static LegWorkload ForRunner(RunnerConfig runner, ActionFile? action, IEnumerable<RunnerConfig>? checks = null)
+    public static LegWorkload ForRunner(
+        RunnerConfig runner,
+        ActionFile? action,
+        IEnumerable<(RunnerConfig Runner, ActionFile? Action, bool Unread)>? checks = null)
     {
         ArgumentNullException.ThrowIfNull(runner);
 
@@ -94,13 +108,30 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
                     new OsScopedStart(command.Program, runnerPath || ProcessRunner.SetsPath(step.Env.Keys), step.RunOn)))];
 
         var everywhere = starts.Where(start => start.RunOn.Count == 0).ToList();
+        var own = Heaviness(runner, action);
+        var checked_ = (checks ?? []).Select(check => (Wholly: check.Runner.RequireBuild || check.Unread, Steps: Heaviness(check.Runner, check.Action))).ToList();
 
         return new LegWorkload(Build: runner.RequireBuild, Test: false, [.. everywhere.Where(start => !start.OwnPath).Select(start => start.Program)])
         {
             UnderOwnPath = [.. everywhere.Where(start => start.OwnPath).Select(start => start.Program)],
             OnlyOn = [.. starts.Where(start => start.RunOn.Count > 0)],
-            DeclaredHeavy = runner.Heavy == true || (checks ?? []).Any(check => check.RequireBuild || check.Heavy == true),
+            DeclaredHeavy = own.Everywhere || checked_.Any(check => check.Wholly || check.Steps.Everywhere),
+            HeavyOnlyOn = [.. own.OnlyOn.Concat(checked_.SelectMany(check => check.Steps.OnlyOn)).Distinct(StringComparer.OrdinalIgnoreCase)],
         };
+    }
+
+    /// <summary>
+    /// How heavy <paramref name="runner"/>'s legs are by what it says: everywhere, where it says so or a step of
+    /// <paramref name="action"/> - the steps a run of it runs - says so on every system; and the systems a heavy step
+    /// limited by <c>runOn</c> makes heavy.
+    /// </summary>
+    private static (bool Everywhere, IReadOnlyList<string> OnlyOn) Heaviness(RunnerConfig runner, ActionFile? action)
+    {
+        var heavy = action?.Steps.Where(step => step.Heavy).ToList() ?? [];
+
+        return (
+            runner.Heavy == true || heavy.Any(step => step.RunOn.Count == 0),
+            [.. heavy.SelectMany(step => step.RunOn).Distinct(StringComparer.OrdinalIgnoreCase)]);
     }
 
     /// <summary>
@@ -120,6 +151,8 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
             Programs = [.. Programs, .. here.Where(start => !start.OwnPath).Select(start => start.Program)],
             UnderOwnPath = [.. UnderOwnPath, .. here.Where(start => start.OwnPath).Select(start => start.Program)],
             OnlyOn = [],
+            DeclaredHeavy = DeclaredHeavy || HeavyOnlyOn.Contains(os, StringComparer.OrdinalIgnoreCase),
+            HeavyOnlyOn = [],
         };
     }
 }

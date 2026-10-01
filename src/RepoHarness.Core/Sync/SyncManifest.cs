@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Platform;
 
@@ -12,7 +13,16 @@ namespace RepoHarness.Core.Sync;
 /// modification times, so a file written after a marker can carry a stamp from before it. Equality
 /// of content carries the same distortion on both sides and a clock cannot bend it.
 /// </param>
-public sealed record SyncEntry(string Path, long Size, string ContentHash);
+public sealed record SyncEntry(string Path, long Size, string ContentHash)
+{
+    /// <summary>What the file holds, as everything that compares files compares it.</summary>
+    /// <remarks>
+    /// Never written out: it is <see cref="Size"/> and <see cref="ContentHash"/> again, and an entry crosses to and
+    /// from every host in a manifest.
+    /// </remarks>
+    [JsonIgnore]
+    public FileContent Identity => new(Size, ContentHash);
+}
 
 /// <summary>The content of a tree, as the identity sync compares and confirms.</summary>
 /// <param name="Root">The tree this manifest describes.</param>

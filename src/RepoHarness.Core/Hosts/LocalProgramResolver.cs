@@ -197,8 +197,7 @@ public sealed class LocalProgramResolver(IHostPlatform platform, IFilePermission
         yield return full;
     }
 
-    private StringComparer PathComparer
-        => _platform.PathComparison == StringComparison.OrdinalIgnoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    private StringComparer PathComparer => _platform.PathComparer();
 
     /// <summary>Where a search looks, and the directories it was told to look in and cannot.</summary>
     /// <param name="Directories">The directories to look in, full, in the order given.</param>

@@ -424,6 +424,7 @@ public sealed class ActionFileParser(
         var outputs = (IReadOnlyList<string>)[];
         var persist = false;
         var manual = false;
+        var heavy = false;
         YamlNode? needsNode = null;
         YamlNode? inputsNode = null;
         var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -480,6 +481,10 @@ public sealed class ActionFileParser(
 
                 case "manual":
                     manual = ReadFlag(valueNode, "manual", problems);
+                    break;
+
+                case "heavy":
+                    heavy = ReadFlag(valueNode, "heavy", problems);
                     break;
 
                 // Read once the step's name is known, which a problem in either names.
@@ -571,7 +576,7 @@ public sealed class ActionFileParser(
 
         // A predefined action is performed by the harness, not started as a child process, so nothing
         // reads what only a run block reads: where it runs, its environment, its witness and bounds,
-        // its outputs and inputs of its own. Accepted silently, these would be a rule nobody applied:
+        // its outputs and inputs of its own, and whether its work is heavy. Accepted silently, these would be a rule nobody applied:
         // the file would read as though the action ran under them, and it never did.
         if (action != PredefinedAction.None)
         {
@@ -600,6 +605,7 @@ public sealed class ActionFileParser(
             Outputs = outputs,
             Persist = persist,
             Manual = manual,
+            Heavy = heavy,
             Needs = needs,
             Inputs = stepInputs,
         };

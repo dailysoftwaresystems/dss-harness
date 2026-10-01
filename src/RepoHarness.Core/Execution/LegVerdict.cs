@@ -24,7 +24,11 @@ public enum LegVerdict
 
     /// <summary>
     /// Files the tests read changed while they ran, so some tests saw the old files and some the
-    /// new. Measured: eight failures, all passing seconds later on the unchanged tree.
+    /// new. Measured: eight failures, all passing seconds later on the unchanged tree. For a leg on
+    /// another machine, also: a file its copy needed changed, or was removed, after the run read
+    /// the tree as it began and before the file was carried there - or went while the tree was
+    /// being read - so the copy could not be made the tree the run began with, and nothing of the
+    /// leg ran.
     /// </summary>
     InputsMoved,
 
@@ -58,7 +62,8 @@ public enum LegVerdict
 
     /// <summary>
     /// A heavy leg waited as long as its machine allows for a heavy-leg slot, or holding one for the memory in use to
-    /// fall below the machine's limit, and nothing of it ran. Never a failure of the code: the machine had no room.
+    /// fall below the machine's limit, or for room for its build beside what the other admitted legs claim, and nothing
+    /// of it ran. Never a failure of the code: the machine could not take it.
     /// </summary>
     NotAdmitted,
 

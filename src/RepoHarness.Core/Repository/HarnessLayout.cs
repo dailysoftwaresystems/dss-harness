@@ -67,6 +67,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// <summary>Name of the configuration file.</summary>
     public const string ConfigFileName = "config.json";
 
+    /// <summary>
+    /// Where the configuration is relative to a tree's root, with a forward slash: as a copy on another machine is given
+    /// it and its index names it, and as a message names it.
+    /// </summary>
+    public const string ConfigFileRelative = DirectoryName + "/" + ConfigFileName;
+
     /// <summary>Name of the run lock file.</summary>
     public const string LockFileName = "lock.json";
 

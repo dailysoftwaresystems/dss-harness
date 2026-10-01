@@ -4,6 +4,7 @@ using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -43,10 +44,7 @@ internal static class RunCommand
         Description = "Take a lock a run on another host holds. Always a human decision.",
     };
 
-    private static readonly Option<bool> UseStagedOption = new("--use-staged")
-    {
-        Description = "Run against what is already staged on each host, without syncing again.",
-    };
+    private static readonly Option<bool> UseStagedOption = DispatchOptions.UseStaged("Run against");
 
     private static readonly Option<string[]> InputOption = new(CommandLineInputs.Option)
     {
@@ -100,14 +98,18 @@ internal static class RunCommand
                 .ConfigureAwait(false);
 
             var runner = Resolve(harness.Config, runnerName);
-            SelectedSteps? file = null;
 
-            // Before a leg is placed or a host is measured, so that a mistyped action costs nothing
-            // and says so in the same terms 'legs' would have.
-            if (runner.Action is { Length: > 0 } action)
+            // The steps a run of a runner runs, where it runs an action: before a leg is placed or a host is
+            // measured, so that a mistyped action costs nothing and says so in the same terms 'legs' would have.
+            async Task<SelectedSteps?> StepsAsync(string name, RunnerConfig declared, IReadOnlyList<string> manual)
             {
+                if (declared.Action is not { Length: > 0 } action)
+                {
+                    return null;
+                }
+
                 ActionPath.RequireResolvable(
-                    [new KeyValuePair<string, string>(runnerName, action)],
+                    [new KeyValuePair<string, string>(name, action)],
                     harness.Layout.RunnerActionsDirectory,
                     context.Get<IFileSystem>(),
                     context.Get<IHostPlatform>().PathComparison);
@@ -124,9 +126,12 @@ internal static class RunCommand
                 // Which of its steps this run runs, decided here for the same reason: a manual step
                 // mistyped, or a runner naming a step the file lacks, is refused once, before any
                 // leg's run has begun. Everything below reads only the steps chosen.
-                file = StepSelection.For(runner, manualSteps).Apply(runnerName, read);
+                return StepSelection.For(declared, manual).Apply(name, read);
             }
-            else if (manualSteps.Count > 0)
+
+            var file = await StepsAsync(runnerName, runner, manualSteps).ConfigureAwait(false);
+
+            if (file is null && manualSteps.Count > 0)
             {
                 throw new HarnessException(
                     HarnessExit.UsageError,
@@ -154,6 +159,33 @@ internal static class RunCommand
             file?.File.RequireAStepOn(runnerName, reached);
             file?.RequireANamedStepOn(runnerName, reached);
 
+            // The runners its expected exceptions' run checks name, which run within its legs, each with the steps a run of
+            // it that names none runs: a heavy one among them makes the legs heavy, as this runner would. Read only to know
+            // that: one whose steps cannot be read counts heavy, said here, and is refused by the run check that runs it,
+            // as it always was, rather than refusing a run whose checks may never run.
+            var checks = new List<(RunnerConfig Runner, ActionFile? Action, bool Unread)>();
+
+            foreach (var check in runner.ExpectedExceptions
+                .SelectMany(entry => entry.RunChecks)
+                .Select(check => check.PredefinedRunner)
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var checkRunner = Resolve(harness.Config, check);
+
+                try
+                {
+                    checks.Add((checkRunner, (await StepsAsync(check, checkRunner, []).ConfigureAwait(false))?.File, false));
+                }
+                catch (HarnessException ex)
+                {
+                    context.Get<IHarnessOutput>().Warn(
+                        Name,
+                        $"run check '{check}' of runner '{runnerName}' could not be read to know how heavy it is, so its legs "
+                        + $"count as heavy: {ex.Message}");
+                    checks.Add((checkRunner, null, true));
+                }
+            }
+
             return await context.Get<LegRunService>()
                 .RunAsync(
                     Name,
@@ -170,10 +202,7 @@ internal static class RunCommand
                         // Built only where the runner requires it, and never tested: a host needs
                         // cmake for a runner that measures a build product, and not for one that
                         // only runs a script.
-                        Workload = LegWorkload.ForRunner(
-                            runner,
-                            file?.File,
-                            runner.ExpectedExceptions.SelectMany(entry => entry.RunChecks).Select(check => Resolve(harness.Config, check.PredefinedRunner))),
+                        Workload = LegWorkload.ForRunner(runner, file?.File, checks),
                     },
                     (work, token) => RunLegAsync(runners, builds, runnerName, inputs, manualSteps, work, token),
                     cancellationToken)
