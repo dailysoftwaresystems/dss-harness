@@ -70,9 +70,11 @@ public sealed class RunnerConfig
     /// <summary>
     /// Whether each leg of this runner is heavy - taking one of its machine's heavy-leg slots before it starts, where
     /// that machine declares admission - or <see langword="null"/> to be heavy only where it builds, as a runner that
-    /// requires the build is. Given false beside <see cref="RequireBuild"/> it is refused: its build is heavy.
+    /// requires the build is. Given false beside <see cref="RequireBuild"/> it is refused: its build is heavy. A step of
+    /// its action that a run runs and that says <c>heavy: true</c> makes its legs heavy whatever this says, false
+    /// included: the step's work is the step's to declare.
     /// </summary>
-    [Description("its legs take a heavy-leg slot ('help admission'); absent, only where it builds")]
+    [Description("its legs take a heavy-leg slot ('help admission'); absent, only where it builds or runs a step that says heavy")]
     public bool? Heavy { get; init; }
 
     /// <summary>

@@ -1,21 +1,25 @@
 using System.Globalization;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Execution;
 
-/// <summary>How a heavy leg's machine took it: how long it waited, and the memory in use when it was let start.</summary>
+/// <summary>
+/// How a heavy leg's machine took it: how long it waited, the memory in use when it was let start, and the room it
+/// claimed.
+/// </summary>
 /// <param name="Admitted">Whether it was let start; a leg that was not is <c>not-admitted</c>, and nothing of it ran.</param>
-/// <param name="WaitedSeconds">How long it waited, for a slot and then for the memory.</param>
+/// <param name="WaitedSeconds">How long it waited, for a slot, then for the memory, then for room for its build.</param>
 /// <param name="MemoryPercent">
-/// The memory in use it was let start at or, for a leg not let start while it held a slot, the reading it last waited
-/// on; absent where it waited for a slot, or the memory was never read.
+/// The memory in use it was let start at or, for a leg not let start while it held a slot, the reading it last took;
+/// absent where it waited for a slot, or the memory was never read.
 /// </param>
 /// <param name="Memory">The same reading as a line says it, with what it was counted from.</param>
 /// <param name="Unmeasured">
-/// Why the memory in use could not be read, where it could not: a leg let start on its slot alone, having never read it
-/// in its wait, or one not let start, having lost the count it had read.
+/// Why the memory in use could not be read, where it could not: a leg let start without it, having never read it in its
+/// wait, or one not let start, having lost the count it had read.
 /// </param>
 /// <param name="Holders">
 /// The legs that held the machine's slots, or claimed the room it needed, each as its line names it, where it was not
@@ -23,8 +27,9 @@ namespace RepoHarness.Core.Execution;
 /// </param>
 /// <param name="Record">The record of the machine's heavy legs it asked in: where to look at who holds and waits.</param>
 /// <param name="Room">
-/// The room it claimed as it was let start, as a line says it, or why that room could not be read; absent where its build
-/// needs nothing anyone said.
+/// The room it claimed as it was let start, as a line says it, or why that room could not be read; for a leg not let
+/// start for want of room, the room it last read. Absent where its build needs nothing anyone said, and for a leg not let
+/// start for any other reason.
 /// </param>
 public sealed record AdmissionFact(
     bool Admitted,
@@ -55,7 +60,7 @@ public sealed record AdmissionFact(
 
         return Memory is not null
             ? $"admitted {waited}, memory {Memory}{room}"
-            : $"admitted {waited} on its slot alone, the memory in use unread: {Unmeasured}{room}";
+            : $"admitted {waited} without the memory in use, which could not be read: {Unmeasured}{room}";
     }
 }
 
@@ -77,7 +82,7 @@ public sealed class Admission : IDisposable
     /// <summary>Why the leg was not let start, as its <c>not-admitted</c> line says it; <see langword="null"/> where it was.</summary>
     public string? Refusal { get; }
 
-    /// <summary>A leg let start, holding its slot until disposed.</summary>
+    /// <summary>A leg let start, holding its slot, and any room it claimed, until disposed.</summary>
     internal static Admission Taken(SlotPlace place, AdmissionFact fact)
         => fact.Admitted ? new(place, fact, null) : throw new ArgumentException("A leg taken is one let start.", nameof(fact));
 
@@ -85,7 +90,7 @@ public sealed class Admission : IDisposable
     internal static Admission Refused(AdmissionFact fact, string refusal)
         => fact.Admitted ? throw new ArgumentException("A leg refused is one not let start.", nameof(fact)) : new(null, fact, refusal);
 
-    /// <summary>Gives the leg's slot back, once its work has ended.</summary>
+    /// <summary>Gives the leg's slot, and the room it claimed, back, once its work has ended.</summary>
     public void Dispose() => _place?.Dispose();
 }
 
@@ -98,7 +103,10 @@ public sealed class Admission : IDisposable
 /// <param name="Tree">The tree it works in, on that host.</param>
 /// <param name="Variant">Its build variant, where it has one.</param>
 /// <param name="Progress">Says what the leg is doing now, under its own name.</param>
-/// <param name="Room">What its build needs of the machine's room, where something says; <see langword="null"/> where nothing does.</param>
+/// <param name="Room">
+/// What its build needs of the machine's room, where something says; <see langword="null"/> where nothing does, or where
+/// its build needs nothing more than its directory holds.
+/// </param>
 public sealed record AdmissionRequest(
     AdmissionRule Rule,
     string RunId,
@@ -108,7 +116,7 @@ public sealed record AdmissionRequest(
     string Tree,
     string? Variant,
     Action<string> Progress,
-    AdmissionRoom? Room = null);
+    RoomNeed? Room = null);
 
 /// <summary>
 /// Admits a heavy leg onto its machine before its work starts: first one of the machine's heavy-leg slots, in the order
@@ -120,9 +128,9 @@ public sealed record AdmissionRequest(
 /// </summary>
 /// <remarks>
 /// Asked by the DssHarness process on the machine the leg's work runs on - for a WSL leg, the one that dispatched it -
-/// which outlives that work: its slot is given back when the work ends and, should the process end first, is reclaimed
-/// the moment anyone looks. Waited with the monotonic clock, never the time of day, which a host this serves steps by 25
-/// seconds every few seconds.
+/// which outlives that work: its slot, and the room it claimed, are given back when the work ends and, should the
+/// process end first, are reclaimed by the next leg that looks at them. Waited with the monotonic clock, never the time
+/// of day, which a host this serves steps by 25 seconds every few seconds.
 /// </remarks>
 /// <param name="slots">The machine's heavy-leg slots.</param>
 /// <param name="gauge">Reads the memory in use.</param>
@@ -156,13 +164,14 @@ public sealed class LegAdmission(
     }
 
     /// <summary>
-    /// Waits until the machine takes the leg - a slot, then the memory - or until it has waited as long as the machine
-    /// allows. A leg taken holds its slot until the answer is disposed; one not taken has given its place back.
+    /// Waits until the machine takes the leg - a slot, then the memory, then room for its build where its need is known -
+    /// or until it has waited as long as the machine allows. A leg taken holds its slot, and the room it claimed, until
+    /// the answer is disposed; one not taken has given its place back.
     /// </summary>
     /// <param name="request">The leg, and what its machine admits by.</param>
     /// <param name="cancellationToken">Stops the wait, giving the leg's place back.</param>
     /// <exception cref="Results.HarnessException">
-    /// The machine's record of its slots could not be named, read or written.
+    /// The machine's record of its slots, or of the room its heavy legs claim, could not be named, read or written.
     /// </exception>
     public async Task<Admission> AdmitAsync(AdmissionRequest request, CancellationToken cancellationToken)
     {
@@ -171,7 +180,12 @@ public sealed class LegAdmission(
         var rule = request.Rule;
         var started = _clock.GetTimestamp();
         var place = _slots.Ask(request.RunId, request.Command, request.Leg, request.Host, request.Tree, request.Variant, rule.HeavyLegs);
-        var waitingForRoom = false;
+
+        // The room as this wait last read it, the legs claiming it as a line last named them, and whether it stopped being
+        // readable since.
+        RoomStanding? lastRoom = null;
+        IReadOnlyList<SlotEntry>? roomSaid = null;
+        var roomLost = false;
 
         try
         {
@@ -223,14 +237,17 @@ public sealed class LegAdmission(
 
                     if (last is null)
                     {
-                        // Never read in this wait: let start on its slot alone, and said on its line, as a leg placed where
-                        // its room could not be measured is. Refused instead, a machine whose count cannot be read would
-                        // never take a heavy leg.
+                        // Never read in this wait: let start without it - on its slot, and its room where its build's need
+                        // is known, for which it may still wait - and said on its line, as a leg placed where its room could
+                        // not be measured is. Refused instead, a machine whose count cannot be read would never take a heavy
+                        // leg.
                         if (TakeWithRoom(new AdmissionFact(true, Seconds(started), Unmeasured: why, Record: _slots.Location), null) is { } taken)
                         {
                             return taken;
                         }
 
+                        // Waited for room: the memory is read, and settled, again before the leg starts.
+                        settled = false;
                         await _wait(Waits.Shorter(rule.Poll, Left(started, rule)), cancellationToken).ConfigureAwait(false);
                         continue;
                     }
@@ -276,6 +293,9 @@ public sealed class LegAdmission(
                             return taken;
                         }
 
+                        // Waited for room: another leg may have started meanwhile, so the memory is settled again before
+                        // this one starts on a reading.
+                        settled = false;
                         await _wait(Waits.Shorter(rule.Poll, Left(started, rule)), cancellationToken).ConfigureAwait(false);
                         continue;
                     }
@@ -305,7 +325,7 @@ public sealed class LegAdmission(
                         null,
                         everBelow
                             ? $"not admitted after {Waited(started)}: it held a heavy-leg slot, and the memory fell below {Limit(rule)} "
-                                + $"only to rise above it again within a settle; it last read {reading.Describe()}"
+                                + $"only to rise above it again before the leg could start; it last read {reading.Describe()}"
                             : $"not admitted after {Waited(started)}: it held a heavy-leg slot, and the memory {reading.Describe()} "
                                 + $"never fell below {Limit(rule)}");
                 }
@@ -323,7 +343,8 @@ public sealed class LegAdmission(
         // The leg taken with the room its build needs claimed, where it fits beside every other admitted leg's claim on
         // that filesystem - claimed as it is taken, so two legs let start together never both take the one room left - or
         // not taken: null where it waits for room and looks again, or the leg refused once it has waited as long as the
-        // machine allows.
+        // machine allows. A room never read in this wait lets the leg start, claimed against every filesystem; one read
+        // before and not now decides nothing, as a memory reading lost does not.
         Admission? TakeWithRoom(AdmissionFact fact, MemoryReading? reading)
         {
             if (request.Room is not { } room)
@@ -331,17 +352,52 @@ public sealed class LegAdmission(
                 return Take(request, place, fact);
             }
 
-            var claim = _slots.Claim(place, room);
+            var claim = _slots.Claim(place, room, takeUnread: lastRoom is null);
 
             if (claim.Fits)
             {
-                return Take(request, place, fact with { Room = claim.Disk is null ? $"unread: {claim.Unmeasured}" : Claimed(room, claim) });
+                return Take(
+                    request,
+                    place,
+                    fact with
+                    {
+                        Room = claim.Disk is null
+                            ? $"unread, so ~{DiskSpace.Size(room.Bytes)} is claimed against every filesystem here: {claim.Unmeasured}"
+                            : Claimed(room, claim),
+                    });
             }
 
-            if (!waitingForRoom)
+            if (claim.Disk is null)
+            {
+                var read = lastRoom!.Describe(room);
+
+                if (!roomLost)
+                {
+                    request.Progress($"holds a heavy-leg slot, and could not read the room again: {claim.Unmeasured}; it last read {read}");
+                    roomLost = true;
+                }
+
+                return Left(started, rule) > TimeSpan.Zero
+                    ? null
+                    : Refuse(
+                        place,
+                        started,
+                        reading,
+                        null,
+                        $"not admitted after {Waited(started)}: it held a heavy-leg slot, and the room, last read as {read}, could "
+                            + $"not be read again: {claim.Unmeasured}",
+                        claimants: lastRoom.Claimants,
+                        record: _slots.RoomLocation,
+                        room: read);
+            }
+
+            (lastRoom, roomLost) = (claim, false);
+
+            // Said again whenever the legs claiming it change, as the legs holding the slots are.
+            if (roomSaid is null || !roomSaid.SequenceEqual(claim.Claimants))
             {
                 request.Progress($"holds a heavy-leg slot, and waits for room: {claim.Describe(room)}");
-                waitingForRoom = true;
+                roomSaid = claim.Claimants;
             }
 
             return Left(started, rule) > TimeSpan.Zero
@@ -351,14 +407,19 @@ public sealed class LegAdmission(
                     started,
                     reading,
                     null,
-                    $"not admitted after {Waited(started)}: it held a heavy-leg slot, and {claim.Describe(room)}; the room each "
-                        + $"heavy leg claims is recorded in '{_slots.RoomLocation}'",
-                    claimants: claim.Claimants);
+                    $"not admitted after {Waited(started)}: it held a heavy-leg slot, and its build would not fit: "
+                        + $"{claim.Describe(room)}; the room each heavy leg claims is recorded in '{_slots.RoomLocation}'",
+                    claimants: claim.Claimants,
+                    record: _slots.RoomLocation,
+                    room: claim.Describe(room));
         }
     }
 
-    /// <summary>The room a leg claimed as it was let start, as its line says it: <c>~31 GiB of 40 GiB free on '/'</c>.</summary>
-    private static string Claimed(AdmissionRoom room, RoomStanding claim)
+    /// <summary>
+    /// The room a leg claimed as it was let start, as its line says it: <c>~31 GiB of 40 GiB free on '/'</c>, with what the
+    /// other legs claim there where they claim any.
+    /// </summary>
+    private static string Claimed(RoomNeed room, RoomStanding claim)
     {
         var disk = claim.Disk!;
         var beside = claim.Claimed > 0 ? $", beside ~{DiskSpace.Size(claim.Claimed)} other legs claim" : string.Empty;
@@ -373,6 +434,10 @@ public sealed class LegAdmission(
         return Admission.Taken(place, fact);
     }
 
+    /// <summary>
+    /// A leg not let start, its place given back, its line naming what held it: the slots' holders and their record, or the
+    /// room, the legs claiming it and the room's record.
+    /// </summary>
     private Admission Refuse(
         SlotPlace place,
         long started,
@@ -380,7 +445,9 @@ public sealed class LegAdmission(
         SlotStanding? standing,
         string refusal,
         string? unmeasured = null,
-        IReadOnlyList<SlotEntry>? claimants = null)
+        IReadOnlyList<SlotEntry>? claimants = null,
+        string? record = null,
+        string? room = null)
     {
         place.Dispose();
 
@@ -394,7 +461,8 @@ public sealed class LegAdmission(
                 reading?.Describe(),
                 unmeasured,
                 holders is null ? null : [.. holders.Select(holder => holder.Describe())],
-                _slots.Location),
+                record ?? _slots.Location,
+                room),
             refusal);
     }
 

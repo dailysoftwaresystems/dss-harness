@@ -1,4 +1,5 @@
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -40,40 +41,40 @@ public sealed record SlotEntry(
 
 /// <summary>A heavy leg's claim on the room of one filesystem of its machine, held while its work runs.</summary>
 /// <param name="Holder">The leg, as its slot's entry names it: whose process holds the claim, and gives it back.</param>
-/// <param name="Filesystem">The filesystem its build fills, as this machine names it.</param>
-/// <param name="Bytes">What its build still needed there as it was admitted.</param>
-public sealed record RoomClaim(SlotEntry Holder, string Filesystem, long Bytes);
-
-/// <summary>What a heavy leg's build needs of its machine's room, as its admission asks for it.</summary>
-/// <param name="Bytes">What it still needs.</param>
-/// <param name="Source">What said how much, as a line says it.</param>
-/// <param name="At">
-/// A path of this machine on the filesystem the build fills: its build directory, or for a WSL distribution's leg the
-/// drive where WSL keeps the distribution's disk.
+/// <param name="Bytes">What its build still needed there as it was placed, claimed whole as it was let start.</param>
+/// <param name="Filesystem">
+/// The filesystem its build fills, as this machine names it; <see langword="null"/> where its room could not be read as it
+/// was let start, which counts against every filesystem of the machine, since nothing says which one it fills. Left out
+/// of the record where it is, so read back as it was written.
 /// </param>
-/// <param name="Where">How a line names that room beyond its filesystem: empty, or <c>, where WSL keeps its disk</c>.</param>
-public sealed record AdmissionRoom(long Bytes, string Source, string At, string Where);
+public sealed record RoomClaim(SlotEntry Holder, long Bytes, string? Filesystem = null);
 
-/// <summary>Whether a leg's claim on its machine's room fits beside what the other legs there claim, and claimed where it does.</summary>
-/// <param name="Fits">Whether it fits, and was claimed; true too where the room could not be read.</param>
+/// <summary>Whether a leg's claim on its machine's room was taken, and what was there.</summary>
+/// <param name="Fits">
+/// Whether the leg may start: its need fitted and was claimed, or its room could not be read and was claimed against
+/// every filesystem of the machine.
+/// </param>
 /// <param name="Disk">The room as it was read, or <see langword="null"/> where it could not be.</param>
-/// <param name="Claimed">What the other legs admitted there claim.</param>
+/// <param name="Claimed">What the other legs admitted onto that room claim.</param>
 /// <param name="Claimants">The legs claiming it, each as its slot's entry names it.</param>
 /// <param name="Unmeasured">Why the room could not be read, where it could not.</param>
 internal sealed record RoomStanding(bool Fits, DiskSpace? Disk, long Claimed, IReadOnlyList<SlotEntry> Claimants, string? Unmeasured)
 {
     /// <summary>
-    /// The room as a line says it of <paramref name="room"/>: <c>'/' has 40 GiB free, ~12 GiB of it claimed by ..., and
+    /// The room as a line says it of <paramref name="room"/>: <c>40 GiB free on '/', beside ~12 GiB claimed by ..., and
     /// this leg needs ~31 GiB, as its buildSpaceGiB, 31, declares</c>.
     /// </summary>
-    public string Describe(AdmissionRoom room)
+    /// <exception cref="InvalidOperationException">The room was not read.</exception>
+    public string Describe(RoomNeed room)
     {
+        ArgumentNullException.ThrowIfNull(room);
+
         var disk = Disk ?? throw new InvalidOperationException("A room that was not read says nothing of what it holds.");
         var beside = Claimants.Count == 0
             ? string.Empty
-            : $", ~{DiskSpace.Size(Claimed)} of it claimed by {string.Join("; ", Claimants.Select(claimant => claimant.Describe()))}";
+            : $", beside ~{DiskSpace.Size(Claimed)} claimed by {string.Join("; ", Claimants.Select(claimant => claimant.Describe()))}";
 
-        return $"'{disk.Filesystem}'{room.Where} has {DiskSpace.Size(disk.FreeBytes)} free{beside}, and this leg needs "
+        return $"{DiskSpace.Size(disk.FreeBytes)} free on '{disk.Filesystem}'{room.Where}{beside}, and this leg needs "
             + $"~{DiskSpace.Size(room.Bytes)}, {room.Source}";
     }
 }
@@ -120,16 +121,17 @@ internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holde
 /// the run lock's entries, which may name another machine.
 /// </para>
 /// <para>
-/// Beside the slots, the room each admitted leg's build still needed as it was let start, by the filesystem it fills: a
-/// command counts the room its own legs need as it places them, and two commands each placing one leg on one host both
-/// found it room and filled its disk between them. Kept in a record of its own beside the slots', which a build from
-/// before it never reads: one that found a member it does not know in the slots' would refuse them.
+/// Beside the slots, the room each admitted leg's build still needed as it was placed, by the filesystem it fills, claimed
+/// whole as it was let start and held, like its slot, until its work ends: a command counts the room its own legs need as
+/// it places them, and two commands each placing one leg on one host both found it room and filled its disk between them.
+/// Kept in a record of its own beside the slots', which a build from before it never reads: one that found a member it
+/// does not know in the slots' record would refuse that record.
 /// </para>
 /// </remarks>
 /// <param name="fileSystem">Reads and writes the record.</param>
 /// <param name="output">Says what was reclaimed, and what could not be given back.</param>
 /// <param name="identity">This process, and how the liveness of another is told.</param>
-/// <param name="path">Names the record, asked the first time a leg asks for a slot.</param>
+/// <param name="path">Names the slots' record, asked the first time a leg asks for a slot; the room's is named beside it.</param>
 public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity, Func<string> path)
 {
     /// <summary>The command name this reports under.</summary>
@@ -141,13 +143,16 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
     private const string RoomSubject = "The record of the room the heavy legs admitted onto this machine claim";
 
-    private const string RoomConsequence = "Until it can be, no heavy leg whose build needs room is admitted onto this machine.";
+    private const string RoomConsequence = "Until it can be, no heavy leg whose build's need is known is admitted onto this machine.";
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
     private readonly IProcessIdentity _identity = identity;
     private readonly Lazy<MachineWideList<SlotEntry>> _record = new(() => Record<SlotEntry>(fileSystem, path, Subject, Consequence));
-    private readonly Lazy<MachineWideList<RoomClaim>> _claims = new(() => Record<RoomClaim>(fileSystem, () => RoomPathFor(path()), RoomSubject, RoomConsequence));
+
+    // Named beside the slots' record as that was named, never by naming it again: where the machine is told only by its
+    // name, naming it again says so a second time.
+    private Lazy<MachineWideList<RoomClaim>>? _claims;
 
     /// <summary>Slots kept in the record at <paramref name="path"/>.</summary>
     /// <param name="fileSystem">Reads and writes the record.</param>
@@ -158,6 +163,8 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
         : this(fileSystem, output, identity, () => path)
     {
     }
+
+
 
     /// <summary>
     /// The record of <paramref name="platform"/>'s machine, for the user running this process. Where the machine can be
@@ -192,17 +199,18 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     /// <param name="slots">The slots' record.</param>
     public static string RoomPathFor(string slots) => Path.ChangeExtension(slots, ".room.json");
 
-    /// <summary>The record, as a refusal names it for whoever must look at what it holds.</summary>
+    /// <summary>The slots' record, as a refusal names it for whoever must look at what it holds.</summary>
     /// <exception cref="HarnessException">No directory of this user's own could be named to keep it in.</exception>
     public string Location => File.Path;
 
-    /// <summary>The record of the room admitted legs claim, as a refusal names it.</summary>
+    /// <summary>The record of the room admitted legs claim, beside the slots', as a refusal names it.</summary>
     /// <exception cref="HarnessException">No directory of this user's own could be named to keep it in.</exception>
     public string RoomLocation => Claims.Path;
 
     private MachineWideList<SlotEntry> File => _record.Value;
 
-    private MachineWideList<RoomClaim> Claims => _claims.Value;
+    private MachineWideList<RoomClaim> Claims
+        => (_claims ??= new(() => Record<RoomClaim>(_fileSystem, () => RoomPathFor(File.Path), RoomSubject, RoomConsequence))).Value;
 
     /// <summary>
     /// Records a leg as asking for a slot, last in line, and returns its place; given back when the place is disposed.
@@ -264,56 +272,71 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
     /// <summary>
     /// Claims the room <paramref name="room"/> needs for the leg holding <paramref name="place"/>, where it fits beside what
-    /// the other legs admitted onto this machine claim on the same filesystem; where it does not, claims nothing and says
-    /// what is there. Read as it is claimed, under the record's lock, so two legs never both claim the one room left.
+    /// the other legs admitted onto this machine claim on the same filesystem; where it does not, claims nothing, and
+    /// returns what is there. The other claims are read, and this one written, under the room record's lock, so two legs
+    /// never both claim the one room left; the free room is read just before.
     /// </summary>
     /// <param name="place">The place of a leg holding a slot, not given back.</param>
     /// <param name="room">What its build needs.</param>
+    /// <param name="takeUnread">
+    /// Whether a room that cannot be read lets the leg start: true where this wait has read nothing of it, so a machine
+    /// whose room never reads still takes the leg; false where it read the room before, and decides nothing on a reading
+    /// that old.
+    /// </param>
     /// <exception cref="ObjectDisposedException">The place was given back.</exception>
     /// <exception cref="HarnessException">The record could not be named, read or written.</exception>
     /// <remarks>
     /// The other legs' claims are counted whole, though their builds may have written some of it already, which the room
-    /// read now shows gone: a leg waits a little longer than it had to, rather than starting into a disk it fills. Where the
-    /// room cannot be read at all, the leg is let start without it, saying so, as one placed where it was unmeasured is.
+    /// read now shows gone, and they are held until those legs' work ends, tests included: a leg can wait for that, and
+    /// be not-admitted where that is longer than its machine allows, rather than start into a disk it fills. A room that
+    /// cannot be read, taken, is claimed against every filesystem of the machine, since nothing says which one it fills.
     /// </remarks>
-    internal RoomStanding Claim(SlotPlace place, AdmissionRoom room)
+    internal RoomStanding Claim(SlotPlace place, RoomNeed room, bool takeUnread)
     {
         ArgumentNullException.ThrowIfNull(place);
         ArgumentNullException.ThrowIfNull(room);
         ObjectDisposedException.ThrowIf(place.Left, place);
 
-        DiskSpace disk;
+        var (disk, unmeasured) = room.At is { } at
+            ? DiskSpace.Measure(_fileSystem, at)
+            : (null, room.Unmeasured ?? "it was not measured as the leg was placed");
 
-        try
-        {
-            disk = _fileSystem.SpaceAt(room.At);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Nothing claimed, so nothing to give back: the leg is let start on its slot and memory alone, saying why.
-            return new RoomStanding(true, null, 0, [], ex.Message);
-        }
-
-        var standing = Claims.Update((entries, afterwards) =>
+        return Claims.Update((entries, afterwards) =>
         {
             var live = Live(entries, claim => claim.Holder, "a claim on this machine's room", afterwards);
-            var others = live
-                .Where(claim => claim.Holder != place.Entry && string.Equals(claim.Filesystem, disk.Filesystem, StringComparison.Ordinal))
+
+            // At most one claim per leg: one of its own already there is replaced, never added to.
+            List<RoomClaim> kept = [.. live.Where(claim => claim.Holder != place.Entry)];
+
+            if (disk is null)
+            {
+                if (!takeUnread)
+                {
+                    return (kept.SequenceEqual(entries) ? null : kept, new RoomStanding(false, null, 0, [], unmeasured));
+                }
+
+                // Set as the claim is decided, so a line said after the record is let go that fails never leaves a
+                // claim this process does not give back.
+                place.Claimed = true;
+
+                return (
+                    [.. kept, new RoomClaim(place.Entry, room.Bytes)],
+                    new RoomStanding(true, null, 0, [], unmeasured));
+            }
+
+            var others = kept
+                .Where(claim => claim.Filesystem is null || string.Equals(claim.Filesystem, disk.Filesystem, StringComparison.Ordinal))
                 .ToList();
             var claimed = others.Sum(claim => claim.Bytes);
             var fits = disk.FreeBytes - claimed >= room.Bytes;
 
-            // A claim this leg made before - a record removed by hand while it waited - is made again, never twice.
-            List<RoomClaim> kept = [.. live.Where(claim => claim.Holder != place.Entry)];
-            List<RoomClaim> written = fits ? [.. kept, new RoomClaim(place.Entry, disk.Filesystem, room.Bytes)] : kept;
+            List<RoomClaim> written = fits ? [.. kept, new RoomClaim(place.Entry, room.Bytes, disk.Filesystem)] : kept;
+            place.Claimed |= fits;
 
             return (
                 written.SequenceEqual(entries) ? null : written,
                 new RoomStanding(fits, disk, claimed, [.. others.Select(claim => claim.Holder)], null));
         });
-
-        place.Claimed |= standing.Fits;
-        return standing;
     }
 
     /// <summary>
@@ -408,7 +431,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
     }
 }
 
-/// <summary>A leg's place among the heavy legs asking its machine for a slot, given back when disposed.</summary>
+/// <summary>A leg's place among the heavy legs asking its machine for a slot, given back - with any room it claimed - when disposed.</summary>
 public sealed class SlotPlace : IDisposable
 {
     private readonly HeavyLegSlots _slots;

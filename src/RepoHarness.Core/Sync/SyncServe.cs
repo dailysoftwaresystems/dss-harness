@@ -22,10 +22,16 @@ public static class SyncServe
     /// <summary>Reports what the copy holds, as a manifest.</summary>
     public const string Manifest = "manifest";
 
-    /// <summary>Reports whether the copy's root exists, and whether the harness created it.</summary>
+    /// <summary>
+    /// Reports whether the copy's root exists, whether the harness created it and whether its last sync finished, and
+    /// what configuration it holds.
+    /// </summary>
     public const string Inspect = "inspect";
 
-    /// <summary>Creates the copy's root, with its parents, and marks it as the harness's.</summary>
+    /// <summary>
+    /// Creates the copy's root, with its parents, and marks it as the harness's: complete, a takeover begun, or a sync
+    /// begun. Marking a copy already there keeps how it came to be.
+    /// </summary>
     public const string Create = "create";
 
     /// <summary>Makes the copy a git repository, which the harness there needs to find anything.</summary>
@@ -41,10 +47,10 @@ public static class SyncServe
     /// <para>
     /// A mark that is spelled and is not one of those a copy can carry is refused rather than
     /// read as complete. <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/> answers yes to
-    /// any number, so <c>"7"</c> and <c>"0"</c> both parse, and both would be written down as a
-    /// copy that was taken over and finished. It means the two ends are different builds, which the
-    /// version check should already have refused — the same reason an unknown operation is named
-    /// rather than passed over.
+    /// any number, so <c>"7"</c> and <c>"0"</c> both parse - to no member, and to None - and writing
+    /// either down would fail as a defect in this tool rather than name the cause. It means the two
+    /// ends are different builds, which the version check should already have refused — the same
+    /// reason an unknown operation is named rather than passed over.
     /// </para>
     /// </remarks>
     public static CopyMark MarkIn(IReadOnlyList<string> arguments)
@@ -62,7 +68,8 @@ public static class SyncServe
                 : throw new HarnessException(
                     HarnessExit.UsageError,
                     $"'{arguments[1]}' is not a mark this build can record, so how '{arguments[0]}' "
-                    + "came to be would be written down wrong. The two ends are different builds.");
+                    + "came to be, or whether its last sync finished, would be written down wrong. The two ends are "
+                    + "different builds.");
     }
 
     /// <summary>Writes one file into the copy.</summary>
@@ -408,15 +415,19 @@ public enum CopyOrigin
 /// <summary>What the far side's root looks like.</summary>
 /// <param name="Exists">Whether the root directory is there.</param>
 /// <param name="Mark">What the harness has recorded about it.</param>
-public sealed record SyncInspectAnswer(bool Exists, CopyMark Mark);
+/// <param name="Configuration">
+/// What the configuration the copy holds is, by content, so a sync knows whether placing its own changes the copy;
+/// <see langword="null"/> where it holds none, or one that cannot be read.
+/// </param>
+public sealed record SyncInspectAnswer(bool Exists, CopyMark Mark, string? Configuration = null);
 
-/// <summary>What a copy's marker says about how it came to be.</summary>
+/// <summary>What a copy's marker says about how it came to be, and whether the last sync of it finished.</summary>
 public enum CopyMark
 {
     /// <summary>There is no marker: whatever is there, this tool did not make it.</summary>
     None,
 
-    /// <summary>A copy this tool made, and finished making.</summary>
+    /// <summary>A copy this tool made, or finished taking over, whose last sync finished.</summary>
     Complete,
 
     /// <summary>
@@ -427,9 +438,10 @@ public enum CopyMark
     AdoptionStopped,
 
     /// <summary>
-    /// A copy this tool made, which a sync began writing and did not finish: part of the tree that sync
-    /// was given and part of the one before, which no run began with. Still this tool's own, which the
-    /// next sync puts right; nothing a run on what is staged tests, nor a carry writes into, until then.
+    /// A copy this tool made or took over, which a sync began writing and has not finished - stopped,
+    /// or still writing: part of the tree that sync was given and part of the one before, which no run
+    /// began with. Still this tool's own, which the next sync puts right; until then a run on what is
+    /// staged makes its legs inputs-moved, and a carry writes nothing into it.
     /// </summary>
     Unfinished,
 }

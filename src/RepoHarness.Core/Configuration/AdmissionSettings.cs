@@ -3,9 +3,10 @@ namespace RepoHarness.Core.Configuration;
 /// <summary>
 /// How heavy legs are admitted onto one physical machine: at most <see cref="HeavyLegs"/> at once across every
 /// DssHarness this user runs there, each started only once the machine's memory in use is below
-/// <see cref="MaxMemoryPercent"/>. Declared under <c>defaults</c>, or under a host that is a machine of its own - this
-/// one, or an ssh host - whose fields replace the defaults' one by one. A machine where neither declares one admits
-/// every leg at once.
+/// <see cref="MaxMemoryPercent"/> and, where its build's need is known, only where that need fits beside the room the
+/// other admitted legs claim. Declared under <c>defaults</c>, or under a host that is a machine of its own - this one, or
+/// an ssh host - whose fields replace the defaults' one by one. A machine where neither declares one admits every leg at
+/// once.
 /// </summary>
 /// <remarks>
 /// For a machine that several separate commands build on at once - worktrees each running a gate of their own -
@@ -32,7 +33,7 @@ public sealed class AdmissionSettings
     /// <summary>The seconds a settle lasts when a section says nothing: at least the first, at most the second.</summary>
     public static IReadOnlyList<int> DefaultSettleSeconds { get; } = [DefaultSettleLeastSeconds, DefaultSettleMostSeconds];
 
-    /// <summary>Seconds between looks at the slots and the memory when a section says nothing.</summary>
+    /// <summary>Seconds between looks at the slots, the memory and the room when a section says nothing.</summary>
     public const int DefaultPollSeconds = 30;
 
     /// <summary>Minutes a leg waits to be admitted, when a section says nothing, before it is not.</summary>
@@ -65,12 +66,13 @@ public sealed class AdmissionSettings
     /// </summary>
     public List<int>? SettleSeconds { get; init; }
 
-    /// <summary>Seconds between looks at the slots and at the memory while a leg waits, at least one.</summary>
+    /// <summary>Seconds between looks at the slots, the memory and the room while a leg waits, at least one.</summary>
     public int? PollSeconds { get; init; }
 
     /// <summary>
-    /// Minutes a leg waits, for a slot and then for the memory, before it is reported <c>not-admitted</c>, naming what
-    /// held the slots, or the memory in use it waited on, and nothing of it runs.
+    /// Minutes a leg waits - for a slot, then the memory, then room for its build where its need is known - before it is
+    /// reported <c>not-admitted</c>, naming what held the slots, the memory in use it waited on, or the room and the legs
+    /// that claimed it, and nothing of it runs.
     /// </summary>
     public double? MaxWaitMinutes { get; init; }
 

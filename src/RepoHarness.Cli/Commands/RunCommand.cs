@@ -4,6 +4,7 @@ using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -159,8 +160,10 @@ internal static class RunCommand
             file?.RequireANamedStepOn(runnerName, reached);
 
             // The runners its expected exceptions' run checks name, which run within its legs, each with the steps a run of
-            // it that names none runs: a heavy one among them makes the legs heavy, as this runner would.
-            var checks = new List<(RunnerConfig Runner, ActionFile? Action)>();
+            // it that names none runs: a heavy one among them makes the legs heavy, as this runner would. Read only to know
+            // that: one whose steps cannot be read counts heavy, said here, and is refused by the run check that runs it,
+            // as it always was, rather than refusing a run whose checks may never run.
+            var checks = new List<(RunnerConfig Runner, ActionFile? Action, bool Unread)>();
 
             foreach (var check in runner.ExpectedExceptions
                 .SelectMany(entry => entry.RunChecks)
@@ -169,7 +172,18 @@ internal static class RunCommand
             {
                 var checkRunner = Resolve(harness.Config, check);
 
-                checks.Add((checkRunner, (await StepsAsync(check, checkRunner, []).ConfigureAwait(false))?.File));
+                try
+                {
+                    checks.Add((checkRunner, (await StepsAsync(check, checkRunner, []).ConfigureAwait(false))?.File, false));
+                }
+                catch (HarnessException ex)
+                {
+                    context.Get<IHarnessOutput>().Warn(
+                        Name,
+                        $"run check '{check}' of runner '{runnerName}' could not be read to know how heavy it is, so its legs "
+                        + $"count as heavy: {ex.Message}");
+                    checks.Add((checkRunner, null, true));
+                }
             }
 
             return await context.Get<LegRunService>()

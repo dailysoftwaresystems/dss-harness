@@ -148,7 +148,7 @@ internal enum CopyState
     /// <summary>This sync made it, so there was nothing in it to lose.</summary>
     Created,
 
-    /// <summary>The harness made it on some earlier run, and it carries its marker.</summary>
+    /// <summary>The harness made it on some earlier run, and its marker says complete.</summary>
     Harness,
 
     /// <summary>It exists, the harness did not make it, and what it holds is nobody here's to assume about.</summary>
@@ -162,8 +162,8 @@ internal enum CopyState
     Interrupted,
 
     /// <summary>
-    /// The harness made it, and a sync of it began and did not finish: its own, which this sync puts
-    /// right, and nothing a carry writes into until one has.
+    /// The harness made or took it over, and a sync of it began and has not finished: its own, which
+    /// this sync puts right, and nothing a carry writes into until one has.
     /// </summary>
     Unfinished,
 }
@@ -411,12 +411,12 @@ public sealed class SyncService(
         {
             return CommandOutcome.Failed(
                 HarnessExit.Refused,
-                $"{unreachable.Count} of {hosts.Count} host(s) hold no copy this harness made, so "
+                $"{unreachable.Count} of {hosts.Count} host(s) hold no finished copy this harness made, so "
                 + $"run '{options.Artifact}' was carried nowhere. A carry writes an existing copy's "
-                + "own files and nothing else: it creates no directory and takes none over, because "
-                + "a repositoryPath that is a typo would otherwise be filled in rather than "
-                + $"noticed. Run '{ToolPackage.Command} sync' first, adding '--adopt \"<host>\"' where a "
-                + "directory is already there. Nothing was changed.",
+                + "own files and nothing else: it creates no directory, takes none over and finishes none a "
+                + "sync left part made, because a repositoryPath that is a typo would otherwise be filled in "
+                + $"rather than noticed. Run '{ToolPackage.Command} sync' first, adding '--adopt \"<host>\"' only "
+                + "where a directory the harness did not make is already there. Nothing was changed.",
                 unreachable);
         }
 
@@ -624,7 +624,7 @@ public sealed class SyncService(
             }
         }
 
-        var state = await PrepareCopyAsync(transport, destinationRoot, options.DryRun, cancellationToken)
+        var (state, placedConfiguration) = await PrepareCopyAsync(transport, destinationRoot, options.DryRun, cancellationToken)
             .ConfigureAwait(false);
 
         var created = state == CopyState.Created;
@@ -722,13 +722,18 @@ public sealed class SyncService(
                 .ConfigureAwait(false);
         }
 
-        // Marked as begun before the first write, and as finished only once the copy is verified, as a takeover is: a sync
-        // that stops part way - a tree that moved, a connection that dropped - leaves part of one tree and part of another,
-        // which a run on what is staged, or a carry, would otherwise take for a copy this tool finished. A copy this sync
-        // created was marked so as it was created; an adoption is marked as one.
+        // Marked as begun before the first write or deletion, and as finished only once the copy is verified, as a takeover
+        // is: a sync that stops part way - a tree that moved, a connection that dropped - leaves part of one tree and part
+        // of another, which a run on what is staged, or a carry, would otherwise take for a copy this tool finished. A copy
+        // this sync created was marked so as it was created, one an earlier sync left unfinished still is, and an adoption
+        // is marked as one.
         var unfinished = state is CopyState.Created or CopyState.Unfinished;
 
-        if (!adopting && !unfinished && !plan.IsUpToDate)
+        // Changed by anything this sync writes into it: a file the plan carries or deletes, or a configuration other than
+        // the one it holds, which is placed beside the files and is as much the tree.
+        var changes = !plan.IsUpToDate || placedConfiguration != FileContent.Of(source.Configuration).Content;
+
+        if (!adopting && !unfinished && changes)
         {
             await transport.CreateRootAsync(destinationRoot, CopyMark.Unfinished, cancellationToken).ConfigureAwait(false);
             unfinished = true;
@@ -740,7 +745,8 @@ public sealed class SyncService(
         await ApplyAsync(source.Files.Root, transport, destinationRoot, plan, cancellationToken).ConfigureAwait(false);
 
         // The copy is a git repository because the harness there finds everything through git. Done
-        // after the transfer, so a copy that failed part way is not left looking complete.
+        // after the transfer, so a copy that failed part way is not left looking complete - and no copy
+        // is marked complete before it is verified, below.
         await transport.InitialiseRepositoryAsync(destinationRoot, cancellationToken).ConfigureAwait(false);
 
         await PlaceConfigurationAsync(source, transport, destinationRoot, cancellationToken).ConfigureAwait(false);
@@ -1193,15 +1199,9 @@ public sealed class SyncService(
 
             var why = !found.Exists
                 ? "is not there"
-                : StateOf(found.Mark) switch
-                {
-                    CopyState.Harness => null,
-                    CopyState.Interrupted => "was being taken over and the run stopped before it "
-                        + "finished, so it is neither the checkout it was nor a copy of this tree",
-                    CopyState.Unfinished => "was being synced and the sync stopped before it finished, so it "
-                        + "holds part of one tree and part of another: sync it, then carry",
-                    _ => "exists and the harness did not create it",
-                };
+                : PartMade(found.Mark) is { } partMade
+                    ? found.Mark == CopyMark.Unfinished ? $"{partMade}: sync it, then carry" : partMade
+                    : StateOf(found.Mark) == CopyState.Harness ? null : "exists and the harness did not create it";
 
             if (why is not null)
             {
@@ -1216,7 +1216,7 @@ public sealed class SyncService(
     /// Makes sure there is a copy to write into, and that it is one the harness made.
     /// </summary>
     /// <returns>What was found there.</returns>
-    private async Task<CopyState> PrepareCopyAsync(
+    private async Task<(CopyState State, string? Configuration)> PrepareCopyAsync(
         ISyncTransport transport,
         string destinationRoot,
         bool dryRun,
@@ -1233,7 +1233,7 @@ public sealed class SyncService(
             if (dryRun)
             {
                 _output.Info(CommandName, $"{transport.Host}: would create '{destinationRoot}'");
-                return CopyState.Created;
+                return (CopyState.Created, null);
             }
 
             // Marked as a sync that has begun, and as finished once the copy is verified: a first sync that stops part way
@@ -1241,11 +1241,25 @@ public sealed class SyncService(
             _output.Info(CommandName, $"{transport.Host}: creating '{destinationRoot}'");
             await transport.CreateRootAsync(destinationRoot, CopyMark.Unfinished, cancellationToken).ConfigureAwait(false);
 
-            return CopyState.Created;
+            return (CopyState.Created, null);
         }
 
-        return StateOf(found.Mark);
+        return (StateOf(found.Mark), found.Configuration);
     }
+
+    /// <summary>
+    /// Why a copy whose marker says <paramref name="mark"/> holds no tree a run began with - a takeover or a sync of it began
+    /// and did not finish - or <see langword="null"/> where it may hold one. One answer for a carry, which writes into no
+    /// such copy, and for a run on what is staged, which tests none.
+    /// </summary>
+    /// <param name="mark">What the copy's marker says.</param>
+    internal static string? PartMade(CopyMark mark) => mark switch
+    {
+        CopyMark.AdoptionStopped => "was being taken over and the run stopped before it finished, so it is neither the "
+            + "checkout it was nor a copy of this tree",
+        CopyMark.Unfinished => "is a copy whose sync began and did not finish, so it holds part of one tree and part of another",
+        _ => null,
+    };
 
     /// <summary>What a copy's marker says about whose directory it is.</summary>
     /// <param name="mark">What the far side recorded there.</param>

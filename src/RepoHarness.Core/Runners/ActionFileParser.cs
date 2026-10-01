@@ -576,7 +576,7 @@ public sealed class ActionFileParser(
 
         // A predefined action is performed by the harness, not started as a child process, so nothing
         // reads what only a run block reads: where it runs, its environment, its witness and bounds,
-        // its outputs and inputs of its own. Accepted silently, these would be a rule nobody applied:
+        // its outputs and inputs of its own, and whether its work is heavy. Accepted silently, these would be a rule nobody applied:
         // the file would read as though the action ran under them, and it never did.
         if (action != PredefinedAction.None)
         {

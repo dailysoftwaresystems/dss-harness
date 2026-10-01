@@ -39,7 +39,7 @@ internal static class HelpCommand
         new("config", ["configuration"], "What config.json declares", RenderConfig),
         new("legs", ["hosts", "emulators"], "Hosts, emulators, and how a leg finds where it runs", RenderLegs),
         new("space", ["disk", "clean"], "Freeing a full disk, and the room a build needs", RenderSpace),
-        new("admission", ["heavy"], "How heavy legs share a machine: its slots and its memory", RenderAdmission),
+        new("admission", ["heavy"], "How heavy legs share a machine: its slots, its memory and its room", RenderAdmission),
         new("worktrees", ["worktree"], "Naming rules, the path budget, and when deleting refuses", RenderWorktrees),
         new("orchestrators", ["orchestrator", "agents", "agent"], "Orchestrators, their agents, and folding an agent's work", RenderOrchestrators),
         new("anchors", ["anchor"], "Anchor registries and the commands that change them", RenderAnchors),
@@ -660,8 +660,9 @@ internal static class HelpCommand
         builder.AppendLine($"  {LegExit.Contended}  contended                  Wait for the other run");
         builder.AppendLine($"  {LegExit.Unwitnessed}  unwitnessed                Find out what actually ran");
         builder.AppendLine($"  {LegExit.LogHeld}  log-held                   Find out which run still owns the logs");
-        builder.AppendLine($"  {LegExit.NotAdmitted}  not-admitted               Wait for the heavy legs it names, free memory,");
-        builder.AppendLine("                                or raise the machine's limits ('help admission')");
+        builder.AppendLine($"  {LegExit.NotAdmitted}  not-admitted               Wait for the heavy legs it names, free memory");
+        builder.AppendLine("                                or room on the filesystem it names, or raise the");
+        builder.AppendLine("                                machine's limits ('help admission')");
 
         return builder.ToString();
     }
@@ -672,21 +673,23 @@ internal static class HelpCommand
 
         builder.AppendLine("Heavy legs on one machine");
         builder.AppendLine();
-        builder.AppendLine("A leg that builds or tests is heavy, and so is a runner's where it, or a runner its");
-        builder.AppendLine("expected exceptions' run checks name, requires the build or says \"heavy\": true, or");
-        builder.AppendLine("where a step the run runs says \"heavy\": true in its action - named with");
-        builder.AppendLine("--manual-step or not, through whichever runner; a runner that only reads the tree");
-        builder.AppendLine("is light, and starts at once. Where a machine declares admission, each heavy leg -");
+        builder.AppendLine("A leg that builds or tests is heavy. So is a run's leg where its runner, or a runner");
+        builder.AppendLine("its expected exceptions' run checks name, requires the build, says \"heavy\": true, or");
+        builder.AppendLine("runs a step whose action says heavy: true - by default or named with --manual-step,");
+        builder.AppendLine("whichever runner starts it; a step limited by runOn makes heavy the legs of those");
+        builder.AppendLine("systems alone. A runner that only reads the tree is light, and starts at once.");
+        builder.AppendLine("Where a machine declares admission, each heavy leg -");
         builder.AppendLine("its tree synced and its lock taken - waits for the machine to take it: first one of");
         builder.AppendLine("its slots, shared by every command this user runs there - worktrees each running a");
         builder.AppendLine("gate of their own, which maxParallelLegs, counted by one command, cannot see - given");
         builder.AppendLine("in the order legs asked; then the memory in use below the limit; then, where its");
         builder.AppendLine("build's need is known (buildSpaceGiB, or what a build recorded; 'help space'), room");
         builder.AppendLine("for it on the filesystem it fills beside what every other admitted leg there claims,");
-        builder.AppendLine("each claim counted whole. A leg holds its slot, and the room it claimed, until its");
-        builder.AppendLine("work ends, and one whose command has ended - crashed, killed - is reclaimed by the");
-        builder.AppendLine("next leg that looks, and said to be. A waiting leg keeps its lock: another run of");
-        builder.AppendLine("its variant is refused-locked meanwhile, as it would be while the leg ran.");
+        builder.AppendLine("each claim counted whole, so a leg may wait for another's whole work, its tests");
+        builder.AppendLine("included. A leg holds its slot, and the room it claimed, until its work ends, and");
+        builder.AppendLine("one whose command has ended - crashed, killed - is reclaimed by the next leg that");
+        builder.AppendLine("looks, and said to be. A waiting leg keeps its lock: another run of its variant is");
+        builder.AppendLine("refused-locked meanwhile, as it would be while the leg ran.");
         builder.AppendLine();
         builder.AppendLine("  \"defaults\": { \"admission\": { \"heavyLegs\": 2, \"maxMemoryPercent\": 76 } },");
         builder.AppendLine("  \"hosts\": { \"local\": { \"admission\": { \"heavyLegs\": 1 } } }");
@@ -710,8 +713,9 @@ internal static class HelpCommand
         builder.AppendLine("a repository that declares none never joins the line, and where repositories that");
         builder.AppendLine("declare different counts share a machine, a leg starts only while it is fewer legs");
         builder.AppendLine("from the front than every count up to it allows. A WSL distribution runs on this");
-        builder.AppendLine("machine: its heavy legs take this machine's slots, against its memory, before they");
-        builder.AppendLine("are sent there, and admission under hosts.wsl is refused - though a command typed");
+        builder.AppendLine("machine: its heavy legs take this machine's slots, against its memory, and claim");
+        builder.AppendLine("room on the drive where WSL keeps the distribution's disk, before they are sent");
+        builder.AppendLine("there, and admission under hosts.wsl is refused - though a command typed");
         builder.AppendLine("inside a distribution keeps a record of the distribution's own, apart from those of");
         builder.AppendLine("the commands typed on Windows. An ssh host is a machine of its own, and takes the");
         builder.AppendLine("legs sent to it by its own section.");
@@ -719,25 +723,27 @@ internal static class HelpCommand
         builder.AppendLine("The memory in use is each system's own count of what it can no longer give: on");
         builder.AppendLine("Windows the commit charge against the commit limit, which grows with the page file;");
         builder.AppendLine("on Linux MemTotal less MemAvailable; on macOS 100 less the free share memory_pressure");
-        builder.AppendLine("reports. A machine whose count could not be read in a leg's wait takes the leg on");
-        builder.AppendLine("its slot alone, and its line says so; one that stops giving a reading it gave is");
-        builder.AppendLine("read again, never taken on the reading it last gave.");
+        builder.AppendLine("reports. A machine whose count could not be read in a leg's wait takes the leg");
+        builder.AppendLine("without it - on its slot, and its room where its build's need is known - and its");
+        builder.AppendLine("line says so; one that stops giving a reading it gave is read again, never taken on");
+        builder.AppendLine("the reading it last gave. The room is read the same way: one never read in the wait");
+        builder.AppendLine("lets the leg start, claimed against every filesystem of the machine, and one read");
+        builder.AppendLine("before and not now decides nothing.");
         builder.AppendLine();
         builder.AppendLine("While it waits, a leg says who holds each slot - tree, variant, host, leg, command,");
         builder.AppendLine("machine, process, run, and since when it asked - and, once it holds one, what the");
         builder.AppendLine("memory stands at, or the room free and who claims it. Its line, and admission in");
         builder.AppendLine("--json, name how long it waited, the memory it started at and the room it claimed;");
-        builder.AppendLine("--json also names the record it asked in. A room that cannot be read lets the leg");
-        builder.AppendLine("start without it, and its line says so. One that waited maxWaitMinutes is");
+        builder.AppendLine("--json also names the record it asked in. One that waited maxWaitMinutes is");
         builder.AppendLine($"not-admitted, exit {LegExit.NotAdmitted}, naming what held the slots and where they are recorded, the");
-        builder.AppendLine("memory it waited on, or the room and who claimed it: nothing of it ran, and nothing");
-        builder.AppendLine("about the code is claimed.");
+        builder.AppendLine("memory it waited on, or the room, who claimed it and where the claims are recorded:");
+        builder.AppendLine("nothing of it ran, and nothing about the code is claimed.");
         builder.AppendLine();
         builder.AppendLine("The slots are kept in <user data>/dssharness/admission-<machine id>.json, and the");
         builder.AppendLine("room the legs claim beside them in admission-<machine id>.room.json - the user");
         builder.AppendLine("data being LOCALAPPDATA on Windows, ~/Library/Application Support on macOS, and");
         builder.AppendLine("$XDG_DATA_HOME or ~/.local/share on Linux - beside the hold that keeps the machine");
-        builder.AppendLine("awake: one record per machine and per user, whichever repository asks, named by the");
+        builder.AppendLine("awake: one of each per machine and per user, whichever repository asks, named by the");
         builder.AppendLine("identifier the system keeps for the machine rather than by its name, which a Mac");
         builder.AppendLine("takes from each network it joins. Where the system keeps none - a container its");
         builder.AppendLine("image gave no machine-id - the record is named by the machine's name, and the first");
@@ -830,8 +836,8 @@ internal static class HelpCommand
         builder.AppendLine($"    {LegExit.Contended,3}  contended: wait for the other run");
         builder.AppendLine($"    {LegExit.Unwitnessed,3}  unwitnessed: find out what actually ran");
         builder.AppendLine($"    {LegExit.LogHeld,3}  log-held: find out which run still owns this leg's logs");
-        builder.AppendLine($"    {LegExit.NotAdmitted,3}  not-admitted: wait for the heavy legs it names, free memory, or raise the");
-        builder.AppendLine("         machine's limits ('help admission')");
+        builder.AppendLine($"    {LegExit.NotAdmitted,3}  not-admitted: wait for the heavy legs it names, free memory or room on the");
+        builder.AppendLine("         filesystem it names, or raise the machine's limits ('help admission')");
         builder.AppendLine();
         builder.AppendLine("host-exec returns the exit code of the command it ran on the host, unchanged, or");
         builder.AppendLine($"{HarnessExit.HostUnavailable} when nothing ran there, or the command never reported how it finished.");
@@ -962,7 +968,8 @@ internal static class HelpCommand
         builder.AppendLine("sit idle; defaults.maxParallelLegsTotal caps the whole fleet on top of that, for");
         builder.AppendLine("what it shares even when its machines do not - a license server, a network share.");
         builder.AppendLine("Both are counted by one command; where a machine declares admission, its heavy legs");
-        builder.AppendLine("take its slots across every command this user runs there ('help admission').");
+        builder.AppendLine("take its slots, and claim its room, across every command this user runs there");
+        builder.AppendLine("('help admission').");
         builder.AppendLine("Every line says which leg it came from, and a child's own output under --verbose");
         builder.AppendLine("is tagged '<leg>/<phase>:', so several hosts building at once stay readable.");
         builder.AppendLine();
@@ -1168,9 +1175,9 @@ internal static class HelpCommand
         builder.AppendLine("is what its build recorded. Commands that build nothing - sync, clean - need no room.");
         builder.AppendLine();
         builder.AppendLine("One command counts only its own legs. Where a machine declares admission ('help");
-        builder.AppendLine("admission'), each heavy leg also claims the room its build needs as it is let start,");
-        builder.AppendLine("and a leg of another command waits until its own need fits beside every claim on");
-        builder.AppendLine("that filesystem.");
+        builder.AppendLine("admission'), each heavy leg whose need is known also claims the room its build");
+        builder.AppendLine("needs as it is let start, and any later heavy leg - of this command or another -");
+        builder.AppendLine("waits until its own need fits beside every claim on that filesystem.");
         builder.AppendLine();
         builder.AppendLine("A WSL distribution's disk is a file that grows on a drive of this machine, whatever");
         builder.AppendLine("room the distribution measures for itself - a terabyte, by default. A WSL leg needs");

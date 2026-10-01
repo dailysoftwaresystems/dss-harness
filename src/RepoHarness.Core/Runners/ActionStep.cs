@@ -131,12 +131,15 @@ public sealed record ActionStep
 
     /// <summary>
     /// Whether the step's work is heavy, from <c>heavy</c>: every leg of a run that runs it - by default, or named with
-    /// <c>run --manual-step</c>, through whichever runner - takes one of its machine's heavy-leg slots, whatever that
-    /// runner declares.
+    /// <c>run --manual-step</c>, through whichever runner - is heavy, and where its machine declares admission waits for
+    /// a slot, the memory and room for its build, whatever that runner declares, false included. Limited by
+    /// <see cref="RunOn"/>, it makes heavy the legs of those systems alone. A step that performs a predefined action runs
+    /// no program, and cannot say it.
     /// </summary>
     /// <remarks>
-    /// Declared on the step, because the work is the step's. Declared only on runners, a manual step that rebuilds,
-    /// kept in an action a light runner also runs, started through that runner and built with no slot at all.
+    /// Declared on the step, because the work is the step's. When weight was declared only on runners, a manual step that
+    /// rebuilds, kept in an action a light runner also runs, was started through that runner and built with no slot at
+    /// all.
     /// </remarks>
     public bool Heavy { get; init; }
 

@@ -52,9 +52,7 @@ internal static class SyncServeCommand
             switch (operation)
             {
                 case SyncServe.Inspect:
-                    return Answer(new SyncInspectAnswer(
-                        await transport.RootExistsAsync(root, cancellationToken).ConfigureAwait(false),
-                        await transport.ReadMarkAsync(root, cancellationToken).ConfigureAwait(false)));
+                    return Answer(await transport.InspectAsync(root, cancellationToken).ConfigureAwait(false));
 
                 case SyncServe.Create:
                     await transport

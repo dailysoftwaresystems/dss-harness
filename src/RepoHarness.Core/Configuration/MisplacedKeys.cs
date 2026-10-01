@@ -143,9 +143,14 @@ internal static class MisplacedKeys
                 var name = NameOrPlace(phase, position);
                 var them = declared.Count == 1 ? "it" : "them";
 
+                // Whether a runner of phases is heavy is said on the runner, which takes the key itself.
+                var heavy = declared.Contains("heavy", StringComparer.OrdinalIgnoreCase)
+                    ? " Whether a runner's legs are heavy is said on the runner itself, as \"heavy\": true beside its phases."
+                    : string.Empty;
+
                 yield return $"predefined runner '{runner.Name}' phase {name} declares {Quoted(declared)}, which only a step "
                     + $"of an action file takes; nothing reads {them} on a phase. Declare the work as a step of an action "
-                    + $"file to use {them}, or remove {them}. A phase takes {Quoted(phaseKeys)}.";
+                    + $"file to use {them}, or remove {them}. A phase takes {Quoted(phaseKeys)}.{heavy}";
             }
         }
     }

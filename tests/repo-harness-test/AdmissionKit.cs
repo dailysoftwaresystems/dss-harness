@@ -3,6 +3,7 @@ using System.Text.Json;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Tests;
@@ -37,20 +38,42 @@ internal sealed class ScriptedGauge(params double?[] percents) : IMemoryGauge
     }
 }
 
-/// <summary>The real file system, save that every path's room is on one filesystem, holding what the test says it does now.</summary>
+/// <summary>
+/// The real file system, save that every path's room is on one filesystem, holding what the test says it does now, and
+/// every path whose room is asked about is remembered.
+/// </summary>
 /// <param name="inner">The real file system.</param>
 /// <param name="freeBytes">What is free there at first.</param>
 /// <param name="filesystem">The filesystem every path is on.</param>
 internal sealed class ScriptedRoom(Core.FileSystem.IFileSystem inner, long freeBytes, string filesystem = "/data") : PassThroughFileSystem(inner)
 {
+    private readonly Lock _asking = new();
+
     /// <summary>What is free there now.</summary>
     public long FreeBytes { get; set; } = freeBytes;
 
     /// <summary>Why the room cannot be read, where the test says it cannot.</summary>
     public string? Unreadable { get; set; }
 
+    /// <summary>How many readings succeed before every later one fails as <see cref="Unreadable"/> says; all, where null.</summary>
+    public int? ReadsBeforeUnreadable { get; set; }
+
+    /// <summary>Every path whose room was asked about, in order.</summary>
+    public List<string> Asked { get; } = [];
+
     public override DiskSpace SpaceAt(string path)
-        => Unreadable is { } why ? throw new IOException(why) : new DiskSpace(FreeBytes, 100 * AdmissionKit.Gibibyte, filesystem);
+    {
+        lock (_asking)
+        {
+            Asked.Add(path);
+
+            var unreadable = Unreadable is not null && (ReadsBeforeUnreadable is not { } reads || Asked.Count > reads);
+
+            return unreadable
+                ? throw new IOException(Unreadable)
+                : new DiskSpace(FreeBytes, 100 * AdmissionKit.Gibibyte, filesystem);
+        }
+    }
 }
 
 /// <summary>Builds what a test of heavy-leg admission needs: slots kept in a file of its own, a clock it moves, and waits that pass at once.</summary>
@@ -113,12 +136,12 @@ internal static class AdmissionKit
     /// A leg asking by <paramref name="rule"/>, whose every line of progress goes to <paramref name="said"/>, and whose
     /// build needs <paramref name="room"/> where it says.
     /// </summary>
-    public static AdmissionRequest Request(AdmissionRule rule, List<string> said, string leg = "mine", AdmissionRoom? room = null)
+    public static AdmissionRequest Request(AdmissionRule rule, List<string> said, string leg = "mine", RoomNeed? room = null)
         => new(rule, $"run-{leg}", "build", leg, "local", $"/src/{leg}", "x86_64-gcc-debug", said.Add, room);
 
     /// <summary>What a test's leg's build needs: <paramref name="gibibytes"/> on the filesystem of its build directory.</summary>
-    public static AdmissionRoom Room(double gibibytes)
-        => new((long)(gibibytes * Gibibyte), "as the test says", "/src/mine/build", string.Empty);
+    public static RoomNeed Room(double gibibytes, string leg = "mine")
+        => new((long)(gibibytes * Gibibyte), "as the test says", $"/src/{leg}/build", string.Empty);
 
     /// <summary>Writes <paramref name="claims"/> as the room's record beside the slots' at <paramref name="record"/>.</summary>
     public static void WriteClaims(string record, params RoomClaim[] claims)

@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.Text.Json;
 using NSubstitute;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
@@ -2334,11 +2336,11 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
-    /// A copy is marked unfinished while a sync writes it, and complete once a sync has finished it, with the marker a build
-    /// from before the mark reads: it refuses a member it does not know, so the mark is written only where it holds.
+    /// A copy marked unfinished, then complete, carries the mark only while it holds, leaving the marker a build from before
+    /// the mark reads: it refuses a member it does not know.
     /// </summary>
     [Fact]
-    public async Task ACopysUnfinishedMark_IsClearedOnceASyncFinishesIt_LeavingTheMarkerAnOlderBuildReads()
+    public async Task ACopysUnfinishedMark_IsWrittenOnlyWhileItHolds_LeavingTheMarkerAnOlderBuildReads()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -2362,6 +2364,168 @@ public sealed class SyncServiceTests
         finally
         {
             SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// Marking a copy again - a sync begun, or finished - keeps how it came to be: when it was made, by which machine, and
+    /// whether somebody's directory was taken over to make it. Written afresh, every copy read as made by the last machine
+    /// to sync it, at that sync.
+    /// </summary>
+    [Fact]
+    public async Task MarkingACopyAgain_KeepsWhenAndByWhomItWasMade_AndWhetherItWasTakenOver()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var transport = SyncKit.Transport(harness);
+        var copy = SyncKit.CopyPath(temp);
+        var marker = Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.SyncedCopyMarkerName);
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+            await File.WriteAllTextAsync(
+                marker,
+                "{ \"CreatedUtc\": \"2026-01-01T00:00:00.0000000+00:00\", \"CreatedBy\": \"somewhere\", \"Adopted\": true, \"Completed\": true }",
+                cancellationToken);
+
+            foreach (var mark in new[] { CopyMark.Unfinished, CopyMark.Complete })
+            {
+                await transport.CreateRootAsync(copy, mark, cancellationToken);
+
+                using var written = JsonDocument.Parse(await File.ReadAllTextAsync(marker, cancellationToken));
+
+                Assert.Equal(mark, await transport.ReadMarkAsync(copy, cancellationToken));
+                Assert.Equal("2026-01-01T00:00:00.0000000+00:00", written.RootElement.GetProperty("CreatedUtc").GetString());
+                Assert.Equal("somewhere", written.RootElement.GetProperty("CreatedBy").GetString());
+                Assert.True(written.RootElement.GetProperty("Adopted").GetBoolean());
+            }
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// A marker that cannot be written is named, with what it records, and fails as a command that failed: raised raw, a
+    /// full disk on a host arrived as a defect in this tool.
+    /// </summary>
+    [Fact]
+    public async Task AMarkerThatCannotBeWritten_IsNamed_WithWhatItRecords()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var transport = SyncKit.Transport(harness, new MarkerUnwritable(harness.FileSystem));
+        var copy = SyncKit.CopyPath(temp);
+        var marker = Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.SyncedCopyMarkerName);
+
+        try
+        {
+            var failure = await Assert.ThrowsAsync<HarnessException>(() => transport.CreateRootAsync(copy, CopyMark.Unfinished, cancellationToken));
+
+            Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
+            Assert.Equal(
+                $"'{marker}', which records how '{copy}' came to be and whether its last sync finished, could not be written: no space left on device",
+                failure.Message);
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// A copy is marked unfinished before a sync changes anything of it - a file, or only the configuration placed beside
+    /// its files, as much the tree as they are - and complete once it is verified. A sync that changes nothing leaves its
+    /// marker as it was, and one finding a copy an earlier sync left unfinished finishes it, though it has nothing to
+    /// write: what the copy holds is then shown to be the tree.
+    /// </summary>
+    [Fact]
+    public async Task ACopyIsMarkedUnfinished_BeforeASyncChangesAnythingOfIt_AndCompleteOnceVerified()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var copy = SyncKit.CopyPath(temp);
+
+        async Task<(SyncResult Result, List<CopyMark> Marked)> SyncAsync()
+        {
+            var transport = new RecordingTransport(SyncKit.Transport(harness));
+            var result = await service.SyncAsync(temp.Path, transport, copy, new SyncOptions(), cancellationToken);
+
+            return (result, transport.Marked);
+        }
+
+        try
+        {
+            Assert.Equal([CopyMark.Unfinished, CopyMark.Complete], (await SyncAsync()).Marked);
+            Assert.Empty((await SyncAsync()).Marked);
+
+            var configuration = Path.Combine(temp.Path, HarnessLayout.ConfigFileRelative);
+            await File.AppendAllTextAsync(configuration, "\n", cancellationToken);
+
+            var configured = await SyncAsync();
+
+            Assert.True(configured.Result.Plan.IsUpToDate);
+            Assert.Equal([CopyMark.Unfinished, CopyMark.Complete], configured.Marked);
+
+            await SyncKit.Transport(harness).CreateRootAsync(copy, CopyMark.Unfinished, cancellationToken);
+
+            var finished = await SyncAsync();
+
+            Assert.True(finished.Result.Plan.IsUpToDate);
+            Assert.Equal([CopyMark.Complete], finished.Marked);
+            Assert.Equal(CopyMark.Complete, await SyncKit.Transport(harness).ReadMarkAsync(copy, cancellationToken));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// A sync whose copy could not be verified leaves it marked unfinished, as a takeover that failed its verification is
+    /// left begun: what it holds is nothing anyone has shown to be the tree, and a run on what is staged must not test it.
+    /// </summary>
+    [Fact]
+    public async Task ASyncThatFailedItsVerification_LeavesTheCopyMarkedUnfinished()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var copy = SyncKit.CopyPath(temp);
+
+        try
+        {
+            await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "a.c"), "changed\n", cancellationToken);
+
+            var failure = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
+                temp.Path, new RecordingTransport(SyncKit.Transport(harness), losesAFileWhenVerifying: true), copy, new SyncOptions(), cancellationToken));
+
+            Assert.Contains("does not match this tree", failure.Message, StringComparison.Ordinal);
+            Assert.Equal(CopyMark.Unfinished, await SyncKit.Transport(harness).ReadMarkAsync(copy, cancellationToken));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>The real file system, save that no copy's marker can be written: the disk it is on is full.</summary>
+    private sealed class MarkerUnwritable(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public override void WriteAllTextAtomic(string path, string contents)
+        {
+            if (path.EndsWith(HarnessLayout.SyncedCopyMarkerName, StringComparison.Ordinal))
+            {
+                throw new IOException("no space left on device");
+            }
+
+            base.WriteAllTextAtomic(path, contents);
         }
     }
 

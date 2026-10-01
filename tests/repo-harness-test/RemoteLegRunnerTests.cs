@@ -54,8 +54,8 @@ public sealed class RemoteLegRunnerTests
 
     /// <summary>
     /// A command run with -v has the host run the leg's command with it too, so the leg's step output reaches the reader
-    /// as a leg run here shows it: with the host's agent alone verbose, a leg on a host printed its verdict and nothing
-    /// of its steps. Without -v, neither is.
+    /// as a leg run here shows it, relayed from the host's standard error: with the host's agent alone verbose, a leg on a
+    /// host printed its verdict and nothing of its steps. Without -v, neither is.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -69,10 +69,14 @@ public sealed class RemoteLegRunnerTests
             sent = command;
             Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
 
-            return HostResults.Finished(command, 0);
+            // What the leg's command writes of its steps where it is verbose, to its standard error under --json.
+            var steps = Request(command).Arguments.Contains(HostAgentProtocol.VerboseOption) ? "test: step 'compile': cc -c a.c\n" : string.Empty;
+
+            return HostResults.Finished(command, 0, steps);
         });
 
-        var output = new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose);
+        var error = new StringWriter();
+        var output = new ConsoleHarnessOutput(new StringWriter(), error, verbose);
 
         await new RemoteLegRunner(hosts, output).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
 
@@ -82,6 +86,7 @@ public sealed class RemoteLegRunnerTests
                 : ["test", "--legs", "wsl-debug", "--json", RemoteLegRunner.HereOption, "wsl Example-Linux"],
             Request(sent).Arguments);
         Assert.Equal(verbose, sent!.Arguments.Contains(HostAgentProtocol.VerboseOption));
+        Assert.Equal(verbose, error.ToString().Contains("test: step 'compile': cc -c a.c", StringComparison.Ordinal));
     }
 
     /// <summary>

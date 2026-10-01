@@ -122,22 +122,6 @@ public sealed class LegRunService(
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
 
-        // A host running what another machine dispatched to it, on what is staged there: a copy a sync stopped making part
-        // way holds part of one tree and part of another, which no run began with, and is refused until a sync finishes
-        // it rather than tested as though it were a tree. Refused as the run's own, which the machine that dispatched it
-        // reports as its run's: the command line asked for what this copy cannot give.
-        if (request.UseStaged
-            && request.Here is { } here
-            && await _transportFactory.For(new HostReport { Host = HostId.Local }).ReadMarkAsync(context.Layout.RepositoryRoot, cancellationToken).ConfigureAwait(false)
-                is CopyMark.Unfinished)
-        {
-            throw new HarnessException(
-                HarnessExit.Refused,
-                $"{here}: '{context.Layout.RepositoryRoot}' is a copy a sync stopped making part way, so it holds part of one tree "
-                + "and part of another, and --use-staged has nothing current to run there. Run without --use-staged, which "
-                + "syncs it first, or sync it, and run again.");
-        }
-
         // Hosts are measured before anything runs, and DssHarness on each is brought to this
         // machine's build there, so a leg never starts on a host that turns out not to answer. A leg
         // goes where a sync puts its tree whatever this command starts, so a run on what is already
@@ -191,6 +175,9 @@ public sealed class LegRunService(
         // another run holds is, and no end to the legs that do not.
         var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
 
+        // What each host's copy is marked, read once per copy, for a run on what is already staged there.
+        var stagedMarks = new ConcurrentDictionary<string, Lazy<Task<CopyMark>>>(LegPlan.TreeKeyComparer);
+
         try
         {
             _output.Info(commandName, $"run {runId.Value}, {placed.Count} leg(s)");
@@ -221,7 +208,7 @@ public sealed class LegRunService(
                             MaxParallelLegsTotal = context.Config.Defaults.MaxParallelLegsTotal,
                             SyncTree = syncTree,
                             RunLeg = (plan, token) => RunLegAsync(
-                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, token),
+                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, stagedMarks, token),
                         },
                         ledger,
                         cancellationToken)
@@ -450,6 +437,7 @@ public sealed class LegRunService(
         string commandName,
         LegLedger ledger,
         ConcurrentDictionary<string, string> lockedTrees,
+        ConcurrentDictionary<string, Lazy<Task<CopyMark>>> stagedMarks,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => candidate.Name == plan.Name);
@@ -458,6 +446,30 @@ public sealed class LegRunService(
         if (lockedTrees.TryGetValue(leg.TreeKey, out var treeHeld))
         {
             return Ended(leg, LegVerdict.RefusedLocked, treeHeld, started);
+        }
+
+        // A run on what each host already holds tests that copy as it is: one a sync or a takeover of began and did not
+        // finish holds no tree a run began with, and its legs are inputs-moved, as a copy whose tree moved before it was
+        // carried is - before a slot is taken, and nothing of them runs. Read by this machine, which would have synced it,
+        // once per copy: a host is never told a run is on what is staged, since the staging is this machine's decision.
+        if (request.UseStaged && leg.Remote && request.Here is null)
+        {
+            var mark = await stagedMarks
+                .GetOrAdd(leg.TreeKey, _ => new Lazy<Task<CopyMark>>(() => _transportFactory.For(leg.Host).ReadMarkAsync(leg.HostTreeRoot, cancellationToken)))
+                .Value
+                .ConfigureAwait(false);
+
+            if (SyncService.PartMade(mark) is { } partMade)
+            {
+                return Ended(
+                    leg,
+                    LegVerdict.InputsMoved,
+                    $"{leg.Named}: '{leg.HostTreeRoot}' {partMade}: --use-staged has nothing current to run there. "
+                    + (mark == CopyMark.AdoptionStopped
+                        ? $"Finish taking it over with '{ToolPackage.Command} sync --adopt \"{leg.Named}\"', and run again."
+                        : "Run without --use-staged, which syncs it first."),
+                    started);
+            }
         }
 
         // The tree shared and this variant exclusive: variants build side by side, but never while
@@ -519,7 +531,8 @@ public sealed class LegRunService(
         LegLedger ledger,
         CancellationToken cancellationToken)
     {
-        if (!request.Workload.Heavy
+        // Heavy as it is on this leg's system: a heavy step limited by runOn makes the legs of those systems alone heavy.
+        if (!request.Workload.On(leg.Leg.Os).Heavy
             || (request.Here is null && leg.Host.Host.Kind == HostKind.Ssh)
             || request.Here is { Kind: HostKind.Wsl })
         {
@@ -533,18 +546,6 @@ public sealed class LegRunService(
             return null;
         }
 
-        // What its build still needs of this machine's room, where something says: on the filesystem of its build
-        // directory, or for a WSL distribution's leg on this machine's drive where WSL keeps the distribution's disk,
-        // which this machine's own legs fill too. Room inside the distribution's disk was counted as it was placed, and
-        // cannot be read from here.
-        var room = leg.Need is not { } need
-            ? null
-            : leg.Host.Host.Kind != HostKind.Wsl
-                ? new AdmissionRoom(need.Bytes, need.Source, leg.BuildDirectory, string.Empty)
-                : leg.Host.DiskImageSpace is { } image
-                    ? new AdmissionRoom(need.Bytes, need.Source, image.Filesystem, ", where WSL keeps its disk")
-                    : null;
-
         return await _admission
             .AdmitAsync(
                 new AdmissionRequest(
@@ -556,7 +557,7 @@ public sealed class LegRunService(
                     leg.HostTreeRoot,
                     leg.Variant.DirectoryName,
                     message => ledger.Transition(leg.Name, message),
-                    room),
+                    leg.Need),
                 cancellationToken)
             .ConfigureAwait(false);
     }

@@ -278,27 +278,84 @@ public sealed class LegsServiceTests
     }
 
     /// <summary>
-    /// A leg placed where its build fits carries what that build still needs to its admission, which holds it against
-    /// every other command's legs on the machine; a leg whose need nothing says carries none.
+    /// A leg placed where its build fits carries what that build still needs of the room on the machine that admits it:
+    /// a leg here, its build directory's filesystem; a WSL distribution's leg, the drive where WSL keeps its disk, or why
+    /// that could not be measured. A leg an ssh host runs carries none here - the host places and admits it - nor does one
+    /// whose need nothing says, or whose directory already holds what its build comes to.
     /// </summary>
     [Fact]
-    public async Task ALegPlacedWhereItsBuildFits_CarriesItsNeedToItsAdmission()
+    public async Task ALegPlacedWhereItsBuildFits_CarriesTheRoomItNeedsOnTheMachineThatAdmitsIt()
     {
         var fixture = Create(
             new()
             {
+                ["here"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", BuildSpaceGiB = 8 },
+                ["again"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "release" },
                 ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = 8 },
-                ["arm-release"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "release" },
+                ["distro"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", BuildSpaceGiB = 4, Wsl = "Ubuntu" },
             },
             configure: config => config.BuildConfigs["release"] = new BuildConfiguration(),
+            inspect: host => host.Kind == HostKind.Wsl
+                ? Measurements[host] with { DiskImageSpace = new DiskSpace(100L << 30, 200L << 30, "D:\\") }
+                : Measurements[host],
+            rooms: (_, path) => path.Contains("release", StringComparison.Ordinal)
+                ? Room(path, exists: true, recorded: 5L << 30, free: 30)
+                : Room(path, exists: false, recorded: null, free: 30));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+
+        RoomNeed? NeedOf(string leg) => report.Placements.Single(placement => placement.Leg.Name == leg).Need;
+
+        var here = NeedOf("here");
+        Assert.NotNull(here);
+        Assert.Equal((8L << 30, "as its buildSpaceGiB, 8, declares", string.Empty), (here.Bytes, here.Source, here.Where));
+        Assert.NotNull(here.At);
+
+        Assert.Equal(new RoomNeed(4L << 30, "as its buildSpaceGiB, 4, declares", "D:\\", ", where WSL keeps its disk"), NeedOf("distro"));
+        Assert.Null(NeedOf("again"));
+        Assert.Null(NeedOf("arm"));
+    }
+
+    /// <summary>
+    /// A WSL distribution's leg whose drive this machine could not measure carries no path to read again, and why, so its
+    /// admission says the room was unread rather than claiming nothing and saying nothing.
+    /// </summary>
+    [Fact]
+    public async Task AWslLegWhoseDriveWasNotMeasured_CarriesWhyToItsAdmission()
+    {
+        var fixture = Create(
+            new() { ["distro"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", BuildSpaceGiB = 4, Wsl = "Ubuntu" } },
+            inspect: host => host.Kind == HostKind.Wsl
+                ? Measurements[host] with { DiskImageUnmeasured = "wsl.exe did not say where the disk is" }
+                : Measurements[host],
             rooms: (_, path) => Room(path, exists: false, recorded: null, free: 30));
 
         var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
 
         Assert.Equal(
-            new RoomNeed(8L << 30, "as its buildSpaceGiB, 8, declares"),
-            report.Placements.Single(placement => placement.Leg.Name == "arm").Need);
-        Assert.Null(report.Placements.Single(placement => placement.Leg.Name == "arm-release").Need);
+            new RoomNeed(4L << 30, "as its buildSpaceGiB, 4, declares", null, ", where WSL keeps its disk", "wsl.exe did not say where the disk is"),
+            Assert.Single(report.Placements).Need);
+    }
+
+    /// <summary>
+    /// A host running a leg another machine sent it measures a worktree copy's first build against the main checkout's copy
+    /// there, where the configuration says it keeps it: its own tree is a repository of its own, whose main checkout is
+    /// itself, and measured against itself the build needed nothing anyone said, and claimed no room.
+    /// </summary>
+    [Fact]
+    public async Task AHostRunningALegItWasSent_MeasuresItAgainstTheMainCopyThere()
+    {
+        var fixture = Create(
+            new() { ["leg"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Ssh = "pi" } },
+            rooms: (_, path) => path.StartsWith("/home/pi/repo", StringComparison.Ordinal)
+                ? Room(path, exists: true, recorded: 6L << 30, free: 30)
+                : Room(path, exists: false, recorded: null, free: 30));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Ssh("pi"), TestContext.Current.CancellationToken);
+
+        var need = Assert.Single(report.Placements).Need;
+        Assert.NotNull(need);
+        Assert.Equal((6L << 30, "what the main checkout's copy of the same variant came to there"), (need.Bytes, need.Source));
     }
 
     /// <summary>

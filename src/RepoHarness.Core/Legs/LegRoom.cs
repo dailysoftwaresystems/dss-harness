@@ -6,17 +6,26 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Core.Legs;
 
-/// <summary>What a placed leg's build still needs on its host, and what said so.</summary>
-/// <param name="Bytes">What it still needs.</param>
+/// <summary>What a placed leg's build still needs of the room on the machine that admits it, and what said so.</summary>
+/// <param name="Bytes">What it still needs, more than nothing: a build that needs nothing more claims nothing.</param>
 /// <param name="Source">What said how much, as a line says it: <c>as its buildSpaceGiB, 4, declares</c>.</param>
+/// <param name="At">
+/// A path of the admitting machine on the filesystem the build fills - its build directory, or for a WSL distribution's
+/// leg the drive of this machine where WSL keeps the distribution's disk - read again as the leg is admitted;
+/// <see langword="null"/> where that drive could not be measured as the leg was placed.
+/// </param>
+/// <param name="Where">How a line names that room beyond its filesystem: empty, or <c>, where WSL keeps its disk</c>.</param>
+/// <param name="Unmeasured">Why that drive could not be measured as the leg was placed, where <paramref name="At"/> is unknown.</param>
 /// <remarks>
-/// Counted, as the leg is placed, against the room beside the other legs of the same command; then held, as the leg is
-/// admitted, against the room every other command's legs on its machine claim.
+/// Decided here, with the rooms a build fills, and nowhere else: counted, as the leg is placed, beside the other legs of
+/// its command; then held, as it is admitted, against what every other admitted leg on that machine claims - this one,
+/// for a leg here or of a WSL distribution, and the host itself for one an ssh host runs, which places it again there.
 /// </remarks>
-public sealed record RoomNeed(long Bytes, string Source);
+public sealed record RoomNeed(long Bytes, string Source, string? At, string Where, string? Unmeasured = null);
 
 /// <summary>
 /// Whether a leg's host has the room its build still needs: what is asked of each host before placing, and
@@ -172,9 +181,15 @@ public static class LegRoom
                 taken[key] = (before.Bytes + need.Bytes, [.. before.Legs, placement.Leg.Name]);
             }
 
-            // Carried to the leg's admission, which holds it against every other command's legs on the machine: counted
-            // here, the room is this command's alone.
-            placed[index] = placement with { Need = new RoomNeed(need.Bytes, need.Source) };
+            // Carried to the leg's admission, which holds it against every other admitted leg on the machine that admits
+            // it: counted here, the room is this command's alone. Only the room of this machine, which admits the leg - an
+            // ssh host places and admits its own - and only where the build needs more than its directory holds.
+            if (need.Bytes > 0 && Rooms(host, need).FirstOrDefault(room => room.Machine.Kind == HostKind.Local) is { Machine: not null } mine)
+            {
+                var at = mine.Where.Length == 0 ? need.Directory : mine.Disk?.Filesystem;
+
+                placed[index] = placement with { Need = new RoomNeed(need.Bytes, need.Source, at, mine.Where, at is null ? mine.Why : null) };
+            }
         }
 
         return (placed, unmeasured);
@@ -265,7 +280,13 @@ public static class LegRoom
             var main = LegTrees.On(context, host, context.Layout.MainCheckoutRoot, comparison);
             var own = LegTrees.On(context, host, LegTrees.Here(context, leg, here), comparison);
 
-            return (main, variant.DirectoryOn(host, own), variant.DirectoryOn(host, main));
+            // On a host running a leg another machine sent it, the tree here is a copy - a repository of its own, whose main
+            // checkout is itself - so the main checkout's copy, which a worktree copy's first build there is measured
+            // against, is where the configuration says this host keeps it. Measured against itself instead, that build
+            // needed nothing anyone said, and claimed no room as it was admitted.
+            var mainCopy = here is { Kind: not HostKind.Local } ? HostCopies.RepositoryPathOf(context.Config, here) : main;
+
+            return (main, variant.DirectoryOn(host, own), variant.DirectoryOn(host, mainCopy));
         }
         catch (HarnessException)
         {

@@ -1793,37 +1793,43 @@ public sealed class ConfigStoreTests
     {
         var light = new RunnerConfig { Action = "a/a.yml" };
 
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml", Heavy = true }, null)]).Heavy);
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml", RequireBuild = true }, null)]).Heavy);
-        Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml" }, null)]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml", Heavy = true }, null, false)]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml", RequireBuild = true }, null, false)]).Heavy);
+        Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml" }, null, false)]).Heavy);
         Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, []).Heavy);
+
+        // One whose steps could not be read counts heavy: nothing says it is not.
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml" }, null, true)]).Heavy);
     }
 
     /// <summary>
     /// A step declared heavy makes heavy every leg of a run that runs it - named with --manual-step, through a runner that
-    /// says nothing of its weight or says it is light - and a run that leaves it out stays as light as its runner. A run
-    /// check's runner whose steps include one is heavy the same way. Declared only on runners, a light runner sharing an
-    /// action with a heavy manual step started it with no slot at all.
+    /// says nothing of its weight or says it is light - and a run that leaves it out stays as light as its runner. One
+    /// limited by runOn makes heavy the legs of those systems alone. A run check's runner whose steps include one is heavy
+    /// the same way. Declared only on runners, a light runner sharing an action with a heavy manual step started it with
+    /// no slot at all.
     /// </summary>
     [Fact]
     public void AHeavyStep_MakesHeavyARunThatRunsIt_WhicheverRunnerStartsIt()
     {
-        var action = new Core.Runners.ActionFileParser(
-                new PhysicalFileSystem(FilePermissionsFactory.Create()),
-                new Core.Output.ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false),
-                new HostPlatform())
-            .Parse(
-                Path.Combine("actions", "sqlite", "sqlite.yml"),
-                """
-                steps:
-                  - name: self-test
-                    run: python3 self_test.py
-                  - name: recompile
-                    manual: true
-                    heavy: true
-                    successPattern: '^built'
-                    run: cmake --build build
-                """);
+        var action = ActionKit.Parse(
+            Path.Combine("actions", "sqlite", "sqlite.yml"),
+            """
+            steps:
+              - name: self-test
+                run: python3 self_test.py
+              - name: recompile
+                manual: true
+                heavy: true
+                successPattern: '^built'
+                run: cmake --build build
+              - name: profile
+                manual: true
+                heavy: true
+                runOn: [linux]
+                successPattern: '^profiled'
+                run: perf record ./app
+            """);
 
         Assert.True(action.Steps[1].Heavy);
         Assert.False(action.Steps[0].Heavy);
@@ -1833,14 +1839,31 @@ public sealed class ConfigStoreTests
 
         foreach (var runner in new[] { new RunnerConfig { Action = "sqlite" }, new RunnerConfig { Action = "sqlite", Heavy = false } })
         {
-            Assert.False(Run(runner).Heavy);
-            Assert.True(Run(runner, "recompile").Heavy);
+            Assert.False(Run(runner).On("linux").Heavy);
+            Assert.True(Run(runner, "recompile").On("windows").Heavy);
+            Assert.True(Run(runner, "profile").On("linux").Heavy);
+            Assert.False(Run(runner, "profile").On("windows").Heavy);
         }
 
         var checks = new RunnerConfig { Action = "sqlite", Steps = ["recompile"] };
         var light = new RunnerConfig { Action = "a/a.yml" };
 
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(checks, Core.Runners.StepSelection.For(checks, []).Apply("rebuild", action).File)]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(checks, Core.Runners.StepSelection.For(checks, []).Apply("rebuild", action).File, false)]).Heavy);
+    }
+
+    /// <summary>
+    /// A runner of phases takes "heavy" on itself: a phase declaring it is refused, as every key only a step takes is, and
+    /// the refusal says where the runner's weight is declared.
+    /// </summary>
+    [Fact]
+    public void HeavyOnAPhase_IsRefused_SayingItIsTheRunnersToSay()
+    {
+        var exception = LoadInvalid("""
+            { "predefinedRunners": { "guard": { "phases": [ { "name": "check", "command": ["python3", "check.py"], "heavy": true } ] } } }
+            """);
+
+        Assert.Contains("predefined runner 'guard' phase 'check' declares 'heavy', which only a step of an action file takes", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Whether a runner's legs are heavy is said on the runner itself, as \"heavy\": true beside its phases.", exception.Message, StringComparison.Ordinal);
     }
 
     private static HarnessConfig LoadValid(string json)

@@ -24,8 +24,9 @@ public static class ActionFileKeys
     ];
 
     /// <summary>
-    /// What only a step's <c>run</c> block reads. A step that performs a predefined action runs no
-    /// program, so nothing would read any of these, and it is refused with them.
+    /// What only a step that runs a program takes: what its <c>run</c> block reads, and whether that work is heavy. A
+    /// step that performs a predefined action runs no program, so nothing would read any of these, and it is refused
+    /// with them.
     /// </summary>
     public static IReadOnlyList<KeyDescription> RunBlock { get; } =
     [

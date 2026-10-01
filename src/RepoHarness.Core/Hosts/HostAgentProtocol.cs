@@ -19,7 +19,10 @@ public static class HostAgentProtocol
     /// <summary>The hidden command a host serves requests with.</summary>
     public const string CommandName = "host-agent";
 
-    /// <summary>The option that has a host report a defect of its own with its stack trace.</summary>
+    /// <summary>
+    /// The option that has a host report a defect of its own with its stack trace, and that a leg's command run there
+    /// takes to show its steps' output, as <c>-v</c> does here.
+    /// </summary>
     public const string VerboseOption = "--verbose";
 
     /// <summary>

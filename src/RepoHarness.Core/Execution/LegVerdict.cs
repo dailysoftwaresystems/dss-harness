@@ -62,7 +62,8 @@ public enum LegVerdict
 
     /// <summary>
     /// A heavy leg waited as long as its machine allows for a heavy-leg slot, or holding one for the memory in use to
-    /// fall below the machine's limit, and nothing of it ran. Never a failure of the code: the machine had no room.
+    /// fall below the machine's limit, or for room for its build beside what the other admitted legs claim, and nothing
+    /// of it ran. Never a failure of the code: the machine could not take it.
     /// </summary>
     NotAdmitted,
 

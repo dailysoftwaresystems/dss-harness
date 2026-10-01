@@ -6,7 +6,8 @@ namespace RepoHarness.Core.Execution;
 
 /// <summary>
 /// A state file holding a list of entries that every process on the machine decides by - the run lock, the heavy
-/// legs admitted onto a machine - read, decided on and written back as one step under <see cref="MachineWideFile"/>.
+/// legs admitted onto a machine and the room they claim - read, decided on and written back as one step under
+/// <see cref="MachineWideFile"/>.
 /// </summary>
 /// <remarks>
 /// One implementation for every such list, so the rules that make one safe hold for all of them: two processes that

@@ -1115,7 +1115,7 @@ from the report.
 | `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; or git could not answer in its tree | warning |
 | `skipped-tool-missing` | A required tool is not installed | warning |
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
-| `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, or for the memory in use to fall below the limit, and nothing of it ran | **yes** |
+| `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict | **yes** |
 
@@ -1123,7 +1123,7 @@ from the report.
 "the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
 `contended` and `not-admitted` say nothing about the code at all: the first two call for
 letting the tree settle and running again, the third for waiting for the other run, and
-the fourth for waiting for the machine's other heavy legs, or freeing its memory.
+the fourth for waiting for the machine's other heavy legs, or freeing its memory or its disk.
 
 `refused-locked` and `log-held` are deliberately distinct, though both mean another run got
 there first. A lock is taken for the duration of the work and is released by the run that
@@ -1242,8 +1242,9 @@ tree synced and its lock taken, waits for the machine to take it:
    minutes, so every wait is one a timer holds.
 3. **Then room for its build**, where its need is known: on the filesystem the build fills, what is
    free less what every other admitted leg there claims must hold it. Claimed as the leg is let
-   start, under the record's lock, so two legs never both take the one room left, and held with its
-   slot; see *Room is claimed as a leg is admitted* below.
+   start, under the room record's lock, so two legs never both take the one room left, and held with
+   its slot. A leg waiting for room keeps its slot, so the legs behind it wait too; see *Room is
+   claimed as a leg is admitted* below.
 
 What a command's own configuration declares is the rule its legs are admitted by: a repository that
 declares none never joins the line. Each entry of the record carries the count its command allows,
@@ -1268,23 +1269,33 @@ it, and never read as free: that is the one reading that would start every waiti
 
 **Heavy** is what builds or tests: a `build` or `test` leg, and a `run` leg whose runner - or a
 runner its expected exceptions' run checks name, which run within its legs - requires the build or
-says `"heavy": true`, or one of whose steps that the run runs says `heavy: true` in its action. The
-step's word holds whichever runner starts it: declared only on runners, a manual step that rebuilds,
-kept in an action a light runner also runs, was started through that runner with `--manual-step`
-and built with no slot at all. A runner that only reads the tree - a repository guard - is light and
-starts at once. A runner saying `"heavy": false` while it requires the build is refused: its build is
-heavy.
+says `"heavy": true`, or runs a step whose action says `heavy: true`. The step's word holds whichever
+runner starts it, one saying `"heavy": false` included: when weight was declared only on runners, a
+manual step that rebuilds, kept in an action a light runner also runs, was started through that
+runner with `--manual-step` and built with no slot at all. A heavy step limited by `runOn` makes
+heavy the legs of those systems alone, and a step that performs a predefined action runs no program
+and cannot say it. A run check's runner whose action cannot be read counts as heavy, said as the run
+begins, and is refused by the check that runs it, as before. A runner that only reads the tree - a
+repository guard - is light and starts at once. A runner saying `"heavy": false` while it requires
+the build is refused: its build is heavy.
 
 **Room is claimed as a leg is admitted.** Where its build's need is known - its `buildSpaceGiB`, or
-what a build recorded - a heavy leg is let start only where that need fits on the filesystem its build
-fills beside what every other admitted leg there claims, and holds its claim until its work ends. A
-command counts the room its own legs need as it places them, but cannot see another's: two commands
-each placing one leg on one host both found it room and filled its disk at build step 931 of 1295.
-The claims are counted whole, though a build may have written some of its own already, which the room
-read now shows gone: a leg waits a little longer than it had to, rather than starting into a disk it
-fills. A WSL distribution's leg claims this machine's drive where WSL keeps its disk; the room inside
-the distribution's own disk was counted as it was placed. Kept in `admission-<machine id>.room.json`,
-beside the slots' record, which a build from before it would refuse with a member it does not know.
+what a build recorded - and is more than its build directory already holds, a heavy leg is let start
+only where that need fits on the filesystem its build fills beside what every other admitted leg
+there claims, and holds its claim until its work ends. A command counts the room its own legs need as
+it places them, but cannot see another's: two commands each placing one leg on one host both found it
+room and filled its disk at build step 931 of 1295. The claims are counted whole, though a build may
+have written some of its own already, which the room read now shows gone, and held until each leg's
+work ends, its tests included: a leg may wait for that, and be `not-admitted` where it lasts longer
+than `maxWaitMinutes`, rather than start into a disk it fills. A room never read in a leg's wait lets
+it start, claimed against every filesystem of the machine, since nothing says which one it fills, and
+its line says why; one read before and not now decides nothing, as a memory reading lost does not. A
+WSL distribution's leg claims this machine's drive where WSL keeps its disk, where that drive was
+measured as it was placed; the room inside the distribution's own disk was counted as it was placed.
+An ssh host places and admits its own legs, a worktree's copy measured against the main checkout's
+copy there. Kept in a record of their own, `admission-<machine id>.room.json`, beside the slots': a
+build from before it, finding a member it does not know in the slots' record, would refuse that
+record.
 
 **The machine is the physical one.** A WSL distribution runs on this machine, so this machine's
 command takes its heavy legs - by `hosts.local`'s rule, against this machine's slots and memory -
@@ -1302,19 +1313,21 @@ asking process runs in allows - and which grows with the page file; on Linux `Me
 above 100% on a healthy machine; on macOS 100 less the free share in `kern.memorystatus_level`,
 which `memory_pressure` reports as free. A WSL leg is admitted by this machine's commit, which
 cannot see a distribution that has reached the cap its own configuration sets. A machine whose
-count could not be read in a leg's wait takes the leg on its slot alone, and its line says so, as a
-leg placed where its room could not be measured is; one that stops giving a reading it gave is read
-again, never taken on the reading it last gave. A leg is let start only at a reading its own line
+count could not be read in a leg's wait takes the leg without it - on its slot, and its room where
+its build's need is known - and its line says so, as a leg placed where its room could not be measured
+is; one that stops giving a reading it gave is read again, never taken on the reading it last gave. A leg is let start only at a reading its own line
 shows below the limit.
 
-Unlike a held lock, which refuses at once, admission waits - because the slots it waits for come
-free as the legs ahead finish - but never silently and never for ever: while it waits the leg says
-who holds each slot (tree, variant, host, leg, command, machine, process, run, and since when it
-asked) and, once it holds one, what the memory stands at; the wait is measured on the monotonic
-clock. A leg that waited `maxWaitMinutes` (60, above 0) is `not-admitted`, exit 7, naming what held
-the slots and the record they are kept in, or the memory it waited on: nothing of it ran, and nothing
-about the code is claimed. Every admitted leg's line names how long it waited and the memory it
-started at, and `--json` gives both, with the record, as the leg's `admission`.
+Unlike a held lock, which refuses at once, admission waits - because the slots and room it waits for
+come free as the legs ahead finish - but never silently and never for ever: while it waits the leg
+says who holds each slot (tree, variant, host, leg, command, machine, process, run, and since when it
+asked) and, once it holds one, what the memory stands at, or the room free and who claims it; the
+wait is measured on the monotonic clock. A leg that waited `maxWaitMinutes` (60, above 0) is
+`not-admitted`, exit 7, naming what held the slots and the record they are kept in, the memory it
+waited on, or the room, who claimed it and where the claims are recorded: nothing of it ran, and
+nothing about the code is claimed. Every admitted leg's line names how long it waited, the memory it
+started at and the room it claimed, and `--json` gives them, with the slots' record, as the leg's
+`admission`.
 
 ## Leg integrity
 
@@ -1795,7 +1808,9 @@ behind is freed by hand, once.
 A leg is placed only where its host has the room its build still needs, as it is only where the
 programs it starts are. A consumer's two variants - the first builds of a new worktree's copy -
 filled a host's disk half way through and died writing an object, while `legs` said the host
-could run them.
+could run them. One command counts only its own legs; where a machine declares admission, each
+heavy leg also claims its room as it is let start, held against every other command's legs there
+(see *Room is claimed as a leg is admitted*).
 
 - **What a build needs** is what its build directory comes to once built: the leg's
   `buildSpaceGiB`, or, left out, what a build of its variant recorded as it finished - in the
@@ -1838,16 +1853,20 @@ directory here cannot drift apart.
   two copies are two moments of a tree that moved in between. Each file carried is checked against
   the reading as it is read for carrying, and the first that changed or went since stops the sync,
   naming it, rather than reaching the copy as content no reading recorded. A stopped sync is never
-  indexed, given its configuration, verified or marked adopted: what it carried before stopping
-  stays on the host. `sync` fails, exit 20, saying so, and a run's legs on that copy are
-  `inputs-moved`.
-- **A copy a sync is writing is marked unfinished**, before its first write, and complete once it
-  is verified, as a takeover is marked begun and finished. A sync that stops part way - a tree that
-  moved, a connection that dropped, a verification that failed - leaves part of one tree and part
-  of another, which no run began with; marked so, a run with `--use-staged` refuses to test it, and
-  `sync --artifact` to carry into it, until a sync finishes it. The next ordinary sync, which plans
-  from what the copy holds, puts it right. The mark is written into the marker only while it holds,
-  so a copy every sync finished carries the marker a build from before it reads.
+  indexed, given its configuration, verified, marked complete or marked adopted: what it carried
+  before stopping stays on the host. `sync` fails, exit 20, saying so, and a run's legs on that copy
+  are `inputs-moved`.
+- **A copy a sync is writing is marked unfinished**, before its first write or deletion - or its
+  configuration, where that changes - and complete once it is verified, as a takeover is marked
+  begun and finished. A sync that stops part way - a tree that moved, a connection that dropped, a
+  verification that failed - leaves part of one tree and part of another, which no run began with.
+  Marked so, the legs of a run with `--use-staged` on that copy are `inputs-moved`, read by the
+  machine that would have synced it, and `sync --artifact` carries nothing into it, until a sync
+  finishes it. The next ordinary sync, which plans from what the copy holds, puts it right; marking
+  a copy again keeps when, and by which machine, it was made. The mark is written into the marker
+  only while it holds, so a copy every sync finished carries the marker a build from before it
+  reads; such a build refuses an unfinished one as unreadable, and the remedy is to upgrade, never
+  to delete the marker, which would turn the copy into one taken over.
 - **The copy is the tool's.** Sync creates it, records that it did, and refuses to write into a
   directory it did not create. It deletes whatever the source does not have, so taking over a
   checkout somebody made by hand could delete work nothing here knows about, on a machine whose
@@ -1996,7 +2015,7 @@ from that host's own copy of the tree — the host reads `config.json` and the r
 from it — so the tree is put there whether or not anything is compiled. A runner that skipped the
 sync because it compiles nothing would find no configuration on the host and fail saying so.
 `--use-staged` is how a run says the copy there is already current - which it is not after a sync
-that stopped part way, or failed its verification, and a copy marked unfinished so is refused.
+that stopped part way, or failed its verification; a copy so marked makes its legs `inputs-moved`.
 
 Runners are keyed by name because a name is how one is selected — by `run`, and by the checks
 below. An unnamed entry in a list could not be selected at all.
@@ -2255,7 +2274,7 @@ command contracts, because each calls for a different remedy:
 | 4 | `contended` | Wait for the other run |
 | 5 | `unwitnessed` | Find out what actually ran |
 | 6 | `log-held` | Find out which run still owns this leg's logs |
-| 7 | `not-admitted` | Wait for the heavy legs its line names, free memory, or raise the machine's limits |
+| 7 | `not-admitted` | Wait for the heavy legs its line names, free memory or room on the filesystem it names, or raise the machine's limits |
 
 `failed` reports 20, `refused-locked` 13 and `poisoned` 70. When legs disagree, the
 more fundamental verdict decides the code, in the order given under *Verdict vocabulary*.

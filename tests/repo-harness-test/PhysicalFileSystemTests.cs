@@ -140,6 +140,24 @@ public sealed class PhysicalFileSystemTests
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A drive is named as Windows spells it, whichever case a path gave it: named as written, 'c:\' where somebody typed
+    /// it so, one drive was two filesystems to every claim on its room, and each claim counted nothing against the other.
+    /// </summary>
+    [Fact]
+    public void SpaceAt_NamesADrive_WhicheverCaseThePathSpelledIt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows names a filesystem by a drive letter.");
+
+        using var temp = new TempDirectory();
+        var path = Path.GetFullPath(temp.Path);
+        var lower = char.ToLowerInvariant(path[0]) + path[1..];
+        var upper = char.ToUpperInvariant(path[0]) + path[1..];
+
+        Assert.Equal(Create().SpaceAt(upper).Filesystem, Create().SpaceAt(lower).Filesystem);
+        Assert.Equal(Path.GetPathRoot(upper), Create().SpaceAt(lower).Filesystem);
+    }
+
     /// <summary>A directory moves whole, and what it held is where it went.</summary>
     [Fact]
     public void MoveDirectory_MovesItWhole()

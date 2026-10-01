@@ -6,6 +6,7 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -163,17 +164,21 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
-    /// A host asked to run a leg on what is staged there refuses where its copy is one a sync stopped making part way,
-    /// naming it and what to do, rather than testing part of one tree and part of another as though it were a tree.
+    /// A run on what is staged reads, on the machine that would have synced each copy, whether a sync or a takeover began
+    /// there and did not finish: where one did, that copy holds part of one tree and part of another, so its legs are
+    /// inputs-moved, naming it and what to do, and its host is never asked to test it; the legs elsewhere run. A host asked
+    /// to run on what it holds was never told by the dispatcher that what it holds is staged, so it could not refuse.
     /// </summary>
     [Theory]
-    [InlineData(CopyMark.Unfinished, true)]
-    [InlineData(CopyMark.Complete, false)]
-    public async Task AHostAskedToRunOnWhatIsStaged_RefusesACopyASyncStoppedMaking(CopyMark mark, bool refused)
+    [InlineData(CopyMark.Unfinished, "is a copy whose sync began and did not finish", "Run without --use-staged, which syncs it first.")]
+    [InlineData(CopyMark.AdoptionStopped, "was being taken over and the run stopped before it finished", "sync --adopt \"ssh pi\"', and run again.")]
+    [InlineData(CopyMark.Complete, null, null)]
+    [InlineData(CopyMark.None, null, null)]
+    public async Task ARunOnWhatIsStaged_MakesInputsMovedTheLegsOfACopyLeftPartMade(CopyMark mark, string? partMade, string? remedy)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var ran = new List<string>();
+        var asked = 0;
 
         var copy = Substitute.For<ISyncTransport>();
         copy.ReadMarkAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(mark);
@@ -181,28 +186,41 @@ public sealed class LegRunServiceTests
         var transports = Substitute.For<ISyncTransportFactory>();
         transports.For(Arg.Any<HostReport>()).Returns(copy);
 
-        Task<CommandOutcome> RunAsync() => OutcomeAsync(
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Interlocked.Increment(ref asked);
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
             temp,
             harness,
-            OneLeg(harness),
+            TwoLegs(harness),
             SshAndLocal(harness),
-            new LegRunRequest(temp.Path, null, Json: true, UseStaged: true, Here: HostId.Ssh(HostName)) { Workload = LegWorkload.Copy },
-            ran: leg => ran.Add(leg.Name),
+            new LegRunRequest(temp.Path, null, Json: true, UseStaged: true) { Workload = LegWorkload.Copy },
+            hosts: hosts,
             transports: transports);
 
-        if (refused)
-        {
-            // Before anything of the run exists, as the refusal of the run the dispatching machine reads it as.
-            var refusal = await Assert.ThrowsAsync<HarnessException>(RunAsync);
+        var legs = Verdicts(outcome);
 
-            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
-            Assert.StartsWith($"ssh {HostName}: '{temp.Path}' is a copy a sync stopped making part way", refusal.Message, StringComparison.Ordinal);
-            Assert.Empty(ran);
+        Assert.Equal("passed", legs["native"].Verdict);
+        await copy.Received(1).ReadMarkAsync(HostTree, Arg.Any<CancellationToken>());
+
+        if (partMade is null)
+        {
+            Assert.Equal("passed", legs["arm"].Verdict);
+            Assert.Equal(1, asked);
         }
         else
         {
-            await RunAsync();
-            Assert.Equal(["native"], ran);
+            Assert.Equal("inputs-moved", legs["arm"].Verdict);
+            Assert.StartsWith($"ssh {HostName}: '{HostTree}' {partMade}", legs["arm"].Detail, StringComparison.Ordinal);
+            Assert.Contains("--use-staged has nothing current to run there", legs["arm"].Detail, StringComparison.Ordinal);
+            Assert.EndsWith(remedy!, legs["arm"].Detail, StringComparison.Ordinal);
+            Assert.Equal(LegExit.InputsMoved, outcome.ExitCode);
+            Assert.Equal(0, asked);
         }
     }
 
@@ -874,6 +892,57 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A heavy leg whose build's need its placement knew claims that room on this machine as it is admitted - read where its
+    /// build directory is - holds it while its work runs and gives it back as the work ends, its line naming what it
+    /// claimed. Counted only as a command placed its own legs, two commands each placing one leg on one host both found it
+    /// room, and filled its disk between them.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyLegWhoseBuildNeedsRoom_ClaimsItAsItIsAdmitted_AndGivesItBackAsItsWorkEnds()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        IReadOnlyList<RoomClaim>? during = null;
+
+        var config = Admitting(
+            new HarnessConfig
+            {
+                BuildConfigs = { ["debug"] = new BuildConfiguration() },
+                Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", BuildSpaceGiB = 8 } },
+            },
+            local: new AdmissionSettings { HeavyLegs = 2 });
+
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor })
+        {
+            BuildRooms = (_, path) => new BuildDirectoryRoom(path, Exists: false, RecordedBytes: null, new DiskSpace(30L << 30, 100L << 30, "/data"), Unmeasured: null),
+        };
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildAndTest },
+            ran: _ => during = AdmissionKit.ReadClaims(record),
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock(), fileSystem: room));
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+
+        var claim = Assert.Single(during!);
+
+        Assert.Equal(("native", 8 * AdmissionKit.Gibibyte, "/data"), (claim.Holder.Leg, claim.Bytes, claim.Filesystem));
+        Assert.Empty(AdmissionKit.ReadClaims(record));
+        Assert.Equal(Assert.Single(inspector.RoomAsked).Room.Builds, room.Asked);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var admission = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("admission");
+
+        Assert.Equal("~8 GiB of 40 GiB free on '/data'", admission.GetProperty("room").GetString());
+    }
+
+    /// <summary>
     /// A leg that builds and tests nothing - a copy of the tree, as a repository guard's is - is light, and starts at
     /// once; and a machine that declares no admission takes every leg at once. Neither asks for a slot.
     /// </summary>
@@ -898,6 +967,36 @@ public sealed class LegRunServiceTests
 
         Assert.Equal("passed", verdicts["native"].Verdict);
         Assert.Equal(["other", "another"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A step heavy only where it runs - limited by runOn - makes heavy the legs of those systems alone: a leg of another
+    /// system, which never runs it, asks for no slot, and one of a system it runs on waits for one as any heavy leg does.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStepHeavyOnlyWhereItRuns_MakesHeavyTheLegsOfThoseSystemsAlone(bool runsHere)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var elsewhere = harness.Platform.PlatformKey == PlatformNames.Linux ? PlatformNames.Windows : PlatformNames.Linux;
+
+        // The one slot held, so a leg that asked would not be taken.
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+
+        var verdicts = await RunAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true)
+            {
+                Workload = LegWorkload.Copy with { HeavyOnlyOn = [runsHere ? harness.Platform.PlatformKey : elsewhere] },
+            });
+
+        Assert.Equal(runsHere ? "not-admitted" : "passed", verdicts["native"].Verdict);
     }
 
     /// <summary>

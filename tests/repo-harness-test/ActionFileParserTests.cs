@@ -1229,11 +1229,7 @@ public sealed class ActionFileParserTests
         Assert.Contains("line 2, column 11: the file is not valid YAML", exception.Message, StringComparison.Ordinal);
     }
 
-    private static ActionFileParser CreateParser()
-        => new(
-            new PhysicalFileSystem(FilePermissionsFactory.Create()),
-            new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false),
-            new HostPlatform());
+    private static ActionFileParser CreateParser() => ActionKit.Parser();
 
     private static ActionFile Parse(string text)
         => CreateParser().Parse(Path.Combine("actions", "compile", "compile.yml"), text);
