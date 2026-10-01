@@ -13,7 +13,12 @@ namespace RepoHarness.Core.FileSystem;
 /// written after a marker can carry a stamp from before it. Equality of content carries the same
 /// distortion on both sides and a clock cannot bend it.
 /// </remarks>
-public readonly record struct FileContent(long Length, string Content);
+public readonly record struct FileContent(long Length, string Content)
+{
+    /// <summary>What <paramref name="contents"/>, bytes already in hand, hold.</summary>
+    /// <param name="contents">The bytes.</param>
+    public static FileContent Of(ReadOnlySpan<byte> contents) => new(contents.Length, FileContentHash.Of(contents));
+}
 
 /// <summary>Hashing a file's bytes.</summary>
 /// <remarks>

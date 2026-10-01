@@ -1108,7 +1108,7 @@ from the report.
 | `passed` | Ran to completion, succeeded, and its success pattern matched | no |
 | `failed` | Ran to completion and reported failure | **yes** |
 | `unwitnessed` | Exited 0, but its success pattern never matched | **yes** |
-| `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, its tree changed after the run began, before that machine's copy was made of it | **yes** |
+| `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, a file its host's copy needed changed or was removed after the run began, before it was carried there, and nothing of the leg ran | **yes** |
 | `unmeasured` | Whether those files held still could not be established | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
 | `skipped-not-selected` | Filtered out by `--legs` | no |
@@ -1405,17 +1405,20 @@ tool that also puts the old time back. The times are compared for equality alone
 ordered.
 
 A leg on another machine tests that machine's copy, which holds still under it; what can
-move is the tree here, before the copy is made of it. So a run records each tree its hosts'
-copies are made of once, as it begins - every file a sync carries, and the configuration
-placed beside them, by content - and every copy is made that tree: each file carried is
-checked against the record as it is read, an edit put back before a host's sync comes round
-leaves no trace there, and a file added since is not carried. Where a file to be carried no
-longer holds what was recorded - edited, or gone - the copy cannot be the tree the run began
-with: that sync stops, and the legs on that copy are `inputs-moved`, naming the files, with
-nothing of them run. Measured: a mutant present in the tree for 7.3 seconds of a run was built
-and tested on a Mac and reported `failed`, while the tree was the same at the run's start and
-end. A leg on this machine is held to its own spans, as above: a lasting edit made after the
-run began reaches a leg here that starts later, which tests it whole.
+move is the tree here, before the copy is made of it. So a run reads each tree its hosts'
+copies are made of once, as it begins and before any leg's work, and every copy is made from
+that reading, as [Syncing a tree](#syncing-a-tree) says: an edit put back before a host's
+sync comes round leaves no trace there, and where a file to be carried no longer holds what
+was read - edited, or removed - the legs on that copy are `inputs-moved`, naming it, with
+nothing of them run, while the legs on other copies still report. A file that goes while the
+tree is being read does the same to every copy of it. Measured: an edit a mutation-testing
+tool left in the tree for 7.3 seconds of a run, and put back, was built and tested on a Mac
+and reported `failed`, while the tree was the same at the run's start and end. A run with
+`--use-staged` reads nothing, and tests whatever the copies hold. A leg on this machine is
+held to its own guards instead, which watch its inputs while it builds and while it tests: an
+edit made after the run began and left in place reaches a leg here that starts after it, which
+builds and tests the edited tree from start to end, never a mix of two - so one run's legs
+here and on hosts can have tested different trees.
 
 ### Clocks are never trusted to order anything
 
@@ -1617,9 +1620,11 @@ while a gate ran turned a green suite red, with four test processes live at once
   could carry a change nobody has committed. It is made a git repository because the host's
   DssHarness finds everything through git, and sync never writes into a directory it did not
   create, because it deletes whatever the source does not have.
-- A remote tree's identity is its content manifest, confirmed equal to the source after
-  every sync. The ledger records the commit and manifest each leg built, and a build
-  directory produced from a different manifest is flagged.
+- A remote tree's identity is its content manifest. Every sync that finishes confirms the copy
+  equal to the reading of the tree it was made from - in a run, the reading taken as the run
+  began; one that stops because the tree moved confirms nothing, and no leg runs on its copy.
+  The ledger records the commit and manifest each leg built, and a build directory produced
+  from a different manifest is flagged.
 - A build directory's recorded source directory must be the leg's own tree, such as
   CMake's `CMAKE_HOME_DIRECTORY`. A build directory configured from a different worktree
   is refused, not reused: watching the wrong tree produced both a false refusal and a
@@ -1808,12 +1813,15 @@ it, as each host's `space` and a WSL distribution's `diskImageSpace`.
 for this machine, a WSL distribution and an ssh host, so a sync to a host and a sync to a
 directory here cannot drift apart.
 
-- **A copy is made of what was read.** Each file carried is checked, as it is read for carrying,
-  against the manifest the plan was made from; one that changed or went since stops the sync,
-  naming it, rather than reaching the copy as content no reading recorded - and a copy is never
-  verified as though it were the tree. A run hands every host's sync the record of the tree it
-  took as it began, so each copy is the tree the run began with, or its legs are `inputs-moved`.
-
+- **A copy is made of what was read.** The tree is read once - its configuration, what it
+  withholds, and every file it carries, by size and hash - and a sync decides everything by that
+  reading: the `sync` command reads it once for all its hosts, and a run once as it begins, so no
+  two copies are two moments of a tree that moved in between. Each file carried is checked against
+  the reading as it is read for carrying, and the first that changed or went since stops the sync,
+  naming it, rather than reaching the copy as content no reading recorded. A stopped sync is never
+  indexed, given its configuration, verified or marked adopted: what it carried before stopping
+  stays on the host, and nothing - `--use-staged` included - should run against that copy until a
+  sync completes. `sync` fails, exit 20, saying so, and a run's legs on that copy are `inputs-moved`.
 - **The copy is the tool's.** Sync creates it, records that it did, and refuses to write into a
   directory it did not create. It deletes whatever the source does not have, so taking over a
   checkout somebody made by hand could delete work nothing here knows about, on a machine whose
@@ -1938,8 +1946,8 @@ directory here cannot drift apart.
   behind `--verbose`: what a sync removed from another machine is the one thing running it again
   cannot recover. `--dry-run` lists every write and every deletion and changes nothing.
 - **The result is verified, not assumed.** After the transfer the copy's manifest is read back and
-  compared with the source's. A tree that still differs fails, names what differs, and says
-  nothing should be run against it.
+  compared with the reading of the tree the sync was made from. A tree that still differs fails,
+  names what differs, and says nothing should be run against it.
 - **Staging is the two commands, not a flag.** `sync` transfers and stops — that is all it ever
   does — and `build`, `test` and `run` take `--use-staged` to act on what is already there without
   syncing again. A `--stage-only` on `sync` would name a mode `sync` is always in.
@@ -1961,7 +1969,8 @@ a runner that calls a program the build produces otherwise runs against whatever
 from that host's own copy of the tree — the host reads `config.json` and the runner's action file
 from it — so the tree is put there whether or not anything is compiled. A runner that skipped the
 sync because it compiles nothing would find no configuration on the host and fail saying so.
-`--use-staged` is how a run says the copy there is already current.
+`--use-staged` is how a run says the copy there is already current - which it is not after a sync
+that stopped part way, or failed its verification.
 
 Runners are keyed by name because a name is how one is selected — by `run`, and by the checks
 below. An unnamed entry in a list could not be selected at all.

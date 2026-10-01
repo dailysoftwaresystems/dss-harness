@@ -19,19 +19,6 @@ namespace RepoHarness.Core.Sync;
 public sealed record SyncOptions(bool DryRun = false, IReadOnlyList<string>? Adopt = null)
 {
     /// <summary>
-    /// The tree to carry as it was recorded - when the run syncing it began - rather than as it stands when the sync
-    /// reaches the host, or <see langword="null"/> to carry the tree as it stands.
-    /// </summary>
-    /// <remarks>
-    /// A run's legs on other machines test what their copies hold, and a copy made from the tree as it stood when its
-    /// sync came round held whatever was in the tree at that moment: a file edited for seconds mid-run, and restored
-    /// before the run ended, was built and tested on a host while every reading the run took saw the tree it began
-    /// with. Given the record, a copy is made that tree or not at all: a file to be carried that no longer holds what
-    /// was recorded is a tree that moved, and the sync stops, saying which (<see cref="SyncResult.Moved"/>).
-    /// </remarks>
-    public SyncSource? Source { get; init; }
-
-    /// <summary>
     /// The run whose artifacts to carry to each host instead of syncing the tree, or
     /// <see langword="null"/> for an ordinary sync.
     /// </summary>
@@ -180,40 +167,58 @@ internal enum CopyState
 /// <param name="Root">The copy's root on that host.</param>
 /// <param name="Plan">What the sync decided to do.</param>
 /// <param name="Verified">
-/// Whether the copy was confirmed equal to the source afterwards. True for every sync that returns
-/// at all, and false only for a dry run, which changes nothing and so confirms nothing: a copy that
-/// does not match raises rather than returning, because a leg must not be run against it and there
-/// is nothing a caller could usefully do with a result that says so.
+/// Whether the copy was confirmed, afterwards, to hold what the tree's reading does. True for every
+/// sync that returns at all, and false only for a dry run, which changes nothing and so confirms
+/// nothing: a copy that does not match raises rather than returning, as does one whose tree moved
+/// before it was carried, because a leg must not be run against either and there is nothing a caller
+/// could usefully do with a result that says so.
 /// </param>
 /// <param name="Created">Whether this sync created the copy.</param>
 /// <param name="RequiresAdoption">
 /// Whether a real run would refuse this copy for want of <c>--adopt</c>. Only a dry run answers
 /// yes: a real one raises instead.
 /// </param>
-/// <remarks>
-/// <see cref="Verified"/> is false for a dry run, and for a sync that stopped because the tree moved
-/// (<see cref="Moved"/>): neither made a copy anything may run against.
-/// </remarks>
 public sealed record SyncResult(
     string Host,
     string Root,
     SyncPlan Plan,
     bool Verified,
     bool Created,
-    bool RequiresAdoption = false)
-{
-    /// <summary>
-    /// The files that no longer held what the source recorded by the time they were to be carried - changed, or
-    /// gone - in the order the sync came to them: a tree that moved, whose copy this sync stopped making. Empty for a
-    /// copy made.
-    /// </summary>
-    public IReadOnlyList<string> Moved { get; init; } = [];
-}
+    bool RequiresAdoption = false);
 
-/// <summary>A tree as a sync carries it, recorded at one moment, so every copy made from the record is that tree.</summary>
-/// <param name="Files">Every file the sync carries, by content.</param>
-/// <param name="Configuration">The configuration placed beside them, by content.</param>
-public sealed record SyncSource(SyncManifest Files, SyncEntry Configuration);
+/// <summary>
+/// A tree as a sync carries it, read at one moment: what it is configured to be, what it withholds, every file a
+/// sync carries, and the configuration a copy is given - so every copy made from it is that tree, or the sync making
+/// it stops.
+/// </summary>
+/// <remarks>
+/// Made only by <see cref="ISyncService.ReadSourceAsync"/>. A sync made from it decides everything by it - what is
+/// withheld, what it may delete, what configuration it places - and reads the tree again only for the bytes of the
+/// files it carries, each checked against it as it is read. The files are held by size and hash, not by their
+/// bytes, so a file still edited when its turn comes cannot be carried as it was read, and the sync stops instead.
+/// </remarks>
+public sealed class SyncSource
+{
+    internal SyncSource(HarnessContext context, SyncExclusions exclusions, SyncManifest files, byte[] configuration)
+    {
+        Context = context;
+        Exclusions = exclusions;
+        Files = files;
+        Configuration = configuration;
+    }
+
+    /// <summary>Every file a sync carries, by size and hash.</summary>
+    internal SyncManifest Files { get; }
+
+    /// <summary>The tree as it was configured: what a sync decides by.</summary>
+    internal HarnessContext Context { get; }
+
+    /// <summary>What the tree withheld from transfer, and protected from deletion, when it was read.</summary>
+    internal SyncExclusions Exclusions { get; }
+
+    /// <summary>The bytes of the configuration a copy is given: the tree's own, or the main checkout's fallback.</summary>
+    internal byte[] Configuration { get; }
+}
 
 /// <summary>Putting a host's copy of a tree in step with it.</summary>
 public interface ISyncService
@@ -239,21 +244,38 @@ public interface ISyncService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// The tree at <paramref name="sourceRoot"/> as a sync would carry it now: recorded as a run begins, and carried by
-    /// each of its syncs in place of the tree as it stands when that sync comes round.
+    /// Reads the tree at <paramref name="sourceRoot"/> as a sync carries it, once, for every copy to be made of it.
     /// </summary>
     /// <param name="sourceRoot">The tree.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
-    Task<SyncSource> RecordAsync(string sourceRoot, CancellationToken cancellationToken = default);
+    /// <exception cref="HarnessException">
+    /// Something listed in the tree was gone when it was opened: the tree changed while it was read
+    /// (<see cref="LegExit.InputsMoved"/>).
+    /// </exception>
+    /// <remarks>
+    /// A run reads each tree its hosts' copies are made of as it begins, before any leg's work, and the sync command
+    /// reads its tree once for every host. Each copy made from the tree as its own sync came round held whatever was
+    /// in the tree at that moment: a file edited for seconds mid-run, and put back before the run ended, was built and
+    /// tested on a host while every reading the run took saw the tree it began with.
+    /// </remarks>
+    Task<SyncSource> ReadSourceAsync(string sourceRoot, CancellationToken cancellationToken = default);
 
-    /// <summary>Syncs <paramref name="sourceRoot"/> into a copy reached through <paramref name="transport"/>.</summary>
-    /// <param name="sourceRoot">The tree to sync from.</param>
+    /// <summary>Makes the copy reached through <paramref name="transport"/> the tree <paramref name="source"/> read.</summary>
+    /// <param name="source">The tree, as <see cref="ReadSourceAsync"/> read it.</param>
     /// <param name="transport">How the copy is reached.</param>
     /// <param name="destinationRoot">Where the copy lives on the far side.</param>
     /// <param name="options">How this sync should behave.</param>
     /// <param name="cancellationToken">Stops the sync.</param>
+    /// <returns>What the sync did: a copy confirmed to hold what <paramref name="source"/> read, or a dry run's plan.</returns>
+    /// <exception cref="HarnessException">
+    /// The copy could not be made. Among the reasons, a file to be carried no longer holds what
+    /// <paramref name="source"/> read of it - changed, or removed, since the tree was read - so the copy cannot be that
+    /// tree (<see cref="LegExit.InputsMoved"/>). It is left part made, and nothing should run against it until a sync
+    /// completes. Raised with its own code because it is about this tree at this moment: a run gives it to that copy's
+    /// legs alone, as their verdict.
+    /// </exception>
     Task<SyncResult> SyncAsync(
-        string sourceRoot,
+        SyncSource source,
         ISyncTransport transport,
         string destinationRoot,
         SyncOptions options,
@@ -392,6 +414,8 @@ public sealed class SyncService(
                 unreachable);
         }
 
+        SyncSource? source = null;
+
         foreach (var host in hosts)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -433,18 +457,21 @@ public sealed class SyncService(
                 continue;
             }
 
-            var result = await SyncAsync(
-                    context.Layout.RepositoryRoot, transport, destination, options, cancellationToken)
-                .ConfigureAwait(false);
+            SyncResult result;
 
-            if (result.Moved.Count > 0)
+            try
             {
-                return CommandOutcome.Failed(
-                    HarnessExit.CommandFailed,
-                    $"{host.Host}: {InputFingerprint.Counted(result.Moved.Count, "file")} changed while '{destination}' was synced: "
-                    + $"{InputFingerprint.Named(result.Moved)}. The copy there is not this tree, and nothing should be run "
-                    + "against it: sync again once the tree holds still.",
-                    details);
+                // Read once, for every host: each read as its own sync came round, two hosts' copies could be two
+                // moments of a tree that moved in between.
+                source ??= await ReadSourceAsync(context.Layout.RepositoryRoot, cancellationToken).ConfigureAwait(false);
+
+                result = await SyncAsync(source, transport, destination, options, cancellationToken).ConfigureAwait(false);
+            }
+            catch (HarnessException ex) when (ex.ExitCode == LegExit.InputsMoved)
+            {
+                // The command's own failure, after what it did for the hosts before: the hosts after this one are left
+                // as they are rather than each given another moment of a tree still moving.
+                return CommandOutcome.Failed(HarnessExit.CommandFailed, ex.Message, details);
             }
 
             if (result.RequiresAdoption)
@@ -472,7 +499,8 @@ public sealed class SyncService(
         }
 
         // Reaching here means every copy was confirmed: a copy that still differed raised from the
-        // verification inside the sync, naming the files, and took the whole command with it.
+        // verification inside the sync, naming the files, and took the whole command with it, and one
+        // whose tree moved before it was carried returned failed above.
         //
         // Said as the direction that ran, because "in step" is a claim about the whole tree that
         // only the tree sync makes good on. A carry writes one run's artifacts and a pull reads a
@@ -550,50 +578,21 @@ public sealed class SyncService(
 
     /// <inheritdoc/>
     public async Task<SyncResult> SyncAsync(
-        string sourceRoot,
+        SyncSource source,
         ISyncTransport transport,
         string destinationRoot,
         SyncOptions options,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(options);
 
-        var (context, exclusions) = await SourceAsync(sourceRoot, cancellationToken).ConfigureAwait(false);
-        var config = context.Config;
-
-        // Before anything is read from the far side, because it is about this tree and costs nothing.
-        await exclusions
-            .RefuseWhenNoLongerIgnoredAsync(_gitClient, context.Layout.RepositoryRoot, cancellationToken)
-            .ConfigureAwait(false);
-
-        // A rule somebody believes is protecting something, doubted before a deletion rests on it.
-        // A rooted entry that matches nothing here while the name exists deeper reads, to any
-        // reader, as evidence that name is protected.
-        var rooted = exclusions.RootedEntriesMatchingNothing(
-            _fileSystem,
-            context.Layout.RepositoryRoot,
-            _platform.PathComparison,
-            cancellationToken);
-
-        foreach (var name in rooted.MatchingNothing)
-        {
-            _output.Warn(
-                CommandName,
-                $"sync.neverTransfer names '{name}', which is not in this tree's root though the name "
-                + $"does exist deeper in it, so this entry protects nothing. Write "
-                + $"'{PathPatterns.AnyDepth}{name}' to cover that name wherever it appears.");
-        }
-
-        if (rooted.Incomplete is { } unread)
-        {
-            // Said rather than swallowed. The entries this would have named are exactly the ones a
-            // reader believes are protecting something, so "it found none" and "it stopped looking"
-            // must not read the same.
-            _output.Warn(
-                CommandName,
-                $"sync.neverTransfer entries could not all be checked against this tree: {unread}");
-        }
+        // Everything this sync decides, it decides by the reading: read again here, a configuration or an ignore rule
+        // edited since would decide what the copy withholds and what may be deleted from it, and those deletions would
+        // be made before anything noticed the tree had moved.
+        var context = source.Context;
+        var exclusions = source.Exclusions;
 
         // A worktree's copy is claimed for it before anything is written to it: recorded, so that deleting the
         // worktree asks this host to remove it and asks no host that holds none; and refused while another worktree
@@ -624,19 +623,13 @@ public sealed class SyncService(
 
         var created = state == CopyState.Created;
 
-        var source = options.Source is { } recorded
-            ? RecordedFor(recorded, context)
-            : await _manifestBuilder
-                .BuildAsync(context.Layout.RepositoryRoot, exclusions.IsWithheldFromTransfer, cancellationToken)
-                .ConfigureAwait(false);
-
         var destination = created
             ? SyncManifest.Empty(destinationRoot)
             : await transport
                 .ReadManifestAsync(destinationRoot, Withheld(exclusions), cancellationToken)
                 .ConfigureAwait(false);
 
-        var plan = SyncPlan.Between(source, destination, exclusions);
+        var plan = SyncPlan.Between(source.Files, destination, exclusions);
 
         // Whose directory this is comes first. Told that a sync would remove all of a directory, the
         // reader goes looking for a mistake in the source, when what is actually true is that this is
@@ -672,7 +665,7 @@ public sealed class SyncService(
         // is what the source does not have. Two gates for that is the point of having one.
         if (!options.DryRun)
         {
-            plan.RefuseWhenDeletingTooMuch(destination, config.Sync.MaxDeleteFraction, adopting);
+            plan.RefuseWhenDeletingTooMuch(destination, context.Config.Sync.MaxDeleteFraction, adopting);
         }
 
         if (options.DryRun)
@@ -709,7 +702,7 @@ public sealed class SyncService(
                 _output.Warn(CommandName, $"{transport.Host}:   {line}");
             }
 
-            _output.Warn(CommandName, $"{transport.Host}:   replace  {HarnessLayout.DirectoryName}/config.json, with this tree's");
+            _output.Warn(CommandName, $"{transport.Host}:   replace  {HarnessLayout.ConfigFileRelative}, with this tree's");
             _output.Warn(CommandName, $"{transport.Host}:   mirror   {HarnessLayout.RunnerActionsDirectoryRelative}, to this tree's actions");
 
             // Marked as begun before anything is deleted, and marked as finished only once the copy
@@ -723,26 +716,16 @@ public sealed class SyncService(
                 .ConfigureAwait(false);
         }
 
-        // A tree that moved stops the sync where it is found, before the copy is made to look complete: no index, no
-        // verification, no adoption marked finished. What was carried by then stays, and the next sync, planning from
-        // what the copy holds, puts it right.
-        var moved = await ApplyAsync(context.Layout.RepositoryRoot, transport, destinationRoot, plan, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (moved.Count > 0)
-        {
-            return Stopped(moved);
-        }
+        // A tree that moved raises from in here, at the first file found to have moved, before anything is deleted: no index,
+        // no verification, no adoption marked finished. What was carried by then stays, and the next sync, planning
+        // from what the copy holds, puts it right - an adoption still asking for --adopt.
+        await ApplyAsync(source.Files.Root, transport, destinationRoot, plan, cancellationToken).ConfigureAwait(false);
 
         // The copy is a git repository because the harness there finds everything through git. Done
         // after the transfer, so a copy that failed part way is not left looking complete.
         await transport.InitialiseRepositoryAsync(destinationRoot, cancellationToken).ConfigureAwait(false);
 
-        if (!await PlaceConfigurationAsync(context, transport, destinationRoot, options.Source?.Configuration, cancellationToken)
-            .ConfigureAwait(false))
-        {
-            return Stopped([$"{HarnessLayout.DirectoryName}/{HarnessLayout.ConfigFileName}"]);
-        }
+        await PlaceConfigurationAsync(source, transport, destinationRoot, cancellationToken).ConfigureAwait(false);
 
         // The copy's own record of which files are its own: every file this sync carried, and the
         // configuration it placed. Written without staging one, a copy's index named nothing, so a build
@@ -755,14 +738,14 @@ public sealed class SyncService(
             .IndexAsync(
                 destinationRoot,
                 [
-                    .. source.Paths.Where(path => !BeyondALink(path, destination.Links)),
-                    $"{HarnessLayout.DirectoryName}/{HarnessLayout.ConfigFileName}",
+                    .. source.Files.Paths.Where(path => !BeyondALink(path, destination.Links)),
+                    HarnessLayout.ConfigFileRelative,
                 ],
                 cancellationToken)
             .ConfigureAwait(false);
 
         // Throws when the copy does not match, so reaching the next line is what verified means.
-        await VerifyAsync(transport, destinationRoot, source, exclusions, cancellationToken)
+        await VerifyAsync(transport, destinationRoot, source.Files, exclusions, cancellationToken)
             .ConfigureAwait(false);
 
         // Marked finished only once the copy has been shown to be one, which is why this sits after
@@ -779,53 +762,73 @@ public sealed class SyncService(
         }
 
         return new SyncResult(transport.Host.ToString(), destinationRoot, plan, Verified: true, created);
-
-        SyncResult Stopped(IReadOnlyList<string> files)
-            => new(transport.Host.ToString(), destinationRoot, plan, Verified: false, created) { Moved = files };
     }
 
     /// <inheritdoc/>
-    public async Task<SyncSource> RecordAsync(string sourceRoot, CancellationToken cancellationToken = default)
-    {
-        var (context, exclusions) = await SourceAsync(sourceRoot, cancellationToken).ConfigureAwait(false);
-
-        var files = await _manifestBuilder
-            .BuildAsync(context.Layout.RepositoryRoot, exclusions.IsWithheldFromTransfer, cancellationToken)
-            .ConfigureAwait(false);
-
-        var (root, relativePath) = ConfigurationFile(context);
-        var configuration = await _localTransport.ReadFileAsync(root, relativePath, cancellationToken).ConfigureAwait(false);
-
-        return new SyncSource(files, SyncEntry.Of(relativePath, configuration));
-    }
-
-    /// <summary>
-    /// The tree a sync reads - its configuration and what it withholds - read the same way for a sync and for a record
-    /// of one.
-    /// </summary>
-    private async Task<(Repository.HarnessContext Context, SyncExclusions Exclusions)> SourceAsync(string sourceRoot, CancellationToken cancellationToken)
+    public async Task<SyncSource> ReadSourceAsync(string sourceRoot, CancellationToken cancellationToken = default)
     {
         var context = await _contextLoader.LoadAsync(sourceRoot, cancellationToken).ConfigureAwait(false);
+        var root = context.Layout.RepositoryRoot;
 
-        return (
-            context,
-            new SyncExclusions(
-                context.Config.Sync,
-                context.Config.Worktrees.Root,
-                await IgnoredPathsAsync(context.Layout.RepositoryRoot, cancellationToken).ConfigureAwait(false)));
+        // The tree's own configuration, or the main checkout's fallback: both '<root>/.harness-config/config.json'. Its
+        // bytes, read as soon as it is parsed, so the copy is given the configuration the sync decides by, whatever
+        // the file holds by the time the copy is made.
+        var configuration = await _localTransport
+            .ReadFileAsync(Path.GetDirectoryName(Path.GetDirectoryName(context.ConfigFile))!, HarnessLayout.ConfigFileRelative, cancellationToken)
+            .ConfigureAwait(false);
+
+        var exclusions = new SyncExclusions(
+            context.Config.Sync,
+            context.Config.Worktrees.Root,
+            await IgnoredPathsAsync(root, cancellationToken).ConfigureAwait(false));
+
+        // Before the tree is read, because it is about this tree and costs nothing.
+        await exclusions.RefuseWhenNoLongerIgnoredAsync(_gitClient, root, cancellationToken).ConfigureAwait(false);
+
+        // A rule somebody believes is protecting something, doubted before a deletion rests on it.
+        // A rooted entry that matches nothing here while the name exists deeper reads, to any
+        // reader, as evidence that name is protected.
+        var rooted = exclusions.RootedEntriesMatchingNothing(_fileSystem, root, _platform.PathComparison, cancellationToken);
+
+        foreach (var name in rooted.MatchingNothing)
+        {
+            _output.Warn(
+                CommandName,
+                $"sync.neverTransfer names '{name}', which is not in this tree's root though the name "
+                + $"does exist deeper in it, so this entry protects nothing. Write "
+                + $"'{PathPatterns.AnyDepth}{name}' to cover that name wherever it appears.");
+        }
+
+        if (rooted.Incomplete is { } unread)
+        {
+            // Said rather than swallowed. The entries this would have named are exactly the ones a
+            // reader believes are protecting something, so "it found none" and "it stopped looking"
+            // must not read the same.
+            _output.Warn(
+                CommandName,
+                $"sync.neverTransfer entries could not all be checked against this tree: {unread}");
+        }
+
+        SyncManifest files;
+
+        try
+        {
+            files = await _manifestBuilder
+                .BuildAsync(root, exclusions.IsWithheldFromTransfer, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Listed, then gone when it was opened: the tree changed while it was read, and what was read of it is no
+            // tree that ever existed. Said as the tree that moved it is - raised raw, it read as a defect in this tool.
+            throw new HarnessException(
+                LegExit.InputsMoved,
+                $"'{root}' changed while it was read: {ex.Message} Let it settle, then run again.",
+                ex);
+        }
+
+        return new SyncSource(context, exclusions, files, configuration);
     }
-
-    /// <summary>The files of <paramref name="recorded"/>, refused where they are another tree's than the one this sync reads.</summary>
-    /// <exception cref="ArgumentException">The record is of another tree.</exception>
-    private SyncManifest RecordedFor(SyncSource recorded, Repository.HarnessContext context)
-        => string.Equals(
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(recorded.Files.Root)),
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.Layout.RepositoryRoot)),
-                _platform.PathComparison)
-            ? recorded.Files
-            : throw new ArgumentException(
-                $"The record is of '{recorded.Files.Root}', and this sync reads '{context.Layout.RepositoryRoot}'.",
-                nameof(recorded));
 
     /// <summary>
     /// The top of everything git ignores in <paramref name="root"/>, as paths relative to it.
@@ -879,54 +882,27 @@ public sealed class SyncService(
         => links.Any(link => path.StartsWith(link + "/", StringComparison.Ordinal));
 
     /// <summary>
-    /// Puts the <c>config.json</c> this command read into the copy.
+    /// Puts the <c>config.json</c> the tree was read with into the copy.
     /// </summary>
     /// <remarks>
     /// A leg placed on a host runs DssHarness there, and DssHarness in a directory holding no
     /// <c>.harness-config/config.json</c> refuses as not initialised — so without this the copy is a
     /// tree no leg can run in, and the failure arrives as "the host could not be reached" about a
-    /// host that answered. The file is the one this command was configured from: the synced tree's
+    /// host that answered. The file is the one the tree was configured from: the synced tree's
     /// own, which for a worktree is that worktree's. Read from the main checkout instead, as it was,
-    /// a worktree's remote legs ran with a configuration the worktree did not have.
+    /// a worktree's remote legs ran with a configuration the worktree did not have. Its bytes as the
+    /// tree was read, which the sync decided by: the file as it stands by now could be an edit made
+    /// since, half saved.
     /// Written after the transfer and the git initialisation, so a copy that failed part way is
     /// never left looking like one a leg could run in. The rest of the harness's directory crosses
     /// only as far as <see cref="HarnessDirectorySync"/> lets it.
     /// </remarks>
-    /// <summary>
-    /// Places the tree's configuration in the copy, as <paramref name="recorded"/> holds it where there is a record:
-    /// false, placing nothing, where the file no longer holds what was recorded.
-    /// </summary>
-    private async Task<bool> PlaceConfigurationAsync(
-        Repository.HarnessContext context,
+    private static Task PlaceConfigurationAsync(
+        SyncSource source,
         ISyncTransport transport,
         string destinationRoot,
-        SyncEntry? recorded,
         CancellationToken cancellationToken)
-    {
-        var (configRoot, relativePath) = ConfigurationFile(context);
-
-        var contents = await _localTransport
-            .ReadFileAsync(configRoot, relativePath, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (recorded is not null && !Holds(contents, recorded))
-        {
-            return false;
-        }
-
-        await transport.WriteFileAsync(destinationRoot, relativePath, contents, cancellationToken).ConfigureAwait(false);
-        return true;
-    }
-
-    /// <summary>
-    /// Where the configuration a copy is given is read from: the tree's own, or the main checkout's fallback, both
-    /// <c>&lt;root&gt;/.harness-config/config.json</c>.
-    /// </summary>
-    private static (string Root, string RelativePath) ConfigurationFile(Repository.HarnessContext context)
-        => (Path.GetDirectoryName(Path.GetDirectoryName(context.ConfigFile))!, $"{Repository.HarnessLayout.DirectoryName}/{Repository.HarnessLayout.ConfigFileName}");
-
-    /// <summary>Whether <paramref name="contents"/> are what <paramref name="entry"/> records.</summary>
-    private static bool Holds(byte[] contents, SyncEntry entry) => SyncEntry.Of(entry.Path, contents).SameContent(entry);
+        => transport.WriteFileAsync(destinationRoot, HarnessLayout.ConfigFileRelative, source.Configuration, cancellationToken);
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<string>> PullAsync(
@@ -1085,19 +1061,19 @@ public sealed class SyncService(
         CancellationToken cancellationToken)
     {
         var contents = await from.ReadFileAsync(fromRoot, path, cancellationToken).ConfigureAwait(false);
-        var expected = FileContentHash.Of(contents);
+        var expected = FileContent.Of(contents);
 
         await to.WriteFileAsync(toRoot, path, contents, cancellationToken).ConfigureAwait(false);
         written?.Invoke();
 
-        var actual = FileContentHash.Of(await to.ReadFileAsync(toRoot, path, cancellationToken).ConfigureAwait(false));
+        var actual = FileContent.Of(await to.ReadFileAsync(toRoot, path, cancellationToken).ConfigureAwait(false));
 
-        if (!string.Equals(expected, actual, StringComparison.Ordinal))
+        if (expected != actual)
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"'{path}' did not land intact, copied from {from.Host} to {to.Host}: it was read as {expected} and "
-                + $"reads back as {actual}.");
+                $"'{path}' did not land intact, copied from {from.Host} to {to.Host}: it was read as {expected.Content} and "
+                + $"reads back as {actual.Content}.");
         }
     }
 
@@ -1287,7 +1263,7 @@ public sealed class SyncService(
 
         var take = $"'--adopt \"{transport.Host}\"'";
 
-        var configuration = $"Taking it over also replaces {HarnessLayout.DirectoryName}/config.json "
+        var configuration = $"Taking it over also replaces {HarnessLayout.ConfigFileRelative} "
             + $"there with this tree's, and makes {HarnessLayout.RunnerActionsDirectoryRelative} there match this tree's, action by action.";
 
         var survives = $"Its .git and every commit in it, the harness's own state in {HarnessLayout.DirectoryName} "
@@ -1321,12 +1297,12 @@ public sealed class SyncService(
             + "changed by this run.";
     }
 
-    /// <summary>
-    /// Carries <paramref name="plan"/> into the copy; the files to carry that no longer hold what the plan was made
-    /// from - changed, or gone, since - where any do, every one of them named and nothing more carried once the first
-    /// is found; empty once the plan is carried out.
-    /// </summary>
-    private async Task<IReadOnlyList<string>> ApplyAsync(
+    /// <summary>Carries <paramref name="plan"/> into the copy: its writes, in batches, then its deletions.</summary>
+    /// <exception cref="HarnessException">
+    /// A file to write no longer holds what the plan was made from (<see cref="LegExit.InputsMoved"/>): nothing more is
+    /// written once it is found, the batch then being gathered is dropped, and nothing is deleted.
+    /// </exception>
+    private async Task ApplyAsync(
         string sourceRoot,
         ISyncTransport transport,
         string destinationRoot,
@@ -1343,26 +1319,13 @@ public sealed class SyncService(
         // sync of a worktree's copy opened a session per file and outlasted the host's wake.
         var batch = new List<SyncFileContent>();
         var held = 0L;
-        var moved = new List<string>();
 
         foreach (var entry in plan.Writes)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Checked as it is read for carrying, against what the plan was made from: carried unchecked, a file changed
-            // since would reach the copy as content no reading of the tree recorded. Once one has moved, the rest are
-            // only read, so every file that moved is named, and nothing more is carried into a copy that cannot be the
-            // tree the plan was made from.
-            if (await CarriedAsync(sourceRoot, entry, cancellationToken).ConfigureAwait(false) is not { } contents)
-            {
-                moved.Add(entry.Path);
-                continue;
-            }
-
-            if (moved.Count > 0)
-            {
-                continue;
-            }
+            var contents = await CarriedAsync(transport, sourceRoot, destinationRoot, entry, cancellationToken)
+                .ConfigureAwait(false);
 
             // Sent before this file joins it, so a batch never holds more than the budget: a file larger
             // than the budget on its own then crosses in a batch of its own, which is what carrying it at
@@ -1375,11 +1338,6 @@ public sealed class SyncService(
 
             batch.Add(new SyncFileContent(entry.Path, contents));
             held += contents.LongLength;
-        }
-
-        if (moved.Count > 0)
-        {
-            return moved;
         }
 
         await CarryBatchAsync().ConfigureAwait(false);
@@ -1445,15 +1403,25 @@ public sealed class SyncService(
                 + $"stayed although the deletion emptied it of everything else: {string.Join(", ", directory.Held)}. "
                 + "The copy there differs from this tree until somebody removes it.");
         }
-
-        return [];
     }
 
-    /// <summary>
-    /// The bytes of the file <paramref name="entry"/> names, read for carrying, or <see langword="null"/> where it no
-    /// longer holds what <paramref name="entry"/> records: changed, or gone, since the plan was made.
-    /// </summary>
-    private async Task<byte[]?> CarriedAsync(string sourceRoot, SyncEntry entry, CancellationToken cancellationToken)
+    /// <summary>The bytes of the file <paramref name="entry"/> names, read for carrying.</summary>
+    /// <exception cref="HarnessException">
+    /// It no longer holds what <paramref name="entry"/> records - changed, or removed, since the tree was read - so the
+    /// copy cannot be made that tree (<see cref="LegExit.InputsMoved"/>).
+    /// </exception>
+    /// <remarks>
+    /// Checked as it is read: carried unchecked, a file edited since would reach the copy as content no reading of the
+    /// tree recorded, and a leg there would test it under the tree's name. Raised at the first, without reading on to
+    /// name the rest: every further read would hold the copy for nothing, and one that failed would take the answer
+    /// with it.
+    /// </remarks>
+    private async Task<byte[]> CarriedAsync(
+        ISyncTransport transport,
+        string sourceRoot,
+        string destinationRoot,
+        SyncEntry entry,
+        CancellationToken cancellationToken)
     {
         byte[] contents;
 
@@ -1461,19 +1429,25 @@ public sealed class SyncService(
         {
             contents = await _localTransport.ReadFileAsync(sourceRoot, entry.Path, cancellationToken).ConfigureAwait(false);
         }
-        catch (HarnessException) when (_fileSystem.KindOf(Path.Combine(sourceRoot, entry.Path)) != PathKind.File)
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
         {
-            // Gone since, or a directory now: a tree that moved, as surely as a file that changed. Asked what is there
-            // rather than whether a file is, so a path this process may not look at is never read as gone - the question
-            // then fails, and the read's own refusal stands.
-            return null;
+            // What reading this tree raises only where no file is there now: removed since, or a directory. A file
+            // there that cannot be opened raises as it did, never as a tree that moved.
+            throw Moved("was removed", ex);
         }
 
-        return Holds(contents, entry) ? contents : null;
+        return FileContent.Of(contents) == entry.Identity ? contents : throw Moved("changed", null);
+
+        HarnessException Moved(string what, Exception? cause) => new(
+            LegExit.InputsMoved,
+            $"{transport.Host}: '{ReportText.Printable(entry.Path)}' {what} after the tree was read for this command, before it "
+            + $"was carried to '{destinationRoot}', so that copy cannot be made the tree that was read. It is left part made, "
+            + "and nothing should run against it until a sync completes: let the tree settle, then run again.",
+            cause);
     }
 
     /// <summary>
-    /// Confirms the copy now holds exactly what the source does.
+    /// Confirms the copy now holds exactly what the tree's reading does.
     /// </summary>
     /// <exception cref="HarnessException">
     /// The copy does not match. Raised rather than answered, so returning at all is what being
@@ -1503,17 +1477,13 @@ public sealed class SyncService(
             return;
         }
 
-        var named = differences.Writes
-            .Select(entry => entry.Path)
-            .Concat(differences.Deletes)
-            .Take(5)
-            .ToList();
+        List<string> differing = [.. differences.Writes.Select(entry => entry.Path), .. differences.Deletes];
 
         throw new HarnessException(
             HarnessExit.CommandFailed,
             $"The copy at '{destinationRoot}' on {transport.Host} does not match this tree after the "
-            + $"sync: {differences.Writes.Count + differences.Deletes.Count} file(s) still differ, "
-            + $"including {string.Join(", ", named)}. Nothing should be run against it.");
+            + $"sync: {differing.Count} file(s) still differ: {ReportText.Listed(differing)}. Nothing should be "
+            + "run against it.");
     }
 
     /// <summary>

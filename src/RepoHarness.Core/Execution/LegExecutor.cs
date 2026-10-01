@@ -254,9 +254,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
                 $"Leg(s) {string.Join(", ", repeated)} were selected more than once; each leg reaches exactly one verdict.");
         }
 
-        var comparer = _platform.PathComparison == StringComparison.OrdinalIgnoreCase
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
+        var comparer = _platform.PathComparer();
 
         // Keyed by the tree as well as the directory. Two hosts commonly keep their copy at the same
         // path — `~/work/repo` is an ordinary convention — and two legs of the same variant on two

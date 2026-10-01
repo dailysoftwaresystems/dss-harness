@@ -15,8 +15,11 @@ public static class LegExit
 {
     /// <summary>
     /// Files the tests read changed while they ran, or whether they held still could not be
-    /// established. Remedy: let the tree settle, then run again. Reported apart from a failure
-    /// because the report describes a tree that never existed, so it says nothing about the code.
+    /// established; or, for a leg on another machine, a file its copy needed changed, or was
+    /// removed, after the run began - before it was carried there, or while the tree was being
+    /// read. Remedy: let the tree settle, then run again. Reported apart from a failure because it
+    /// says nothing about the code: what was tested was no tree that ever existed, or, where the
+    /// copy could not be made, nothing was.
     /// </summary>
     public const int InputsMoved = 3;
 

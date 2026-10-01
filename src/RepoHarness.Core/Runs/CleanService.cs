@@ -152,7 +152,7 @@ public sealed class CleanService(
         // The lock a build of this leg takes, so a build holding it is seen, and a build about to take it is kept out.
         var building = leg.BuildLock(RunId.New(), CommandName);
 
-        if (leg.Host.Host.Kind == HostKind.Local)
+        if (!leg.Remote)
         {
             return CleanHere(context.Layout, leg, building, request.DryRun) with { Duration = Stopwatch.GetElapsedTime(started) };
         }

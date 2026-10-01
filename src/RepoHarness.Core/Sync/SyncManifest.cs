@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Platform;
 
@@ -14,24 +15,13 @@ namespace RepoHarness.Core.Sync;
 /// </param>
 public sealed record SyncEntry(string Path, long Size, string ContentHash)
 {
-    /// <summary>The entry for <paramref name="contents"/>, read whole, at <paramref name="path"/>.</summary>
-    /// <param name="path">The file's path relative to the tree root, with forward separators.</param>
-    /// <param name="contents">Its bytes.</param>
-    public static SyncEntry Of(string path, byte[] contents)
-    {
-        ArgumentNullException.ThrowIfNull(contents);
-
-        return new SyncEntry(path, contents.LongLength, FileContentHash.Of(contents));
-    }
-
-    /// <summary>Whether <paramref name="other"/> records the same content, wherever it is: the same size and the same hash.</summary>
-    /// <param name="other">Another entry.</param>
-    public bool SameContent(SyncEntry other)
-    {
-        ArgumentNullException.ThrowIfNull(other);
-
-        return Size == other.Size && string.Equals(ContentHash, other.ContentHash, StringComparison.Ordinal);
-    }
+    /// <summary>What the file holds, as everything that compares files compares it.</summary>
+    /// <remarks>
+    /// Never written out: it is <see cref="Size"/> and <see cref="ContentHash"/> again, and an entry crosses to and
+    /// from every host in a manifest.
+    /// </remarks>
+    [JsonIgnore]
+    public FileContent Identity => new(Size, ContentHash);
 }
 
 /// <summary>The content of a tree, as the identity sync compares and confirms.</summary>

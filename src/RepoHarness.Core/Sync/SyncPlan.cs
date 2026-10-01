@@ -47,7 +47,7 @@ public sealed record SyncPlan(
     /// <summary>
     /// Compares a source manifest with a copy's and decides what to write and what to delete.
     /// </summary>
-    /// <param name="source">The tree being synced from.</param>
+    /// <param name="source">The tree being synced from, as the sync read it.</param>
     /// <param name="destination">The copy as it stands.</param>
     /// <param name="exclusions">What is withheld from transfer and protected from deletion.</param>
     /// <returns>The plan, before its deletion bound has been checked.</returns>
@@ -72,7 +72,7 @@ public sealed record SyncPlan(
             var entry = source.Entries[path];
             var had = destination.Entries.TryGetValue(path, out var existing);
 
-            if (had && existing!.SameContent(entry))
+            if (had && existing!.Identity == entry.Identity)
             {
                 unchanged++;
                 continue;

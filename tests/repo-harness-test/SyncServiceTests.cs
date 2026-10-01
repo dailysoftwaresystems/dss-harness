@@ -1,6 +1,7 @@
 using System.Globalization;
 using NSubstitute;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
@@ -24,7 +25,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -38,7 +39,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -54,7 +55,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         async Task<IReadOnlyList<string>> IndexedAsync()
             => [.. (await harness.GitClient.ListIndexAsync(copy, cancellationToken)).Select(entry => entry.Path).Order(StringComparer.Ordinal)];
@@ -82,7 +83,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -97,7 +98,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -117,7 +118,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -159,7 +160,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -186,7 +187,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -202,7 +203,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         // More files than one batch may hold, so the grouping itself is exercised rather than assumed.
         var extra = SyncServe.MostFilesInABatch + 20;
@@ -243,196 +244,323 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
     /// <summary>
-    /// A copy made from a record of the tree is that tree: a file edited and put back since the record was taken is
-    /// carried as it was recorded, one added since is not carried, and the copy is verified against the record. So a
-    /// run's hosts test the tree the run began with, whatever passed through the tree in between.
+    /// A copy made from a reading of the tree is the tree as it was read: a file edited and put back since is carried
+    /// as it was read, one added since is not carried, the configuration placed is the one read whatever the file holds
+    /// by then, and the copy is verified against the reading. So a run's hosts test the tree the run began with,
+    /// whatever passed through the tree and left it again before their syncs came round.
     /// </summary>
     [Fact]
-    public async Task ACopyMadeFromARecord_IsTheRecordedTree_WhateverPassedThroughTheTreeSince()
+    public async Task ACopyMadeFromAReading_IsTheTreeAsItWasRead_WhateverPassedThroughItAndLeftItSince()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
+        var configuration = Path.Combine(temp.Path, HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName);
+        var configured = await File.ReadAllBytesAsync(configuration, cancellationToken);
 
         try
         {
-            var recorded = await service.RecordAsync(temp.Path, cancellationToken);
+            var reading = await service.ReadSourceAsync(temp.Path, cancellationToken);
 
-            // A mutant, gone again before the sync comes round; and a file the run never had.
+            // A mutant, gone again before the sync comes round; a file the tree did not have when it was read; and the
+            // configuration half saved.
             await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "a.c"), "mutant\n", cancellationToken);
             await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "a.c"), "a\n", cancellationToken);
             await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "c.c"), "new\n", cancellationToken);
+            await File.WriteAllTextAsync(configuration, "{ \"half", cancellationToken);
 
-            var result = await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions { Source = recorded }, cancellationToken);
+            var result = await service.SyncAsync(reading, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
 
             Assert.True(result.Verified);
-            Assert.Empty(result.Moved);
             Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(copy, "src", "a.c"), cancellationToken));
             Assert.False(File.Exists(Path.Combine(copy, "src", "c.c")));
+            Assert.Equal(
+                configured,
+                await File.ReadAllBytesAsync(Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName), cancellationToken));
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
     /// <summary>
-    /// A file to be carried that no longer holds what the record does - edited, or gone, since - stops the sync, naming
-    /// every such file: the copy cannot be the recorded tree, and is never verified as though it were. One the copy
-    /// already holds as recorded is not carried, so a later edit to it moves nothing.
+    /// A file to be carried that no longer holds what was read of it - edited, even to the same size, or removed, or
+    /// made a directory, since - stops the sync at the first, as a tree that moved, naming it: the copy cannot be the
+    /// tree that was read, so it is neither made a repository nor given its configuration as though it were. One the
+    /// copy already holds as it was read is not carried, so a later edit to it moves nothing.
     /// </summary>
     [Fact]
-    public async Task AFileThatNoLongerHoldsWhatTheRecordDoes_StopsTheSync_NamingIt()
+    public async Task AFileThatNoLongerHoldsWhatWasRead_StopsTheSync_NamingIt()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
+        var a = Path.Combine(temp.Path, "src", "a.c");
+        var b = Path.Combine(temp.Path, "src", "b.c");
+
+        Task<SyncResult> SyncAsync(SyncSource reading)
+            => service.SyncAsync(reading, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
+
+        string Said(string path, string what) => SyncKit.Moved(HostId.Local, path, what, copy);
 
         try
         {
-            var first = await service.RecordAsync(temp.Path, cancellationToken);
+            var reading = await service.ReadSourceAsync(temp.Path, cancellationToken);
 
-            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "a.c"), "mutant\n", cancellationToken);
-            File.Delete(Path.Combine(temp.Path, "src", "b.c"));
+            // An edit of the same size, as a flipped operator is: its size alone would not tell it.
+            await File.WriteAllTextAsync(a, "A\n", cancellationToken);
+            File.Delete(b);
 
-            var stopped = await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions { Source = first }, cancellationToken);
+            var changed = await Assert.ThrowsAsync<HarnessException>(() => SyncAsync(reading));
 
-            Assert.False(stopped.Verified);
-            Assert.Equal(["src/a.c", "src/b.c"], stopped.Moved);
-            Assert.False(File.Exists(Path.Combine(copy, "src", "a.c")));
+            Assert.Equal(LegExit.InputsMoved, changed.ExitCode);
+            Assert.Equal(Said("src/a.c", "changed"), changed.Message);
+            Assert.False(Directory.Exists(Path.Combine(copy, ".git")));
+            Assert.False(File.Exists(Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName)));
 
-            // Made the recorded tree once the tree holds it again; then a file the copy holds as recorded, edited, moves nothing.
-            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "a.c"), "a\n", cancellationToken);
-            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "b.c"), "b\n", cancellationToken);
-            Assert.True((await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions { Source = first }, cancellationToken)).Verified);
+            await File.WriteAllTextAsync(a, "a\n", cancellationToken);
+            Assert.Equal(Said("src/b.c", "was removed"), (await Assert.ThrowsAsync<HarnessException>(() => SyncAsync(reading))).Message);
 
-            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "a.c"), "mutant\n", cancellationToken);
-            var again = await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions { Source = first }, cancellationToken);
+            Directory.CreateDirectory(b);
+            Assert.Equal(Said("src/b.c", "was removed"), (await Assert.ThrowsAsync<HarnessException>(() => SyncAsync(reading))).Message);
 
-            Assert.True(again.Verified);
-            Assert.Empty(again.Moved);
+            // Made the tree as it was read once the tree holds it again; then a file the copy holds as it was read, edited,
+            // moves nothing.
+            Directory.Delete(b);
+            await File.WriteAllTextAsync(b, "b\n", cancellationToken);
+            Assert.True((await SyncAsync(reading)).Verified);
+
+            await File.WriteAllTextAsync(a, "A\n", cancellationToken);
+            Assert.True((await SyncAsync(reading)).Verified);
             Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(copy, "src", "a.c"), cancellationToken));
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
-    /// <summary>The configuration placed beside the files is the recorded one too: one edited since stops the sync, naming it.</summary>
+    /// <summary>
+    /// A move found part way leaves what was already carried, drops the batch then being gathered, carries nothing
+    /// after it and deletes nothing: the copy is left part made, as the failure says, for the next sync of a settled
+    /// tree to put right from what the copy holds.
+    /// </summary>
     [Fact]
-    public async Task AConfigurationEditedSinceTheRecord_StopsTheSync_NamingIt()
+    public async Task AMoveFoundPartWay_LeavesWhatWasCarried_AndCarriesAndDeletesNothingMore()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
+
+        string Numbered(int index) => Path.Combine("src", $"f{index.ToString("D4", CultureInfo.InvariantCulture)}.c");
 
         try
         {
-            var recorded = await service.RecordAsync(temp.Path, cancellationToken);
-            var configuration = Path.Combine(temp.Path, HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName);
+            // A copy holding a file the tree then drops, which the sync would delete, among enough others that the
+            // deletion is well inside the bound.
+            for (var index = 0; index < 5; index++)
+            {
+                await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", $"e{index}.c"), $"kept {index}\n", cancellationToken);
+            }
 
-            await File.AppendAllTextAsync(configuration, "\n", cancellationToken);
+            await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
+            File.Delete(Path.Combine(temp.Path, "src", "b.c"));
 
-            var stopped = await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions { Source = recorded }, cancellationToken);
+            // More files than a batch holds ahead of the one that moves, and one after it.
+            for (var index = 0; index < SyncServe.MostFilesInABatch + 20; index++)
+            {
+                await File.WriteAllTextAsync(Path.Combine(temp.Path, Numbered(index)), $"file {index}\n", cancellationToken);
+            }
 
-            Assert.False(stopped.Verified);
-            Assert.Equal([$"{HarnessLayout.DirectoryName}/{HarnessLayout.ConfigFileName}"], stopped.Moved);
-            Assert.False(File.Exists(Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName)));
+            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "m.c"), "m\n", cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "z.c"), "z\n", cancellationToken);
+
+            var reading = await service.ReadSourceAsync(temp.Path, cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "m.c"), "M\n", cancellationToken);
+
+            var stopped = await Assert.ThrowsAsync<HarnessException>(
+                () => service.SyncAsync(reading, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken));
+
+            Assert.Equal(LegExit.InputsMoved, stopped.ExitCode);
+            Assert.Contains("'src/m.c' changed", stopped.Message, StringComparison.Ordinal);
+
+            Assert.True(File.Exists(Path.Combine(copy, Numbered(0))));
+            Assert.False(File.Exists(Path.Combine(copy, Numbered(SyncServe.MostFilesInABatch + 19))));
+            Assert.False(File.Exists(Path.Combine(copy, "src", "z.c")));
+            Assert.True(File.Exists(Path.Combine(copy, "src", "b.c")));
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
     /// <summary>
-    /// A sync of the tree as it stands is held to what it read too: a file that changes between being read for the plan
-    /// and being carried stops the sync, naming it, rather than reaching the copy as content the plan never read.
+    /// A sync made from a reading decides what it may delete by the configuration read, not the file as it stands by
+    /// then: an entry taken out of sync.neverTransfer since does not expose what it protected on the host, which a
+    /// sync deciding by the file deleted before anything noticed the tree had moved.
     /// </summary>
     [Fact]
-    public async Task AFileThatChangesWhileTheTreeIsSynced_StopsTheSync_NamingIt()
+    public async Task ASyncFromAReading_DecidesByTheConfigurationRead_NotTheFileAsItStandsByThen()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var (harness, _) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
-        var moving = new ChangedWhenCarried(harness.FileSystem, Path.Combine(temp.Path, "src", "a.c"));
-        var service = SyncKit.Service(harness, fileSystem: moving);
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var copy = SyncKit.CopyPath(temp);
+
+        harness.WriteConfig(temp.Path, new HarnessConfig { Sync = new SyncConfig { NeverTransfer = ["build", "keep"] } });
 
         try
         {
-            var stopped = await service.SyncAsync(temp.Path, SyncKit.Transport(harness, moving), copy, new SyncOptions(), cancellationToken);
+            await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
 
-            Assert.False(stopped.Verified);
-            Assert.Equal(["src/a.c"], stopped.Moved);
+            // The host's own, which the tree never has.
+            Directory.CreateDirectory(Path.Combine(copy, "keep"));
+            await File.WriteAllTextAsync(Path.Combine(copy, "keep", "warm.bin"), "warm\n", cancellationToken);
+
+            var reading = await service.ReadSourceAsync(temp.Path, cancellationToken);
+            harness.WriteConfig(temp.Path, new HarnessConfig());
+
+            Assert.True((await service.SyncAsync(reading, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken)).Verified);
+            Assert.True(File.Exists(Path.Combine(copy, "keep", "warm.bin")));
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
     /// <summary>
-    /// The sync command fails where the tree moved while it synced a host, naming the host, the copy and the files, and
-    /// saying what to do: the copy there is not this tree, and nothing should be run against it.
+    /// A reading holds what a sync carries and nothing git ignores: what a build left in the tree is no part of it, so
+    /// it is never carried to a host as the tree.
     /// </summary>
     [Fact]
-    public async Task TheSyncCommand_FailsWhereTheTreeMovedWhileItSynced_NamingTheFiles()
+    public async Task AReading_HoldsWhatASyncCarries_AndNothingTheTreeIgnores()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (_, service) = await PrepareAsync(temp, cancellationToken);
+
+        await File.AppendAllTextAsync(Path.Combine(temp.Path, ".gitignore"), "out/\n", cancellationToken);
+        Directory.CreateDirectory(Path.Combine(temp.Path, "out"));
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "out", "x.o"), "object\n", cancellationToken);
+
+        var reading = await service.ReadSourceAsync(temp.Path, cancellationToken);
+
+        Assert.Contains("src/a.c", reading.Files.Entries.Keys);
+        Assert.DoesNotContain("out/x.o", reading.Files.Entries.Keys);
+    }
+
+    /// <summary>
+    /// A file listed in the tree and gone when it is opened, while the tree is read, is a tree that moved, said so:
+    /// raised raw, it read as a defect in this tool.
+    /// </summary>
+    [Fact]
+    public async Task AFileGoneBetweenBeingListedAndOpened_IsATreeThatMovedWhileItWasRead()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, _) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
-        var moving = new ChangedWhenCarried(harness.FileSystem, Path.Combine(temp.Path, "src", "a.c"));
+        var service = SyncKit.Service(harness, fileSystem: new GoneWhenOpened(harness.FileSystem, Path.Combine(temp.Path, "src", "a.c")));
+
+        var moved = await Assert.ThrowsAsync<HarnessException>(() => service.ReadSourceAsync(temp.Path, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, moved.ExitCode);
+        Assert.Contains("changed while it was read", moved.Message, StringComparison.Ordinal);
+        Assert.Contains("a.c", moved.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The sync command reads its tree once, for every host, so two hosts' copies are never two moments of a tree that
+    /// moved in between: a file that changed once the first host's copy was made fails the second's sync, as the
+    /// command's own failure, naming the host, the file and the copy, after what it did for the first.
+    /// </summary>
+    [Fact]
+    public async Task TheSyncCommand_ReadsTheTreeOnceForEveryHost_AndFailsWhereItMovedBetweenThem()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, _) = await PrepareAsync(temp, cancellationToken);
+        var copies = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["pi"] = SyncKit.CopyPath(temp),
+            ["pj"] = SyncKit.CopyPath(temp),
+        };
 
         var config = new HarnessConfig
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
-            Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = copy } } },
-            Legs = { ["arm"] = HostDoubles.Leg("linux", "arm64") },
+            Hosts = new HostsConfig
+            {
+                Ssh =
+                {
+                    ["pi"] = new SshHostConfig { RepositoryPath = copies["pi"] },
+                    ["pj"] = new SshHostConfig { RepositoryPath = copies["pj"] },
+                },
+            },
+            Legs = { ["arm"] = HostDoubles.Leg("linux", "arm64"), ["risc"] = HostDoubles.Leg("linux", "riscv64") },
         };
 
         var inspector = new RecordingInspector(host => host.Kind == HostKind.Local
             ? new HostReport { Host = host, Os = "linux", Processor = "x86_64" }
-            : new HostReport { Host = host, Os = "linux", Processor = "arm64", Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness") });
+            : new HostReport
+            {
+                Host = host,
+                Os = "linux",
+                Processor = host.Name == "pi" ? "arm64" : "riscv64",
+                Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness"),
+            });
 
+        // The file changes as the second host's sync begins, once the first host's copy is made.
+        var reached = new List<HostId>();
         var transports = Substitute.For<ISyncTransportFactory>();
-        transports.For(Arg.Any<HostReport>()).Returns(call => new RecordingTransport(SyncKit.Transport(harness, moving), reports: call.Arg<HostReport>().Host));
+        transports.For(Arg.Any<HostReport>()).Returns(call =>
+        {
+            var host = call.Arg<HostReport>().Host;
+            reached.Add(host);
 
-        var service = SyncKit.Service(harness, loader: HostDoubles.Loader(config, temp.Path, temp.Path), inspector: inspector, transports: transports, fileSystem: moving);
+            if (reached.Count == 2)
+            {
+                File.WriteAllText(Path.Combine(temp.Path, "src", "a.c"), "A\n");
+            }
+
+            return new RecordingTransport(SyncKit.Transport(harness), reports: host);
+        });
+
+        var service = SyncKit.Service(harness, loader: HostDoubles.Loader(config, temp.Path, temp.Path), inspector: inspector, transports: transports);
 
         try
         {
             var outcome = await service.SyncHostsAsync(temp.Path, null, new SyncOptions(), [], cancellationToken);
 
+            Assert.Equal(2, reached.Count);
             Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
-            Assert.Equal(
-                $"ssh pi: 1 file changed while '{copy}' was synced: src/a.c. The copy there is not this tree, and nothing "
-                + "should be run against it: sync again once the tree holds still.",
-                outcome.Message);
+            Assert.Equal(SyncKit.Moved(reached[1], "src/a.c", "changed", copies[reached[1].Name]), outcome.Message);
+            Assert.Contains($"{reached[0]}: {copies[reached[0].Name]}", outcome.Details ?? []);
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copies["pi"]);
+            SyncKit.DeleteIfPresent(copies["pj"]);
         }
     }
 
-    /// <summary>The real file system, save that one file read whole for carrying holds what it did not when it was hashed.</summary>
-    private sealed class ChangedWhenCarried(Core.FileSystem.IFileSystem inner, string changed) : PassThroughFileSystem(inner)
+    /// <summary>The real file system, save that one file, listed as ever, is gone when it is opened.</summary>
+    private sealed class GoneWhenOpened(Core.FileSystem.IFileSystem inner, string gone) : PassThroughFileSystem(inner)
     {
-        public override async Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken = default)
-            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(changed), StringComparison.OrdinalIgnoreCase)
-                ? "changed meanwhile\n"u8.ToArray()
-                : await base.ReadAllBytesAsync(path, cancellationToken);
+        public override Stream OpenRead(string path)
+            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(gone), StringComparison.OrdinalIgnoreCase)
+                ? throw new FileNotFoundException($"Could not find file '{path}'.", path)
+                : base.OpenRead(path);
     }
 
     [Fact]
@@ -443,7 +571,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -463,7 +591,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -475,7 +603,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -493,7 +621,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -505,7 +633,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -523,7 +651,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -538,7 +666,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -568,7 +696,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -584,7 +712,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -617,7 +745,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -688,7 +816,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -709,7 +837,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -726,7 +854,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -765,7 +893,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -781,7 +909,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var elsewhere = Path.Combine(temp.Path, "..", "elsewhere-" + Guid.NewGuid().ToString("N")[..8]);
 
         try
@@ -806,8 +934,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
-            DeleteIfPresent(elsewhere);
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(elsewhere);
         }
     }
 
@@ -821,7 +949,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -844,7 +972,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -858,8 +986,8 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var made = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
-        var taken = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var made = SyncKit.CopyPath(temp);
+        var taken = SyncKit.CopyPath(temp);
 
         try
         {
@@ -884,8 +1012,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(made);
-            DeleteIfPresent(taken);
+            SyncKit.DeleteIfPresent(made);
+            SyncKit.DeleteIfPresent(taken);
         }
     }
 
@@ -904,7 +1032,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -925,7 +1053,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -939,7 +1067,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -964,7 +1092,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -978,7 +1106,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -998,7 +1126,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1013,7 +1141,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -1032,7 +1160,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1044,7 +1172,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -1060,7 +1188,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1070,7 +1198,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -1083,7 +1211,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1095,7 +1223,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var landing = Path.Combine(temp.Path, "artefacts");
 
         try
@@ -1114,7 +1242,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1134,7 +1262,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var landing = Path.Combine(temp.Path, "artefacts");
 
         try
@@ -1153,7 +1281,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1166,7 +1294,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var outside = Path.Combine(temp.Path, "..", "outside-" + Guid.NewGuid().ToString("N")[..8] + ".txt");
 
         try
@@ -1183,7 +1311,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
             File.Delete(Path.Combine(temp.Path, "src", "linked.c"));
             File.Delete(outside);
         }
@@ -1242,7 +1370,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -1273,7 +1401,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1294,7 +1422,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -1311,7 +1439,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1327,7 +1455,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -1345,7 +1473,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1362,7 +1490,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -1379,7 +1507,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1394,7 +1522,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var elsewhere = Path.Combine(temp.Path, "..", "elsewhere-" + Guid.NewGuid().ToString("N")[..8]);
 
         try
@@ -1420,8 +1548,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
-            DeleteIfPresent(elsewhere);
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(elsewhere);
         }
     }
 
@@ -1436,7 +1564,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var elsewhere = Path.Combine(temp.Path, "..", "elsewhere-" + Guid.NewGuid().ToString("N")[..8]);
 
         try
@@ -1458,8 +1586,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
-            DeleteIfPresent(elsewhere);
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(elsewhere);
         }
     }
 
@@ -1843,7 +1971,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -1873,7 +2001,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -1889,7 +2017,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var elsewhere = Path.Combine(temp.Path, "..", "elsewhere-" + Guid.NewGuid().ToString("N")[..8]);
 
         try
@@ -1922,8 +2050,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
-            DeleteIfPresent(elsewhere);
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(elsewhere);
         }
     }
 
@@ -1976,8 +2104,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(named);
-            DeleteIfPresent(other);
+            SyncKit.DeleteIfPresent(named);
+            SyncKit.DeleteIfPresent(other);
         }
     }
 
@@ -2019,7 +2147,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var counting = new RecordingTransport(SyncKit.Transport(harness));
 
         try
@@ -2035,7 +2163,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -2052,7 +2180,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -2074,7 +2202,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -2089,7 +2217,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -2107,7 +2235,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -2129,7 +2257,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
         var elsewhere = Path.Combine(temp.Path, "..", "elsewhere-" + Guid.NewGuid().ToString("N")[..8]);
 
         try
@@ -2160,8 +2288,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
-            DeleteIfPresent(elsewhere);
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(elsewhere);
         }
     }
 
@@ -2274,7 +2402,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         temp.WriteFile(".harness-config/runner/actions/committed/committed.yml", "steps: []\n");
         await harness.CommitAllAsync(temp.Path, "an action", cancellationToken);
@@ -2289,7 +2417,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -2304,7 +2432,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         temp.WriteFile(".harness-config/runner/actions/old/old.yml", "steps: []\n");
         await harness.CommitAllAsync(temp.Path, "an action", cancellationToken);
@@ -2333,7 +2461,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -2347,7 +2475,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         temp.WriteFile(".harness-config/sshItems/vps/item.env", "SECRET=1\n");
 
@@ -2365,7 +2493,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -2380,7 +2508,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         await File.AppendAllTextAsync(Path.Combine(temp.Path, ".gitignore"), "*.env\n", cancellationToken);
         await harness.CommitAllAsync(temp.Path, "ignore env", cancellationToken);
@@ -2397,7 +2525,7 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -2414,7 +2542,7 @@ public sealed class SyncServiceTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
         var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
-        var copy = Path.GetFullPath(Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]));
+        var copy = Path.GetFullPath(SyncKit.CopyPath(temp));
 
         try
         {
@@ -2432,8 +2560,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
-            DeleteIfPresent(worktree);
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(worktree);
         }
     }
 
@@ -2485,7 +2613,7 @@ public sealed class SyncServiceTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
         var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
-        var mainCopy = Path.GetFullPath(Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]));
+        var mainCopy = Path.GetFullPath(SyncKit.CopyPath(temp));
         var name = HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase);
         var worktreeCopy = HostCopies.ForWorktree(mainCopy, name);
         var stoppedCopy = HostCopies.ForWorktree(mainCopy + "-stopped", name);
@@ -2515,11 +2643,11 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(mainCopy);
-            DeleteIfPresent(worktreeCopy);
-            DeleteIfPresent(stoppedCopy);
-            DeleteIfPresent(dryCopy);
-            DeleteIfPresent(worktree);
+            SyncKit.DeleteIfPresent(mainCopy);
+            SyncKit.DeleteIfPresent(worktreeCopy);
+            SyncKit.DeleteIfPresent(stoppedCopy);
+            SyncKit.DeleteIfPresent(dryCopy);
+            SyncKit.DeleteIfPresent(worktree);
         }
     }
 
@@ -2534,7 +2662,7 @@ public sealed class SyncServiceTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
         var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
-        var copy = HostCopies.ForWorktree(Path.GetFullPath(Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8])), HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase));
+        var copy = HostCopies.ForWorktree(Path.GetFullPath(SyncKit.CopyPath(temp)), HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase));
         var other = temp.Combine("elsewhere", Path.GetFileName(worktree));
         Directory.CreateDirectory(other);
 
@@ -2554,8 +2682,8 @@ public sealed class SyncServiceTests
         }
         finally
         {
-            DeleteIfPresent(copy);
-            DeleteIfPresent(worktree);
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(worktree);
         }
     }
 
@@ -2702,7 +2830,7 @@ public sealed class SyncServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, service) = await PrepareAsync(temp, cancellationToken);
-        var copy = Path.Combine(temp.Path, "..", "copy-" + Guid.NewGuid().ToString("N")[..8]);
+        var copy = SyncKit.CopyPath(temp);
 
         try
         {
@@ -2728,12 +2856,12 @@ public sealed class SyncServiceTests
             }
             finally
             {
-                DeleteIfPresent(mine);
+                SyncKit.DeleteIfPresent(mine);
             }
         }
         finally
         {
-            DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -2783,20 +2911,5 @@ public sealed class SyncServiceTests
         var service = SyncKit.Service(harness);
 
         return (harness, service);
-    }
-
-    private static void DeleteIfPresent(string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-            {
-                new HarnessFactory().FileSystem.DeleteDirectory(path);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            TestContext.Current.AddWarning($"The sync copy at '{path}' could not be deleted: {ex.Message}");
-        }
     }
 }

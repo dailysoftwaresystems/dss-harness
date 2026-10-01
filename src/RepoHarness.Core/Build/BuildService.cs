@@ -367,8 +367,8 @@ public sealed class BuildService(
             return await FinishAsync(
                 ReachedVerdict.Of(
                     LegVerdict.Failed,
-                    $"{dependencies.WithoutHeaders.Count} object(s) recorded no header dependencies, "
-                    + $"including {string.Join(", ", dependencies.WithoutHeaders.Take(3))}"),
+                    $"{dependencies.WithoutHeaders.Count} object(s) recorded no header dependencies: "
+                    + ReportText.Listed(dependencies.WithoutHeaders)),
                 dependencies)
                 .ConfigureAwait(false);
         }

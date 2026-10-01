@@ -25,8 +25,10 @@ public enum LegVerdict
     /// <summary>
     /// Files the tests read changed while they ran, so some tests saw the old files and some the
     /// new. Measured: eight failures, all passing seconds later on the unchanged tree. For a leg on
-    /// another machine, also its tree changed after the run began, before that machine's copy was
-    /// made of it, so the copy could not be the tree the run began with and nothing of it ran.
+    /// another machine, also: a file its copy needed changed, or was removed, after the run read
+    /// the tree as it began and before the file was carried there - or went while the tree was
+    /// being read - so the copy could not be made the tree the run began with, and nothing of the
+    /// leg ran.
     /// </summary>
     InputsMoved,
 

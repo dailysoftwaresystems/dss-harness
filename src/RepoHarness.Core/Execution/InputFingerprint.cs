@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Execution;
@@ -29,6 +30,9 @@ public sealed record FileFingerprint(string Path, long Length, string Content)
     /// time could not be read.
     /// </summary>
     public DateTime? Created { get; init; }
+
+    /// <summary>What the file holds, as everything that compares files compares it.</summary>
+    public FileContent Identity => new(Length, Content);
 }
 
 /// <summary>An input file that could not be fingerprinted, and why.</summary>
@@ -107,9 +111,6 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
     /// not absence, that leaves the question open.
     /// </summary>
     public const string AbsentContent = "absent";
-
-    /// <summary>How many changed inputs the ledger names before it counts the rest.</summary>
-    private const int NamedInDetail = 3;
 
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
@@ -213,7 +214,7 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
             return new InputComparison(
                 InputChange.Unmeasured,
                 unmeasured,
-                $"{Counted(unmeasured.Count, "input")} could not be read: {Named(unmeasured)}");
+                $"{Describe(unmeasured.Count, "input")} could not be read: {ReportText.Listed(unmeasured)}");
         }
 
         if (watch?.Failure is { } failure)
@@ -235,7 +236,7 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
             : new InputComparison(
                 InputChange.Moved,
                 moved,
-                $"{Counted(moved.Count, "input")} changed: {Named(moved)}");
+                $"{Describe(moved.Count, "input")} changed: {ReportText.Listed(moved)}");
     }
 
     private static IEnumerable<string> Differences(InputSnapshot before, InputSnapshot after)
@@ -247,9 +248,7 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
         {
             // A file the second snapshot never looked at is a change in what was measured, not
             // evidence that nothing happened to it.
-            if (!end.TryGetValue(path, out var last)
-                || last.Length != first.Length
-                || !string.Equals(last.Content, first.Content, StringComparison.Ordinal))
+            if (!end.TryGetValue(path, out var last) || last.Identity != first.Identity)
             {
                 yield return path;
             }
@@ -291,24 +290,13 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
         }
     }
 
-    /// <summary>A count of things as a detail says it: <c>1 input</c>, <c>3 inputs</c>.</summary>
-    /// <param name="count">How many.</param>
-    /// <param name="noun">What they are, one of them.</param>
-    internal static string Counted(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
-
-    /// <summary>Files as a detail names them: the first three, and how many more.</summary>
-    /// <param name="paths">The files, relative to the tree.</param>
-    internal static string Named(IReadOnlyList<string> paths)
-        => paths.Count <= NamedInDetail
-            ? string.Join(", ", paths)
-            : string.Join(", ", paths.Take(NamedInDetail)) + $", and {paths.Count - NamedInDetail} more";
+    private static string Describe(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
 
     /// <summary>Forward slashes everywhere, so one input is one name in the report on every platform.</summary>
     private static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
 
     /// <summary>How input paths compare: as this platform compares paths, since that is what decides whether two names are one file.</summary>
-    private StringComparer Comparer
-        => _platform.PathComparison == StringComparison.OrdinalIgnoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    private StringComparer Comparer => _platform.PathComparer();
 }
 
 /// <summary>

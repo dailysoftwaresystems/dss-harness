@@ -54,6 +54,9 @@ public sealed record PlacedLeg(
     /// </remarks>
     public string TreeKey => CompositeKey.Of(Host.Host.ToString(), HostTreeRoot);
 
+    /// <summary>Whether the leg runs on another machine - a WSL distribution or an ssh host - from its copy of the tree there.</summary>
+    public bool Remote => Host.Host.Kind != HostKind.Local;
+
     /// <summary>
     /// The host as the machine that typed the command names it: the one this leg landed on, or, where
     /// a host runs a leg another machine dispatched to it, the name that machine knows it by.
@@ -259,8 +262,8 @@ public sealed record PlacedLeg(
     {
         Name = Name,
         BuildDirectory = BuildDirectory,
-        TreeKey = Host.Host.Kind == HostKind.Local ? string.Empty : TreeKey,
-        Tree = Host.Host.Kind == HostKind.Local ? string.Empty : $"'{HostTreeRoot}' on {Named}",
+        TreeKey = Remote ? TreeKey : string.Empty,
+        Tree = Remote ? $"'{HostTreeRoot}' on {Named}" : string.Empty,
         Emulated = Emulated,
         MachineKey = Host.Host.MachineKey,
         Host = Named.ToString(),
@@ -397,12 +400,10 @@ public static class LegRunPlan
     /// </remarks>
     private static void RefuseSharedHostCopies(List<PlacedLeg> placed, IHostPlatform platform)
     {
-        var comparer = platform.PathComparison == StringComparison.Ordinal
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase;
+        var comparer = platform.PathComparer();
 
         var contested = placed
-            .Where(leg => leg.Host.Host.Kind != HostKind.Local)
+            .Where(leg => leg.Remote)
             .GroupBy(leg => leg.TreeKey, LegPlan.TreeKeyComparer)
             .Where(group => group.Select(leg => leg.TreeRoot).Distinct(comparer).Count() > 1)
             .Select(group =>
@@ -432,9 +433,7 @@ public static class LegRunPlan
     /// </remarks>
     private static void RefuseSharedBuildDirectories(List<PlacedLeg> placed, IHostPlatform platform)
     {
-        var comparer = platform.PathComparison == StringComparison.Ordinal
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase;
+        var comparer = platform.PathComparer();
 
         var byDirectory = placed
             .GroupBy(
