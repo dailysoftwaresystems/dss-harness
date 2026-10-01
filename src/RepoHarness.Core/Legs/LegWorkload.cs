@@ -45,7 +45,10 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// </summary>
     public bool StartsPrograms => Build || Test || Programs.Count > 0 || UnderOwnPath.Count > 0 || OnlyOn.Count > 0;
 
-    /// <summary>Whether the runner the command runs says its legs are heavy, where they build nothing.</summary>
+    /// <summary>
+    /// Whether what the command runs says its legs are heavy, where they build nothing: the runner, or a step of it
+    /// that this run runs.
+    /// </summary>
     public bool DeclaredHeavy { get; init; }
 
     /// <summary>
@@ -76,10 +79,14 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// and is only asked about: see <see cref="UnderOwnPath"/>.
     /// </remarks>
     /// <param name="checks">
-    /// The runners its expected exceptions' run checks name, which run within its legs: any of them heavy - requiring
-    /// the build, or saying so - makes its legs heavy, as the runner itself would.
+    /// The runners its expected exceptions' run checks name, which run within its legs, each with the action steps a
+    /// run of it runs: any of them heavy - requiring the build, or saying so, itself or by a step - makes its legs
+    /// heavy, as the runner itself would.
     /// </param>
-    public static LegWorkload ForRunner(RunnerConfig runner, ActionFile? action, IEnumerable<RunnerConfig>? checks = null)
+    public static LegWorkload ForRunner(
+        RunnerConfig runner,
+        ActionFile? action,
+        IEnumerable<(RunnerConfig Runner, ActionFile? Action)>? checks = null)
     {
         ArgumentNullException.ThrowIfNull(runner);
 
@@ -99,9 +106,16 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
         {
             UnderOwnPath = [.. everywhere.Where(start => start.OwnPath).Select(start => start.Program)],
             OnlyOn = [.. starts.Where(start => start.RunOn.Count > 0)],
-            DeclaredHeavy = runner.Heavy == true || (checks ?? []).Any(check => check.RequireBuild || check.Heavy == true),
+            DeclaredHeavy = Declares(runner, action) || (checks ?? []).Any(check => check.Runner.RequireBuild || Declares(check.Runner, check.Action)),
         };
     }
+
+    /// <summary>
+    /// Whether <paramref name="runner"/> says its legs are heavy, or a step of <paramref name="action"/> - the steps a run
+    /// of it runs - does.
+    /// </summary>
+    private static bool Declares(RunnerConfig runner, ActionFile? action)
+        => runner.Heavy == true || (action?.Steps.Any(step => step.Heavy) ?? false);
 
     /// <summary>
     /// What the command starts on a leg of <paramref name="os"/>: what it starts on every leg, and

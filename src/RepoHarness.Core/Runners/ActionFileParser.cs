@@ -424,6 +424,7 @@ public sealed class ActionFileParser(
         var outputs = (IReadOnlyList<string>)[];
         var persist = false;
         var manual = false;
+        var heavy = false;
         YamlNode? needsNode = null;
         YamlNode? inputsNode = null;
         var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -480,6 +481,10 @@ public sealed class ActionFileParser(
 
                 case "manual":
                     manual = ReadFlag(valueNode, "manual", problems);
+                    break;
+
+                case "heavy":
+                    heavy = ReadFlag(valueNode, "heavy", problems);
                     break;
 
                 // Read once the step's name is known, which a problem in either names.
@@ -600,6 +605,7 @@ public sealed class ActionFileParser(
             Outputs = outputs,
             Persist = persist,
             Manual = manual,
+            Heavy = heavy,
             Needs = needs,
             Inputs = stepInputs,
         };

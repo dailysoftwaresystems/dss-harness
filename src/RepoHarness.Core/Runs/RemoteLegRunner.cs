@@ -72,12 +72,18 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
         var nonce = HostAgentProtocol.NewNonce();
 
+        // The leg's own command verbose where this one is: what -v shows - each step's output - is that command's to
+        // write, and the agent's own --verbose below reaches the agent alone, so a leg on a host printed its verdict and
+        // nothing else while a leg here streamed its steps. Written to the host's standard error under --json, it is
+        // relayed from there like every line of it.
+        string[] verbosity = _output.IsVerbose ? [HostAgentProtocol.VerboseOption] : [];
+
         var request = JsonSerializer.Serialize(
             new HostAgentRequest
             {
                 Kind = HostAgentRequestKind.Run,
                 Directory = leg.HostTreeRoot,
-                Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. arguments],
+                Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. verbosity, .. arguments],
                 Nonce = nonce,
             },
             HostAgentProtocol.JsonOptions);

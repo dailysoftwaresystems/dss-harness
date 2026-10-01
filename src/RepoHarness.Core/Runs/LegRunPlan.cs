@@ -76,6 +76,12 @@ public sealed record PlacedLeg(
     private readonly HostId? _named;
 
     /// <summary>
+    /// What the leg's build still needs on its host, as it was placed there: what its admission claims of the room on
+    /// that machine; <see langword="null"/> where nothing says, or the command builds nothing.
+    /// </summary>
+    public RoomNeed? Need { get; init; }
+
+    /// <summary>
     /// What the developer environment the leg's toolchain names set up for it, on the machine that runs
     /// it: empty until it is set up there, and for a leg whose toolchain names none.
     /// </summary>
@@ -315,7 +321,7 @@ public static class LegRunPlan
                 continue;
             }
 
-            placed.Add(Place(context, placement.Leg, placement.Host, report.Here, platform.PathComparison));
+            placed.Add(Place(context, placement.Leg, placement.Host, report.Here, platform.PathComparison) with { Need = placement.Need });
         }
 
         RefuseSharedBuildDirectories(placed, platform);

@@ -52,10 +52,7 @@ internal static class TestCommand
         Description = "Take a lock a run on another host holds. Always a human decision.",
     };
 
-    private static readonly Option<bool> UseStagedOption = new("--use-staged")
-    {
-        Description = "Test what is already staged on each host, without syncing again.",
-    };
+    private static readonly Option<bool> UseStagedOption = DispatchOptions.UseStaged("Test");
 
     private static readonly Option<bool> SkipBuildOption = new("--no-build")
     {

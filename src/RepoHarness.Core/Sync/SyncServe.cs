@@ -39,7 +39,7 @@ public static class SyncServe
     /// was carried, and reading it as anything else would turn a finished copy into one that still
     /// needs somebody's permission.
     /// <para>
-    /// A mark that is spelled and is not one of the two a copy can carry is refused rather than
+    /// A mark that is spelled and is not one of those a copy can carry is refused rather than
     /// read as complete. <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/> answers yes to
     /// any number, so <c>"7"</c> and <c>"0"</c> both parse, and both would be written down as a
     /// copy that was taken over and finished. It means the two ends are different builds, which the
@@ -57,7 +57,7 @@ public static class SyncServe
         }
 
         return Enum.TryParse<CopyMark>(arguments[1], ignoreCase: false, out var mark)
-            && mark is CopyMark.Complete or CopyMark.AdoptionStopped
+            && mark is CopyMark.Complete or CopyMark.AdoptionStopped or CopyMark.Unfinished
                 ? mark
                 : throw new HarnessException(
                     HarnessExit.UsageError,
@@ -425,6 +425,13 @@ public enum CopyMark
     /// plan would now report, because a plan can only see what survived.
     /// </summary>
     AdoptionStopped,
+
+    /// <summary>
+    /// A copy this tool made, which a sync began writing and did not finish: part of the tree that sync
+    /// was given and part of the one before, which no run began with. Still this tool's own, which the
+    /// next sync puts right; nothing a run on what is staged tests, nor a carry writes into, until then.
+    /// </summary>
+    Unfinished,
 }
 
 /// <summary>One file's bytes, base64 encoded so they survive a line of text intact.</summary>

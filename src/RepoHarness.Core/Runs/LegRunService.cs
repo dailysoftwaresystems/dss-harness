@@ -122,6 +122,22 @@ public sealed class LegRunService(
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
 
+        // A host running what another machine dispatched to it, on what is staged there: a copy a sync stopped making part
+        // way holds part of one tree and part of another, which no run began with, and is refused until a sync finishes
+        // it rather than tested as though it were a tree. Refused as the run's own, which the machine that dispatched it
+        // reports as its run's: the command line asked for what this copy cannot give.
+        if (request.UseStaged
+            && request.Here is { } here
+            && await _transportFactory.For(new HostReport { Host = HostId.Local }).ReadMarkAsync(context.Layout.RepositoryRoot, cancellationToken).ConfigureAwait(false)
+                is CopyMark.Unfinished)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"{here}: '{context.Layout.RepositoryRoot}' is a copy a sync stopped making part way, so it holds part of one tree "
+                + "and part of another, and --use-staged has nothing current to run there. Run without --use-staged, which "
+                + "syncs it first, or sync it, and run again.");
+        }
+
         // Hosts are measured before anything runs, and DssHarness on each is brought to this
         // machine's build there, so a leg never starts on a host that turns out not to answer. A leg
         // goes where a sync puts its tree whatever this command starts, so a run on what is already
@@ -517,6 +533,18 @@ public sealed class LegRunService(
             return null;
         }
 
+        // What its build still needs of this machine's room, where something says: on the filesystem of its build
+        // directory, or for a WSL distribution's leg on this machine's drive where WSL keeps the distribution's disk,
+        // which this machine's own legs fill too. Room inside the distribution's disk was counted as it was placed, and
+        // cannot be read from here.
+        var room = leg.Need is not { } need
+            ? null
+            : leg.Host.Host.Kind != HostKind.Wsl
+                ? new AdmissionRoom(need.Bytes, need.Source, leg.BuildDirectory, string.Empty)
+                : leg.Host.DiskImageSpace is { } image
+                    ? new AdmissionRoom(need.Bytes, need.Source, image.Filesystem, ", where WSL keeps its disk")
+                    : null;
+
         return await _admission
             .AdmitAsync(
                 new AdmissionRequest(
@@ -527,7 +555,8 @@ public sealed class LegRunService(
                     leg.Host.Host.ToString(),
                     leg.HostTreeRoot,
                     leg.Variant.DirectoryName,
-                    message => ledger.Transition(leg.Name, message)),
+                    message => ledger.Transition(leg.Name, message),
+                    room),
                 cancellationToken)
             .ConfigureAwait(false);
     }

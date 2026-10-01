@@ -278,6 +278,30 @@ public sealed class LegsServiceTests
     }
 
     /// <summary>
+    /// A leg placed where its build fits carries what that build still needs to its admission, which holds it against
+    /// every other command's legs on the machine; a leg whose need nothing says carries none.
+    /// </summary>
+    [Fact]
+    public async Task ALegPlacedWhereItsBuildFits_CarriesItsNeedToItsAdmission()
+    {
+        var fixture = Create(
+            new()
+            {
+                ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = 8 },
+                ["arm-release"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "release" },
+            },
+            configure: config => config.BuildConfigs["release"] = new BuildConfiguration(),
+            rooms: (_, path) => Room(path, exists: false, recorded: null, free: 30));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new RoomNeed(8L << 30, "as its buildSpaceGiB, 8, declares"),
+            report.Placements.Single(placement => placement.Leg.Name == "arm").Need);
+        Assert.Null(report.Placements.Single(placement => placement.Leg.Name == "arm-release").Need);
+    }
+
+    /// <summary>
     /// Legs building on one filesystem of one host are counted together, in the order they were selected,
     /// because every build directory stays once built: a leg that does not fit beside those before it is turned
     /// away, naming them, and they are kept.

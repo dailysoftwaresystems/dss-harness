@@ -1793,10 +1793,54 @@ public sealed class ConfigStoreTests
     {
         var light = new RunnerConfig { Action = "a/a.yml" };
 
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [new RunnerConfig { Action = "b/b.yml", Heavy = true }]).Heavy);
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [new RunnerConfig { Action = "b/b.yml", RequireBuild = true }]).Heavy);
-        Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, [new RunnerConfig { Action = "b/b.yml" }]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml", Heavy = true }, null)]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml", RequireBuild = true }, null)]).Heavy);
+        Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml" }, null)]).Heavy);
         Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, []).Heavy);
+    }
+
+    /// <summary>
+    /// A step declared heavy makes heavy every leg of a run that runs it - named with --manual-step, through a runner that
+    /// says nothing of its weight or says it is light - and a run that leaves it out stays as light as its runner. A run
+    /// check's runner whose steps include one is heavy the same way. Declared only on runners, a light runner sharing an
+    /// action with a heavy manual step started it with no slot at all.
+    /// </summary>
+    [Fact]
+    public void AHeavyStep_MakesHeavyARunThatRunsIt_WhicheverRunnerStartsIt()
+    {
+        var action = new Core.Runners.ActionFileParser(
+                new PhysicalFileSystem(FilePermissionsFactory.Create()),
+                new Core.Output.ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false),
+                new HostPlatform())
+            .Parse(
+                Path.Combine("actions", "sqlite", "sqlite.yml"),
+                """
+                steps:
+                  - name: self-test
+                    run: python3 self_test.py
+                  - name: recompile
+                    manual: true
+                    heavy: true
+                    successPattern: '^built'
+                    run: cmake --build build
+                """);
+
+        Assert.True(action.Steps[1].Heavy);
+        Assert.False(action.Steps[0].Heavy);
+
+        Core.Legs.LegWorkload Run(RunnerConfig runner, params string[] manual)
+            => Core.Legs.LegWorkload.ForRunner(runner, Core.Runners.StepSelection.For(runner, manual).Apply("sqlite", action).File);
+
+        foreach (var runner in new[] { new RunnerConfig { Action = "sqlite" }, new RunnerConfig { Action = "sqlite", Heavy = false } })
+        {
+            Assert.False(Run(runner).Heavy);
+            Assert.True(Run(runner, "recompile").Heavy);
+        }
+
+        var checks = new RunnerConfig { Action = "sqlite", Steps = ["recompile"] };
+        var light = new RunnerConfig { Action = "a/a.yml" };
+
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(checks, Core.Runners.StepSelection.For(checks, []).Apply("rebuild", action).File)]).Heavy);
     }
 
     private static HarnessConfig LoadValid(string json)

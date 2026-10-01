@@ -160,6 +160,12 @@ internal enum CopyState
     /// first one did because it can only see what survived.
     /// </summary>
     Interrupted,
+
+    /// <summary>
+    /// The harness made it, and a sync of it began and did not finish: its own, which this sync puts
+    /// right, and nothing a carry writes into until one has.
+    /// </summary>
+    Unfinished,
 }
 
 /// <summary>What one sync did.</summary>
@@ -270,9 +276,9 @@ public interface ISyncService
     /// <exception cref="HarnessException">
     /// The copy could not be made. Among the reasons, a file to be carried no longer holds what
     /// <paramref name="source"/> read of it - changed, or removed, since the tree was read - so the copy cannot be that
-    /// tree (<see cref="LegExit.InputsMoved"/>). It is left part made, and nothing should run against it until a sync
-    /// completes. Raised with its own code because it is about this tree at this moment: a run gives it to that copy's
-    /// legs alone, as their verdict.
+    /// tree (<see cref="LegExit.InputsMoved"/>). It is left part made, and marked unfinished, so a run on what is staged
+    /// and a carry refuse it until a sync finishes it. Raised with its own code because it is about this tree at this
+    /// moment: a run gives it to that copy's legs alone, as their verdict.
     /// </exception>
     Task<SyncResult> SyncAsync(
         SyncSource source,
@@ -634,7 +640,7 @@ public sealed class SyncService(
         // Whose directory this is comes first. Told that a sync would remove all of a directory, the
         // reader goes looking for a mistake in the source, when what is actually true is that this is
         // not a copy of the source at all.
-        var mine = state is CopyState.Created or CopyState.Harness;
+        var mine = state is CopyState.Created or CopyState.Harness or CopyState.Unfinished;
         var adopting = !mine && options.Adopts(transport.Host);
 
         if (!mine && !adopting && !options.DryRun)
@@ -716,6 +722,18 @@ public sealed class SyncService(
                 .ConfigureAwait(false);
         }
 
+        // Marked as begun before the first write, and as finished only once the copy is verified, as a takeover is: a sync
+        // that stops part way - a tree that moved, a connection that dropped - leaves part of one tree and part of another,
+        // which a run on what is staged, or a carry, would otherwise take for a copy this tool finished. A copy this sync
+        // created was marked so as it was created; an adoption is marked as one.
+        var unfinished = state is CopyState.Created or CopyState.Unfinished;
+
+        if (!adopting && !unfinished && !plan.IsUpToDate)
+        {
+            await transport.CreateRootAsync(destinationRoot, CopyMark.Unfinished, cancellationToken).ConfigureAwait(false);
+            unfinished = true;
+        }
+
         // A tree that moved raises from in here, at the first file found to have moved, before anything is deleted: no index,
         // no verification, no adoption marked finished. What was carried by then stays, and the next sync, planning
         // from what the copy holds, puts it right - an adoption still asking for --adopt.
@@ -759,6 +777,10 @@ public sealed class SyncService(
                 .ConfigureAwait(false);
 
             _output.Info(CommandName, $"{transport.Host}: adopted '{destinationRoot}'");
+        }
+        else if (unfinished)
+        {
+            await transport.CreateRootAsync(destinationRoot, CopyMark.Complete, cancellationToken).ConfigureAwait(false);
         }
 
         return new SyncResult(transport.Host.ToString(), destinationRoot, plan, Verified: true, created);
@@ -1176,6 +1198,8 @@ public sealed class SyncService(
                     CopyState.Harness => null,
                     CopyState.Interrupted => "was being taken over and the run stopped before it "
                         + "finished, so it is neither the checkout it was nor a copy of this tree",
+                    CopyState.Unfinished => "was being synced and the sync stopped before it finished, so it "
+                        + "holds part of one tree and part of another: sync it, then carry",
                     _ => "exists and the harness did not create it",
                 };
 
@@ -1212,8 +1236,10 @@ public sealed class SyncService(
                 return CopyState.Created;
             }
 
+            // Marked as a sync that has begun, and as finished once the copy is verified: a first sync that stops part way
+            // leaves a copy no run began with.
             _output.Info(CommandName, $"{transport.Host}: creating '{destinationRoot}'");
-            await transport.CreateRootAsync(destinationRoot, CopyMark.Complete, cancellationToken).ConfigureAwait(false);
+            await transport.CreateRootAsync(destinationRoot, CopyMark.Unfinished, cancellationToken).ConfigureAwait(false);
 
             return CopyState.Created;
         }
@@ -1227,6 +1253,7 @@ public sealed class SyncService(
     {
         CopyMark.Complete => CopyState.Harness,
         CopyMark.AdoptionStopped => CopyState.Interrupted,
+        CopyMark.Unfinished => CopyState.Unfinished,
         _ => CopyState.Unclaimed,
     };
 
@@ -1442,7 +1469,7 @@ public sealed class SyncService(
             LegExit.InputsMoved,
             $"{transport.Host}: '{ReportText.Printable(entry.Path)}' {what} after the tree was read for this command, before it "
             + $"was carried to '{destinationRoot}', so that copy cannot be made the tree that was read. It is left part made, "
-            + "and nothing should run against it until a sync completes: let the tree settle, then run again.",
+            + "and marked so: nothing runs against it until a sync finishes it. Let the tree settle, then run again.",
             cause);
     }
 

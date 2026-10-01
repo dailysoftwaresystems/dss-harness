@@ -325,6 +325,7 @@ public sealed class SyncServiceTests
             Assert.Equal(Said("src/a.c", "changed"), changed.Message);
             Assert.False(Directory.Exists(Path.Combine(copy, ".git")));
             Assert.False(File.Exists(Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.ConfigFileName)));
+            Assert.Equal(CopyMark.Unfinished, await SyncKit.Transport(harness).ReadMarkAsync(copy, cancellationToken));
 
             await File.WriteAllTextAsync(a, "a\n", cancellationToken);
             Assert.Equal(Said("src/b.c", "was removed"), (await Assert.ThrowsAsync<HarnessException>(() => SyncAsync(reading))).Message);
@@ -337,6 +338,7 @@ public sealed class SyncServiceTests
             Directory.Delete(b);
             await File.WriteAllTextAsync(b, "b\n", cancellationToken);
             Assert.True((await SyncAsync(reading)).Verified);
+            Assert.Equal(CopyMark.Complete, await SyncKit.Transport(harness).ReadMarkAsync(copy, cancellationToken));
 
             await File.WriteAllTextAsync(a, "A\n", cancellationToken);
             Assert.True((await SyncAsync(reading)).Verified);
@@ -397,6 +399,10 @@ public sealed class SyncServiceTests
             Assert.False(File.Exists(Path.Combine(copy, Numbered(SyncServe.MostFilesInABatch + 19))));
             Assert.False(File.Exists(Path.Combine(copy, "src", "z.c")));
             Assert.True(File.Exists(Path.Combine(copy, "src", "b.c")));
+
+            // Marked as the part-made copy it is, though the sync before had finished it: a run on what is staged there,
+            // or a carry into it, is refused until a sync finishes it again.
+            Assert.Equal(CopyMark.Unfinished, await SyncKit.Transport(harness).ReadMarkAsync(copy, cancellationToken));
         }
         finally
         {
@@ -2303,6 +2309,7 @@ public sealed class SyncServiceTests
     [InlineData(new[] { "/host/repo", "" }, CopyMark.Complete)]
     [InlineData(new[] { "/host/repo", "Complete" }, CopyMark.Complete)]
     [InlineData(new[] { "/host/repo", "AdoptionStopped" }, CopyMark.AdoptionStopped)]
+    [InlineData(new[] { "/host/repo", "Unfinished" }, CopyMark.Unfinished)]
     public void AMarkACreateRequestCarries_IsReadAsItWasSpelled(string[] arguments, CopyMark expected)
         => Assert.Equal(expected, SyncServe.MarkIn(arguments));
 
@@ -2324,6 +2331,38 @@ public sealed class SyncServiceTests
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains("different builds", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A copy is marked unfinished while a sync writes it, and complete once a sync has finished it, with the marker a build
+    /// from before the mark reads: it refuses a member it does not know, so the mark is written only where it holds.
+    /// </summary>
+    [Fact]
+    public async Task ACopysUnfinishedMark_IsClearedOnceASyncFinishesIt_LeavingTheMarkerAnOlderBuildReads()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var transport = SyncKit.Transport(harness);
+        var copy = SyncKit.CopyPath(temp);
+        var marker = Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.SyncedCopyMarkerName);
+
+        try
+        {
+            await transport.CreateRootAsync(copy, CopyMark.Unfinished, cancellationToken);
+
+            Assert.Equal(CopyMark.Unfinished, await transport.ReadMarkAsync(copy, cancellationToken));
+            Assert.Contains("\"Unfinished\": true", await File.ReadAllTextAsync(marker, cancellationToken), StringComparison.OrdinalIgnoreCase);
+
+            await transport.CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
+
+            Assert.Equal(CopyMark.Complete, await transport.ReadMarkAsync(copy, cancellationToken));
+            Assert.DoesNotContain("unfinished", await File.ReadAllTextAsync(marker, cancellationToken), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
     }
 
     /// <summary>

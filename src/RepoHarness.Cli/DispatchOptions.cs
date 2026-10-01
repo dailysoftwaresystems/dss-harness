@@ -34,4 +34,15 @@ internal static class DispatchOptions
             return null;
         },
     };
+
+    /// <summary>
+    /// <c>--use-staged</c>, as each command that runs legs takes it: <paramref name="verb"/> what each host already holds,
+    /// without syncing again. One spelling for every such command, so none can say less than the others about the copy
+    /// it refuses.
+    /// </summary>
+    /// <param name="verb">What the command does with the copy, as its description starts: <c>Build</c>.</param>
+    internal static Option<bool> UseStaged(string verb) => new("--use-staged")
+    {
+        Description = $"{verb} what is already staged on each host, without syncing again; a copy a sync stopped making part way is refused.",
+    };
 }

@@ -9,6 +9,15 @@ using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Legs;
 
+/// <summary>What a placed leg's build still needs on its host, and what said so.</summary>
+/// <param name="Bytes">What it still needs.</param>
+/// <param name="Source">What said how much, as a line says it: <c>as its buildSpaceGiB, 4, declares</c>.</param>
+/// <remarks>
+/// Counted, as the leg is placed, against the room beside the other legs of the same command; then held, as the leg is
+/// admitted, against the room every other command's legs on its machine claim.
+/// </remarks>
+public sealed record RoomNeed(long Bytes, string Source);
+
 /// <summary>
 /// Whether a leg's host has the room its build still needs: what is asked of each host before placing, and
 /// the legs placed where there is not enough.
@@ -162,6 +171,10 @@ public static class LegRoom
                 var before = taken.TryGetValue(key, out var counted) ? counted : (Bytes: 0L, Legs: new List<string>());
                 taken[key] = (before.Bytes + need.Bytes, [.. before.Legs, placement.Leg.Name]);
             }
+
+            // Carried to the leg's admission, which holds it against every other command's legs on the machine: counted
+            // here, the room is this command's alone.
+            placed[index] = placement with { Need = new RoomNeed(need.Bytes, need.Source) };
         }
 
         return (placed, unmeasured);
@@ -184,6 +197,7 @@ public static class LegRoom
     }
 
     /// <summary>What a leg's build still needs on its host, and what is known of the room there.</summary>
+    /// <remarks>Counted against the room of one command's legs; <see cref="RoomNeed"/> is what reaches its admission.</remarks>
     /// <param name="Bytes">What it still needs.</param>
     /// <param name="Disk">The room where its build directory is, or <see langword="null"/> where it could not be measured.</param>
     /// <param name="Source">What said how much it needs.</param>

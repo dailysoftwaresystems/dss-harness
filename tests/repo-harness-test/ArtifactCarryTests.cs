@@ -308,6 +308,7 @@ public sealed class ArtifactCarryTests
     [InlineData(false, CopyMark.None, "is not there")]
     [InlineData(true, CopyMark.None, "did not create")]
     [InlineData(true, CopyMark.AdoptionStopped, "stopped before it finished")]
+    [InlineData(true, CopyMark.Unfinished, "the sync stopped before it finished, so it holds part of one tree and part of another: sync it, then carry")]
     public async Task AHostWithNoCopyThisHarnessMade_IsRefused_AndNothingIsWrittenToIt(
         bool exists,
         CopyMark mark,

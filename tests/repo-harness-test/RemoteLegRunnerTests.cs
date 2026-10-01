@@ -53,6 +53,38 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// A command run with -v has the host run the leg's command with it too, so the leg's step output reaches the reader
+    /// as a leg run here shows it: with the host's agent alone verbose, a leg on a host printed its verdict and nothing
+    /// of its steps. Without -v, neither is.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AVerboseCommand_HasTheHostRunTheLegsCommandVerboseToo(bool verbose)
+    {
+        HostCommand? sent = null;
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var output = new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose);
+
+        await new RemoteLegRunner(hosts, output).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            verbose
+                ? ["test", "--legs", "wsl-debug", "--json", RemoteLegRunner.HereOption, "wsl Example-Linux", HostAgentProtocol.VerboseOption]
+                : ["test", "--legs", "wsl-debug", "--json", RemoteLegRunner.HereOption, "wsl Example-Linux"],
+            Request(sent).Arguments);
+        Assert.Equal(verbose, sent!.Arguments.Contains(HostAgentProtocol.VerboseOption));
+    }
+
+    /// <summary>
     /// A host runs the leg under a run of its own, and says where that run keeps its records: the
     /// leg's line carries it, so the caller is told where its records are as for a leg run here. A
     /// host that says nothing about it names nothing.

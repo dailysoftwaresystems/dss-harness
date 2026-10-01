@@ -1240,6 +1240,10 @@ tree synced and its lock taken, waits for the machine to take it:
    again every `pollSeconds` (30, at least 1); the slot is looked at again too, so a leg whose place
    went while it waited waits its turn again. Seconds are at most 3600 and the wait at most 10080
    minutes, so every wait is one a timer holds.
+3. **Then room for its build**, where its need is known: on the filesystem the build fills, what is
+   free less what every other admitted leg there claims must hold it. Claimed as the leg is let
+   start, under the record's lock, so two legs never both take the one room left, and held with its
+   slot; see *Room is claimed as a leg is admitted* below.
 
 What a command's own configuration declares is the rule its legs are admitted by: a repository that
 declares none never joins the line. Each entry of the record carries the count its command allows,
@@ -1264,8 +1268,23 @@ it, and never read as free: that is the one reading that would start every waiti
 
 **Heavy** is what builds or tests: a `build` or `test` leg, and a `run` leg whose runner - or a
 runner its expected exceptions' run checks name, which run within its legs - requires the build or
-says `"heavy": true`. A runner that only reads the tree - a repository guard - is light and starts
-at once. A runner saying `"heavy": false` while it requires the build is refused: its build is heavy.
+says `"heavy": true`, or one of whose steps that the run runs says `heavy: true` in its action. The
+step's word holds whichever runner starts it: declared only on runners, a manual step that rebuilds,
+kept in an action a light runner also runs, was started through that runner with `--manual-step`
+and built with no slot at all. A runner that only reads the tree - a repository guard - is light and
+starts at once. A runner saying `"heavy": false` while it requires the build is refused: its build is
+heavy.
+
+**Room is claimed as a leg is admitted.** Where its build's need is known - its `buildSpaceGiB`, or
+what a build recorded - a heavy leg is let start only where that need fits on the filesystem its build
+fills beside what every other admitted leg there claims, and holds its claim until its work ends. A
+command counts the room its own legs need as it places them, but cannot see another's: two commands
+each placing one leg on one host both found it room and filled its disk at build step 931 of 1295.
+The claims are counted whole, though a build may have written some of its own already, which the room
+read now shows gone: a leg waits a little longer than it had to, rather than starting into a disk it
+fills. A WSL distribution's leg claims this machine's drive where WSL keeps its disk; the room inside
+the distribution's own disk was counted as it was placed. Kept in `admission-<machine id>.room.json`,
+beside the slots' record, which a build from before it would refuse with a member it does not know.
 
 **The machine is the physical one.** A WSL distribution runs on this machine, so this machine's
 command takes its heavy legs - by `hosts.local`'s rule, against this machine's slots and memory -
@@ -1820,8 +1839,15 @@ directory here cannot drift apart.
   the reading as it is read for carrying, and the first that changed or went since stops the sync,
   naming it, rather than reaching the copy as content no reading recorded. A stopped sync is never
   indexed, given its configuration, verified or marked adopted: what it carried before stopping
-  stays on the host, and nothing - `--use-staged` included - should run against that copy until a
-  sync completes. `sync` fails, exit 20, saying so, and a run's legs on that copy are `inputs-moved`.
+  stays on the host. `sync` fails, exit 20, saying so, and a run's legs on that copy are
+  `inputs-moved`.
+- **A copy a sync is writing is marked unfinished**, before its first write, and complete once it
+  is verified, as a takeover is marked begun and finished. A sync that stops part way - a tree that
+  moved, a connection that dropped, a verification that failed - leaves part of one tree and part
+  of another, which no run began with; marked so, a run with `--use-staged` refuses to test it, and
+  `sync --artifact` to carry into it, until a sync finishes it. The next ordinary sync, which plans
+  from what the copy holds, puts it right. The mark is written into the marker only while it holds,
+  so a copy every sync finished carries the marker a build from before it reads.
 - **The copy is the tool's.** Sync creates it, records that it did, and refuses to write into a
   directory it did not create. It deletes whatever the source does not have, so taking over a
   checkout somebody made by hand could delete work nothing here knows about, on a machine whose
@@ -1970,7 +1996,7 @@ from that host's own copy of the tree — the host reads `config.json` and the r
 from it — so the tree is put there whether or not anything is compiled. A runner that skipped the
 sync because it compiles nothing would find no configuration on the host and fail saying so.
 `--use-staged` is how a run says the copy there is already current - which it is not after a sync
-that stopped part way, or failed its verification.
+that stopped part way, or failed its verification, and a copy marked unfinished so is refused.
 
 Runners are keyed by name because a name is how one is selected — by `run`, and by the checks
 below. An unnamed entry in a list could not be selected at all.

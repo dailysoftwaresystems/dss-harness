@@ -44,12 +44,12 @@ public sealed class LocalSyncTransport(
         // would write one claiming the copy was both taken over and finished — the most permissive
         // thing this file can say, and the one nobody asked for. Checked before anything is created,
         // so a caller that gets this wrong leaves nothing behind.
-        if (mark is not (CopyMark.Complete or CopyMark.AdoptionStopped))
+        if (mark is not (CopyMark.Complete or CopyMark.AdoptionStopped or CopyMark.Unfinished))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(mark),
                 mark,
-                "A copy is created as a complete one or as a takeover that has begun, never as unmarked.");
+                "A copy is marked complete, as a takeover that has begun, or as a sync that has begun, never as unmarked.");
         }
 
         // A file where the directory should be is named rather than worked around. Creating the
@@ -79,7 +79,8 @@ public sealed class LocalSyncTransport(
                     DateTimeOffset.UtcNow.ToString("O"),
                     Environment.MachineName,
                     Adopted: mark == CopyMark.AdoptionStopped || Adopted(root),
-                    Completed: mark != CopyMark.AdoptionStopped),
+                    Completed: mark != CopyMark.AdoptionStopped,
+                    Unfinished: mark == CopyMark.Unfinished),
                 MarkerOptions));
 
         return Task.CompletedTask;
@@ -99,6 +100,7 @@ public sealed class LocalSyncTransport(
             // still needs somebody to say go ahead.
             null => CopyMark.None,
             { Adopted: true, Completed: false } => CopyMark.AdoptionStopped,
+            { Unfinished: true } => CopyMark.Unfinished,
             _ => CopyMark.Complete,
         });
 
@@ -563,12 +565,22 @@ public sealed class LocalSyncTransport(
     /// Whether the run that made it got to the end. A takeover that stopped part way is marked but
     /// not complete, which is neither the checkout somebody had nor a copy of the source.
     /// </param>
+    /// <param name="Unfinished">
+    /// Whether a sync began writing it and has not finished: written before a sync's first write, and
+    /// cleared once the copy is verified. Written only where true, so a copy every sync finished carries
+    /// the marker a build from before it reads.
+    /// </param>
     /// <remarks>
     /// Both strings are nullable because deserialising decides that, not this declaration: a file
     /// holding <c>{}</c> parses into a marker with neither, and that is one of the shapes that has
     /// to be told from a marker this tool wrote. Every marker it has ever written carries both.
     /// </remarks>
-    private sealed record SyncedCopyMarker(string? CreatedUtc, string? CreatedBy, bool Adopted, bool Completed);
+    private sealed record SyncedCopyMarker(
+        string? CreatedUtc,
+        string? CreatedBy,
+        bool Adopted,
+        bool Completed,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Unfinished = false);
 
     /// <summary>
     /// What the marker at <paramref name="root"/> says, or null where there is none.

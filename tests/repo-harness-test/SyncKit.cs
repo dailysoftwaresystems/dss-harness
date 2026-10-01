@@ -60,8 +60,8 @@ internal static class SyncKit
     /// </summary>
     public static string Moved(HostId host, string path, string what, string copy)
         => $"{host}: '{path}' {what} after the tree was read for this command, before it was carried to '{copy}', so "
-            + "that copy cannot be made the tree that was read. It is left part made, and nothing should run against it "
-            + "until a sync completes: let the tree settle, then run again.";
+            + "that copy cannot be made the tree that was read. It is left part made, and marked so: nothing runs against it "
+            + "until a sync finishes it. Let the tree settle, then run again.";
 
     /// <summary>
     /// The transport this machine reads its own tree through - the same a host runs on its own side - over

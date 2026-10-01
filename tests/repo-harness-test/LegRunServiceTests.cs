@@ -163,6 +163,50 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A host asked to run a leg on what is staged there refuses where its copy is one a sync stopped making part way,
+    /// naming it and what to do, rather than testing part of one tree and part of another as though it were a tree.
+    /// </summary>
+    [Theory]
+    [InlineData(CopyMark.Unfinished, true)]
+    [InlineData(CopyMark.Complete, false)]
+    public async Task AHostAskedToRunOnWhatIsStaged_RefusesACopyASyncStoppedMaking(CopyMark mark, bool refused)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ran = new List<string>();
+
+        var copy = Substitute.For<ISyncTransport>();
+        copy.ReadMarkAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(mark);
+
+        var transports = Substitute.For<ISyncTransportFactory>();
+        transports.For(Arg.Any<HostReport>()).Returns(copy);
+
+        Task<CommandOutcome> RunAsync() => OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, UseStaged: true, Here: HostId.Ssh(HostName)) { Workload = LegWorkload.Copy },
+            ran: leg => ran.Add(leg.Name),
+            transports: transports);
+
+        if (refused)
+        {
+            // Before anything of the run exists, as the refusal of the run the dispatching machine reads it as.
+            var refusal = await Assert.ThrowsAsync<HarnessException>(RunAsync);
+
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+            Assert.StartsWith($"ssh {HostName}: '{temp.Path}' is a copy a sync stopped making part way", refusal.Message, StringComparison.Ordinal);
+            Assert.Empty(ran);
+        }
+        else
+        {
+            await RunAsync();
+            Assert.Equal(["native"], ran);
+        }
+    }
+
+    /// <summary>
     /// A run on what each host already holds reads nothing for carrying and carries nothing: --use-staged says the copies
     /// are current, and its legs test them as they are.
     /// </summary>

@@ -739,6 +739,158 @@ public sealed class LegAdmissionTests
         Assert.Contains("slots", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A leg whose build needs room claims it as it is let start, its line saying what it took of what was free, and gives it
+    /// back with its slot as its work ends. Counted only within one command, two commands each placing one leg on one host
+    /// both found it room, and filled its disk at build step 931 of 1295.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseBuildNeedsRoom_ClaimsIt_AndGivesItBackWithItsSlot()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var said = new List<string>();
+
+        using (var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said, room: AdmissionKit.Room(10)), TestContext.Current.CancellationToken))
+        {
+            Assert.True(admitted.Fact.Admitted);
+            Assert.Equal("admitted at once, memory 30.0% in use (30 of 100 by the test); room ~10 GiB of 40 GiB free on '/data'", admitted.Fact.Describe());
+
+            var claim = Assert.Single(AdmissionKit.ReadClaims(record));
+            Assert.Equal(("mine", "/data", 10 * AdmissionKit.Gibibyte), (claim.Holder.Leg, claim.Filesystem, claim.Bytes));
+        }
+
+        Assert.Empty(AdmissionKit.ReadClaims(record));
+        Assert.Empty(AdmissionKit.Read(record));
+    }
+
+    /// <summary>
+    /// A leg whose build would not fit beside what the other admitted legs on its filesystem claim waits for room, saying
+    /// what is free, who claims what, and what it needs; it starts once a claim is given back. Their claims count whole,
+    /// though some of it may be written already: it waits a little longer, rather than starting into a disk it fills.
+    /// </summary>
+    [Fact]
+    public async Task ALegWaitsForTheRoomOtherLegsClaim_AndStartsOnceItIsGivenBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var said = new List<string>();
+        var waits = 0;
+
+        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), "/data", 35 * AdmissionKit.Gibibyte));
+
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room, onWait: () =>
+        {
+            if (++waits == 2)
+            {
+                AdmissionKit.WriteClaims(record);
+            }
+        });
+
+        using var admitted = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(settleLeast: 0, settleMost: 0), said, room: AdmissionKit.Room(10)),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(60, admitted.Fact.WaitedSeconds);
+
+        var waiting = Assert.Single(said, line => line.StartsWith("holds a heavy-leg slot, and waits for room", StringComparison.Ordinal));
+        Assert.StartsWith("holds a heavy-leg slot, and waits for room: '/data' has 40 GiB free, ~35 GiB of it claimed by '/src/first'", waiting, StringComparison.Ordinal);
+        Assert.EndsWith("and this leg needs ~10 GiB, as the test says", waiting, StringComparison.Ordinal);
+        Assert.Equal("mine", Assert.Single(AdmissionKit.ReadClaims(record)).Holder.Leg);
+    }
+
+    /// <summary>
+    /// A leg that never finds room within its machine's wait is not admitted, its line naming the room, who claimed it and
+    /// where the claims are recorded, and claims nothing.
+    /// </summary>
+    [Fact]
+    public async Task ALegThatNeverFindsRoom_IsNotAdmitted_NamingWhoClaimedIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var said = new List<string>();
+
+        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), "/data", 35 * AdmissionKit.Gibibyte));
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
+            .AdmitAsync(
+                AdmissionKit.Request(AdmissionKit.Rule(settleLeast: 0, settleMost: 0, pollSeconds: 30, maxWaitMinutes: 2), said, room: AdmissionKit.Room(10)),
+                TestContext.Current.CancellationToken);
+
+        Assert.False(admitted.Fact.Admitted);
+        Assert.StartsWith("not admitted after 2m00s: it held a heavy-leg slot, and '/data' has 40 GiB free, ~35 GiB of it claimed by '/src/first'", admitted.Refusal, StringComparison.Ordinal);
+        Assert.EndsWith($"; the room each heavy leg claims is recorded in '{HeavyLegSlots.RoomPathFor(record)}'", admitted.Refusal, StringComparison.Ordinal);
+        Assert.Single(admitted.Fact.Holders ?? []);
+        Assert.Equal("first", Assert.Single(AdmissionKit.ReadClaims(record)).Holder.Leg);
+        Assert.Empty(AdmissionKit.Read(record));
+    }
+
+    /// <summary>
+    /// What counts against a leg's room is what other live legs claim on its own filesystem: a claim on another filesystem
+    /// counts nothing, and one whose command has ended is reclaimed, said to be.
+    /// </summary>
+    [Fact]
+    public async Task OnlyLiveClaimsOnItsOwnFilesystem_CountAgainstALegsRoom()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var said = new List<string>();
+
+        AdmissionKit.WriteClaims(
+            record,
+            new RoomClaim(AdmissionKit.Holder(harness, "elsewhere"), "/other", 35 * AdmissionKit.Gibibyte),
+            new RoomClaim(AdmissionKit.Holder(harness, "gone", processId: 999_999), "/data", 35 * AdmissionKit.Gibibyte));
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said, room: AdmissionKit.Room(10)), TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(0, admitted.Fact.WaitedSeconds);
+        Assert.Equal(["elsewhere", "mine"], AdmissionKit.ReadClaims(record).Select(claim => claim.Holder.Leg));
+        Assert.Contains("a claim on this machine's room", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A leg whose room cannot be read is let start on its slot and memory alone, its line saying why, as a leg placed where
+    /// its room was unmeasured is; it claims nothing, and a leg whose build needs nothing anyone said is never asked.
+    /// </summary>
+    [Fact]
+    public async Task ARoomThatCannotBeRead_LetsTheLegStart_SayingSo_AndALegNeedingNothingClaimsNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte) { Unreadable = "the volume is gone" };
+        var said = new List<string>();
+
+        using (var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said, room: AdmissionKit.Room(10)), TestContext.Current.CancellationToken))
+        {
+            Assert.True(admitted.Fact.Admitted);
+            Assert.Equal("unread: the volume is gone", admitted.Fact.Room);
+            Assert.Empty(AdmissionKit.ReadClaims(record));
+        }
+
+        using (var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said), TestContext.Current.CancellationToken))
+        {
+            Assert.True(admitted.Fact.Admitted);
+            Assert.Null(admitted.Fact.Room);
+        }
+
+        Assert.False(File.Exists(HeavyLegSlots.RoomPathFor(record)));
+    }
+
     /// <summary>This process as a test's holders see it: each id it names alive until the test ends it.</summary>
     /// <param name="real">This process.</param>
     /// <param name="alive">The ids of the other commands' processes, alive until ended.</param>

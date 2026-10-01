@@ -130,6 +130,17 @@ public sealed record ActionStep
     public bool Manual { get; init; }
 
     /// <summary>
+    /// Whether the step's work is heavy, from <c>heavy</c>: every leg of a run that runs it - by default, or named with
+    /// <c>run --manual-step</c>, through whichever runner - takes one of its machine's heavy-leg slots, whatever that
+    /// runner declares.
+    /// </summary>
+    /// <remarks>
+    /// Declared on the step, because the work is the step's. Declared only on runners, a manual step that rebuilds,
+    /// kept in an action a light runner also runs, started through that runner and built with no slot at all.
+    /// </remarks>
+    public bool Heavy { get; init; }
+
+    /// <summary>
     /// The steps declared before this one that run first whenever it runs, from <c>needs</c>, as they
     /// were written. A run that names only this step runs these too, in the order they are declared.
     /// </summary>
