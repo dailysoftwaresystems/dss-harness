@@ -1,3 +1,5 @@
+using RepoHarness.Core.Configuration;
+
 namespace RepoHarness.Core.Anchors;
 
 /// <summary>One data row of a registry's anchor table, exactly as read.</summary>
@@ -56,6 +58,14 @@ public sealed class AnchorRow
 
     /// <summary>Whether the Status cell reads closed.</summary>
     public bool IsClosed => AnchorStatus.IsClosed(Status);
+
+    /// <summary>
+    /// Whether the row is closed by its Status and its Trigger says the closure is bookkeeping, where
+    /// <paramref name="settings"/> hold a Trigger to its row's verdict: see <see cref="AnchorStatus.IsBookkeepingClosure"/>.
+    /// </summary>
+    /// <param name="settings">The repository's anchor settings.</param>
+    public bool IsBookkeepingClosure(AnchorSettings settings)
+        => IsClosed && AnchorStatus.IsBookkeepingClosure(Trigger, settings);
 
     /// <summary>Cell <paramref name="position"/>, counting the Anchor cell as 1; empty past the end.</summary>
     public string Cell(int position) => position >= 1 && position < _pieces.Count ? _pieces[position] : string.Empty;

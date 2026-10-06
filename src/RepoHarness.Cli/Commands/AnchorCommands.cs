@@ -446,7 +446,7 @@ internal static class CheckAnchorBalanceCommand
     {
         var command = new Command(
             Name,
-            "Fail when a change creates more anchors than its work closes or loses an anchor's row, or a registry is misfiled or malformed.");
+            "Fail when a change creates more anchors than its work closes, when it loses an anchor's row, or when a registry is misfiled or malformed.");
 
         command.Options.Add(BaseOption);
         command.Options.Add(JsonOption);

@@ -95,7 +95,7 @@ public static class MachineWideMutex
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
-                    $"The lock '{name}' on {subject} belongs to another user on this machine, so nothing was changed.",
+                    $"The lock '{name}' on {subject} belongs to another user on this machine, so nothing it guards was read or changed.",
                     ex);
             }
             catch (IOException) when (attempt < Attempts)
@@ -107,7 +107,7 @@ public static class MachineWideMutex
                 throw new HarnessException(
                     HarnessExit.HostUnavailable,
                     $"The lock '{name}' on {subject} could not be opened in {Attempts} tries, the last saying: "
-                    + $"{ex.Message.TrimEnd('.')}. Nothing was changed, and nothing can run on this machine until "
+                    + $"{ex.Message.TrimEnd('.')}. Nothing it guards was read or changed, and nothing can run on this machine until "
                     + "it opens: fix what the system said, and run the command again.",
                     ex);
             }

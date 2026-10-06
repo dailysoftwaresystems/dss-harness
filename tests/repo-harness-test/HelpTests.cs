@@ -545,11 +545,11 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The balance says what it measures from and what it does not count - a base that moved on, the bookkeeping pair,
-    /// a lost row - where the anchors are described.
+    /// The balance says what it measures from, what it does not credit and what it refuses - a base that moved on, an
+    /// unfinished merge, the bookkeeping pair, a lost row - where the anchors are described.
     /// </summary>
     [Fact]
-    public async Task AnchorsTopic_StatesWhatTheBalanceMeasuresFrom_AndDoesNotCount()
+    public async Task AnchorsTopic_StatesWhatTheBalanceMeasuresFrom_AndDoesNotCredit()
     {
         var result = await CliRunner.RunAsync(["help", "anchors"], TestContext.Current.CancellationToken);
 
@@ -561,7 +561,9 @@ public sealed partial class HelpTests
             $"a closure whose Trigger opens with {AnchorStatus.ClosedMark}{AnchorStatus.BookkeepingMark} records work that already existed",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("an anchor open at the base is in neither registry now", prose, StringComparison.Ordinal);
+        Assert.Contains("an anchor open where the change began is in neither registry now", prose, StringComparison.Ordinal);
+        Assert.Contains("a lost one is not credited either", prose, StringComparison.Ordinal);
+        Assert.Contains("during an unfinished merge, HEAD is taken merged with what the merge brings in", prose, StringComparison.Ordinal);
     }
 
     /// <summary>

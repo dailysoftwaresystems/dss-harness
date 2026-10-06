@@ -5,7 +5,9 @@ using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Anchors;
 
-/// <summary>Serialises changes to one pair of registries across every DssHarness process on the machine.</summary>
+/// <summary>
+/// Serialises changes to one pair of registries, and reads of both, across every DssHarness process on the machine.
+/// </summary>
 public interface IAnchorRegistryLock
 {
     /// <summary>
@@ -15,7 +17,11 @@ public interface IAnchorRegistryLock
     /// The work is synchronous on purpose, and must stay so: the lock is released by the thread that
     /// took it, and an await inside the work could resume on a different one.
     /// </remarks>
-    /// <exception cref="HarnessException">Another process held the lock for longer than the wait allows.</exception>
+    /// <exception cref="HarnessException">
+    /// Another process held the lock for longer than the wait allows (<see cref="HarnessExit.Refused"/>), or the lock
+    /// could not be opened: it belongs to another user (<see cref="HarnessExit.Refused"/>), or the system would not open
+    /// it (<see cref="HarnessExit.HostUnavailable"/>).
+    /// </exception>
     T RunExclusive<T>(AnchorRegistries registries, Func<T> work);
 }
 
@@ -23,15 +29,18 @@ public interface IAnchorRegistryLock
 public static class AnchorRegistryReading
 {
     /// <summary>
-    /// Each registry's text as it stands, or <see langword="null"/> where it has no file, both read together while
-    /// holding the lock.
+    /// Each registry's text as it stands, or <see langword="null"/> where nothing is there, both read together while
+    /// holding the lock: one per registry, in <see cref="AnchorRegistries.All"/> order.
     /// </summary>
     /// <remarks>
     /// One file needs no lock, since every write replaces a whole file in one rename. Two do: a change moves a row by
     /// writing one file and then the other, so the two read apart can hold that row in neither, which reads exactly
     /// like an anchor closed or lost, or in both, which reads as a duplicate.
     /// </remarks>
-    /// <exception cref="HarnessException">Another process held the lock for longer than the wait allows.</exception>
+    /// <exception cref="HarnessException">
+    /// The lock could not be taken, as <see cref="IAnchorRegistryLock.RunExclusive"/> says; or a registry's path holds a
+    /// directory, or its file could not be read (<see cref="AnchorRegistry.ReadText"/>).
+    /// </exception>
     public static IReadOnlyList<(AnchorRegistry Registry, string? Text)> ReadTogether(
         this IAnchorRegistryLock registryLock,
         AnchorRegistries registries,
@@ -55,7 +64,7 @@ public static class AnchorRegistryReading
 /// </remarks>
 public sealed class NamedMutexAnchorRegistryLock(IHostPlatform platform, TimeSpan timeout) : IAnchorRegistryLock
 {
-    /// <summary>How long a change waits for another before refusing.</summary>
+    /// <summary>How long a change or a read waits for the lock before refusing.</summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
     private readonly IHostPlatform _platform = platform;

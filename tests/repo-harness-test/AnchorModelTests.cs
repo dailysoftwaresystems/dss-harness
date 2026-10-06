@@ -86,6 +86,41 @@ public sealed class AnchorStatusTests
         Assert.False(AnchorStatus.IsBookkeepingClosure(trigger, new AnchorSettings()));
     }
 
+    /// <summary>
+    /// A Trigger opening with the closed mark and then the bookkeeping mark that is not read as the pair says why: the
+    /// Trigger carries no verdict, or emphasis stands between the marks. One read as the pair, or holding no such marks
+    /// where they would open it, has nothing to say.
+    /// </summary>
+    [Theory]
+    [InlineData("✅🧾 **CLOSED**, mark repaired", false, "anchors.triggerCarriesVerdict is not set")]
+    [InlineData("✅\uFE0F 🧾 **CLOSED**", false, "anchors.triggerCarriesVerdict is not set")]
+    [InlineData("✅ **🧾 CLOSED**", false, "anchors.triggerCarriesVerdict is not set")]
+    [InlineData("✅ **🧾 CLOSED**", true, "emphasis stands between the two marks")]
+    [InlineData("**✅** 🧾 CLOSED", true, "emphasis stands between the two marks")]
+    [InlineData("✅ _ 🧾 CLOSED", true, "emphasis stands between the two marks")]
+    [InlineData("✅🧾 **CLOSED**, mark repaired", true, null)]
+    [InlineData("✅\uFE0F 🧾 **CLOSED**", true, null)]
+    [InlineData("✅ **CLOSED** - 🧾 mentioned in the prose", false, null)]
+    [InlineData("✅ **CLOSED** - 🧾 mentioned in the prose", true, null)]
+    [InlineData("🧾✅ CLOSED", false, null)]
+    [InlineData("✅ CLOSED", false, null)]
+    [InlineData("🟠 OPEN 🧾", true, null)]
+    public void UnreadBookkeepingPair_SaysWhyAPairThatOpensATriggerIsNotRead(string trigger, bool triggerCarriesVerdict, string? why)
+    {
+        var settings = triggerCarriesVerdict ? HarnessFactory.TriggerCarriesVerdict().Anchors : new AnchorSettings();
+        var unread = AnchorStatus.UnreadBookkeepingPair(trigger, settings);
+
+        if (why is null)
+        {
+            Assert.Null(unread);
+            return;
+        }
+
+        Assert.NotNull(unread);
+        Assert.StartsWith(why, unread, StringComparison.Ordinal);
+        Assert.False(AnchorStatus.IsBookkeepingClosure(trigger, settings));
+    }
+
     [Fact]
     public void IsCanonical_AcceptsOnlyTheExactSpellings()
     {
@@ -106,6 +141,8 @@ public sealed class AnchorStatusTests
     [InlineData("🟠 OPEN", "✅ **CLOSED** - fixed", "the Trigger opens with the closed mark")]
     [InlineData("⏳ GATED", "**✅ CLOSED**", "the Trigger opens with the closed mark")]
     [InlineData("✅ CLOSED", "CLOSED in words, with no mark", "the Status reads closed")]
+    [InlineData("✅ CLOSED", "", "the Status reads closed")]
+    [InlineData("✅ CLOSED", "✅\uFE0F 🧾 **CLOSED**", null)]
     public void SplitVerdict_IsAPairThatReadsClosedOnOneSideOnly(string status, string trigger, string? expected)
     {
         var split = AnchorStatus.SplitVerdict(status, trigger, HarnessFactory.TriggerCarriesVerdict().Anchors);

@@ -633,19 +633,26 @@ anchor table or a second one, or with an anchor row outside the table or inside 
 table, is malformed: where a new row belongs would be a guess, and a stray row is counted by
 nothing. Every command that reads or changes anchors refuses a malformed registry (exit 20)
 rather than answer from rows it cannot trust, while `read-anchors --lint` and
-`check-anchor-balance` report the problem among their findings (exit 1).
+`check-anchor-balance` report the problem among their findings (exit 1). A directory where a
+registry's file belongs, or a file that cannot be read, is refused by every command, `init`
+included (exit 20): taken for no registry, a directory sent its reader to `init`, which then failed
+to write over it.
 
 The Status cell is the only verdict that decides: `🟠 OPEN`, `⏳ GATED`, `🔵 DISCLOSED` or `✅ CLOSED`. A
 row is closed exactly when its Status cell starts with ✅, and every other glyph, including
 one nobody anticipated, reads as open: a row wrongly read as open stays visible as work,
 while a row wrongly read as closed disappears from every count. Nothing is inferred from
-the prose cells. A registry whose rows open a closed Trigger with the closure itself can say
+the prose cells to decide a verdict or a count. A registry whose rows open a closed Trigger
+with the closure itself can say
 so with `anchors.triggerCarriesVerdict`: a closed row's Trigger then opens with ✅ and no
 other row's does, the writing commands refuse a row whose two cells disagree, and the lint
 and the balance report one, so that a row states its verdict once, even where it states it
 twice. A closed row's Trigger may open with ✅ and then 🧾 instead, the bookkeeping pair, when
 its closure only repairs the mark of work done before the change that closes it (see the
-balance, below).
+balance, below). Whatever the setting, a closed row whose Trigger opens with the two marks where
+they are not read as the pair - the setting is off, or emphasis stands between them - is noted,
+failing nothing, since only its writer knows whether they meant it: by the lint wherever it is, and
+by the balance where it is a closure the change made.
 
 ### Writing a row
 
@@ -698,10 +705,12 @@ of its read, decide and write. .NET supports named mutexes on Windows, Linux and
 and named semaphores on Windows only. A mutex must be released by the thread that took it, so
 the locked work is synchronous by construction. A change that cannot take the lock within 10
 seconds writes nothing and exits 13. A read takes the lock too, for as long as reading the two
-files takes, and one that cannot take it in time reads nothing and exits 13 as well. One file
-needs no lock, since every write replaces a whole file in one rename, but a move writes one file
-and then the other, and the two read apart could hold its row in neither, which reads as an
-anchor closed or lost, or in both, which reads as a duplicate.
+files takes, and one that cannot take it in time reads nothing and exits 13 as well. A lock that
+belongs to another user refuses the same way (exit 13), and one the system will not open stops
+the command (exit 15). One file needs no lock, since every write replaces a whole file in one
+rename. Two do: a move never leaves its row in neither file, but a read of the destination before
+the move's first write and of the source after its second finds it in neither, which reads as an
+anchor closed or lost, and a read the other way round finds it in both, a duplicate.
 
 ### The balance
 
@@ -710,35 +719,46 @@ anchor closed or lost, or in both, which reads as a duplicate.
 `check-anchor-citations --current-pr` measures a branch: the base itself where it is an
 ancestor of HEAD. Compared with directly, a base that had moved on counted its own later
 changes, reversed, as the change's - an anchor it closed as one the change created, one it
-gained as one the change lost - and a base that shares no history with HEAD, or a HEAD that
-names no commit yet, is refused. A shallow clone needs its history back to where the two part,
-unless one names the other as a parent in its own commit - a pull request's merge commit checked
-out alone names the tip it merges into - and where it stops first, the check says so and asks
-for the rest (`git fetch --unshallow`) rather than calling the two unrelated. The receipt names
-both commits where they differ. Each registry
-is read at the commit compared with as `--current-commit` reads a file (see Citations), so a
-file git cannot read is refused rather than taken for one that did not exist yet. A registry
-absent there counts as empty, and the receipt says so. A registry git ignores has no history
-and is refused.
+gained as one the change lost. During an unfinished merge the working tree already holds what
+the merge brings in, so HEAD is taken merged with each commit MERGE_HEAD names, as the commit
+finishing the merge would be (`git merge-base <base> HEAD <merging>...`): measured from HEAD
+alone, the anchors the base opened after HEAD left it counted as the change's. A base that
+shares no history with HEAD leaves no point the change began from, and the check stops (exit
+20); a HEAD that names no commit yet is refused, as every command measuring from HEAD refuses it
+(exit 13). A shallow clone needs its history back to where the two part, unless either names the
+other as a parent in its own commit - a pull request's merge commit checked out alone names the
+tip it merges into - and where it may stop first, the check says so and asks for the rest (`git
+fetch --unshallow`) rather than calling the two unrelated; a base it holds no commit for is said
+the same way. The receipt names both commits where they differ, and the merge in progress. Each
+registry is read at the commit compared with as `--current-commit` reads a file (see Citations),
+so a file git cannot read is refused rather than taken for one that did not exist yet. A
+registry absent there counts as empty, and the receipt says so. One malformed there is noted
+too: a row it hid was not counted there, so deleting it goes unseen and repairing it reads as
+new - noted rather than failed, since no change can repair the history. A registry git ignores
+has no history and is refused.
 
 Anchors are compared by id across both registries, so moving a row counts as nothing. The
 check fails when open anchors rose, less the anchors newly disclosed and plus the closures that
-are bookkeeping: when the change created more anchors than its work closed. The two corrections
-pull opposite ways for one reason. Disclosure records debt that already existed, so writing it
-down is not creating it. A bookkeeping closure - a row closed since the base whose Trigger opens
-with the bookkeeping pair, `✅🧾`, where `anchors.triggerCarriesVerdict` holds - records work that
-already existed, so marking it is not doing it: the anchor leaves the open count, as a closed row
-must, and the change is credited with nothing for it. The pair counts only where it opens the
-Trigger, as every mark counts only where it opens its cell: one later in the prose could be
-claimed by a row that merely mentions bookkeeping.
+are bookkeeping and the anchors lost: when the change created more anchors than its work
+closed. The first two corrections pull opposite ways for one reason. Disclosure records debt
+that already existed, so writing it down is not creating it. A bookkeeping closure - a row
+closed since the change began whose Trigger opens with the bookkeeping pair, `✅🧾`, where
+`anchors.triggerCarriesVerdict` holds - records work that already existed, so marking it is not
+doing it: the anchor leaves the open count, as a closed row must, and the change is credited
+with nothing for it. The pair counts only where it opens the Trigger, as every mark counts only
+where it opens its cell: one later in the prose could be claimed by a row that merely mentions
+bookkeeping. A closure whose Trigger opens with the two marks where they are not read as the
+pair is credited as work, as it reads, and noted.
 
 The check also fails whenever the registries as they stand are unsound: a closed anchor in
 pending, a live anchor in done, a Status that is none of the four spellings, a row stating two
 verdicts where `anchors.triggerCarriesVerdict` holds, a missing registry, or a structural
-problem. And it fails when an anchor open at the base is in neither registry now: a row moves
-between them and is never deleted, so a lost row - deleted, or renamed by hand - would count as
-closed. A lost row is judged only where both registries were read whole, since every row a
-missing or malformed registry hides would read as lost. Every problem is reported at once.
+problem. And it fails when an anchor open where the change began is in neither registry now: a
+row moves between them and is never deleted, so a lost row - deleted, or renamed by hand - is
+listed apart and not credited; counted as closed, it paid for an anchor the change created,
+which went unreported until the row came back. A lost row is a finding only where both
+registries were read whole, since every row a missing or malformed registry hides would read as
+lost. Every problem is reported at once.
 
 ### Citations
 
@@ -747,7 +767,9 @@ row in either registry. The roots are `anchors.citationRoots`, and nothing outsi
 root is scanned: which code is production code is a judgement a repository makes, not one a
 tool can infer. An empty list scans nothing and the command says so, rather than reporting a
 pass over a check that looked at no file. `--current-commit` reads HEAD, `--current-tree` reads
-the disk, `--current-pr` reads only what this branch changed.
+the disk, `--current-pr` reads only what this branch changed, measured as the balance measures a
+change, an unfinished merge included. A HEAD that names no commit is refused by the two that
+read from it (exit 13).
 
 A citation resolves to a row whose id is exactly the id cited, by the rule `read-anchor` finds
 a row by, so the two verbs never disagree about whether a row exists. Resolved by containment
@@ -781,8 +803,9 @@ time, each cost two, and 2,385 files took twenty minutes. A file is read as it w
 disk - its byte order mark, UTF-16 included, says how. git answers "missing" for a file whose
 object it cannot read exactly as for a path that names none, so a path it answers that way is
 looked for in the commit's listing: one listed there refuses the read, naming it, rather than
-passing with nothing read in it. `check-anchor-balance` reads its base through the same rule, so
-a registry git cannot read is refused rather than reported missing at the base.
+passing with nothing read in it. `check-anchor-balance` reads the commit it compares with
+through the same rule, so a registry git cannot read there is refused rather than reported
+missing.
 
 git holds a name as bytes, and nothing makes them UTF-8. A file in a root whose name is not
 UTF-8 refuses the check, named as git's quoting writes it (`caf\351.md`): no file opens by such a

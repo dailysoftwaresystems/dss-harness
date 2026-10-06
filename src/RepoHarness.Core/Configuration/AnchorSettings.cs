@@ -30,7 +30,7 @@ public sealed class AnchorSettings
     /// Trigger may open with the bookkeeping pair instead, the closed mark and then the bookkeeping mark, to
     /// say its closure only repairs the mark of work done before the change that closes it:
     /// check-anchor-balance counts the anchor closed and credits that change with nothing. False, the
-    /// default: the Status cell is the only verdict, and nothing is read from the prose beside it.
+    /// default: the Status cell is the only verdict, and no verdict or count is read from the prose beside it.
     /// </summary>
     /// <remarks>
     /// For a registry whose rows open a closed Trigger with the closure itself - the mark, when, and what

@@ -12,6 +12,12 @@ public enum AnchorFindingSeverity
 
     /// <summary>Every row was read, but the file will not render the way it reads.</summary>
     Warning,
+
+    /// <summary>
+    /// Every row was read and counted as it stands, but one may not say what its writer meant: reported, and failing
+    /// nothing.
+    /// </summary>
+    Note,
 }
 
 /// <summary>A problem in the structure of a registry file.</summary>

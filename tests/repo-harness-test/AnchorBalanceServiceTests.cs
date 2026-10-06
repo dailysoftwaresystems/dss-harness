@@ -72,11 +72,24 @@ public sealed class AnchorBalanceServiceTests
         Assert.Equal(-1, repaired.OpenNow - repaired.OpenAtBase - repaired.Disclosed);
         Assert.True(repaired.Passed);
         Assert.Empty(repaired.Findings);
+
+        // The receipt says which closure was not credited, and only that one.
+        var receipt = AnchorReports.Balance(repaired, json: false).Data;
+        Assert.Equal($"base      HEAD ({ReportText.Commit(repaired.BaseCommit)})", receipt[0]);
+        Assert.Contains("change    2 closed (1 bookkeeping), 1 opened (1 created, 0 disclosed); counted 0", receipt);
+        Assert.Contains($"  - {StaleMark}   [bookkeeping: not credited]", receipt);
+        Assert.Contains($"  - {WorkDone}", receipt);
+
+        using var json = JsonDocument.Parse(AnchorReports.Balance(repaired, json: true).Data[0]);
+        Assert.Equal(
+            [(StaleMark, true), (WorkDone, false)],
+            json.RootElement.GetProperty("closed").EnumerateArray()
+                .Select(closing => (closing.GetProperty("anchor").GetString(), closing.GetProperty("bookkeeping").GetBoolean())));
     }
 
     /// <summary>
-    /// By default the Status is the only verdict and nothing is read from the Trigger, so the pair there is prose
-    /// and the closure is credited.
+    /// By default the Status is the only verdict and no verdict is read from the Trigger, so the pair there is prose
+    /// and the closure is credited; it is noted, failing nothing.
     /// </summary>
     [Fact]
     public async Task ByDefault_TheBookkeepingPairIsProse_AndTheClosureIsCredited()
@@ -92,6 +105,8 @@ public sealed class AnchorBalanceServiceTests
 
         Assert.Equal([new AnchorClosing(One, Bookkeeping: false)], report.Closed);
         Assert.Equal(-1, report.NetNew);
+        Assert.Equal(AnchorFindingSeverity.Note, Assert.Single(report.Findings).Severity);
+        Assert.True(report.Passed);
     }
 
     /// <summary>
@@ -150,19 +165,21 @@ public sealed class AnchorBalanceServiceTests
     }
 
     /// <summary>
-    /// A closure is bookkeeping where any row its id has says so. Every row an id still has is closed, and crediting the
-    /// closure would take every one of them saying the work was done by this change.
+    /// A closure is bookkeeping where any row its id has says so, whichever row comes first. Every row an id still has is
+    /// closed, and crediting the closure would take every one of them saying the work was done by this change.
     /// </summary>
-    [Fact]
-    public async Task AClosureIsBookkeeping_WhereAnyRowOfItsIdSaysSo()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AClosureIsBookkeeping_WhereAnyRowOfItsIdSaysSo(bool bookkeptFirst)
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareCommittedAsync(temp, triggerCarriesVerdict: true, One);
 
         await harness.AnchorRegistryService.SetAsync(
-            temp.Path, new AnchorSetRequest(One) { Status = "closed", Trigger = Bookkept }, dryRun: false, cancellationToken);
-        File.AppendAllText(DonePath(temp), $"| `{One}` | P1 | ✅ CLOSED | {Worked} | - | - |\n");
+            temp.Path, new AnchorSetRequest(One) { Status = "closed", Trigger = bookkeptFirst ? Bookkept : Worked }, dryRun: false, cancellationToken);
+        File.AppendAllText(DonePath(temp), $"| `{One}` | P1 | ✅ CLOSED | {(bookkeptFirst ? Worked : Bookkept)} | - | - |\n");
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
 
@@ -172,10 +189,11 @@ public sealed class AnchorBalanceServiceTests
 
     /// <summary>
     /// A row moves between the registries and is never deleted, so an anchor open at the base that neither holds now
-    /// fails the balance, by name. Counted as closed, a row deleted or renamed by hand was credited as progress.
+    /// fails the balance, by name, and is not credited. Counted as closed, a row deleted or renamed by hand was credited
+    /// as progress, and paid for the anchor its new name made, which went unreported until the row came back.
     /// </summary>
     [Fact]
-    public async Task AnAnchorOpenAtTheBaseThatNeitherRegistryHoldsNow_FailsTheBalance()
+    public async Task AnAnchorOpenAtTheBaseThatNeitherRegistryHoldsNow_FailsTheBalance_AndIsNotCredited()
     {
         using var temp = new TempDirectory();
         var harness = await PrepareCommittedAsync(temp, One);
@@ -186,12 +204,231 @@ public sealed class AnchorBalanceServiceTests
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, TestContext.Current.CancellationToken);
 
-        Assert.Equal(0, report.NetNew);
+        Assert.Equal([One], report.Lost);
+        Assert.Empty(report.Closed);
+        Assert.Equal([Two], report.Opened.Select(opening => opening.Id));
+        Assert.Equal(1, report.NetNew);
         Assert.False(report.Passed);
 
         var finding = Assert.Single(report.Findings);
         Assert.Equal(AnchorSettings.DefaultPendingAnchorsPath, finding.File);
+        Assert.Equal(AnchorFindingSeverity.Fatal, finding.Severity);
         Assert.Contains($"'{One}' was open where this change began and neither registry holds it now", finding.Message, StringComparison.Ordinal);
+
+        // Both failures in one run, and the lost anchor listed apart from the closures.
+        var receipt = AnchorReports.Balance(report, json: false);
+        Assert.Contains("change    0 closed (0 bookkeeping), 1 lost, 1 opened (1 created, 0 disclosed); counted +1", receipt.Data);
+        Assert.Contains($"  ! {One}   [lost: not credited]", receipt.Data);
+        Assert.Contains("creates 1 more anchor(s)", receipt.Message, StringComparison.Ordinal);
+        Assert.Contains("1 problem(s)", receipt.Message, StringComparison.Ordinal);
+
+        using var json = JsonDocument.Parse(AnchorReports.Balance(report, json: true).Data[0]);
+        Assert.Equal([One], json.RootElement.GetProperty("lost").EnumerateArray().Select(lost => lost.GetProperty("anchor").GetString()));
+        Assert.Empty(json.RootElement.GetProperty("closed").EnumerateArray());
+    }
+
+    /// <summary>
+    /// A registry whose only finding is a warning was still read whole, so the anchors open at the base that neither
+    /// registry holds now are judged lost there as anywhere: only a fatal finding hides rows.
+    /// </summary>
+    [Fact]
+    public async Task ARegistryWithOnlyAWarning_StillHasItsLostRowsJudged()
+    {
+        using var temp = new TempDirectory();
+        var harness = await PrepareCommittedAsync(temp, One, Two, StayOpen);
+        var pending = PendingPath(temp);
+        var stayOpen = File.ReadAllLines(pending).Single(line => line.Contains(StayOpen, StringComparison.Ordinal));
+        File.WriteAllText(pending, File.ReadAllText(pending).Replace(stayOpen, "<!-- a note -->\n" + stayOpen, StringComparison.Ordinal));
+        TakeRowByHand(pending, Two);
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, TestContext.Current.CancellationToken);
+
+        Assert.Contains(report.Findings, finding => finding.Severity == AnchorFindingSeverity.Warning);
+        Assert.Contains(
+            report.Findings,
+            finding => finding.Severity == AnchorFindingSeverity.Fatal
+                && finding.Message.Contains($"'{Two}' was open where this change began", StringComparison.Ordinal));
+        Assert.Equal([Two], report.Lost);
+        Assert.False(report.Passed);
+    }
+
+    /// <summary>
+    /// A closure whose Trigger opens with the bookkeeping pair that is not read as one - the setting is off, or emphasis
+    /// stands between the marks - is credited as work, as it reads; and the balance says so, failing nothing, since the
+    /// writer may have meant it as bookkeeping.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "✅🧾 **CLOSED** 2026-10-01, mark repaired", "anchors.triggerCarriesVerdict is not set")]
+    [InlineData(true, "✅ **🧾 CLOSED** 2026-10-01, mark repaired", "emphasis stands between the two marks")]
+    public async Task AnUnreadBookkeepingPair_IsNoted_AndTheClosureCountsAsWork(bool triggerCarriesVerdict, string trigger, string why)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp, triggerCarriesVerdict, One);
+
+        await harness.AnchorRegistryService.SetAsync(
+            temp.Path, new AnchorSetRequest(One) { Status = "closed", Trigger = trigger }, dryRun: false, cancellationToken);
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
+
+        Assert.Equal([new AnchorClosing(One, Bookkeeping: false)], report.Closed);
+        Assert.Equal(-1, report.NetNew);
+        Assert.True(report.Passed);
+
+        var note = Assert.Single(report.Findings);
+        Assert.Equal((AnchorSettings.DefaultDoneAnchorsPath, AnchorFindingSeverity.Note), (note.File, note.Severity));
+        Assert.Contains($"anchor '{One}' has a Trigger opening with the closed mark and then the bookkeeping mark", note.Message, StringComparison.Ordinal);
+        Assert.Contains(why, note.Message, StringComparison.Ordinal);
+
+        var receipt = AnchorReports.Balance(report, json: false);
+        Assert.Contains($"note      {note.File}:{note.LineNumber}   {note.Message}", receipt.Data);
+        Assert.DoesNotContain("problems", receipt.Data);
+        Assert.Equal(0, receipt.ExitCode);
+
+        using var json = JsonDocument.Parse(AnchorReports.Balance(report, json: true).Data[0]);
+        Assert.Equal("note", Assert.Single(json.RootElement.GetProperty("findings").EnumerateArray()).GetProperty("severity").GetString());
+    }
+
+    /// <summary>
+    /// A registry malformed where the change began hid the rows it could not read there, so they count as absent there:
+    /// noted, so a deleted row that went unseen, or a repaired one read as new, can be told, and not failed, since no
+    /// change can repair the history.
+    /// </summary>
+    [Fact]
+    public async Task ARegistryMalformedWhereTheChangeBegan_IsNoted_NotFailed()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp, One, Two);
+        var pending = PendingPath(temp);
+        var row = TakeRowByHand(pending, One);
+        File.AppendAllText(pending, $"\nA paragraph.\n\n{row}\n");
+        await harness.CommitAllAsync(temp.Path, "a row stranded outside the table", cancellationToken);
+
+        // The stranded row deleted: nothing that counted there is gone.
+        File.WriteAllText(pending, File.ReadAllText(pending).Replace($"\nA paragraph.\n\n{row}\n", string.Empty, StringComparison.Ordinal));
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
+
+        Assert.Equal([AnchorSettings.DefaultPendingAnchorsPath], report.MalformedAtBase);
+        Assert.Empty(report.Findings);
+        Assert.Empty(report.Lost);
+        Assert.True(report.Passed);
+        Assert.Contains(
+            $"note      {AnchorSettings.DefaultPendingAnchorsPath} was malformed at HEAD, so a row it held that could not be read was not counted there",
+            AnchorReports.Balance(report, json: false).Data);
+
+        using var json = JsonDocument.Parse(AnchorReports.Balance(report, json: true).Data[0]);
+        Assert.Equal(
+            [AnchorSettings.DefaultPendingAnchorsPath],
+            json.RootElement.GetProperty("malformedAtBase").EnumerateArray().Select(path => path.GetString()));
+    }
+
+    /// <summary>
+    /// During an unfinished merge the working tree already holds what the merge brings in, so the change is measured as
+    /// the commit finishing it would be. Measured from where HEAD alone left the base, the anchors the base opened after
+    /// were counted as the change's.
+    /// </summary>
+    [Fact]
+    public async Task AnUnfinishedMergeOfTheBase_IsMeasuredAsTheCommitFinishingItWouldBe()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp, One, StayOpen);
+        var registry = harness.AnchorRegistryService;
+
+        await harness.RunGitAsync(temp.Path, ["branch", "upstream"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "-b", "work"], cancellationToken);
+        await registry.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "closed" }, dryRun: false, cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "the change", cancellationToken);
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "upstream"], cancellationToken);
+        await registry.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
+        await registry.WriteAsync(temp.Path, Anchor(NewDebt), dryRun: false, cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "the base moves on", cancellationToken);
+        var upstream = (await harness.GitClient.ResolveCommitAsync(temp.Path, "upstream", cancellationToken))!;
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "work"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["merge", "-q", "--no-commit", "--no-ff", "upstream"], cancellationToken);
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, "upstream", cancellationToken);
+
+        Assert.Equal([upstream], report.Merging);
+        Assert.Equal(upstream, report.Commit);
+        Assert.False(report.BaseMovedOn);
+        Assert.Equal([new AnchorClosing(One, Bookkeeping: false)], report.Closed);
+        Assert.Empty(report.Opened);
+        Assert.Equal(-1, report.NetNew);
+        Assert.True(report.Passed);
+        Assert.Contains(
+            $"note      HEAD is merging {ReportText.Commit(upstream)}, so the change is measured as the commit finishing that merge would be",
+            AnchorReports.Balance(report, json: false).Data);
+
+        using var json = JsonDocument.Parse(AnchorReports.Balance(report, json: true).Data[0]);
+        Assert.Equal([upstream], json.RootElement.GetProperty("merging").EnumerateArray().Select(commit => commit.GetString()));
+    }
+
+    /// <summary>
+    /// A pull request's merge commit checked out alone, as CI checks one out, with the branch it merges into fetched alone
+    /// too: the merge commit names that branch's tip as a parent, so the change is measured from there, and the anchors
+    /// the branch opened after the change left it are not counted as the change's.
+    /// </summary>
+    [Fact]
+    public async Task ABalanceOnAMergeCommitCheckedOutAlone_IsMeasuredFromTheTipItMergesInto()
+    {
+        using var origin = new TempDirectory();
+        using var clone = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(origin, One, StayOpen);
+        var registry = harness.AnchorRegistryService;
+
+        await harness.RunGitAsync(origin.Path, ["branch", "-M", "main"], cancellationToken);
+        await harness.RunGitAsync(origin.Path, ["checkout", "-q", "-b", "change"], cancellationToken);
+        await registry.SetAsync(origin.Path, new AnchorSetRequest(One) { Status = "closed" }, dryRun: false, cancellationToken);
+        await harness.CommitAllAsync(origin.Path, "the change", cancellationToken);
+        await harness.RunGitAsync(origin.Path, ["checkout", "-q", "main"], cancellationToken);
+        await registry.WriteAsync(origin.Path, Anchor(Two), dryRun: false, cancellationToken);
+        await harness.CommitAllAsync(origin.Path, "main moves on", cancellationToken);
+        var into = (await harness.GitClient.ResolveCommitAsync(origin.Path, "main", cancellationToken))!;
+        await harness.RunGitAsync(origin.Path, ["checkout", "-q", "-b", "merged"], cancellationToken);
+        await harness.RunGitAsync(origin.Path, ["merge", "-q", "--no-ff", "-m", "merge the change", "change"], cancellationToken);
+
+        // --depth needs a URL: a clone from a plain path copies the whole history and ignores it.
+        var url = new Uri(origin.Path).AbsoluteUri;
+        await harness.RunGitAsync(clone.Path, ["clone", "-q", "--depth", "1", "--branch", "merged", url, "."], cancellationToken);
+        await harness.RunGitAsync(clone.Path, ["fetch", "-q", "--depth", "1", "origin", "main:refs/remotes/origin/main"], cancellationToken);
+        Assert.False((await harness.GitClient.RunAsync(clone.Path, ["merge-base", "origin/main", "HEAD"], cancellationToken: cancellationToken)).Succeeded);
+
+        var report = await harness.AnchorBalanceService.CheckAsync(clone.Path, "origin/main", cancellationToken);
+
+        Assert.Equal((into, into), (report.BaseCommit, report.Commit));
+        Assert.False(report.BaseMovedOn);
+        Assert.Equal([new AnchorClosing(One, Bookkeeping: false)], report.Closed);
+        Assert.Empty(report.Opened);
+        Assert.True(report.Passed);
+    }
+
+    /// <summary>
+    /// A shallow clone holds no commit before where its history was cut, so a base there names none: said so, with how
+    /// to fetch the rest, rather than as a name that names nothing.
+    /// </summary>
+    [Fact]
+    public async Task ABaseBeyondAShallowClonesHistory_AsksForTheRest()
+    {
+        using var origin = new TempDirectory();
+        using var clone = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(origin, One);
+        await harness.CommitAllAsync(origin.Path, "one more", cancellationToken);
+
+        await harness.RunGitAsync(clone.Path, ["clone", "-q", "--depth", "1", new Uri(origin.Path).AbsoluteUri, "."], cancellationToken);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => harness.AnchorBalanceService.CheckAsync(clone.Path, "HEAD~1", cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+        Assert.StartsWith("'HEAD~1' names no commit this clone holds", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("git fetch --unshallow", refusal.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -231,17 +468,17 @@ public sealed class AnchorBalanceServiceTests
         var registry = harness.AnchorRegistryService;
         var forked = await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken);
 
-        await GitAsync(harness, temp, "branch", "upstream");
-        await GitAsync(harness, temp, "checkout", "-q", "-b", "work");
+        await harness.RunGitAsync(temp.Path, ["branch", "upstream"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "-b", "work"], cancellationToken);
         await registry.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "closed" }, dryRun: false, cancellationToken);
         await registry.WriteAsync(temp.Path, Anchor(StayOpen), dryRun: false, cancellationToken);
         await harness.CommitAllAsync(temp.Path, "the change", cancellationToken);
 
-        await GitAsync(harness, temp, "checkout", "-q", "upstream");
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "upstream"], cancellationToken);
         await registry.SetAsync(temp.Path, new AnchorSetRequest(Two) { Status = "closed" }, dryRun: false, cancellationToken);
         await registry.WriteAsync(temp.Path, Anchor(NewDebt), dryRun: false, cancellationToken);
         await harness.CommitAllAsync(temp.Path, "the base moves on", cancellationToken);
-        await GitAsync(harness, temp, "checkout", "-q", "work");
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "work"], cancellationToken);
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, "upstream", cancellationToken);
 
@@ -266,7 +503,7 @@ public sealed class AnchorBalanceServiceTests
         Assert.Equal(forked, json.RootElement.GetProperty("commit").GetString());
 
         // HEAD detached at the same commit is measured the same.
-        await GitAsync(harness, temp, "checkout", "-q", "--detach");
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "--detach"], cancellationToken);
         var detached = await harness.AnchorBalanceService.CheckAsync(temp.Path, "upstream", cancellationToken);
 
         Assert.Equal(report.Commit, detached.Commit);
@@ -288,11 +525,11 @@ public sealed class AnchorBalanceServiceTests
         var registry = harness.AnchorRegistryService;
         var head = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
 
-        await GitAsync(harness, temp, "branch", "behind");
-        await GitAsync(harness, temp, "checkout", "-q", "-b", "upstream");
+        await harness.RunGitAsync(temp.Path, ["branch", "behind"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "-b", "upstream"], cancellationToken);
         await registry.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "closed" }, dryRun: false, cancellationToken);
         await harness.CommitAllAsync(temp.Path, "the base moves on", cancellationToken);
-        await GitAsync(harness, temp, "checkout", "-q", "behind");
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "behind"], cancellationToken);
         await registry.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, "upstream", cancellationToken);
@@ -309,7 +546,7 @@ public sealed class AnchorBalanceServiceTests
 
     /// <summary>
     /// A HEAD that names no commit yet shares no history with any base, so there is no point the change began from:
-    /// refused, saying so, whether a base is named or not.
+    /// refused as a precondition, as check-anchor-citations refuses it, whether a base is named or not.
     /// </summary>
     [Fact]
     public async Task AHeadThatNamesNoCommit_IsRefused_WhateverTheBase()
@@ -318,15 +555,16 @@ public sealed class AnchorBalanceServiceTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareCommittedAsync(temp, One);
         var committed = await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken);
-        await GitAsync(harness, temp, "checkout", "-q", "--orphan", "unborn");
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "--orphan", "unborn"], cancellationToken);
 
         foreach (var baseReference in new[] { null, committed })
         {
             var refusal = await Assert.ThrowsAsync<HarnessException>(
                 () => harness.AnchorBalanceService.CheckAsync(temp.Path, baseReference, cancellationToken));
 
-            Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
             Assert.StartsWith("HEAD names no commit yet", refusal.Message, StringComparison.Ordinal);
+            Assert.Contains("there is no point this change began from to compare against. Commit first.", refusal.Message, StringComparison.Ordinal);
         }
     }
 
@@ -341,12 +579,26 @@ public sealed class AnchorBalanceServiceTests
     {
         var baseCommit = new string('a', 40);
         var report = new AnchorBalanceReport(
-            "upstream", baseCommit, movedOn ? new string('b', 40) : baseCommit, 0, 0, [], [], [AnchorSettings.DefaultDoneAnchorsPath], []);
+            Base: "upstream",
+            BaseCommit: baseCommit,
+            Commit: movedOn ? new string('b', 40) : baseCommit,
+            Merging: [],
+            OpenAtBase: 0,
+            OpenNow: 0,
+            Closed: [],
+            Lost: [],
+            Opened: [],
+            MissingAtBase: [AnchorSettings.DefaultDoneAnchorsPath],
+            MalformedAtBase: [AnchorSettings.DefaultPendingAnchorsPath],
+            Findings: []);
 
         var receipt = AnchorReports.Balance(report, json: false);
 
         Assert.Equal($"open      0 {measured}, 0 now", receipt.Data[1]);
         Assert.Contains($"note      {AnchorSettings.DefaultDoneAnchorsPath} did not exist {measured}, so it counts as empty there", receipt.Data);
+        Assert.Contains(
+            $"note      {AnchorSettings.DefaultPendingAnchorsPath} was malformed {measured}, so a row it held that could not be read was not counted there",
+            receipt.Data);
         Assert.EndsWith($"against 0 {measured}", receipt.Message, StringComparison.Ordinal);
     }
 
@@ -369,30 +621,12 @@ public sealed class AnchorBalanceServiceTests
             harness.GitClient,
             harness.FileSystem);
 
-        using var held = new ManualResetEventSlim();
-        using var release = new ManualResetEventSlim();
-
-        var holder = new Thread(() => harness.AnchorRegistryLock.RunExclusive(registries, () =>
+        using (RegistryLockHolder.Take(harness.AnchorRegistryLock, registries, cancellationToken))
         {
-            held.Set();
-            release.Wait(TimeSpan.FromSeconds(60));
-            return 0;
-        }));
-
-        holder.Start();
-
-        try
-        {
-            Assert.True(held.Wait(TimeSpan.FromSeconds(60), cancellationToken), "The holder never took the lock.");
-
             var refusal = await Assert.ThrowsAsync<HarnessException>(() => impatient.CheckAsync(temp.Path, null, cancellationToken));
 
             Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
-        }
-        finally
-        {
-            release.Set();
-            holder.Join();
+            Assert.Contains("has held the anchor registries", refusal.Message, StringComparison.Ordinal);
         }
 
         Assert.True((await impatient.CheckAsync(temp.Path, null, cancellationToken)).Passed);
@@ -405,7 +639,8 @@ public sealed class AnchorBalanceServiceTests
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareCommittedAsync(temp, One);
-        var unrelated = (await GitAsync(harness, temp, "commit-tree", "HEAD^{tree}", "-m", "unrelated")).Trim();
+        var unrelated = (await harness.RunGitAsync(temp.Path, ["commit-tree", "HEAD^{tree}", "-m", "unrelated"], cancellationToken))
+            .StandardOutput.Trim();
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(
             () => harness.AnchorBalanceService.CheckAsync(temp.Path, unrelated, cancellationToken));
@@ -473,7 +708,7 @@ public sealed class AnchorBalanceServiceTests
     }
 
     [Fact]
-    public async Task AChangeThatLeavesMoreOpenAnchors_Fails()
+    public async Task AChangeThatCreatesMoreAnchorsThanItsWorkCloses_Fails()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -623,6 +858,7 @@ public sealed class AnchorBalanceServiceTests
             harness.AnchorBalanceService.CheckAsync(temp.Path, "no-such-branch", TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, exception.ExitCode);
+        Assert.Equal("'no-such-branch' does not name a commit, so there is nothing to compare against.", exception.Message);
     }
 
     [Fact]
@@ -685,14 +921,6 @@ public sealed class AnchorBalanceServiceTests
 
     private static AnchorWriteRequest Anchor(string id, string status = "open")
         => new(id, "P1", $"trigger for {id}") { Status = status };
-
-    /// <summary>Runs git in the test's repository, failing the test where git fails, and returns what it printed.</summary>
-    private static async Task<string> GitAsync(HarnessFactory harness, TempDirectory temp, params string[] arguments)
-    {
-        var result = await harness.GitClient.RunAsync(temp.Path, arguments, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(result.Succeeded, result.FailureMessage);
-        return result.StandardOutput;
-    }
 
     /// <summary>Takes <paramref name="id"/>'s row out of the registry at <paramref name="path"/> by hand, as no command would, and returns it.</summary>
     private static string TakeRowByHand(string path, string id)

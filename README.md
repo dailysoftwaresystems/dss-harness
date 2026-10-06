@@ -308,8 +308,8 @@ dssharness read-anchors --open --band P0 P1
 dssharness check-anchor-balance --base main
 ```
 
-The Status cell (`🟠 OPEN`, `⏳ GATED`, `🔵 DISCLOSED`, `✅ CLOSED`) is the only verdict a
-row carries. Closing an anchor moves its row to the done registry, and
+The Status cell (`🟠 OPEN`, `⏳ GATED`, `🔵 DISCLOSED`, `✅ CLOSED`) is the only verdict that
+decides whether a row is closed. Closing an anchor moves its row to the done registry, and
 `check-anchor-balance` fails a change that creates more anchors than its work closes. A row is
 one line, so a value's line breaks are stored as spaces: a value that would be stored with an
 id or a path cut in two is refused, and so is one that newly cites an id no row holds. Run

@@ -24,7 +24,9 @@ public enum AnchorState
 /// <remarks>
 /// The Status cell is the only verdict that decides whether a row is closed: nothing is inferred from the prose
 /// beside it, even where a registry states the verdict in its Trigger too. Such a Trigger is read for two things
-/// alone: whether it states the verdict its Status does, and whether a closure is bookkeeping.
+/// alone: whether it states the verdict its Status does, and whether a closure is bookkeeping. Whatever the
+/// setting, a closed row's Trigger opening with the two bookkeeping marks is read for one thing more, which decides
+/// nothing: whether they are read as the pair, so a pair that is not can be noted.
 /// Each status is written glyph first and word second. The glyph is what the closed test reads,
 /// because a test on the first character of the cell has one answer however the rest is phrased;
 /// the word is there for the person reading the table.
@@ -136,9 +138,9 @@ public static class AnchorStatus
     /// <remarks>
     /// Leading position only, as for every mark: a pair anywhere in the prose could be claimed by a row that merely
     /// mentions bookkeeping. The closed mark comes first, so a Trigger opening with the pair reads closed as
-    /// <see cref="IsClosed"/> reads it, and it is the closed mark with the invisible selector a keyboard may type after
-    /// it too (<see cref="EmojiPresentation"/>): read as anything else, the pair its writer meant would go uncounted, and
-    /// the closure credited.
+    /// <see cref="IsClosed"/> reads it; and the closed mark followed by the invisible selector a keyboard may type after
+    /// it (<see cref="EmojiPresentation"/>) is still the closed mark: read as anything else, the pair its writer meant
+    /// would go uncounted, and the closure credited.
     /// </remarks>
     /// <param name="trigger">The Trigger cell.</param>
     /// <param name="settings">The repository's anchor settings.</param>
@@ -149,11 +151,40 @@ public static class AnchorStatus
 
         return settings.TriggerCarriesVerdict
             && IsClosed(trigger)
-            && Lead(trigger)[ClosedMark.Length..].TrimStart(EmojiPresentation).TrimStart().StartsWith(BookkeepingMark, StringComparison.Ordinal);
+            && AfterClosedMark(trigger).TrimStart().StartsWith(BookkeepingMark, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Why a Trigger that opens with the closed mark and then the bookkeeping mark is not read as the bookkeeping pair
+    /// (<see cref="IsBookkeepingClosure"/>), or <see langword="null"/> where it is read so or holds no such marks: the
+    /// Trigger carries no verdict under <paramref name="settings"/>, or emphasis stands between the two marks. Its
+    /// closure is then counted as work, which its writer may not have meant.
+    /// </summary>
+    /// <param name="trigger">The Trigger cell.</param>
+    /// <param name="settings">The repository's anchor settings.</param>
+    public static string? UnreadBookkeepingPair(string trigger, AnchorSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(trigger);
+        ArgumentNullException.ThrowIfNull(settings);
+
+        if (!IsClosed(trigger)
+            || IsBookkeepingClosure(trigger, settings)
+            || !string.Concat(AfterClosedMark(trigger).SkipWhile(character => char.IsWhiteSpace(character) || character is '*' or '_'))
+                .StartsWith(BookkeepingMark, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return settings.TriggerCarriesVerdict
+            ? "emphasis stands between the two marks, where only whitespace may"
+            : "anchors.triggerCarriesVerdict is not set, so no verdict is read from a Trigger";
     }
 
     /// <summary>Whether a Status cell is exactly one of the registry's spellings.</summary>
     public static bool IsCanonical(string cell) => Cells.Contains(cell.Trim(), StringComparer.Ordinal);
 
     private static string Lead(string cell) => cell.TrimStart().TrimStart('*', '_', ' ');
+
+    /// <summary>What follows the closed mark that opens <paramref name="cell"/>, with any selector typed after it.</summary>
+    private static string AfterClosedMark(string cell) => Lead(cell)[ClosedMark.Length..].TrimStart(EmojiPresentation);
 }

@@ -1,5 +1,6 @@
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Anchors;
 
@@ -44,12 +45,44 @@ public sealed record AnchorRegistry(AnchorRegistryKind Kind, string RelativePath
     /// <summary>The config.json setting that names this registry.</summary>
     public string Setting => Kind == AnchorRegistryKind.Pending ? "anchors.pendingAnchorsPath" : "anchors.doneAnchorsPath";
 
-    /// <summary>The file's text as it stands, or <see langword="null"/> where there is no file.</summary>
+    /// <summary>Whether the registry's file is there.</summary>
+    /// <exception cref="HarnessException">A directory is there instead.</exception>
+    public bool Exists(IFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        // Taken for no registry, a directory sent its reader to init, which then failed to write over it.
+        if (fileSystem.DirectoryExists(FullPath))
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{RelativePath}', where {Setting} puts the {Name} registry, is a directory. Move it aside, or set {Setting} to a file.");
+        }
+
+        return fileSystem.FileExists(FullPath);
+    }
+
+    /// <summary>The file's text as it stands, or <see langword="null"/> where nothing is there.</summary>
+    /// <exception cref="HarnessException">A directory is there instead (<see cref="Exists"/>), or the file could not be read.</exception>
     public string? ReadText(IFileSystem fileSystem)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
 
-        return fileSystem.FileExists(FullPath) ? fileSystem.ReadAllText(FullPath) : null;
+        try
+        {
+            return Exists(fileSystem) ? fileSystem.ReadAllText(FullPath) : null;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // Removed between the look and the read.
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"The {Name} registry, '{RelativePath}', could not be read: {ex.Message.TrimEnd('.')}.");
+        }
     }
 
     /// <summary>
@@ -91,7 +124,27 @@ public sealed record AnchorRegistry(AnchorRegistryKind Kind, string RelativePath
             : null;
     }
 
-    /// <summary>A problem with a row this registry holds that stops the registry being trusted.</summary>
+    /// <summary>
+    /// The note for a closed row this registry holds whose Trigger opens with the bookkeeping pair that is not read as
+    /// one, so its closure counts as work (<see cref="AnchorStatus.UnreadBookkeepingPair"/>), or null.
+    /// </summary>
+    public AnchorFinding? UnreadBookkeepingPair(AnchorRow row, AnchorSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        return row.IsClosed && AnchorStatus.UnreadBookkeepingPair(row.Trigger, settings) is { } why
+            ? Note(
+                row,
+                $"anchor '{row.Id}' has a Trigger opening with the closed mark and then the bookkeeping mark, "
+                + $"{AnchorStatus.ClosedMark}{AnchorStatus.BookkeepingMark}, that is not read as the bookkeeping pair: {why}; "
+                + "its closure counts as work")
+            : null;
+    }
+
+    /// <summary>
+    /// A problem with a row this registry holds, as its file stands now, that stops the registry being trusted. A row read
+    /// from another commit is at another line.
+    /// </summary>
     public AnchorFinding Fatal(AnchorRow row, string message)
     {
         ArgumentNullException.ThrowIfNull(row);
@@ -99,8 +152,16 @@ public sealed record AnchorRegistry(AnchorRegistryKind Kind, string RelativePath
         return new AnchorFinding(RelativePath, row.LineNumber, AnchorFindingSeverity.Fatal, message);
     }
 
-    /// <summary>A problem with this registry as a whole, at no line of it, that stops it being trusted.</summary>
+    /// <summary>A problem at no one line of this registry as it stands now, that stops it being trusted.</summary>
     public AnchorFinding Fatal(string message) => new(RelativePath, 0, AnchorFindingSeverity.Fatal, message);
+
+    /// <summary>Something about a row this registry holds, as its file stands now, that fails nothing.</summary>
+    public AnchorFinding Note(AnchorRow row, string message)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        return new AnchorFinding(RelativePath, row.LineNumber, AnchorFindingSeverity.Note, message);
+    }
 
     /// <summary>A problem in the structure of this registry's file, as a finding of the registry.</summary>
     public AnchorFinding Finding(AnchorDocumentFinding finding)
@@ -421,7 +482,16 @@ public sealed record AnchorListFilter
 }
 
 /// <summary>A row, and the registry it was read from.</summary>
-public sealed record AnchorEntry(AnchorRow Row, AnchorRegistry Registry);
+public sealed record AnchorEntry(AnchorRow Row, AnchorRegistry Registry)
+{
+    /// <summary>Every row of <paramref name="documents"/>, in order, each with the registry it was read from.</summary>
+    public static IEnumerable<AnchorEntry> Of(IEnumerable<(AnchorRegistryDocument Document, AnchorRegistry Registry)> documents)
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+
+        return documents.SelectMany(pair => pair.Document.Rows.Select(row => new AnchorEntry(row, pair.Registry)));
+    }
+}
 
 /// <summary>One changed cell.</summary>
 /// <param name="Field">The column.</param>
@@ -473,16 +543,20 @@ public sealed record AnchorLookup(IReadOnlyList<AnchorLookupResult> Results)
 /// <param name="Message">What is wrong.</param>
 public sealed record AnchorFinding(string File, int LineNumber, AnchorFindingSeverity Severity, string Message);
 
-/// <summary>An anchor open now that was not open at the base commit.</summary>
+/// <summary>An anchor open now that was not open where the change began (<see cref="AnchorBalanceReport.Commit"/>).</summary>
 /// <param name="Id">The anchor.</param>
 /// <param name="Excerpt">The start of its Trigger.</param>
 /// <param name="Disclosed">Whether it is disclosed, and so not counted against the balance.</param>
 public sealed record AnchorOpening(string Id, string Excerpt, bool Disclosed);
 
-/// <summary>An anchor open at the base commit that is not open now.</summary>
+/// <summary>
+/// An anchor open where the change began (<see cref="AnchorBalanceReport.Commit"/>) and closed now: its id still has a
+/// row, and every row it has reads closed.
+/// </summary>
 /// <param name="Id">The anchor.</param>
 /// <param name="Bookkeeping">
-/// Whether its closure only repairs the mark of work done before the base, and so is not counted to the change's credit.
+/// Whether its closure only repairs the mark of work done before the change that closes it, and so is not counted to the
+/// change's credit.
 /// </param>
 public sealed record AnchorClosing(string Id, bool Bookkeeping);
 
@@ -490,24 +564,40 @@ public sealed record AnchorClosing(string Id, bool Bookkeeping);
 /// <param name="Base">The base as given.</param>
 /// <param name="BaseCommit">The commit it resolved to.</param>
 /// <param name="Commit">
-/// The commit the working tree was compared with: where HEAD's history left the base's, which is the base's own commit
-/// where it is an ancestor of HEAD.
+/// The commit the working tree was compared with, where the change began: where HEAD's history left the base's - HEAD
+/// merged with <paramref name="Merging"/>, as the commit finishing that merge would be - which is the base's own commit
+/// where it is an ancestor of them.
+/// </param>
+/// <param name="Merging">
+/// The commits an unfinished merge is bringing into HEAD, whose content the working tree holds; none where no merge is
+/// in progress.
 /// </param>
 /// <param name="OpenAtBase">Distinct ids open at <paramref name="Commit"/>.</param>
 /// <param name="OpenNow">Distinct ids open in the working tree.</param>
-/// <param name="Closed">Ids open at the base and not now.</param>
-/// <param name="Opened">Ids open now and not at the base.</param>
-/// <param name="MissingAtBase">Registries that did not exist at the base, and so count as empty there.</param>
-/// <param name="Findings">Problems in the registries as they are now.</param>
+/// <param name="Closed">Anchors open at <paramref name="Commit"/> and closed now, in id order.</param>
+/// <param name="Lost">
+/// Ids open at <paramref name="Commit"/> that neither registry holds now, in id order: deleted, or renamed by hand. Each
+/// leaves the open count and is not credited to the change, as a closure would be; where both registries were read whole,
+/// each is a finding too.
+/// </param>
+/// <param name="Opened">Anchors open now and not at <paramref name="Commit"/>, in id order.</param>
+/// <param name="MissingAtBase">Registries that did not exist at <paramref name="Commit"/>, and so count as empty there.</param>
+/// <param name="MalformedAtBase">
+/// Registries malformed at <paramref name="Commit"/>, so a row one held that could not be read was not counted there.
+/// </param>
+/// <param name="Findings">Problems in the registries as they are now, and notes that fail nothing.</param>
 public sealed record AnchorBalanceReport(
     string Base,
     string BaseCommit,
     string Commit,
+    IReadOnlyList<string> Merging,
     int OpenAtBase,
     int OpenNow,
     IReadOnlyList<AnchorClosing> Closed,
+    IReadOnlyList<string> Lost,
     IReadOnlyList<AnchorOpening> Opened,
     IReadOnlyList<string> MissingAtBase,
+    IReadOnlyList<string> MalformedAtBase,
     IReadOnlyList<AnchorFinding> Findings)
 {
     /// <summary>Whether the base has moved on from where HEAD's history left it, so the change is measured from there.</summary>
@@ -516,18 +606,22 @@ public sealed record AnchorBalanceReport(
     /// <summary>How many newly opened anchors are disclosed.</summary>
     public int Disclosed => Opened.Count(opening => opening.Disclosed);
 
-    /// <summary>How many closures only repair the mark of work done before the base.</summary>
+    /// <summary>How many closures only repair the mark of work done before the change that closes them.</summary>
     public int Bookkeeping => Closed.Count(closing => closing.Bookkeeping);
 
     /// <summary>
-    /// The rise the balance counts: the change in open anchors, less those newly disclosed, plus the closures that
-    /// are bookkeeping - that is, the anchors the change created less those its work closed. The two corrections pull
-    /// opposite ways for one reason: a disclosed anchor records debt that already existed, so writing it down is not
-    /// creating it, and a bookkeeping closure records work that already existed, so marking it is not doing it. The
-    /// anchor still leaves the open count, which a closed row must, while the change is credited with nothing for it.
+    /// The rise the balance counts: the anchors the change created less those its work closed - the change in open
+    /// anchors, less those newly disclosed, plus the closures that are bookkeeping and the anchors lost. The first two
+    /// corrections pull opposite ways for one reason: a disclosed anchor records debt that already existed, so writing it
+    /// down is not creating it, and a bookkeeping closure records work that already existed, so marking it is not doing
+    /// it. A bookkeeping or a lost anchor still leaves the open count, as a row closed or gone must, while the change is
+    /// credited with nothing for it.
     /// </summary>
-    public int NetNew => OpenNow - OpenAtBase - Disclosed + Bookkeeping;
+    public int NetNew => Opened.Count - Disclosed - (Closed.Count - Bookkeeping);
 
-    /// <summary>Whether the change did not add open work and the registries are sound.</summary>
+    /// <summary>
+    /// Whether the change created no more anchors than its work closed (<see cref="NetNew"/> is not positive) and no
+    /// finding is fatal.
+    /// </summary>
     public bool Passed => NetNew <= 0 && !Findings.Any(finding => finding.Severity == AnchorFindingSeverity.Fatal);
 }

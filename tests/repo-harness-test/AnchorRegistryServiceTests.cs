@@ -299,22 +299,8 @@ public sealed class AnchorRegistryServiceTests
         var registries = await harness.AnchorRegistryLocator.LocateAsync(context, cancellationToken);
         var before = File.ReadAllText(PendingPath(temp));
 
-        using var held = new ManualResetEventSlim();
-        using var release = new ManualResetEventSlim();
-
-        var holder = new Thread(() => harness.AnchorRegistryLock.RunExclusive(registries, () =>
+        using (RegistryLockHolder.Take(harness.AnchorRegistryLock, registries, cancellationToken))
         {
-            held.Set();
-            release.Wait(TimeSpan.FromSeconds(60));
-            return 0;
-        }));
-
-        holder.Start();
-
-        try
-        {
-            Assert.True(held.Wait(TimeSpan.FromSeconds(60), cancellationToken), "The holder never took the lock.");
-
             var impatient = new AnchorRegistryService(
                 harness.ContextLoader,
                 harness.AnchorRegistryLocator,
@@ -325,12 +311,8 @@ public sealed class AnchorRegistryServiceTests
                 impatient.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken));
 
             Assert.Equal(HarnessExit.Refused, exception.ExitCode);
+            Assert.Contains("has held the anchor registries", exception.Message, StringComparison.Ordinal);
             Assert.Equal(before, File.ReadAllText(PendingPath(temp)));
-        }
-        finally
-        {
-            release.Set();
-            holder.Join();
         }
     }
 
@@ -354,42 +336,113 @@ public sealed class AnchorRegistryServiceTests
             new NamedMutexAnchorRegistryLock(harness.Platform, TimeSpan.FromMilliseconds(200)),
             harness.FileSystem);
 
-        using var held = new ManualResetEventSlim();
-        using var release = new ManualResetEventSlim();
-
-        var holder = new Thread(() => harness.AnchorRegistryLock.RunExclusive(registries, () =>
+        using (RegistryLockHolder.Take(harness.AnchorRegistryLock, registries, cancellationToken))
         {
-            held.Set();
-            release.Wait(TimeSpan.FromSeconds(60));
-            return 0;
-        }));
-
-        holder.Start();
-
-        try
-        {
-            Assert.True(held.Wait(TimeSpan.FromSeconds(60), cancellationToken), "The holder never took the lock.");
-
             Func<Task>[] reads =
             [
                 () => impatient.LintAsync(temp.Path, cancellationToken),
                 () => impatient.ListAsync(temp.Path, new AnchorListFilter(), cancellationToken),
                 () => impatient.ReadAsync(temp.Path, [One], AnchorScope.All, cancellationToken),
+                () => impatient.DifferencesAsync(temp.Path, [Declared(One, "open", "work")], cancellationToken),
             ];
 
             foreach (var read in reads)
             {
-                Assert.Equal(HarnessExit.Refused, (await Assert.ThrowsAsync<HarnessException>(read)).ExitCode);
+                var refusal = await Assert.ThrowsAsync<HarnessException>(read);
+
+                Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+                Assert.Contains("has held the anchor registries", refusal.Message, StringComparison.Ordinal);
             }
-        }
-        finally
-        {
-            release.Set();
-            holder.Join();
         }
 
         Assert.Empty(await impatient.LintAsync(temp.Path, cancellationToken));
         Assert.Equal([One], (await impatient.ListAsync(temp.Path, new AnchorListFilter(), cancellationToken)).Select(entry => entry.Row.Id));
+    }
+
+    /// <summary>
+    /// Every read of the registries reads both files under one hold of the lock: held once per file, a row a change moved
+    /// between the two holds would be read in neither, or in both.
+    /// </summary>
+    [Fact]
+    public async Task EveryRead_TakesTheLockOnce_ForBothRegistries()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        var counting = new CountingLock(harness.AnchorRegistryLock);
+        var service = new AnchorRegistryService(harness.ContextLoader, harness.AnchorRegistryLocator, counting, harness.FileSystem);
+        var balance = new AnchorBalanceService(harness.ContextLoader, harness.AnchorRegistryLocator, counting, harness.GitClient, harness.FileSystem);
+
+        Func<Task>[] reads =
+        [
+            () => service.LintAsync(temp.Path, cancellationToken),
+            () => service.ListAsync(temp.Path, new AnchorListFilter(), cancellationToken),
+            () => service.ReadAsync(temp.Path, [One], AnchorScope.All, cancellationToken),
+            () => service.DifferencesAsync(temp.Path, [Declared(One, "open", "work")], cancellationToken),
+            () => balance.CheckAsync(temp.Path, null, cancellationToken),
+        ];
+
+        foreach (var read in reads)
+        {
+            var before = counting.Taken;
+            await read();
+            Assert.Equal(before + 1, counting.Taken);
+        }
+    }
+
+    /// <summary>
+    /// A directory where a registry's file belongs is refused, naming it, by every reader and by init. Taken for no
+    /// registry, it sent the reader to init, which then failed to write over it with an internal error.
+    /// </summary>
+    [Fact]
+    public async Task ARegistryPathHoldingADirectory_IsRefused_NotReadAsMissing()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        File.Delete(DonePath(temp));
+        Directory.CreateDirectory(DonePath(temp));
+
+        Func<Task>[] reads =
+        [
+            () => harness.AnchorRegistryService.LintAsync(temp.Path, cancellationToken),
+            () => harness.AnchorRegistryService.ListAsync(temp.Path, new AnchorListFilter(), cancellationToken),
+            () => harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken),
+            () => harness.InitService.InitializeAsync(temp.Path, cancellationToken),
+        ];
+
+        foreach (var read in reads)
+        {
+            var refusal = await Assert.ThrowsAsync<HarnessException>(read);
+
+            Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+            Assert.StartsWith($"'{AnchorSettings.DefaultDoneAnchorsPath}', where anchors.doneAnchorsPath puts the done registry, is a directory", refusal.Message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The lint notes a closed row whose Trigger opens with the bookkeeping pair that is not read as one, and still passes:
+    /// the row is sound as it stands, and only its writer can say what they meant.
+    /// </summary>
+    [Fact]
+    public async Task TheLint_NotesAnUnreadBookkeepingPair_AndStillPasses()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(
+            temp.Path, new AnchorWriteRequest(One, "P1", "✅🧾 **CLOSED**, mark repaired") { Status = "closed" }, dryRun: false, cancellationToken);
+
+        var findings = await harness.AnchorRegistryService.LintAsync(temp.Path, cancellationToken);
+
+        var note = Assert.Single(findings);
+        Assert.Equal((AnchorSettings.DefaultDoneAnchorsPath, AnchorFindingSeverity.Note), (note.File, note.Severity));
+        Assert.Contains("anchors.triggerCarriesVerdict is not set", note.Message, StringComparison.Ordinal);
+
+        var outcome = AnchorReports.Lint(findings, json: false);
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Contains($"{note.File}:{note.LineNumber}   note: {note.Message}", outcome.Data);
     }
 
     [Fact]
@@ -1299,6 +1352,18 @@ public sealed class AnchorRegistryServiceTests
 
     private static IReadOnlyList<AnchorRow> Rows(HarnessFactory harness, string path)
         => AnchorRegistryDocument.Parse(File.ReadAllText(path), new AnchorIdRules("D", 3)).Rows;
+
+    /// <summary>The registry lock, counting how often it is taken.</summary>
+    private sealed class CountingLock(IAnchorRegistryLock inner) : IAnchorRegistryLock
+    {
+        public int Taken { get; private set; }
+
+        public T RunExclusive<T>(AnchorRegistries registries, Func<T> work)
+        {
+            Taken++;
+            return inner.RunExclusive(registries, work);
+        }
+    }
 
     /// <summary>A file system that fails one atomic write, as a crash between the two writes of a move would.</summary>
     private sealed class FailingWriteFileSystem(IFileSystem inner, int failOnWrite) : PassThroughFileSystem(inner)

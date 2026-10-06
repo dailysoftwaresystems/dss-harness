@@ -210,11 +210,11 @@ public sealed class AnchorCommandsCliTests
 
     /// <summary>
     /// A row closed since the base through set-anchor, its Trigger opening with the bookkeeping pair where the Trigger
-    /// carries the verdict, leaves the open count and is named as bookkeeping and not counted, in the text and in the
+    /// carries the verdict, leaves the open count and is named as bookkeeping and not credited, in the text and in the
     /// JSON.
     /// </summary>
     [Fact]
-    public async Task CheckAnchorBalance_NamesABookkeepingClosure_AndDoesNotCountIt()
+    public async Task CheckAnchorBalance_NamesABookkeepingClosure_AndDoesNotCreditIt()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -231,7 +231,7 @@ public sealed class AnchorCommandsCliTests
         Assert.Equal(HarnessExit.Success, text.ExitCode);
         Assert.Contains("open      1 at HEAD, 0 now", text.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("change    1 closed (1 bookkeeping), 0 opened (0 created, 0 disclosed); counted 0", text.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains($"  - {One}   [bookkeeping: not counted]", text.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"  - {One}   [bookkeeping: not credited]", text.StandardOutput, StringComparison.Ordinal);
 
         var json = await CliRunner.RunAsync(["check-anchor-balance", "--json", "-C", temp.Path], cancellationToken);
         using var receipt = JsonDocument.Parse(json.StandardOutput);

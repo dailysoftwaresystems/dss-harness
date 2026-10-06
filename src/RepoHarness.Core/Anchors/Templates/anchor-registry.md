@@ -18,7 +18,8 @@ row is relocated, never deleted, so its history survives every change of status.
 
 ### Statuses
 
-The Status cell is the only verdict a row carries. Nothing is read from the prose beside it.
+The Status cell is the only verdict that decides whether a row is closed. Unless
+anchors.triggerCarriesVerdict is set, no verdict or count is read from the prose beside it.
 
 - `🟠 OPEN`: live work that can be picked up now.
 - `⏳ GATED`: live work waiting on a trigger. When the trigger fires, set the anchor to open.

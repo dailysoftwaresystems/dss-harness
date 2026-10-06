@@ -9,8 +9,8 @@ namespace RepoHarness.Core.Anchors;
 public interface IAnchorBalanceService
 {
     /// <summary>
-    /// Compares the registries in the working tree with the registries where HEAD's history left
-    /// <paramref name="baseReference"/>'s: at the base itself, where it is an ancestor of HEAD.
+    /// Compares the registries in the working tree with the registries where HEAD's history - with what an unfinished
+    /// merge brings in - left <paramref name="baseReference"/>'s: at the base itself, where it is an ancestor of HEAD.
     /// </summary>
     Task<AnchorBalanceReport> CheckAsync(string startDirectory, string? baseReference, CancellationToken cancellationToken = default);
 }
@@ -19,10 +19,10 @@ public interface IAnchorBalanceService
 /// <remarks>
 /// Anchors are compared by id across both registries, so moving a row from one to the other is
 /// neither progress nor regression. The count that must not rise is open anchors, less those newly
-/// disclosed and plus those whose closure is bookkeeping: a disclosed anchor records debt that already
-/// existed, and a bookkeeping closure work that already existed. The registries are also checked
-/// as they stand, because a closed anchor left in the pending registry, or an open one in the done
-/// registry, makes both counts wrong.
+/// disclosed and plus those whose closure is bookkeeping or whose row was lost: a disclosed anchor records
+/// debt that already existed, a bookkeeping closure work that already existed, and a lost row no work at
+/// all. The registries are also checked as they stand, because a closed anchor left in the pending
+/// registry, or an open one in the done registry, makes both counts wrong.
 /// </remarks>
 public sealed class AnchorBalanceService(
     IHarnessContextLoader contextLoader,
@@ -66,30 +66,42 @@ public sealed class AnchorBalanceService(
 
         var root = context.Layout.RepositoryRoot;
 
-        if (await _gitClient.ResolveCommitAsync(root, "HEAD", cancellationToken).ConfigureAwait(false) is null)
+        await _gitClient
+            .RequireHeadAsync(root, "there is no point this change began from to compare against", cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        var baseCommit = await _gitClient.ResolveCommitAsync(root, reference, cancellationToken).ConfigureAwait(false);
+
+        if (baseCommit is null)
         {
+            // A shallow clone holds no commit before where its history was cut, so HEAD~1 there names none.
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                "HEAD names no commit yet, so it shares no history with any base and there is no point this change began "
-                + "from to compare against. Commit first.");
+                await _gitClient.IsShallowAsync(root, cancellationToken).ConfigureAwait(false) == true
+                    ? $"'{reference}' names no commit this clone holds, so there is nothing to compare against: its history is "
+                      + "shallow, and the commit may lie beyond it. Fetch the rest of it (git fetch --unshallow), or fetch "
+                      + "the base, and run again."
+                    : $"'{reference}' does not name a commit, so there is nothing to compare against.");
         }
-
-        var baseCommit = await _gitClient.ResolveCommitAsync(root, reference, cancellationToken).ConfigureAwait(false)
-            ?? throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"'{reference}' does not name a commit, so there is nothing to compare against.");
 
         // What the change did is measured from where its history left the base's, as --current-pr of
         // check-anchor-citations measures a branch. Compared with directly, a base that has moved on since counted its
         // own later changes, reversed, as the change's: an anchor it closed as one the change created, and one it
-        // gained as one the change lost. Where the base is an ancestor of HEAD, that is the base itself. Asked by the
-        // names given, so a clone too shallow to answer is told which.
-        var commit = await _gitClient.MergeBaseAsync(root, reference, "HEAD", cancellationToken).ConfigureAwait(false)
+        // gained as one the change lost. Where the base is an ancestor of HEAD, that is the base itself. During an
+        // unfinished merge the working tree already holds what the merge brings in, so the change is measured as the
+        // commit finishing it would be: from where the base parts from HEAD merged with each commit coming in. Asked
+        // by the names given rather than the commits they resolved to, so a refusal names them as they were written.
+        var merging = await _gitClient.ListMergeHeadsAsync(root, cancellationToken).ConfigureAwait(false);
+
+        var commit = await _gitClient.MergeBaseAsync(root, reference, ["HEAD", .. merging], cancellationToken).ConfigureAwait(false)
             ?? throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"'{reference}' shares no history with HEAD, so there is no point this change began from to compare against.");
+                $"'{reference}' shares no history with HEAD{(merging.Count > 0 ? " or the commits its unfinished merge brings in" : string.Empty)}, "
+                + "so there is no point this change began from to compare against. Where it should share some, git fsck "
+                + "reports a commit between them that git cannot read.");
 
         var missingAtBase = new List<string>();
+        var malformedAtBase = new List<string>();
         var atBase = new List<(AnchorRegistryDocument Document, AnchorRegistry Registry)>();
 
         foreach (var registry in registries.All)
@@ -104,7 +116,15 @@ public sealed class AnchorBalanceService(
                 continue;
             }
 
-            atBase.Add((AnchorRegistryDocument.Parse(text, rules), registry));
+            var document = AnchorRegistryDocument.Parse(text, rules);
+            atBase.Add((document, registry));
+
+            // A row the file hid there counts as absent there, so deleting it goes unseen and recovering it reads as new.
+            // Noted rather than failed: no change can repair the history, and failing would fail the change repairing the file.
+            if (!document.IsSound)
+            {
+                malformedAtBase.Add(registry.RelativePath);
+            }
         }
 
         var findings = new List<AnchorFinding>();
@@ -153,25 +173,33 @@ public sealed class AnchorBalanceService(
 
         var openAtBase = OpenAnchors(atBase);
         var openNow = OpenAnchors(now);
-        var rowsNow = now.SelectMany(pair => pair.Document.Rows).ToLookup(row => row.Id, AnchorIdMatch.Comparer);
+        var rowsNow = AnchorEntry.Of(now).ToLookup(entry => entry.Row.Id, AnchorIdMatch.Comparer);
 
-        // Every row an id still has is closed, or the id would be open.
-        var closed = openAtBase.Keys
-            .Where(id => !openNow.ContainsKey(id))
-            .Order(StringComparer.Ordinal)
-            .Select(id => new AnchorClosing(id, rowsNow[id].Any(row => AnchorStatus.IsBookkeepingClosure(row.Trigger, settings))))
+        // An id open where the change began and not now either still has rows, every one closed, or has none: a row moves
+        // between the registries and is never deleted, so one with none was lost - deleted, or renamed by hand - and its
+        // leaving the open count is no work done, so it is not credited.
+        var gone = openAtBase.Keys.Where(id => !openNow.ContainsKey(id)).Order(StringComparer.Ordinal).ToList();
+        var lost = gone.Where(id => !rowsNow.Contains(id)).ToList();
+
+        var closed = gone
+            .Where(rowsNow.Contains)
+            .Select(id => new AnchorClosing(id, rowsNow[id].Any(entry => entry.Row.IsBookkeepingClosure(settings))))
             .ToList();
 
-        // A row moves between the registries and is never deleted, so an anchor open at the base that neither holds now
-        // was lost - deleted, or renamed by hand - and would count as closed. Judged only where both registries were
-        // read whole: a missing or malformed one is its own finding, and every row it hides would read as lost.
+        // A closure whose Trigger opens with the bookkeeping pair that is not read as one is credited as work, which its
+        // writer may not have meant: said, and counted as it reads.
+        findings.AddRange(closed
+            .SelectMany(closing => rowsNow[closing.Id])
+            .Select(entry => entry.Registry.UnreadBookkeepingPair(entry.Row, settings))
+            .OfType<AnchorFinding>());
+
+        // A lost row is a finding only where both registries were read whole: a missing or malformed one is its own
+        // finding, and every row it hides would read as lost.
         if (now.Count == registries.All.Count && now.All(pair => pair.Document.IsSound))
         {
-            findings.AddRange(closed
-                .Where(closing => !rowsNow.Contains(closing.Id))
-                .Select(closing => openAtBase[closing.Id].Registry.Fatal(
-                    $"anchor '{closing.Id}' was open where this change began and neither registry holds it now: a row "
-                    + "moves between the registries and is never deleted, so a lost row would count as closed")));
+            findings.AddRange(lost.Select(id => openAtBase[id].Registry.Fatal(
+                $"anchor '{id}' was open where this change began and neither registry holds it now: a row moves between "
+                + "the registries and is never deleted, so its row was lost - deleted, or its id changed by hand")));
         }
 
         var opened = openNow
@@ -184,15 +212,18 @@ public sealed class AnchorBalanceService(
             .ToList();
 
         return new AnchorBalanceReport(
-            reference,
-            baseCommit,
-            commit,
-            openAtBase.Count,
-            openNow.Count,
-            closed,
-            opened,
-            missingAtBase,
-            [.. findings.OrderBy(finding => finding.File, StringComparer.Ordinal).ThenBy(finding => finding.LineNumber)]);
+            Base: reference,
+            BaseCommit: baseCommit,
+            Commit: commit,
+            Merging: merging,
+            OpenAtBase: openAtBase.Count,
+            OpenNow: openNow.Count,
+            Closed: closed,
+            Lost: lost,
+            Opened: opened,
+            MissingAtBase: missingAtBase,
+            MalformedAtBase: malformedAtBase,
+            Findings: [.. findings.OrderBy(finding => finding.File, StringComparer.Ordinal).ThenBy(finding => finding.LineNumber)]);
     }
 
     /// <summary>

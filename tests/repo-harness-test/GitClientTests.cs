@@ -401,13 +401,13 @@ public sealed class GitClientTests
         var unrelated = (await harness.RunGitAsync(temp.Path, ["commit-tree", "HEAD^{tree}", "-m", "unrelated"], cancellationToken))
             .StandardOutput.Trim();
 
-        Assert.Equal(forked, await git.MergeBaseAsync(temp.Path, forked, "HEAD", cancellationToken));
-        Assert.Equal(forked, await git.MergeBaseAsync(temp.Path, ahead, "HEAD", cancellationToken));
-        Assert.Null(await git.MergeBaseAsync(temp.Path, unrelated, "HEAD", cancellationToken));
-        await Assert.ThrowsAsync<HarnessException>(() => git.MergeBaseAsync(temp.Path, "no-such-branch", "HEAD", cancellationToken));
+        Assert.Equal(forked, await git.MergeBaseAsync(temp.Path, forked, ["HEAD"], cancellationToken));
+        Assert.Equal(forked, await git.MergeBaseAsync(temp.Path, ahead, ["HEAD"], cancellationToken));
+        Assert.Null(await git.MergeBaseAsync(temp.Path, unrelated, ["HEAD"], cancellationToken));
+        await Assert.ThrowsAsync<HarnessException>(() => git.MergeBaseAsync(temp.Path, "no-such-branch", ["HEAD"], cancellationToken));
 
         // A name that starts with a dash is a name to look up, never an option to obey.
-        await Assert.ThrowsAsync<HarnessException>(() => git.MergeBaseAsync(temp.Path, "--octopus", "HEAD", cancellationToken));
+        await Assert.ThrowsAsync<HarnessException>(() => git.MergeBaseAsync(temp.Path, "--octopus", ["HEAD"], cancellationToken));
     }
 
     /// <summary>
@@ -424,17 +424,19 @@ public sealed class GitClientTests
         await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
         var head = (await git.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
         var prefix = head[..4];
+        var format = (await harness.RunGitAsync(temp.Path, ["rev-parse", "--show-object-format"], cancellationToken)).StandardOutput.Trim();
+        Func<byte[], byte[]> hash = format == "sha256" ? SHA256.HashData : SHA1.HashData;
 
         // Hashed as git names a blob, until one opens as the commit does.
         var content = Enumerable.Range(0, int.MaxValue)
             .Select(index => $"collision {index}\n")
-            .First(text => Convert.ToHexStringLower(SHA1.HashData(Encoding.UTF8.GetBytes($"blob {text.Length}\0{text}")))
+            .First(text => Convert.ToHexStringLower(hash(Encoding.UTF8.GetBytes($"blob {text.Length}\0{text}")))
                 .StartsWith(prefix, StringComparison.Ordinal));
         temp.WriteFile("collision.txt", content);
         await harness.RunGitAsync(temp.Path, ["hash-object", "-w", "--no-filters", "collision.txt"], cancellationToken);
         Assert.False((await git.RunAsync(temp.Path, ["merge-base", prefix, "HEAD"], cancellationToken: cancellationToken)).Succeeded);
 
-        Assert.Equal(head, await git.MergeBaseAsync(temp.Path, prefix, "HEAD", cancellationToken));
+        Assert.Equal(head, await git.MergeBaseAsync(temp.Path, prefix, ["HEAD"], cancellationToken));
     }
 
     /// <summary>
@@ -464,9 +466,12 @@ public sealed class GitClientTests
             cancellationToken);
         Assert.Equal("true", (await harness.RunGitAsync(clone.Path, ["rev-parse", "--is-shallow-repository"], cancellationToken)).StandardOutput.Trim());
         Assert.Equal("aside", (await harness.RunGitAsync(clone.Path, ["branch", "--show-current"], cancellationToken)).StandardOutput.Trim());
+        Assert.False((await git.RunAsync(clone.Path, ["merge-base", "origin/ahead", "HEAD"], cancellationToken: cancellationToken)).Succeeded);
+        Assert.True(await git.IsShallowAsync(clone.Path, cancellationToken));
+        Assert.False(await git.IsShallowAsync(origin.Path, cancellationToken));
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(
-            () => git.MergeBaseAsync(clone.Path, "origin/ahead", "HEAD", cancellationToken));
+            () => git.MergeBaseAsync(clone.Path, "origin/ahead", ["HEAD"], cancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
         Assert.Contains("shallow", refusal.Message, StringComparison.Ordinal);
@@ -474,7 +479,7 @@ public sealed class GitClientTests
 
         // Where the shallow history still holds the point the two part, it is named as anywhere else.
         var tip = await git.ResolveCommitAsync(clone.Path, "HEAD", cancellationToken);
-        Assert.Equal(tip, await git.MergeBaseAsync(clone.Path, "HEAD", "HEAD", cancellationToken));
+        Assert.Equal(tip, await git.MergeBaseAsync(clone.Path, "HEAD", ["HEAD"], cancellationToken));
     }
 
     /// <summary>
@@ -507,8 +512,45 @@ public sealed class GitClientTests
         await harness.RunGitAsync(clone.Path, ["fetch", "-q", "--depth", "1", "origin", "main:refs/remotes/origin/main"], cancellationToken);
         Assert.False((await git.RunAsync(clone.Path, ["merge-base", "origin/main", "HEAD"], cancellationToken: cancellationToken)).Succeeded);
 
-        Assert.Equal(into, await git.MergeBaseAsync(clone.Path, "origin/main", "HEAD", cancellationToken));
-        Assert.Equal(into, await git.MergeBaseAsync(clone.Path, "HEAD", "origin/main", cancellationToken));
+        Assert.Equal(into, await git.MergeBaseAsync(clone.Path, "origin/main", ["HEAD"], cancellationToken));
+        Assert.Equal(into, await git.MergeBaseAsync(clone.Path, "HEAD", ["origin/main"], cancellationToken));
+    }
+
+    /// <summary>
+    /// Measured against several commits, the merge base is where the first parts from the commit merging them all would:
+    /// with a branch merged in, that branch's tip. During an unfinished merge MERGE_HEAD names what it brings in, and
+    /// nothing is named before it starts or once it is given up.
+    /// </summary>
+    [Fact]
+    public async Task MergeBaseAsync_AgainstSeveralCommits_IsWhereTheirMergeWouldPart_AsAnUnfinishedMergeNamesThem()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var git = harness.GitClient;
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+
+        var forked = (await git.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        await harness.RunGitAsync(temp.Path, ["branch", "upstream"], cancellationToken);
+        temp.WriteFile("work.txt", "work");
+        await harness.CommitAllAsync(temp.Path, "work", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "upstream"], cancellationToken);
+        temp.WriteFile("upstream.txt", "upstream");
+        await harness.CommitAllAsync(temp.Path, "upstream moves on", cancellationToken);
+        var upstream = (await git.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        await harness.RunGitAsync(temp.Path, ["checkout", "-q", "-"], cancellationToken);
+
+        Assert.Empty(await git.ListMergeHeadsAsync(temp.Path, cancellationToken));
+        Assert.Equal(forked, await git.MergeBaseAsync(temp.Path, "upstream", ["HEAD"], cancellationToken));
+
+        await harness.RunGitAsync(temp.Path, ["merge", "-q", "--no-commit", "--no-ff", "upstream"], cancellationToken);
+
+        Assert.Equal([upstream], await git.ListMergeHeadsAsync(temp.Path, cancellationToken));
+        Assert.Equal(upstream, await git.MergeBaseAsync(temp.Path, "upstream", ["HEAD", upstream], cancellationToken));
+
+        await harness.RunGitAsync(temp.Path, ["merge", "--abort"], cancellationToken);
+
+        Assert.Empty(await git.ListMergeHeadsAsync(temp.Path, cancellationToken));
     }
 
     [Fact]
@@ -1288,8 +1330,10 @@ public sealed class GitClientProtocolTests
 
     /// <summary>
     /// Where git finds nothing two commits share, that is the answer only where the clone is known to hold its whole
-    /// history: a shallow one asks for the rest, and one that could not say which is neither answered as two unrelated
-    /// histories nor called shallow. A merge-base that ran out of time answers nothing.
+    /// history: a shallow one answers with a parent the other commit's own object names, or asks for the rest; and one
+    /// that could not say which - git failing, or a git too old to know the question echoing it back - is neither
+    /// answered as two unrelated histories nor called shallow. A merge-base that ran out of time fails, and nothing more
+    /// is asked of git.
     /// </summary>
     [Fact]
     public async Task MergeBaseAsync_AnswersThatNothingIsShared_OnlyWhereTheCloneIsKnownWhole()
@@ -1297,7 +1341,7 @@ public sealed class GitClientProtocolTests
         var cancellationToken = TestContext.Current.CancellationToken;
 
         var (whole, _) = Scripted(Exited(1), Exited(0, "false\n"));
-        Assert.Null(await whole.MergeBaseAsync("/repo", "main", "HEAD", cancellationToken));
+        Assert.Null(await whole.MergeBaseAsync("/repo", "main", ["HEAD"], cancellationToken));
 
         const string Main = "1111111111111111111111111111111111111111";
         const string Head = "2222222222222222222222222222222222222222";
@@ -1306,27 +1350,88 @@ public sealed class GitClientProtocolTests
         var (named, _) = Scripted(
             Exited(1), Exited(0, "true\n"), Exited(0, Main + "\n"), Exited(0, Head + "\n"),
             Exited(0, $"tree 4444444444444444444444444444444444444444\nparent {Main}\nparent {Other}\nauthor a\n\nparent {Head} in the message\n"));
-        Assert.Equal(Main, await named.MergeBaseAsync("/repo", "main", "HEAD", cancellationToken));
+        Assert.Equal(Main, await named.MergeBaseAsync("/repo", "main", ["HEAD"], cancellationToken));
 
         // A message line that reads as a parent is no parent: the header ends at the first empty line.
         var (shallow, _) = Scripted(
             Exited(1), Exited(0, "true\n"), Exited(0, Main + "\n"), Exited(0, Head + "\n"),
             Exited(0, $"tree 4444444444444444444444444444444444444444\nparent {Other}\n\nparent {Main}\n"),
             Exited(0, "tree 4444444444444444444444444444444444444444\n\nmain's root\n"));
-        var asked = await Assert.ThrowsAsync<HarnessException>(() => shallow.MergeBaseAsync("/repo", "main", "HEAD", cancellationToken));
+        var asked = await Assert.ThrowsAsync<HarnessException>(() => shallow.MergeBaseAsync("/repo", "main", ["HEAD"], cancellationToken));
         Assert.Contains("'main' and 'HEAD'", asked.Message, StringComparison.Ordinal);
         Assert.Contains("git fetch --unshallow", asked.Message, StringComparison.Ordinal);
 
         var (unknown, _) = Scripted(Exited(1), Exited(128, stderr: "fatal: unable to read the shallow file"));
-        var untold = await Assert.ThrowsAsync<HarnessException>(() => unknown.MergeBaseAsync("/repo", "main", "HEAD", cancellationToken));
+        var untold = await Assert.ThrowsAsync<HarnessException>(() => unknown.MergeBaseAsync("/repo", "main", ["HEAD"], cancellationToken));
         Assert.Equal(HarnessExit.CommandFailed, untold.ExitCode);
         Assert.Contains("could not say whether this clone holds their whole history", untold.Message, StringComparison.Ordinal);
         Assert.Contains("unable to read the shallow file", untold.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("is shallow", untold.Message, StringComparison.Ordinal);
 
+        var (older, _) = Scripted(Exited(1), Exited(0, "--is-shallow-repository\n"));
+        var unasked = await Assert.ThrowsAsync<HarnessException>(() => older.MergeBaseAsync("/repo", "main", ["HEAD"], cancellationToken));
+        Assert.Contains("could not say whether this clone holds their whole history: '--is-shallow-repository'", unasked.Message, StringComparison.Ordinal);
+
         var (timedOut, requests) = Scripted(Exited(1, timedOut: true));
-        await Assert.ThrowsAsync<HarnessException>(() => timedOut.MergeBaseAsync("/repo", "main", "HEAD", cancellationToken));
+        await Assert.ThrowsAsync<HarnessException>(() => timedOut.MergeBaseAsync("/repo", "main", ["HEAD"], cancellationToken));
         Assert.Single(requests);
+    }
+
+    /// <summary>
+    /// Measured against several commits in a shallow clone, the first is where they part where any of them names it as a
+    /// parent; the first naming one of them is no answer, since it may share more with another than with that one.
+    /// </summary>
+    [Fact]
+    public async Task MergeBaseAsync_InAShallowClone_AgainstSeveral_AnswersOnlyWithAParentOneOfThemNames()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        const string Main = "1111111111111111111111111111111111111111";
+        const string Head = "2222222222222222222222222222222222222222";
+        const string Merging = "3333333333333333333333333333333333333333";
+        const string Tree = "tree 4444444444444444444444444444444444444444\n";
+
+        var (named, _) = Scripted(
+            Exited(1), Exited(0, "true\n"), Exited(0, Main + "\n"), Exited(0, Head + "\n"),
+            Exited(0, Tree + "parent 5555555555555555555555555555555555555555\n\n"), Exited(0, Merging + "\n"),
+            Exited(0, Tree + $"parent {Main}\n\n"));
+        Assert.Equal(Main, await named.MergeBaseAsync("/repo", "main", ["HEAD", Merging], cancellationToken));
+
+        var (naming, _) = Scripted(
+            Exited(1), Exited(0, "true\n"), Exited(0, Main + "\n"), Exited(0, Head + "\n"),
+            Exited(0, Tree + "\n"), Exited(0, Merging + "\n"), Exited(0, Tree + "\n"),
+            Exited(0, Tree + $"parent {Head}\n\n"));
+        var asked = await Assert.ThrowsAsync<HarnessException>(() => naming.MergeBaseAsync("/repo", "main", ["HEAD", Merging], cancellationToken));
+        Assert.Contains($"'main' and 'HEAD' merged with '{Merging}'", asked.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every name is asked for as the commit it names, after git's options end: one that starts with a dash is a name to
+    /// look up, and a short id a blob shares is still its commit's. Several are asked at once, as the commit merging them
+    /// would be.
+    /// </summary>
+    [Fact]
+    public async Task MergeBaseAsync_AsksForEachNameAsACommit_AfterTheOptionsEnd()
+    {
+        const string Base = "1111111111111111111111111111111111111111";
+        var (git, requests) = Scripted(Exited(0, Base + "\n"));
+
+        Assert.Equal(Base, await git.MergeBaseAsync("/repo", "--octopus", ["HEAD", "abc1234"], TestContext.Current.CancellationToken));
+        Assert.Equal(
+            ["merge-base", "--end-of-options", "--octopus^{commit}", "HEAD^{commit}", "abc1234^{commit}"],
+            Assert.Single(requests).Arguments);
+    }
+
+    /// <summary>Whether a clone is shallow is git's answer, and no answer where git fails or echoes a question it does not know.</summary>
+    [Fact]
+    public async Task IsShallowAsync_IsGitsAnswer_OrNoneWhereGitGivesNone()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        Assert.True(await Scripted(Exited(0, "true\n")).Client.IsShallowAsync("/repo", cancellationToken));
+        Assert.False(await Scripted(Exited(0, "false\n")).Client.IsShallowAsync("/repo", cancellationToken));
+        Assert.Null(await Scripted(Exited(0, "--is-shallow-repository\n")).Client.IsShallowAsync("/repo", cancellationToken));
+        Assert.Null(await Scripted(Exited(128, stderr: "fatal: not a git repository")).Client.IsShallowAsync("/repo", cancellationToken));
     }
 
     private static (GitClient Client, List<ProcessRequest> Requests) Scripted(params ProcessResult[] results)
