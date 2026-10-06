@@ -1,6 +1,7 @@
 using RepoHarness.Core.Anchors;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -402,6 +403,65 @@ public sealed class AnchorCitationServiceTests
 
         Assert.Equal(AnchorExit.Findings, outcome.ExitCode);
         Assert.Equal("src/thing.cpp:1: D-AREA-TOPIC-MISSING", Assert.Single(outcome.Data));
+    }
+
+    /// <summary>
+    /// --current-pr reads what the branch changed since it left the default branch: not a file it never touched, even
+    /// one the default branch changed after it left.
+    /// </summary>
+    [Fact]
+    public async Task ThePullRequest_IsWhatTheBranchChangedSinceItLeftTheDefaultBranch()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, ["src"]);
+        await harness.RunGitAsync(temp.Path, ["branch", "-M", "main"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "untouched.cpp"), "// D-AREA-TOPIC-UNTOUCHED\n");
+        await harness.CommitAllAsync(temp.Path, "base", cancellationToken);
+        var left = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "-b", "work"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "changed.cpp"), "// D-AREA-TOPIC-CHANGED\n");
+        await harness.CommitAllAsync(temp.Path, "the branch", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "main"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "untouched.cpp"), "// D-AREA-TOPIC-UNTOUCHED\n// edited on main\n");
+        await harness.CommitAllAsync(temp.Path, "main moves on", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "work"], cancellationToken);
+
+        var report = await Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken);
+
+        Assert.Equal(["D-AREA-TOPIC-CHANGED"], report.Unresolved.Select(citation => citation.Id));
+        Assert.Equal($"what this branch changed against main ({ReportText.Commit(left)})", report.SubjectDescription);
+    }
+
+    /// <summary>
+    /// --current-pr refuses a HEAD it cannot tell a branch's change apart in: one that shares no history with the
+    /// default branch, and one that names no commit yet.
+    /// </summary>
+    [Fact]
+    public async Task ThePullRequest_IsRefused_WhereHeadSharesNoHistoryWithTheDefaultBranch_OrNamesNoCommit()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, ["src"]);
+        await harness.RunGitAsync(temp.Path, ["branch", "-M", "main"], cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "base", cancellationToken);
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "--orphan", "unrelated"], cancellationToken);
+
+        var unborn = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, unborn.ExitCode);
+        Assert.StartsWith("HEAD names no commit", unborn.Message, StringComparison.Ordinal);
+
+        await harness.CommitAllAsync(temp.Path, "no shared history", cancellationToken);
+
+        var unrelated = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, unrelated.ExitCode);
+        Assert.StartsWith("HEAD shares no history with main", unrelated.Message, StringComparison.Ordinal);
     }
 
     private static AnchorCitationService Service(HarnessFactory harness)

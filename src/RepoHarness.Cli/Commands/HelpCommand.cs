@@ -1324,6 +1324,7 @@ internal static class HelpCommand
     {
         var defaults = new AnchorSettings();
         var rules = AnchorIdRules.From(defaults);
+        var bookkeeping = AnchorStatus.ClosedMark + AnchorStatus.BookkeepingMark;
         var builder = new StringBuilder();
 
         builder.AppendLine("Anchors");
@@ -1353,7 +1354,9 @@ internal static class HelpCommand
         builder.AppendLine("Nothing is read from the prose beside the Status, unless anchors.triggerCarriesVerdict");
         builder.AppendLine("is true: then a closed row's Trigger opens with the closed mark and no other row's");
         builder.AppendLine("does, write-anchor and set-anchor refuse a row whose two cells disagree, and");
-        builder.AppendLine("read-anchors --lint reports one.");
+        builder.AppendLine("read-anchors --lint and check-anchor-balance report one. A closed row's Trigger may");
+        builder.AppendLine($"open with {bookkeeping} instead, the closed mark and then the bookkeeping mark, when its");
+        builder.AppendLine("closure only repairs the mark of work done before the change that closes it.");
         builder.AppendLine("A row is added at the end of its table: rows are never sorted.");
         builder.AppendLine();
         builder.AppendLine($"Rows: {AnchorRegistryDocument.TableHeader}");
@@ -1401,11 +1404,21 @@ internal static class HelpCommand
         builder.AppendLine("A cut or a citation the cell already held is history, and is not judged again.");
         builder.AppendLine();
         builder.AppendLine($"check-anchor-balance compares the working tree with --base (default {AnchorBalanceService.DefaultBase}), by id");
-        builder.AppendLine("across both registries, so moving a row counts as nothing. It fails when open");
-        builder.AppendLine("anchors rose, not counting anchors newly disclosed, and when a closed anchor is in");
-        builder.AppendLine("the pending registry, a live one is in the done registry, or a registry is");
-        builder.AppendLine("malformed. A registry that did not exist at the base counts as empty there; one git");
-        builder.AppendLine("ignores has no history, and is refused.");
+        builder.AppendLine("across both registries, so moving a row counts as nothing. A base that has moved on");
+        builder.AppendLine("since HEAD left it is measured from where HEAD left it, as --current-pr measures a");
+        builder.AppendLine("branch, so its own later changes are never counted as the change's; a shallow clone");
+        builder.AppendLine("needs its history back to where the two part, unless HEAD's own commit names the base");
+        builder.AppendLine("as a parent, as a pull request's merge commit does. It fails when the change creates");
+        builder.AppendLine("more anchors than its work closes. An anchor newly disclosed records debt that already");
+        builder.AppendLine("existed, so it is not counted; where anchors.triggerCarriesVerdict holds, a closure");
+        builder.AppendLine($"whose Trigger opens with {bookkeeping} records work that already existed, so the anchor leaves");
+        builder.AppendLine("the open count and the change is credited with nothing for it. It also fails when a");
+        builder.AppendLine("closed anchor is in the pending registry, a live one is in the done registry, a Status");
+        builder.AppendLine("is none of the four spellings, an anchor open at the base is in neither registry now");
+        builder.AppendLine("(a row moves between them, and is never deleted), a row states two verdicts where");
+        builder.AppendLine("anchors.triggerCarriesVerdict holds, or a registry is malformed. A registry that did");
+        builder.AppendLine("not exist at the base counts as empty there; one git ignores has no history, and is");
+        builder.AppendLine("refused.");
         builder.AppendLine();
         builder.AppendLine("check-anchor-citations reads every file under anchors.citationRoots - as HEAD holds");
         builder.AppendLine("it, as the disk holds it, or only what this branch changed - and fails when a cited");
@@ -1423,7 +1436,9 @@ internal static class HelpCommand
         builder.AppendLine("whole on one line.");
         builder.AppendLine();
         builder.AppendLine("Every change holds a machine-wide lock on its two registries. A change that cannot");
-        builder.AppendLine($"take it within {NamedMutexAnchorRegistryLock.DefaultTimeout.TotalSeconds:0} seconds writes nothing and exits {HarnessExit.Refused}.");
+        builder.AppendLine($"take it within {NamedMutexAnchorRegistryLock.DefaultTimeout.TotalSeconds:0} seconds writes nothing and exits {HarnessExit.Refused}. A read takes it");
+        builder.AppendLine("too, while it reads both files, so a row being moved between them is never read in");
+        builder.AppendLine($"neither or both; one that cannot take it in time reads nothing and exits {HarnessExit.Refused} too.");
         builder.AppendLine();
         builder.AppendLine("Exit codes");
         builder.AppendLine($"  {AnchorExit.Findings,3}  an id was not found, --lint found problems, the balance did not hold,");
@@ -1435,9 +1450,13 @@ internal static class HelpCommand
         builder.AppendLine($"  {HarnessExit.Refused,3}  refused: the id exists, there is no such anchor, an id has two rows,");
         builder.AppendLine("       a value newly cites a row no registry holds,");
         builder.AppendLine("       the registry is ignored by git, the lock is held, anchors.citationRoots");
-        builder.AppendLine("       declares no root, or a file in a root is not named in UTF-8");
-        builder.AppendLine($"  {HarnessExit.CommandFailed,3}  a registry is malformed, the base commit cannot be read, git lists a");
-        builder.AppendLine("       file it cannot read, or the directories at the top of the tree cannot be listed");
+        builder.AppendLine("       declares no root, a file in a root is not named in UTF-8, or HEAD names no");
+        builder.AppendLine("       commit for check-anchor-citations --current-commit or --current-pr");
+        builder.AppendLine($"  {HarnessExit.CommandFailed,3}  a registry is malformed, the base commit cannot be read or shares no");
+        builder.AppendLine("       history with HEAD (a HEAD that names no commit shares none), a shallow clone's");
+        builder.AppendLine("       history stops before where the two part, git lists a file it cannot read, or the");
+        builder.AppendLine("       directories at the top of the tree cannot be listed");
+        builder.AppendLine($"  {HarnessExit.HostUnavailable,3}  the machine-wide lock on the registries could not be opened");
         builder.AppendLine();
         builder.AppendLine("read-anchors --lint and check-anchor-balance report a missing or malformed registry");
         builder.AppendLine($"as one of their findings instead, so for them it exits {AnchorExit.Findings}.");

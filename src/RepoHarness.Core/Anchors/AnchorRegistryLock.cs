@@ -1,3 +1,4 @@
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -16,6 +17,32 @@ public interface IAnchorRegistryLock
     /// </remarks>
     /// <exception cref="HarnessException">Another process held the lock for longer than the wait allows.</exception>
     T RunExclusive<T>(AnchorRegistries registries, Func<T> work);
+}
+
+/// <summary>Reads of the two registries as one moment.</summary>
+public static class AnchorRegistryReading
+{
+    /// <summary>
+    /// Each registry's text as it stands, or <see langword="null"/> where it has no file, both read together while
+    /// holding the lock.
+    /// </summary>
+    /// <remarks>
+    /// One file needs no lock, since every write replaces a whole file in one rename. Two do: a change moves a row by
+    /// writing one file and then the other, so the two read apart can hold that row in neither, which reads exactly
+    /// like an anchor closed or lost, or in both, which reads as a duplicate.
+    /// </remarks>
+    /// <exception cref="HarnessException">Another process held the lock for longer than the wait allows.</exception>
+    public static IReadOnlyList<(AnchorRegistry Registry, string? Text)> ReadTogether(
+        this IAnchorRegistryLock registryLock,
+        AnchorRegistries registries,
+        IFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(registryLock);
+        ArgumentNullException.ThrowIfNull(registries);
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        return registryLock.RunExclusive(registries, () => registries.All.Select(registry => (registry, registry.ReadText(fileSystem))).ToList());
+    }
 }
 
 /// <inheritdoc cref="IAnchorRegistryLock"/>
@@ -46,7 +73,7 @@ public sealed class NamedMutexAnchorRegistryLock(IHostPlatform platform, TimeSpa
             throw new HarnessException(
                 HarnessExit.Refused,
                 $"Another {ToolPackage.Id} process has held the anchor registries for {_timeout.TotalSeconds:0} seconds, "
-                + "so nothing was changed. Run the command again once it has finished.");
+                + "so nothing was read or changed. Run the command again once it has finished.");
         }
 
         try

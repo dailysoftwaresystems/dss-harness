@@ -62,7 +62,7 @@ public sealed class HarnessFactory
         AnchorRegistryLocator = new AnchorRegistryLocator(GitClient);
         AnchorRegistryLock = new NamedMutexAnchorRegistryLock(Platform, NamedMutexAnchorRegistryLock.DefaultTimeout);
         AnchorRegistryService = new AnchorRegistryService(ContextLoader, AnchorRegistryLocator, AnchorRegistryLock, FileSystem);
-        AnchorBalanceService = new AnchorBalanceService(ContextLoader, AnchorRegistryLocator, GitClient, FileSystem);
+        AnchorBalanceService = new AnchorBalanceService(ContextLoader, AnchorRegistryLocator, AnchorRegistryLock, GitClient, FileSystem);
 
         // A double rather than the real service: init --install-tools calls it for every declared leg,
         // and the real one reaches hosts. A test that declared a leg would otherwise try to install a
@@ -285,6 +285,10 @@ public sealed class HarnessFactory
     /// <summary>Replaces the configuration of the repository at <paramref name="repositoryRoot"/>.</summary>
     public void WriteConfig(string repositoryRoot, HarnessConfig config)
         => ConfigStore.Save(ConfigPath(repositoryRoot), config);
+
+    /// <summary>A configuration whose anchor registries hold each row's Trigger to its verdict (anchors.triggerCarriesVerdict).</summary>
+    public static HarnessConfig TriggerCarriesVerdict()
+        => new() { Anchors = new AnchorSettings { TriggerCarriesVerdict = true } };
 
     /// <summary>Where the configuration of <paramref name="repositoryRoot"/> lives.</summary>
     public static string ConfigPath(string repositoryRoot)

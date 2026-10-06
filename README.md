@@ -67,7 +67,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `set-anchor <id>` | Change an anchor; changing its status moves it between registries |
 | `read-anchor <id>...` | Show anchors in full |
 | `read-anchors` | List anchors, or check the registries with `--lint` |
-| `check-anchor-balance` | Fail a change that leaves more open anchors than it found |
+| `check-anchor-balance` | Fail a change that creates more anchors than its work closes |
 | `check-anchor-citations` | Check every anchor cited in the declared roots resolves to a row |
 | `fix-line-endings [--all \| --changed]` | Apply the line-ending policy `.gitattributes` declares; `--check` refuses instead |
 | `check-ci-legs` | Report each CI leg, separating a real failure from a budget overrun, by the job and step names `ci` declares (`help ci`) |
@@ -310,7 +310,7 @@ dssharness check-anchor-balance --base main
 
 The Status cell (`🟠 OPEN`, `⏳ GATED`, `🔵 DISCLOSED`, `✅ CLOSED`) is the only verdict a
 row carries. Closing an anchor moves its row to the done registry, and
-`check-anchor-balance` fails a change that leaves more open anchors than it found. A row is
+`check-anchor-balance` fails a change that creates more anchors than its work closes. A row is
 one line, so a value's line breaks are stored as spaces: a value that would be stored with an
 id or a path cut in two is refused, and so is one that newly cites an id no row holds. Run
 `dssharness help anchors` for the rules.

@@ -43,8 +43,8 @@ id disappears from every search; the commands escape, validate and move rows for
 - `dssharness write-anchor` adds an anchor.
 - `dssharness set-anchor` changes one, and changing its status moves it between registries.
 - `dssharness read-anchor` shows anchors in full, and `dssharness read-anchors` lists them.
-- `dssharness check-anchor-balance` confirms a change did not open more anchors than it
-  closed.
+- `dssharness check-anchor-balance` confirms a change did not create more anchors than its
+  work closed.
 
 Run `dssharness help anchors` for the details.
 

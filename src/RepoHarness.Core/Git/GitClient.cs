@@ -938,6 +938,112 @@ public sealed class GitClient(
             $"Could not resolve '{reference}': {result.FailureMessage}");
     }
 
+    public async Task<string?> MergeBaseAsync(
+        string directory,
+        string first,
+        string second,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(first);
+        ArgumentException.ThrowIfNullOrWhiteSpace(second);
+
+        // Each name read as ResolveCommitAsync reads it, a commit: a short id a tree or a blob shares is still the commit's.
+        var result = await RunAsync(
+            directory,
+            ["merge-base", "--end-of-options", first + "^{commit}", second + "^{commit}"],
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (result.Succeeded)
+        {
+            return result.StandardOutput.Trim();
+        }
+
+        // git answers "no common ancestor" with exit code 1 and nothing else; any other failure is git being unable
+        // to look, or a name that names no commit. In a shallow clone the answer only means the history here stops
+        // first, so it is never read as two histories that share nothing - nor is a clone whose history could not be
+        // told whole.
+        if (result.ExitCode == 1 && !result.TimedOut)
+        {
+            var shallow = await RunAsync(
+                directory,
+                ["rev-parse", "--is-shallow-repository"],
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            switch (shallow.Succeeded ? shallow.StandardOutput.Trim() : null)
+            {
+                case "false":
+                    return null;
+
+                case "true":
+                    return await ParentOfTheOtherAsync(directory, first, second, cancellationToken).ConfigureAwait(false)
+                        ?? throw new HarnessException(
+                            HarnessExit.CommandFailed,
+                            $"Could not find where '{first}' and '{second}' part: this clone's history is shallow and stops first. "
+                            + "Fetch the rest of it (git fetch --unshallow), or clone with the whole history, and run again.");
+
+                default:
+                    throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"git found nothing '{first}' and '{second}' share, and could not say whether this clone holds "
+                        + $"their whole history: {(shallow.Succeeded ? $"'{shallow.StandardOutput.Trim()}'" : shallow.FailureMessage)}");
+            }
+        }
+
+        throw new HarnessException(
+            HarnessExit.CommandFailed,
+            $"Could not find where '{first}' and '{second}' part: {result.FailureMessage}");
+    }
+
+    /// <summary>
+    /// Whichever of two commits the other's own object names as a parent, or <see langword="null"/>: that one is where
+    /// the two part, however little of the history a shallow clone holds, since the commit naming it holds its parents
+    /// whatever was cut away behind them. A pull request's merge commit checked out alone names, as its first parent,
+    /// the tip of the branch it merges into.
+    /// </summary>
+    private async Task<string?> ParentOfTheOtherAsync(string directory, string first, string second, CancellationToken cancellationToken)
+    {
+        var firstCommit = await ResolveCommitAsync(directory, first, cancellationToken).ConfigureAwait(false);
+        var secondCommit = await ResolveCommitAsync(directory, second, cancellationToken).ConfigureAwait(false);
+
+        if (firstCommit is null || secondCommit is null)
+        {
+            return null;
+        }
+
+        if ((await ParentsNamedByAsync(directory, secondCommit, cancellationToken).ConfigureAwait(false)).Contains(firstCommit, StringComparer.Ordinal))
+        {
+            return firstCommit;
+        }
+
+        return (await ParentsNamedByAsync(directory, firstCommit, cancellationToken).ConfigureAwait(false)).Contains(secondCommit, StringComparer.Ordinal)
+            ? secondCommit
+            : null;
+    }
+
+    /// <summary>
+    /// The parents <paramref name="commit"/>'s own object names, read from the object itself: where a shallow clone cut
+    /// the history behind it, every view of the history answers that it has none.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> ParentsNamedByAsync(string directory, string commit, CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(directory, ["cat-file", "commit", commit], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"Could not read commit {commit}: {result.FailureMessage}");
+        }
+
+        // The header ends at the first empty line, before the message, which may hold anything.
+        return [.. result.StandardOutput
+            .Split('\n')
+            .Select(line => line.TrimEnd('\r'))
+            .TakeWhile(line => line.Length > 0)
+            .Where(line => line.StartsWith("parent ", StringComparison.Ordinal))
+            .Select(line => line["parent ".Length..].Trim())];
+    }
+
     public async Task<string?> ReadFileAtCommitAsync(
         string directory,
         string commit,

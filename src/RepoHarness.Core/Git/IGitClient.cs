@@ -219,6 +219,22 @@ public interface IGitClient
     Task<string?> ResolveCommitAsync(string directory, string reference, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Where the histories of two commits part: the best common ancestor <c>git merge-base</c> names, which is
+    /// <paramref name="first"/> itself where it is an ancestor of <paramref name="second"/>; <see langword="null"/>
+    /// where they share no history. In a shallow clone whose history stops before the two part, a commit the other's
+    /// own object names as a parent is still that answer.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="first">A commit, or a name of one, read as <see cref="ResolveCommitAsync"/> reads it.</param>
+    /// <param name="second">A commit, or a name of one, read as <see cref="ResolveCommitAsync"/> reads it.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">
+    /// git could not answer: a name that names no commit, for one, or a shallow clone whose history stops before the
+    /// two part, which is never answered as two histories that share nothing.
+    /// </exception>
+    Task<string?> MergeBaseAsync(string directory, string first, string second, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// A file's content at <paramref name="commit"/>, or <see langword="null"/> when no file was
     /// there.
     /// </summary>

@@ -1,4 +1,5 @@
 using RepoHarness.Core.Anchors;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -60,6 +61,31 @@ public sealed class AnchorStatusTests
         Assert.False(AnchorStatus.IsDisclosed("🟠 OPEN, disclosed 🔵 later"));
     }
 
+    /// <summary>
+    /// Where a Trigger carries its row's verdict, the bookkeeping pair counts only where it opens the Trigger, the
+    /// closed mark first, emphasis before it and whitespace between the two marks ignored; a Trigger opening with it
+    /// reads closed, as it always read. Where a Trigger carries no verdict, nothing is read from it.
+    /// </summary>
+    [Theory]
+    [InlineData("✅🧾 **CLOSED 2026-01-01, mark repaired**", true)]
+    [InlineData("**✅🧾 CLOSED**", true)]
+    [InlineData("✅ 🧾 **CLOSED, mark repaired**", true)]
+    [InlineData("✅\uFE0F🧾 **CLOSED, mark repaired**", true)]
+    [InlineData("**✅\uFE0F 🧾 CLOSED**", true)]
+    [InlineData("✅\uFE0F **CLOSED** - 🧾 mentioned in the prose", false)]
+    [InlineData("✅ **CLOSED** - 🧾 bookkeeping, mentioned in the prose", false)]
+    [InlineData("✅ **🧾 CLOSED**", false)]
+    [InlineData("🧾 **CLOSED 2026-01-01**", false)]
+    [InlineData("🧾✅ CLOSED", false)]
+    [InlineData("✅ CLOSED", false)]
+    [InlineData("🟠 OPEN", false)]
+    public void IsBookkeepingClosure_ReadsOnlyThePairThatOpensAVerdictTrigger(string trigger, bool bookkeeping)
+    {
+        Assert.Equal(bookkeeping, AnchorStatus.IsBookkeepingClosure(trigger, HarnessFactory.TriggerCarriesVerdict().Anchors));
+        Assert.True(!bookkeeping || AnchorStatus.IsClosed(trigger));
+        Assert.False(AnchorStatus.IsBookkeepingClosure(trigger, new AnchorSettings()));
+    }
+
     [Fact]
     public void IsCanonical_AcceptsOnlyTheExactSpellings()
     {
@@ -69,8 +95,9 @@ public sealed class AnchorStatusTests
     }
 
     /// <summary>
-    /// A Status and a Trigger state one verdict where both read closed, or neither does, emphasis ignored as
-    /// the closed test ignores it; each other pair states two, and says which reads closed.
+    /// Where a Trigger carries its row's verdict, a Status and a Trigger state one verdict where both read closed, or
+    /// neither does, emphasis ignored as the closed test ignores it; each other pair states two, and says which reads
+    /// closed. Where a Trigger carries no verdict, it states none, and no pair states two.
     /// </summary>
     [Theory]
     [InlineData("✅ CLOSED", "✅ **CLOSED 2026-09-23** - fixed", null)]
@@ -81,7 +108,9 @@ public sealed class AnchorStatusTests
     [InlineData("✅ CLOSED", "CLOSED in words, with no mark", "the Status reads closed")]
     public void SplitVerdict_IsAPairThatReadsClosedOnOneSideOnly(string status, string trigger, string? expected)
     {
-        var split = AnchorStatus.SplitVerdict(status, trigger);
+        var split = AnchorStatus.SplitVerdict(status, trigger, HarnessFactory.TriggerCarriesVerdict().Anchors);
+
+        Assert.Null(AnchorStatus.SplitVerdict(status, trigger, new AnchorSettings()));
 
         if (expected is null)
         {

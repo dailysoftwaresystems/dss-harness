@@ -642,7 +642,10 @@ while a row wrongly read as closed disappears from every count. Nothing is infer
 the prose cells. A registry whose rows open a closed Trigger with the closure itself can say
 so with `anchors.triggerCarriesVerdict`: a closed row's Trigger then opens with ✅ and no
 other row's does, the writing commands refuse a row whose two cells disagree, and the lint
-reports one, so that a row states its verdict once, even where it states it twice.
+and the balance report one, so that a row states its verdict once, even where it states it
+twice. A closed row's Trigger may open with ✅ and then 🧾 instead, the bookkeeping pair, when
+its closure only repairs the mark of work done before the change that closes it (see the
+balance, below).
 
 ### Writing a row
 
@@ -694,22 +697,48 @@ Every change holds a machine-wide named mutex, keyed by the two registry paths, 
 of its read, decide and write. .NET supports named mutexes on Windows, Linux and macOS alike,
 and named semaphores on Windows only. A mutex must be released by the thread that took it, so
 the locked work is synchronous by construction. A change that cannot take the lock within 10
-seconds writes nothing and exits 13. Reads take no lock.
+seconds writes nothing and exits 13. A read takes the lock too, for as long as reading the two
+files takes, and one that cannot take it in time reads nothing and exits 13 as well. One file
+needs no lock, since every write replaces a whole file in one rename, but a move writes one file
+and then the other, and the two read apart could hold its row in neither, which reads as an
+anchor closed or lost, or in both, which reads as a duplicate.
 
 ### The balance
 
 `check-anchor-balance` compares the working tree with a base commit (`--base`, default
-`HEAD`). Each registry is read at the base through `git ls-tree` and `git show`: whether the
-file exists there is asked of a command whose exit code does not depend on the answer, so a
-commit git cannot read is never mistaken for a file that did not exist yet. A registry absent
-at the base counts as empty there, and the receipt says so. A registry git ignores has no
-history and is refused.
+`HEAD`), measured from where HEAD's history left the base's (`git merge-base`), as
+`check-anchor-citations --current-pr` measures a branch: the base itself where it is an
+ancestor of HEAD. Compared with directly, a base that had moved on counted its own later
+changes, reversed, as the change's - an anchor it closed as one the change created, one it
+gained as one the change lost - and a base that shares no history with HEAD, or a HEAD that
+names no commit yet, is refused. A shallow clone needs its history back to where the two part,
+unless one names the other as a parent in its own commit - a pull request's merge commit checked
+out alone names the tip it merges into - and where it stops first, the check says so and asks
+for the rest (`git fetch --unshallow`) rather than calling the two unrelated. The receipt names
+both commits where they differ. Each registry
+is read at the commit compared with as `--current-commit` reads a file (see Citations), so a
+file git cannot read is refused rather than taken for one that did not exist yet. A registry
+absent there counts as empty, and the receipt says so. A registry git ignores has no history
+and is refused.
 
 Anchors are compared by id across both registries, so moving a row counts as nothing. The
-check fails when open anchors rose, less the anchors newly disclosed (disclosure records debt
-that already existed), and whenever the registries as they stand are unsound: a closed anchor
-in pending, a live anchor in done, a missing registry, or a structural problem. Every problem
-is reported at once.
+check fails when open anchors rose, less the anchors newly disclosed and plus the closures that
+are bookkeeping: when the change created more anchors than its work closed. The two corrections
+pull opposite ways for one reason. Disclosure records debt that already existed, so writing it
+down is not creating it. A bookkeeping closure - a row closed since the base whose Trigger opens
+with the bookkeeping pair, `✅🧾`, where `anchors.triggerCarriesVerdict` holds - records work that
+already existed, so marking it is not doing it: the anchor leaves the open count, as a closed row
+must, and the change is credited with nothing for it. The pair counts only where it opens the
+Trigger, as every mark counts only where it opens its cell: one later in the prose could be
+claimed by a row that merely mentions bookkeeping.
+
+The check also fails whenever the registries as they stand are unsound: a closed anchor in
+pending, a live anchor in done, a Status that is none of the four spellings, a row stating two
+verdicts where `anchors.triggerCarriesVerdict` holds, a missing registry, or a structural
+problem. And it fails when an anchor open at the base is in neither registry now: a row moves
+between them and is never deleted, so a lost row - deleted, or renamed by hand - would count as
+closed. A lost row is judged only where both registries were read whole, since every row a
+missing or malformed registry hides would read as lost. Every problem is reported at once.
 
 ### Citations
 

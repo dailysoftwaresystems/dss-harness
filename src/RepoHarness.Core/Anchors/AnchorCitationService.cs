@@ -217,11 +217,20 @@ public sealed class AnchorCitationService(
 
             case AnchorCitationSubject.CurrentPullRequest:
             {
+                if (await _gitClient.ResolveCommitAsync(root, "HEAD", cancellationToken).ConfigureAwait(false) is null)
+                {
+                    throw new HarnessException(
+                        HarnessExit.Refused,
+                        "HEAD names no commit, so nothing this branch changed can be told apart. Commit first, or use --current-tree.");
+                }
+
                 var branch = await ResolveDefaultBranchAsync(root, cancellationToken).ConfigureAwait(false);
 
-                var mergeBase = await RunAsync(root, ["merge-base", branch, "HEAD"], cancellationToken)
-                    .ConfigureAwait(false);
-                var commit = mergeBase.Trim();
+                var commit = await _gitClient.MergeBaseAsync(root, branch, "HEAD", cancellationToken).ConfigureAwait(false)
+                    ?? throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"HEAD shares no history with {branch}, so nothing this branch changed can be told apart. "
+                        + "Use --current-tree or --current-commit.");
 
                 var changed = await _gitClient.ListNamesAsync(
                     root,
@@ -291,20 +300,6 @@ public sealed class AnchorCitationService(
             HarnessExit.Refused,
             $"No default branch was found to compare with (tried the remote's own HEAD, then {string.Join(", ", DefaultBranchCandidates)}). "
             + "Fetch the remote, or use --current-tree or --current-commit.");
-    }
-
-    private async Task<string> RunAsync(string root, string[] arguments, CancellationToken cancellationToken)
-    {
-        var result = await _gitClient.RunAsync(root, arguments, cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        if (!result.Succeeded)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"git {string.Join(' ', arguments)} failed, so nothing was checked: {result.FailureMessage}");
-        }
-
-        return result.StandardOutput;
     }
 
     /// <summary>

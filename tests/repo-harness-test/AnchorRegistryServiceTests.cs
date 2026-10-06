@@ -334,6 +334,64 @@ public sealed class AnchorRegistryServiceTests
         }
     }
 
+    /// <summary>
+    /// A read takes the lock too, while it reads both registries: a change moves a row by writing one and then the other,
+    /// so the two read apart could hold it in neither - an id not found - or in both, a duplicate the lint reports.
+    /// Held too long, every read refuses as a change does.
+    /// </summary>
+    [Fact]
+    public async Task AReadOfBothRegistries_TakesTheLock()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
+        var registries = await harness.AnchorRegistryLocator.LocateAsync(context, cancellationToken);
+        var impatient = new AnchorRegistryService(
+            harness.ContextLoader,
+            harness.AnchorRegistryLocator,
+            new NamedMutexAnchorRegistryLock(harness.Platform, TimeSpan.FromMilliseconds(200)),
+            harness.FileSystem);
+
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+
+        var holder = new Thread(() => harness.AnchorRegistryLock.RunExclusive(registries, () =>
+        {
+            held.Set();
+            release.Wait(TimeSpan.FromSeconds(60));
+            return 0;
+        }));
+
+        holder.Start();
+
+        try
+        {
+            Assert.True(held.Wait(TimeSpan.FromSeconds(60), cancellationToken), "The holder never took the lock.");
+
+            Func<Task>[] reads =
+            [
+                () => impatient.LintAsync(temp.Path, cancellationToken),
+                () => impatient.ListAsync(temp.Path, new AnchorListFilter(), cancellationToken),
+                () => impatient.ReadAsync(temp.Path, [One], AnchorScope.All, cancellationToken),
+            ];
+
+            foreach (var read in reads)
+            {
+                Assert.Equal(HarnessExit.Refused, (await Assert.ThrowsAsync<HarnessException>(read)).ExitCode);
+            }
+        }
+        finally
+        {
+            release.Set();
+            holder.Join();
+        }
+
+        Assert.Empty(await impatient.LintAsync(temp.Path, cancellationToken));
+        Assert.Equal([One], (await impatient.ListAsync(temp.Path, new AnchorListFilter(), cancellationToken)).Select(entry => entry.Row.Id));
+    }
+
     [Fact]
     public async Task ConcurrentChanges_LoseNoAnchor()
     {
@@ -1228,7 +1286,7 @@ public sealed class AnchorRegistryServiceTests
         await harness.InitializeHarnessAsync(
             temp.Path,
             TestContext.Current.CancellationToken,
-            triggerCarriesVerdict ? new HarnessConfig { Anchors = new AnchorSettings { TriggerCarriesVerdict = true } } : null);
+            triggerCarriesVerdict ? HarnessFactory.TriggerCarriesVerdict() : null);
         return harness;
     }
 

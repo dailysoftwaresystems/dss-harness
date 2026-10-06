@@ -1,3 +1,6 @@
+using RepoHarness.Core.Configuration;
+using RepoHarness.Core.FileSystem;
+
 namespace RepoHarness.Core.Anchors;
 
 /// <summary>The exit code the anchor commands share for an answer of "no".</summary>
@@ -41,6 +44,14 @@ public sealed record AnchorRegistry(AnchorRegistryKind Kind, string RelativePath
     /// <summary>The config.json setting that names this registry.</summary>
     public string Setting => Kind == AnchorRegistryKind.Pending ? "anchors.pendingAnchorsPath" : "anchors.doneAnchorsPath";
 
+    /// <summary>The file's text as it stands, or <see langword="null"/> where there is no file.</summary>
+    public string? ReadText(IFileSystem fileSystem)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
+        return fileSystem.FileExists(FullPath) ? fileSystem.ReadAllText(FullPath) : null;
+    }
+
     /// <summary>
     /// The kind of registry a row with <paramref name="statusCell"/> belongs in: done when the row is
     /// closed, pending otherwise. Placing a row and finding a misfiled one both ask this, so a row is
@@ -59,13 +70,44 @@ public sealed record AnchorRegistry(AnchorRegistryKind Kind, string RelativePath
             return null;
         }
 
-        return new AnchorFinding(
-            RelativePath,
-            row.LineNumber,
-            AnchorFindingSeverity.Fatal,
+        return Fatal(
+            row,
             Kind == AnchorRegistryKind.Pending
                 ? $"closed anchor '{row.Id}' is in the pending registry; closed anchors belong in the done registry"
                 : $"live anchor '{row.Id}' is in the done registry, where nothing reads it as work");
+    }
+
+    /// <summary>
+    /// The finding for a row this registry holds whose Trigger states another verdict than its Status, where
+    /// <paramref name="settings"/> hold a Trigger to its row's verdict (<see cref="AnchorSettings.TriggerCarriesVerdict"/>),
+    /// or null.
+    /// </summary>
+    public AnchorFinding? SplitVerdict(AnchorRow row, AnchorSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        return AnchorStatus.SplitVerdict(row.Status, row.Trigger, settings) is { } split
+            ? Fatal(row, $"{split}: anchors.triggerCarriesVerdict holds a row to one verdict, stated in both")
+            : null;
+    }
+
+    /// <summary>A problem with a row this registry holds that stops the registry being trusted.</summary>
+    public AnchorFinding Fatal(AnchorRow row, string message)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        return new AnchorFinding(RelativePath, row.LineNumber, AnchorFindingSeverity.Fatal, message);
+    }
+
+    /// <summary>A problem with this registry as a whole, at no line of it, that stops it being trusted.</summary>
+    public AnchorFinding Fatal(string message) => new(RelativePath, 0, AnchorFindingSeverity.Fatal, message);
+
+    /// <summary>A problem in the structure of this registry's file, as a finding of the registry.</summary>
+    public AnchorFinding Finding(AnchorDocumentFinding finding)
+    {
+        ArgumentNullException.ThrowIfNull(finding);
+
+        return new AnchorFinding(RelativePath, finding.LineNumber, finding.Severity, finding.Message);
     }
 }
 
@@ -437,10 +479,21 @@ public sealed record AnchorFinding(string File, int LineNumber, AnchorFindingSev
 /// <param name="Disclosed">Whether it is disclosed, and so not counted against the balance.</param>
 public sealed record AnchorOpening(string Id, string Excerpt, bool Disclosed);
 
+/// <summary>An anchor open at the base commit that is not open now.</summary>
+/// <param name="Id">The anchor.</param>
+/// <param name="Bookkeeping">
+/// Whether its closure only repairs the mark of work done before the base, and so is not counted to the change's credit.
+/// </param>
+public sealed record AnchorClosing(string Id, bool Bookkeeping);
+
 /// <summary>What check-anchor-balance measured.</summary>
 /// <param name="Base">The base as given.</param>
-/// <param name="Commit">The commit it resolved to.</param>
-/// <param name="OpenAtBase">Distinct ids open at the base.</param>
+/// <param name="BaseCommit">The commit it resolved to.</param>
+/// <param name="Commit">
+/// The commit the working tree was compared with: where HEAD's history left the base's, which is the base's own commit
+/// where it is an ancestor of HEAD.
+/// </param>
+/// <param name="OpenAtBase">Distinct ids open at <paramref name="Commit"/>.</param>
 /// <param name="OpenNow">Distinct ids open in the working tree.</param>
 /// <param name="Closed">Ids open at the base and not now.</param>
 /// <param name="Opened">Ids open now and not at the base.</param>
@@ -448,22 +501,32 @@ public sealed record AnchorOpening(string Id, string Excerpt, bool Disclosed);
 /// <param name="Findings">Problems in the registries as they are now.</param>
 public sealed record AnchorBalanceReport(
     string Base,
+    string BaseCommit,
     string Commit,
     int OpenAtBase,
     int OpenNow,
-    IReadOnlyList<string> Closed,
+    IReadOnlyList<AnchorClosing> Closed,
     IReadOnlyList<AnchorOpening> Opened,
     IReadOnlyList<string> MissingAtBase,
     IReadOnlyList<AnchorFinding> Findings)
 {
+    /// <summary>Whether the base has moved on from where HEAD's history left it, so the change is measured from there.</summary>
+    public bool BaseMovedOn => !string.Equals(BaseCommit, Commit, StringComparison.Ordinal);
+
     /// <summary>How many newly opened anchors are disclosed.</summary>
     public int Disclosed => Opened.Count(opening => opening.Disclosed);
 
+    /// <summary>How many closures only repair the mark of work done before the base.</summary>
+    public int Bookkeeping => Closed.Count(closing => closing.Bookkeeping);
+
     /// <summary>
-    /// The rise the balance counts: the change in open anchors, less those newly disclosed. A disclosed
-    /// anchor records debt that already existed, so writing it down is not creating it.
+    /// The rise the balance counts: the change in open anchors, less those newly disclosed, plus the closures that
+    /// are bookkeeping - that is, the anchors the change created less those its work closed. The two corrections pull
+    /// opposite ways for one reason: a disclosed anchor records debt that already existed, so writing it down is not
+    /// creating it, and a bookkeeping closure records work that already existed, so marking it is not doing it. The
+    /// anchor still leaves the open count, which a closed row must, while the change is credited with nothing for it.
     /// </summary>
-    public int NetNew => OpenNow - OpenAtBase - Disclosed;
+    public int NetNew => OpenNow - OpenAtBase - Disclosed + Bookkeeping;
 
     /// <summary>Whether the change did not add open work and the registries are sound.</summary>
     public bool Passed => NetNew <= 0 && !Findings.Any(finding => finding.Severity == AnchorFindingSeverity.Fatal);
