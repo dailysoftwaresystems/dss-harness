@@ -348,7 +348,7 @@ public sealed class InitService(
     {
         var shown = Describe(root, registry.FullPath);
 
-        if (_fileSystem.FileExists(registry.FullPath))
+        if (registry.Exists(_fileSystem))
         {
             actions.Add($"kept    {shown} (already present)");
             return;

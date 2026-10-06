@@ -107,7 +107,7 @@ public static class AnchorReports
         return CommandOutcome.Ok($"{entries.Count} anchor(s)") with { Data = lines, Quiet = true };
     }
 
-    /// <summary>What read-anchors --lint reports.</summary>
+    /// <summary>What read-anchors --lint reports: a finding fails it, and a note does not.</summary>
     public static CommandOutcome Lint(IReadOnlyList<AnchorFinding> findings, bool json)
     {
         ArgumentNullException.ThrowIfNull(findings);
@@ -116,9 +116,11 @@ public static class AnchorReports
             ? [FindingsJson(findings).ToJsonString(JsonOptions)]
             : [.. findings.Select(FindingLine), $"{findings.Count} finding(s)."];
 
-        return findings.Count == 0
+        var problems = findings.Count(finding => finding.Severity != AnchorFindingSeverity.Note);
+
+        return problems == 0
             ? CommandOutcome.Ok("the anchor registries are sound") with { Data = data, Quiet = true }
-            : CommandOutcome.Failed(AnchorExit.Findings, $"{findings.Count} problem(s) in the anchor registries") with { Data = data };
+            : CommandOutcome.Failed(AnchorExit.Findings, $"{problems} problem(s) in the anchor registries") with { Data = data };
     }
 
     /// <summary>What check-anchor-balance reports.</summary>
@@ -131,14 +133,14 @@ public static class AnchorReports
         if (report.Passed)
         {
             return CommandOutcome.Ok(
-                $"the balance holds: {report.OpenNow} open now against {report.OpenAtBase} at {report.Base}") with { Data = data, Quiet = json };
+                $"the balance holds: {report.OpenNow} open now against {report.OpenAtBase} {Measured(report)}") with { Data = data, Quiet = json };
         }
 
         var reasons = new List<string>();
 
         if (report.NetNew > 0)
         {
-            reasons.Add($"this change leaves {report.NetNew} more open anchor(s) than it found; close what was opened, or disclose debt that already existed");
+            reasons.Add($"this change creates {report.NetNew} more anchor(s) than its work closes; close what was opened, or disclose debt that already existed");
         }
 
         var fatal = report.Findings.Count(finding => finding.Severity == AnchorFindingSeverity.Fatal);
@@ -221,28 +223,45 @@ public static class AnchorReports
 
     private static List<string> BalanceText(AnchorBalanceReport report)
     {
-        var shortCommit = ReportText.Commit(report.Commit);
         var created = report.Opened.Count - report.Disclosed;
 
         var lines = new List<string>
         {
-            $"base      {report.Base} ({shortCommit})",
-            $"open      {report.OpenAtBase} at base, {report.OpenNow} now",
-            $"change    {report.Closed.Count} closed, {report.Opened.Count} opened ({created} created, "
-            + $"{report.Disclosed} disclosed); counted {SignedCount(report.NetNew)}",
+            $"base      {report.Base} ({ReportText.Commit(report.BaseCommit)})"
+            + (report.BaseMovedOn ? $", measured from where HEAD left it ({ReportText.Commit(report.Commit)})" : string.Empty),
+            $"open      {report.OpenAtBase} {Measured(report)}, {report.OpenNow} now",
+            $"change    {report.Closed.Count} closed ({report.Bookkeeping} bookkeeping), "
+            + (report.Lost.Count > 0 ? $"{report.Lost.Count} lost, " : string.Empty)
+            + $"{report.Opened.Count} opened ({created} created, {report.Disclosed} disclosed); counted {SignedCount(report.NetNew)}",
         };
 
-        lines.AddRange(report.Closed.Select(id => $"  - {id}"));
+        lines.AddRange(report.Closed.Select(closing =>
+            $"  - {closing.Id}{(closing.Bookkeeping ? "   [bookkeeping: not credited]" : string.Empty)}"));
+        lines.AddRange(report.Lost.Select(id => $"  ! {id}   [lost: not credited]"));
         lines.AddRange(report.Opened.Select(opening =>
             $"  + {opening.Id}   {opening.Excerpt}{(opening.Disclosed ? "   [disclosed: not counted]" : string.Empty)}"));
 
-        lines.AddRange(report.MissingAtBase.Select(path =>
-            $"note      {path} did not exist at {report.Base}, so it counts as empty there"));
+        if (report.Merging.Count > 0)
+        {
+            lines.Add(
+                $"note      HEAD is merging {string.Join(", ", report.Merging.Select(ReportText.Commit))}, so the change is "
+                + "measured as the commit finishing that merge would be");
+        }
 
-        if (report.Findings.Count > 0)
+        lines.AddRange(report.MissingAtBase.Select(path =>
+            $"note      {path} did not exist {Measured(report)}, so it counts as empty there"));
+        lines.AddRange(report.MalformedAtBase.Select(path =>
+            $"note      {path} was malformed {Measured(report)}, so a row it held that could not be read was not counted there"));
+        lines.AddRange(report.Findings
+            .Where(finding => finding.Severity == AnchorFindingSeverity.Note)
+            .Select(finding => $"note      {finding.File}:{finding.LineNumber}   {finding.Message}"));
+
+        var problems = report.Findings.Where(finding => finding.Severity != AnchorFindingSeverity.Note).ToList();
+
+        if (problems.Count > 0)
         {
             lines.Add("problems");
-            lines.AddRange(report.Findings.Select(finding => "  " + FindingLine(finding)));
+            lines.AddRange(problems.Select(finding => "  " + FindingLine(finding)));
         }
 
         return lines;
@@ -253,36 +272,63 @@ public static class AnchorReports
         var node = new JsonObject
         {
             ["base"] = report.Base,
+            ["baseCommit"] = report.BaseCommit,
             ["commit"] = report.Commit,
+            ["merging"] = Strings(report.Merging),
             ["openAtBase"] = report.OpenAtBase,
             ["openNow"] = report.OpenNow,
             ["netNew"] = report.NetNew,
             ["passed"] = report.Passed,
-            ["closed"] = new JsonArray([.. report.Closed.Select(id => (JsonNode?)JsonValue.Create(id))]),
+            ["closed"] = new JsonArray([.. report.Closed.Select(closing => (JsonNode)new JsonObject
+            {
+                ["anchor"] = closing.Id,
+                ["bookkeeping"] = closing.Bookkeeping,
+            })]),
+            ["lost"] = new JsonArray([.. report.Lost.Select(id => (JsonNode)new JsonObject
+            {
+                ["anchor"] = id,
+            })]),
             ["opened"] = new JsonArray([.. report.Opened.Select(opening => (JsonNode)new JsonObject
             {
                 ["anchor"] = opening.Id,
                 ["excerpt"] = opening.Excerpt,
                 ["disclosed"] = opening.Disclosed,
             })]),
-            ["missingAtBase"] = new JsonArray([.. report.MissingAtBase.Select(path => (JsonNode?)JsonValue.Create(path))]),
+            ["missingAtBase"] = Strings(report.MissingAtBase),
+            ["malformedAtBase"] = Strings(report.MalformedAtBase),
             ["findings"] = FindingsJson(report.Findings),
         };
 
         return node.ToJsonString(JsonOptions);
     }
 
+    private static JsonArray Strings(IEnumerable<string> values) => new([.. values.Select(value => (JsonNode?)JsonValue.Create(value))]);
+
     private static JsonArray FindingsJson(IEnumerable<AnchorFinding> findings)
         => new([.. findings.Select(finding => (JsonNode)new JsonObject
         {
             ["file"] = finding.File,
             ["line"] = finding.LineNumber,
-            ["severity"] = finding.Severity == AnchorFindingSeverity.Fatal ? "fatal" : "warning",
+            ["severity"] = finding.Severity switch
+            {
+                AnchorFindingSeverity.Fatal => "fatal",
+                AnchorFindingSeverity.Warning => "warning",
+                _ => "note",
+            },
             ["message"] = finding.Message,
         })]);
 
     private static string FindingLine(AnchorFinding finding)
-        => $"{finding.File}:{finding.LineNumber}   {(finding.Severity == AnchorFindingSeverity.Warning ? "warning: " : string.Empty)}{finding.Message}";
+        => $"{finding.File}:{finding.LineNumber}   {finding.Severity switch
+        {
+            AnchorFindingSeverity.Warning => "warning: ",
+            AnchorFindingSeverity.Note => "note: ",
+            _ => string.Empty,
+        }}{finding.Message}";
+
+    /// <summary>Where the balance was measured from: the base, or where HEAD left it where the base has moved on.</summary>
+    private static string Measured(AnchorBalanceReport report)
+        => report.BaseMovedOn ? $"where HEAD left {report.Base}" : $"at {report.Base}";
 
     private static string SignedCount(int value)
         => value > 0 ? "+" + value.ToString(CultureInfo.InvariantCulture) : value.ToString(CultureInfo.InvariantCulture);

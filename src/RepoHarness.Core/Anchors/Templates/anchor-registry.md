@@ -18,7 +18,8 @@ row is relocated, never deleted, so its history survives every change of status.
 
 ### Statuses
 
-The Status cell is the only verdict a row carries. Nothing is read from the prose beside it.
+The Status cell is the only verdict that decides whether a row is closed. Unless
+anchors.triggerCarriesVerdict is set, no verdict or count is read from the prose beside it.
 
 - `🟠 OPEN`: live work that can be picked up now.
 - `⏳ GATED`: live work waiting on a trigger. When the trigger fires, set the anchor to open.
@@ -43,8 +44,8 @@ id disappears from every search; the commands escape, validate and move rows for
 - `dssharness write-anchor` adds an anchor.
 - `dssharness set-anchor` changes one, and changing its status moves it between registries.
 - `dssharness read-anchor` shows anchors in full, and `dssharness read-anchors` lists them.
-- `dssharness check-anchor-balance` confirms a change did not open more anchors than it
-  closed.
+- `dssharness check-anchor-balance` confirms a change did not create more anchors than its
+  work closed.
 
 Run `dssharness help anchors` for the details.
 

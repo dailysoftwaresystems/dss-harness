@@ -32,6 +32,12 @@ public sealed class GitClient(
     /// </summary>
     private const string StagingIndexSuffix = ".harness-sync";
 
+    /// <summary>
+    /// How git says a directory is in no repository it can open: in none at all, or below a .git file naming one that is
+    /// not there - in its own words since git 2.56, where older git said "not a git repository" for that too.
+    /// </summary>
+    private static readonly string[] NotARepositoryAnswers = ["not a git repository", "gitfile does not point to a valid repository"];
+
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IHarnessOutput _output = output;
     private readonly IFilePermissions _filePermissions = filePermissions ?? FilePermissionsFactory.Create();
@@ -938,6 +944,197 @@ public sealed class GitClient(
             $"Could not resolve '{reference}': {result.FailureMessage}");
     }
 
+    public async Task<string?> MergeBaseAsync(
+        string directory,
+        string first,
+        IReadOnlyList<string> others,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(first);
+        ArgumentNullException.ThrowIfNull(others);
+
+        if (others.Count == 0 || others.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException("At least one commit to measure against, and no empty name.", nameof(others));
+        }
+
+        // Each name read as ResolveCommitAsync reads it, a commit: a short id a tree or a blob shares is still the commit's.
+        var result = await RunAsync(
+            directory,
+            ["merge-base", "--end-of-options", .. new[] { first }.Concat(others).Select(name => name + "^{commit}")],
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (result.Succeeded)
+        {
+            return result.StandardOutput.Trim();
+        }
+
+        var named = $"'{first}' and {Merged(others)}";
+
+        // git answers "no common ancestor" with exit code 1 and nothing else; any other failure is git being unable
+        // to look, or a name that names no commit. In a shallow clone the answer may mean only that the history here
+        // stops first, so it is never read as histories that share nothing - nor is a clone whose history could not be
+        // told whole.
+        if (result.ExitCode == 1 && !result.TimedOut)
+        {
+            var (shallow, answer) = await ShallowAnswerAsync(directory, cancellationToken).ConfigureAwait(false);
+
+            switch (shallow)
+            {
+                case false:
+                    return null;
+
+                case true:
+                    return await ParentNamedByAnotherAsync(directory, first, others, cancellationToken).ConfigureAwait(false)
+                        ?? throw new HarnessException(
+                            HarnessExit.CommandFailed,
+                            $"Could not find where {named} part: this clone's history is shallow, and may stop before they part "
+                            + "- or they share none. Fetch the rest of it (git fetch --unshallow), or clone with the whole history, "
+                            + "and run again.");
+
+                default:
+                    throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"git found nothing {named} share, and could not say whether this clone holds their whole history: {answer}");
+            }
+        }
+
+        throw new HarnessException(
+            HarnessExit.CommandFailed,
+            $"Could not find where {named} part: {result.FailureMessage}");
+    }
+
+    public async Task<IReadOnlyList<string>> ListMergeHeadsAsync(string directory, CancellationToken cancellationToken = default)
+    {
+        var result = await RunAsync(
+            directory,
+            ["rev-parse", "--git-path", "MERGE_HEAD"],
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        Ensure(result, "find where git records a merge in progress");
+
+        // git answers relative to the directory it ran in, where it can. One line per commit coming in: an octopus merge
+        // brings several.
+        var path = Path.GetFullPath(Path.Combine(directory, result.StandardOutput.Trim()));
+
+        try
+        {
+            return File.Exists(path)
+                ? [.. File.ReadAllText(path).Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0)]
+                : [];
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            // The merge was finished, or given up, between the look and the read.
+            return [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"Could not read '{path}', where git records the merge in progress: {ex.Message.TrimEnd('.')}.");
+        }
+    }
+
+    public async Task<bool?> IsShallowAsync(string directory, CancellationToken cancellationToken = default)
+        => (await ShallowAnswerAsync(directory, cancellationToken).ConfigureAwait(false)).Shallow;
+
+    /// <summary>
+    /// Whether the clone at <paramref name="directory"/> is shallow, or <see langword="null"/> where git could not say,
+    /// with git's answer in words for a message: its failure, or output that is neither answer - the option itself,
+    /// which a git older than 2.15 echoes back.
+    /// </summary>
+    private async Task<(bool? Shallow, string Answer)> ShallowAnswerAsync(string directory, CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(
+            directory,
+            ["rev-parse", "--is-shallow-repository"],
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            return (null, result.FailureMessage);
+        }
+
+        return result.StandardOutput.Trim() switch
+        {
+            "true" => (true, "true"),
+            "false" => (false, "false"),
+            var other => (null, $"'{other}'"),
+        };
+    }
+
+    /// <summary>The commits a merge base is measured against, as a message names them: one, or the merge of several.</summary>
+    private static string Merged(IReadOnlyList<string> commits)
+        => string.Join(" merged with ", commits.Select(commit => $"'{commit}'"));
+
+    /// <summary>
+    /// A commit another's own object names as a parent, where that answers where they part, or <see langword="null"/>:
+    /// <paramref name="first"/> where any of <paramref name="others"/> names it, an ancestor of each then and so of their
+    /// merge; or, measured against one commit alone, that one where <paramref name="first"/> names it. However little of
+    /// the history a shallow clone holds, the commit naming a parent holds it, whatever was cut away behind. A pull
+    /// request's merge commit checked out alone names, as its first parent, the tip of the branch it merges into.
+    /// </summary>
+    private async Task<string?> ParentNamedByAnotherAsync(
+        string directory,
+        string first,
+        IReadOnlyList<string> others,
+        CancellationToken cancellationToken)
+    {
+        if (await ResolveCommitAsync(directory, first, cancellationToken).ConfigureAwait(false) is not { } firstCommit)
+        {
+            return null;
+        }
+
+        var otherCommits = new List<string>();
+
+        foreach (var other in others)
+        {
+            if (await ResolveCommitAsync(directory, other, cancellationToken).ConfigureAwait(false) is not { } otherCommit)
+            {
+                return null;
+            }
+
+            if ((await ParentsNamedByAsync(directory, otherCommit, cancellationToken).ConfigureAwait(false)).Contains(firstCommit, StringComparer.Ordinal))
+            {
+                return firstCommit;
+            }
+
+            otherCommits.Add(otherCommit);
+        }
+
+        // The other way round against one commit alone: measured against a merge, first may share more with a commit
+        // merged in than with the parent it names.
+        return otherCommits is [var only]
+            && (await ParentsNamedByAsync(directory, firstCommit, cancellationToken).ConfigureAwait(false)).Contains(only, StringComparer.Ordinal)
+            ? only
+            : null;
+    }
+
+    /// <summary>
+    /// The parents <paramref name="commit"/>'s own object names, read from the object itself: where a shallow clone cut
+    /// the history behind it, every view of the history answers that it has none.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> ParentsNamedByAsync(string directory, string commit, CancellationToken cancellationToken)
+    {
+        var result = await RunAsync(directory, ["cat-file", "commit", commit], cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"Could not read commit {commit}: {result.FailureMessage}");
+        }
+
+        // The header ends at the first empty line, before the message, which may hold anything.
+        return [.. result.StandardOutput
+            .Split('\n')
+            .Select(line => line.TrimEnd('\r'))
+            .TakeWhile(line => line.Length > 0)
+            .Where(line => line.StartsWith("parent ", StringComparison.Ordinal))
+            .Select(line => line["parent ".Length..].Trim())];
+    }
+
     public async Task<string?> ReadFileAtCommitAsync(
         string directory,
         string commit,
@@ -1239,7 +1436,7 @@ public sealed class GitClient(
     /// untranslated.
     /// </summary>
     /// <remarks>
-    /// "not a git repository" and "not a gitdir" are recognised by their text, and a translated
+    /// "not a git repository" (<see cref="NotARepositoryAnswers"/>) and "not a gitdir" are recognised by their text, and a translated
     /// git answers in another language, so these queries run under <c>LC_ALL=C</c>. The override is kept
     /// to them alone: every other git command, including those that run the user's hooks,
     /// keeps the user's locale, because forcing C onto a hook changes how it handles
@@ -1486,14 +1683,14 @@ public sealed class GitClient(
 
     /// <summary>
     /// Distinguishes git's "not a repository" answer from a genuine failure to run.
-    /// git reports the former on stderr in a recognisable form; everything else
+    /// git reports the former on stderr in a recognisable form (<see cref="NotARepositoryAnswers"/>); everything else
     /// (dubious ownership, a corrupt config, an unreadable object store, a timeout) is a
     /// failure whose own message tells the user what to do.
     /// </summary>
     private static void EnsureNotAnError(GitCommandResult result, string directory)
     {
         if (!result.TimedOut
-            && result.StandardError.Contains("not a git repository", StringComparison.OrdinalIgnoreCase))
+            && NotARepositoryAnswers.Any(answer => result.StandardError.Contains(answer, StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }

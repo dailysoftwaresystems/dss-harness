@@ -1,5 +1,6 @@
 using System.Text.Json;
 using RepoHarness.Core.Anchors;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -204,6 +205,40 @@ public sealed class AnchorCommandsCliTests
         using var json = JsonDocument.Parse(risen.StandardOutput);
         Assert.Equal(1, json.RootElement.GetProperty("netNew").GetInt32());
         Assert.False(json.RootElement.GetProperty("passed").GetBoolean());
+        Assert.Contains("this change creates 1 more anchor(s) than its work closes", risen.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A row closed since the base through set-anchor, its Trigger opening with the bookkeeping pair where the Trigger
+    /// carries the verdict, leaves the open count and is named as bookkeeping and not credited, in the text and in the
+    /// JSON.
+    /// </summary>
+    [Fact]
+    public async Task CheckAnchorBalance_NamesABookkeepingClosure_AndDoesNotCreditIt()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, HarnessFactory.TriggerCarriesVerdict());
+        await WriteAsync(temp, One);
+        await harness.CommitAllAsync(temp.Path, "base", cancellationToken);
+
+        var closing = await CliRunner.RunAsync(
+            ["set-anchor", One, "--status", "closed", "--trigger", "✅🧾 **CLOSED** 2026-10-01, mark repaired: the work predates the base", "-C", temp.Path],
+            cancellationToken);
+        Assert.Equal(HarnessExit.Success, closing.ExitCode);
+
+        var text = await CliRunner.RunAsync(["check-anchor-balance", "-C", temp.Path], cancellationToken);
+        Assert.Equal(HarnessExit.Success, text.ExitCode);
+        Assert.Contains("open      1 at HEAD, 0 now", text.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("change    1 closed (1 bookkeeping), 0 opened (0 created, 0 disclosed); counted 0", text.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"  - {One}   [bookkeeping: not credited]", text.StandardOutput, StringComparison.Ordinal);
+
+        var json = await CliRunner.RunAsync(["check-anchor-balance", "--json", "-C", temp.Path], cancellationToken);
+        using var receipt = JsonDocument.Parse(json.StandardOutput);
+        var closed = Assert.Single(receipt.RootElement.GetProperty("closed").EnumerateArray());
+        Assert.Equal(One, closed.GetProperty("anchor").GetString());
+        Assert.True(closed.GetProperty("bookkeeping").GetBoolean());
+        Assert.Equal(0, receipt.RootElement.GetProperty("netNew").GetInt32());
     }
 
     [Fact]
@@ -217,10 +252,10 @@ public sealed class AnchorCommandsCliTests
         Assert.Equal(HarnessExit.NotInitialized, result.ExitCode);
     }
 
-    private static async Task<HarnessFactory> PrepareAsync(TempDirectory temp)
+    private static async Task<HarnessFactory> PrepareAsync(TempDirectory temp, HarnessConfig? config = null)
     {
         var harness = new HarnessFactory();
-        await harness.InitializeHarnessAsync(temp.Path, TestContext.Current.CancellationToken);
+        await harness.InitializeHarnessAsync(temp.Path, TestContext.Current.CancellationToken, config);
         return harness;
     }
 

@@ -545,6 +545,28 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The balance says what it measures from, what it does not credit and what it refuses - a base that moved on, an
+    /// unfinished merge, the bookkeeping pair, a lost row - where the anchors are described.
+    /// </summary>
+    [Fact]
+    public async Task AnchorsTopic_StatesWhatTheBalanceMeasuresFrom_AndDoesNotCredit()
+    {
+        var result = await CliRunner.RunAsync(["help", "anchors"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        var prose = Words(result.StandardOutput);
+
+        Assert.Contains("A base that has moved on since HEAD left it is measured from where HEAD left it", prose, StringComparison.Ordinal);
+        Assert.Contains(
+            $"a closure whose Trigger opens with {AnchorStatus.ClosedMark}{AnchorStatus.BookkeepingMark} records work that already existed",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("an anchor open where the change began is in neither registry now", prose, StringComparison.Ordinal);
+        Assert.Contains("a lost one is not credited either", prose, StringComparison.Ordinal);
+        Assert.Contains("during an unfinished merge, HEAD is taken merged with what the merge brings in", prose, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The citation check says what it cannot see - a break inside a segment, with no hyphen on either
     /// side - both where its command is described and in the topic that lists it.
     /// </summary>

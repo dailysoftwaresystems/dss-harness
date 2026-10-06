@@ -1279,6 +1279,15 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<string?> ResolveCommitAsync(string directory, string reference, CancellationToken cancellationToken = default)
         => Call(() => inner.ResolveCommitAsync(directory, reference, Token(cancellationToken)));
 
+    public Task<string?> MergeBaseAsync(string directory, string first, IReadOnlyList<string> others, CancellationToken cancellationToken = default)
+        => Call(() => inner.MergeBaseAsync(directory, first, others, Token(cancellationToken)));
+
+    public Task<IReadOnlyList<string>> ListMergeHeadsAsync(string directory, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListMergeHeadsAsync(directory, Token(cancellationToken)));
+
+    public Task<bool?> IsShallowAsync(string directory, CancellationToken cancellationToken = default)
+        => Call(() => inner.IsShallowAsync(directory, Token(cancellationToken)));
+
     public Task<string?> ReadFileAtCommitAsync(
         string directory,
         string commit,

@@ -219,6 +219,39 @@ public interface IGitClient
     Task<string?> ResolveCommitAsync(string directory, string reference, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Where the history of <paramref name="first"/> parts from that of <paramref name="others"/>: the full id, as
+    /// <see cref="ResolveCommitAsync"/> returns one, of the best common ancestor <c>git merge-base</c> names - which is
+    /// <paramref name="first"/> itself where it is an ancestor of them - or <see langword="null"/> where they share no
+    /// history and the clone is known to hold all of it. Several others are read as git reads them, as the commit merging
+    /// them all would be: HEAD and each commit an unfinished merge brings in, for one. In a shallow clone whose history
+    /// may stop before they part, a commit another's own object names as a parent is still that answer.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="first">A commit, or a name of one, read as <see cref="ResolveCommitAsync"/> reads it.</param>
+    /// <param name="others">At least one commit, or name of one, each read as <see cref="ResolveCommitAsync"/> reads it.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">
+    /// git could not answer: a name that names no commit, for one, or a shallow clone whose history may stop before they
+    /// part, or one that cannot say whether it holds the whole history, which are never answered as histories that share
+    /// nothing.
+    /// </exception>
+    Task<string?> MergeBaseAsync(string directory, string first, IReadOnlyList<string> others, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The commits an unfinished merge in the work tree at <paramref name="directory"/> is bringing into HEAD, as its
+    /// MERGE_HEAD records them, or none where no merge is in progress. The work tree then holds what they bring, as far
+    /// as git could merge it.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not say where the record is kept, or it could not be read.</exception>
+    Task<IReadOnlyList<string>> ListMergeHeadsAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether the clone holding <paramref name="directory"/> is shallow, its history cut short, or <see langword="null"/>
+    /// where git could not say.
+    /// </summary>
+    Task<bool?> IsShallowAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// A file's content at <paramref name="commit"/>, or <see langword="null"/> when no file was
     /// there.
     /// </summary>

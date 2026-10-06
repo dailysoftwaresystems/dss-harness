@@ -1,6 +1,7 @@
 using RepoHarness.Core.Anchors;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -402,6 +403,134 @@ public sealed class AnchorCitationServiceTests
 
         Assert.Equal(AnchorExit.Findings, outcome.ExitCode);
         Assert.Equal("src/thing.cpp:1: D-AREA-TOPIC-MISSING", Assert.Single(outcome.Data));
+    }
+
+    /// <summary>
+    /// --current-pr reads what the branch changed since it left the default branch: not a file it never touched, even
+    /// one the default branch changed after it left.
+    /// </summary>
+    [Fact]
+    public async Task ThePullRequest_IsWhatTheBranchChangedSinceItLeftTheDefaultBranch()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, ["src"]);
+        await harness.RunGitAsync(temp.Path, ["branch", "-M", "main"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "untouched.cpp"), "// D-AREA-TOPIC-UNTOUCHED\n");
+        await harness.CommitAllAsync(temp.Path, "base", cancellationToken);
+        var left = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "-b", "work"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "changed.cpp"), "// D-AREA-TOPIC-CHANGED\n");
+        await harness.CommitAllAsync(temp.Path, "the branch", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "main"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "untouched.cpp"), "// D-AREA-TOPIC-UNTOUCHED\n// edited on main\n");
+        await harness.CommitAllAsync(temp.Path, "main moves on", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "work"], cancellationToken);
+
+        var report = await Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken);
+
+        Assert.Equal(["D-AREA-TOPIC-CHANGED"], report.Unresolved.Select(citation => citation.Id));
+        Assert.Equal($"what this branch changed against main ({ReportText.Commit(left)})", report.SubjectDescription);
+    }
+
+    /// <summary>
+    /// --current-pr refuses a HEAD it cannot tell a branch's change apart in: one that shares no history with the
+    /// default branch, and one that names no commit yet - refused as --current-commit refuses it, and as the balance does.
+    /// </summary>
+    [Fact]
+    public async Task ThePullRequest_IsRefused_WhereHeadSharesNoHistoryWithTheDefaultBranch_OrNamesNoCommit()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, ["src"]);
+        await harness.RunGitAsync(temp.Path, ["branch", "-M", "main"], cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "base", cancellationToken);
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "--orphan", "unrelated"], cancellationToken);
+
+        var unborn = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, unborn.ExitCode);
+        Assert.StartsWith("HEAD names no commit yet", unborn.Message, StringComparison.Ordinal);
+        Assert.EndsWith("so nothing this branch changed can be told apart. Commit first, or use --current-tree.", unborn.Message, StringComparison.Ordinal);
+
+        var noCommit = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentCommit, cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, noCommit.ExitCode);
+        Assert.StartsWith("HEAD names no commit yet", noCommit.Message, StringComparison.Ordinal);
+        Assert.EndsWith("so there is no commit to check. Commit first, or use --current-tree.", noCommit.Message, StringComparison.Ordinal);
+
+        await harness.CommitAllAsync(temp.Path, "no shared history", cancellationToken);
+
+        var unrelated = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, unrelated.ExitCode);
+        Assert.StartsWith("HEAD shares no history with main", unrelated.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// During an unfinished merge the disk already holds what the merge brings in, so --current-pr measures the branch as
+    /// the commit finishing the merge would be: a file only the default branch changed is not the branch's change.
+    /// </summary>
+    [Fact]
+    public async Task ThePullRequest_DuringAnUnfinishedMerge_IsStillOnlyWhatTheBranchChanged()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, ["src"]);
+        await harness.RunGitAsync(temp.Path, ["branch", "-M", "main"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "untouched.cpp"), "// D-AREA-TOPIC-UNTOUCHED\n");
+        await harness.CommitAllAsync(temp.Path, "base", cancellationToken);
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "-b", "work"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "changed.cpp"), "// D-AREA-TOPIC-CHANGED\n");
+        await harness.CommitAllAsync(temp.Path, "the branch", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "main"], cancellationToken);
+        temp.WriteFile(Path.Combine("src", "untouched.cpp"), "// D-AREA-TOPIC-UNTOUCHED\n// edited on main\n");
+        await harness.CommitAllAsync(temp.Path, "main moves on", cancellationToken);
+        var main = (await harness.GitClient.ResolveCommitAsync(temp.Path, "main", cancellationToken))!;
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "work"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["merge", "--quiet", "--no-commit", "--no-ff", "main"], cancellationToken);
+
+        var report = await Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken);
+
+        Assert.Equal(["D-AREA-TOPIC-CHANGED"], report.Unresolved.Select(citation => citation.Id));
+        Assert.Equal($"what this branch changed against main ({ReportText.Commit(main)})", report.SubjectDescription);
+    }
+
+    /// <summary>
+    /// A remote's HEAD still naming a branch that is not here, as after master became main, is passed over for the
+    /// conventional names; where none of them resolves either, the refusal says what the remote's HEAD names, and how to
+    /// set it again. Taken at its word, it failed in git's own words, naming a branch nobody typed.
+    /// </summary>
+    [Fact]
+    public async Task ThePullRequest_PassesOverARemoteHeadNamingNoBranchHere()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp, ["src"]);
+        await harness.RunGitAsync(temp.Path, ["branch", "-M", "main"], cancellationToken);
+        await harness.CommitAllAsync(temp.Path, "base", cancellationToken);
+        var main = (await harness.GitClient.ResolveCommitAsync(temp.Path, "main", cancellationToken))!;
+        await harness.RunGitAsync(temp.Path, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "-b", "work"], cancellationToken);
+
+        var report = await Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken);
+
+        Assert.Equal($"what this branch changed against main ({ReportText.Commit(main)})", report.SubjectDescription);
+
+        await harness.RunGitAsync(temp.Path, ["branch", "-M", "main", "trunk"], cancellationToken);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => Service(harness).CheckAsync(temp.Path, AnchorCitationSubject.CurrentPullRequest, cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("tried the remote's own HEAD, which names origin/master, a branch not here", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("git remote set-head origin --auto", refusal.Message, StringComparison.Ordinal);
     }
 
     private static AnchorCitationService Service(HarnessFactory harness)

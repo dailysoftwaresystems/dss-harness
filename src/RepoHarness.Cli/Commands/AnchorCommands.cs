@@ -433,7 +433,7 @@ internal static class CheckAnchorBalanceCommand
 
     private static readonly Option<string> BaseOption = new("--base")
     {
-        Description = "The commit to compare with.",
+        Description = "The commit to compare with; where it has moved on, the change is measured from where HEAD left it.",
         DefaultValueFactory = _ => AnchorBalanceService.DefaultBase,
     };
 
@@ -446,7 +446,7 @@ internal static class CheckAnchorBalanceCommand
     {
         var command = new Command(
             Name,
-            "Fail when a change leaves more open anchors than it found, or a registry is misfiled or malformed.");
+            "Fail when a change creates more anchors than its work closes, when it loses an anchor's row, or when a registry is misfiled or malformed.");
 
         command.Options.Add(BaseOption);
         command.Options.Add(JsonOption);

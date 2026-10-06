@@ -44,7 +44,10 @@ public interface IAnchorRegistryService
     /// <summary>Lists anchors.</summary>
     Task<IReadOnlyList<AnchorEntry>> ListAsync(string startDirectory, AnchorListFilter filter, CancellationToken cancellationToken = default);
 
-    /// <summary>Reports every row a reader cannot rely on, and every structural problem in the registries.</summary>
+    /// <summary>
+    /// Reports every row a reader cannot rely on, and every structural problem in the registries; and notes, which fail
+    /// nothing, a closed row whose Trigger may not say what its writer meant.
+    /// </summary>
     Task<IReadOnlyList<AnchorFinding>> LintAsync(string startDirectory, CancellationToken cancellationToken = default);
 }
 
@@ -370,8 +373,12 @@ public sealed class AnchorRegistryService(
         var rules = AnchorIdRules.From(context.Config.Anchors);
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
 
-        // Read under the lock, both registries together, so a row moving between them is never seen in neither or both.
-        return _registryLock.RunExclusive(registries, () => Differing(rows, registries, Load(registries.Pending, rules), Load(registries.Done, rules)));
+        // Both read as one moment, so a row moving between them is never seen in neither or both.
+        var documents = _registryLock
+            .ReadTogether(registries, _fileSystem)
+            .ToDictionary(read => read.Registry.Kind, read => Load(read.Registry, read.Text, rules));
+
+        return Differing(rows, registries, documents[AnchorRegistryKind.Pending], documents[AnchorRegistryKind.Done]);
     }
 
     public async Task<AnchorLookup> ReadAsync(
@@ -389,7 +396,7 @@ public sealed class AnchorRegistryService(
 
         var documents = await LoadForReadingAsync(startDirectory, cancellationToken).ConfigureAwait(false);
 
-        var entries = Entries(documents).ToList();
+        var entries = AnchorEntry.Of(documents).ToList();
         var inScope = entries.Where(entry => InScope(entry.Registry, scope)).ToList();
 
         var results = ids
@@ -421,7 +428,7 @@ public sealed class AnchorRegistryService(
 
         var documents = await LoadForReadingAsync(startDirectory, cancellationToken).ConfigureAwait(false);
 
-        return [.. Entries(documents)
+        return [.. AnchorEntry.Of(documents)
             .Where(entry => InScope(entry.Registry, filter.Scope))
             .Where(entry => bands.Count == 0 || bands.Contains(entry.Row.Priority))
             .Where(entry => !filter.OnlyOpen || !entry.Row.IsClosed)
@@ -437,23 +444,19 @@ public sealed class AnchorRegistryService(
         var findings = new List<AnchorFinding>();
         var documents = new List<(AnchorRegistryDocument Document, AnchorRegistry Registry)>();
 
-        foreach (var registry in registries.All)
+        // Both read as one moment: a row a change was moving between them would otherwise read as a duplicate.
+        foreach (var (registry, text) in _registryLock.ReadTogether(registries, _fileSystem))
         {
-            if (!_fileSystem.FileExists(registry.FullPath))
+            if (text is null)
             {
-                findings.Add(new AnchorFinding(
-                    registry.RelativePath,
-                    0,
-                    AnchorFindingSeverity.Fatal,
-                    $"there is no {registry.Name} registry here; run '{ToolPackage.Command} init' to create it"));
+                findings.Add(registry.Fatal($"there is no {registry.Name} registry here; run '{ToolPackage.Command} init' to create it"));
                 continue;
             }
 
-            var document = AnchorRegistryDocument.Parse(_fileSystem.ReadAllText(registry.FullPath), rules);
+            var document = AnchorRegistryDocument.Parse(text, rules);
             documents.Add((document, registry));
 
-            findings.AddRange(document.Findings.Select(finding =>
-                new AnchorFinding(registry.RelativePath, finding.LineNumber, finding.Severity, finding.Message)));
+            findings.AddRange(document.Findings.Select(registry.Finding));
 
             foreach (var row in document.Rows)
             {
@@ -462,14 +465,12 @@ public sealed class AnchorRegistryService(
         }
 
         // One id, one row, across both registries: a duplicate hands a reader two histories under one name.
-        foreach (var group in Entries(documents).GroupBy(entry => entry.Row.Id, StringComparer.Ordinal).Where(group => group.Count() > 1))
+        foreach (var group in AnchorEntry.Of(documents).GroupBy(entry => entry.Row.Id, AnchorIdMatch.Comparer).Where(group => group.Count() > 1))
         {
             var locations = string.Join(", ", group.Select(entry => $"{entry.Registry.RelativePath}:{entry.Row.LineNumber}"));
 
-            findings.AddRange(group.Select(entry => new AnchorFinding(
-                entry.Registry.RelativePath,
-                entry.Row.LineNumber,
-                AnchorFindingSeverity.Fatal,
+            findings.AddRange(group.Select(entry => entry.Registry.Fatal(
+                entry.Row,
                 $"'{group.Key}' has {group.Count()} rows ({locations}); one id has one row")));
         }
 
@@ -480,8 +481,7 @@ public sealed class AnchorRegistryService(
 
     private static IEnumerable<AnchorFinding> LintRow(AnchorRow row, AnchorRegistry registry, AnchorIdRules rules, AnchorSettings settings)
     {
-        AnchorFinding Finding(string message) =>
-            new(registry.RelativePath, row.LineNumber, AnchorFindingSeverity.Fatal, message);
+        AnchorFinding Finding(string message) => registry.Fatal(row, message);
 
         if (row.CellCount != AnchorRow.ExpectedCellCount)
         {
@@ -509,9 +509,14 @@ public sealed class AnchorRegistryService(
             yield return Finding("the Trigger cell is empty, so the row explains nothing");
         }
 
-        if (settings.TriggerCarriesVerdict && AnchorStatus.SplitVerdict(row.Status, row.Trigger) is { } split)
+        if (registry.SplitVerdict(row, settings) is { } contradicted)
         {
-            yield return Finding($"{split}: anchors.triggerCarriesVerdict holds a row to one verdict, stated in both");
+            yield return contradicted;
+        }
+
+        if (registry.UnreadBookkeepingPair(row, settings) is { } unread)
+        {
+            yield return unread;
         }
 
         if (registry.Misfiling(row) is { } misfiled)
@@ -528,20 +533,23 @@ public sealed class AnchorRegistryService(
         var rules = AnchorIdRules.From(context.Config.Anchors);
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
 
-        // Reading takes no lock: every write replaces a whole file in one rename, so a reader sees
-        // either the old file or the new one, never a mixture.
-        return [.. registries.All.Select(registry => (Load(registry, rules), registry))];
+        // Both read as one moment, so a row a change was moving between them is never read in neither or both.
+        return [.. _registryLock.ReadTogether(registries, _fileSystem).Select(read => (Load(read.Registry, read.Text, rules), read.Registry))];
     }
 
-    /// <summary>
-    /// Reads a registry for a command that reads or changes anchors. A file with a structural problem is
-    /// refused rather than read around: its rows could be miscounted, or given a second row, without anyone
-    /// being told. Lint and the balance parse the files themselves, because reporting those problems is
-    /// their job.
-    /// </summary>
+    /// <summary>Reads a registry from its file, as <see cref="Load(AnchorRegistry, string?, AnchorIdRules)"/> reads its text.</summary>
     private AnchorRegistryDocument Load(AnchorRegistry registry, AnchorIdRules rules)
+        => Load(registry, registry.ReadText(_fileSystem), rules);
+
+    /// <summary>
+    /// Reads a registry for a command that reads or changes anchors, from its text, null where it has no file. A file
+    /// with a structural problem is refused rather than read around: its rows could be miscounted, or given a second
+    /// row, without anyone being told. Lint and the balance parse the files themselves, because reporting those
+    /// problems is their job.
+    /// </summary>
+    private static AnchorRegistryDocument Load(AnchorRegistry registry, string? text, AnchorIdRules rules)
     {
-        if (!_fileSystem.FileExists(registry.FullPath))
+        if (text is null)
         {
             throw new HarnessException(
                 HarnessExit.NotInitialized,
@@ -549,19 +557,16 @@ public sealed class AnchorRegistryService(
                 + $"to create it, or correct {registry.Setting} in config.json.");
         }
 
-        return Parse(registry, _fileSystem.ReadAllText(registry.FullPath), rules);
+        return Parse(registry, text, rules);
     }
 
-    /// <summary>Parses a registry's text, refusing one with a structural problem as <see cref="Load"/> does.</summary>
+    /// <summary>Parses a registry's text, refusing one with a structural problem as <see cref="Load(AnchorRegistry, string?, AnchorIdRules)"/> does.</summary>
     private static AnchorRegistryDocument Parse(AnchorRegistry registry, string text, AnchorIdRules rules)
     {
         var document = AnchorRegistryDocument.Parse(text, rules);
         document.EnsureSound(registry.RelativePath);
         return document;
     }
-
-    private static IEnumerable<AnchorEntry> Entries(IEnumerable<(AnchorRegistryDocument Document, AnchorRegistry Registry)> documents)
-        => documents.SelectMany(pair => pair.Document.Rows.Select(row => new AnchorEntry(row, pair.Registry)));
 
     private static List<(AnchorEntry Entry, AnchorRegistryDocument Document)> Matches(
         string id,
@@ -1012,7 +1017,7 @@ public sealed class AnchorRegistryService(
     /// <summary>Why a row no registry holds is refused where nobody named it new, naming the rows that begin the same way.</summary>
     private static string NotNamedNew(string id, AnchorRegistryDocument pending, AnchorRegistryDocument done, AnchorRegistries registries)
     {
-        var similar = SameNamespace(id, Entries([(pending, registries.Pending), (done, registries.Done)]));
+        var similar = SameNamespace(id, AnchorEntry.Of([(pending, registries.Pending), (done, registries.Done)]));
 
         return $"'{id}' has no row in either registry, and it was not named new: a typo in an existing row's id would make it a "
             + $"second row. If it is a new row, pass {AnchorBatchRequest.NewOption} {id}"
@@ -1195,7 +1200,7 @@ public sealed class AnchorRegistryService(
     {
         var cells = AnchorCells.Split(row);
 
-        if (settings.TriggerCarriesVerdict && AnchorStatus.SplitVerdict(cells[3].Trim(), cells[4].Trim()) is { } split)
+        if (AnchorStatus.SplitVerdict(cells[3].Trim(), cells[4].Trim(), settings) is { } split)
         {
             refusals.Usage(
                 $"The row would state two verdicts: {split}. anchors.triggerCarriesVerdict holds a row's Trigger to "

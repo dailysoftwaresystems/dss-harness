@@ -54,7 +54,9 @@ public interface IAnchorCitationService
     /// <param name="subject">What to read.</param>
     /// <param name="cancellationToken">Stops the git processes and the scan.</param>
     /// <exception cref="HarnessException">
-    /// No root is declared, so nothing could be scanned; or git could not produce the subject.
+    /// No root is declared, so nothing could be scanned; HEAD names no commit for a subject measured from it; git could
+    /// not produce the subject; or the registries could not be read, as <see cref="IAnchorRegistryService.ListAsync"/>
+    /// reads them, under the registry lock.
     /// </exception>
     Task<AnchorCitationReport> CheckAsync(
         string startDirectory,
@@ -217,11 +219,22 @@ public sealed class AnchorCitationService(
 
             case AnchorCitationSubject.CurrentPullRequest:
             {
+                await _gitClient
+                    .RequireHeadAsync(root, "nothing this branch changed can be told apart", "use --current-tree", cancellationToken)
+                    .ConfigureAwait(false);
+
                 var branch = await ResolveDefaultBranchAsync(root, cancellationToken).ConfigureAwait(false);
 
-                var mergeBase = await RunAsync(root, ["merge-base", branch, "HEAD"], cancellationToken)
-                    .ConfigureAwait(false);
-                var commit = mergeBase.Trim();
+                // The disk is read, and during an unfinished merge it already holds what the merge brings in: measured as
+                // the commit finishing it would be, the branch's own changes are what is listed, and not the merge's.
+                var merging = await _gitClient.ListMergeHeadsAsync(root, cancellationToken).ConfigureAwait(false);
+
+                var commit = await _gitClient.MergeBaseAsync(root, branch, ["HEAD", .. merging], cancellationToken).ConfigureAwait(false)
+                    ?? throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"HEAD shares no history with {branch}, so nothing this branch changed can be told apart. "
+                        + "Use --current-tree or --current-commit; where it should share some, git fsck reports a commit "
+                        + "between them that git cannot read.");
 
                 var changed = await _gitClient.ListNamesAsync(
                     root,
@@ -236,10 +249,9 @@ public sealed class AnchorCitationService(
 
             default:
             {
-                var commit = await _gitClient.ResolveCommitAsync(root, "HEAD", cancellationToken).ConfigureAwait(false)
-                    ?? throw new HarnessException(
-                        HarnessExit.Refused,
-                        "HEAD names no commit, so there is no commit to check. Commit first, or use --current-tree.");
+                var commit = await _gitClient
+                    .RequireHeadAsync(root, "there is no commit to check", "use --current-tree", cancellationToken)
+                    .ConfigureAwait(false);
 
                 // Files alone: a submodule's entry names a commit in another repository, which is
                 // no file here, and every file listed is one git must then be able to read.
@@ -264,9 +276,10 @@ public sealed class AnchorCitationService(
     }
 
     /// <summary>
-    /// The branch a pull request would be opened against: what the remote says is its default, and
-    /// failing that the conventional names, each tried until one resolves. Guessing one that does
-    /// not exist would make <c>--current-pr</c> compare against nothing and pass.
+    /// The branch a pull request would be opened against: what the remote says is its default, where
+    /// that names a commit here, and failing that the conventional names, each tried until one resolves.
+    /// Guessing one that does not exist would make <c>--current-pr</c> compare against nothing and pass;
+    /// and a remote's HEAD still naming a branch since renamed, as after master became main, names none.
     /// </summary>
     private async Task<string> ResolveDefaultBranchAsync(string root, CancellationToken cancellationToken)
     {
@@ -274,7 +287,9 @@ public sealed class AnchorCitationService(
             .RunAsync(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
-        if (declared.Succeeded && declared.StandardOutput.Trim() is { Length: > 0 } name)
+        var name = declared.Succeeded ? declared.StandardOutput.Trim() : string.Empty;
+
+        if (name.Length > 0 && await _gitClient.ResolveCommitAsync(root, name, cancellationToken).ConfigureAwait(false) is not null)
         {
             return name;
         }
@@ -287,24 +302,15 @@ public sealed class AnchorCitationService(
             }
         }
 
+        var dangling = name.Length > 0;
+
         throw new HarnessException(
             HarnessExit.Refused,
-            $"No default branch was found to compare with (tried the remote's own HEAD, then {string.Join(", ", DefaultBranchCandidates)}). "
-            + "Fetch the remote, or use --current-tree or --current-commit.");
-    }
-
-    private async Task<string> RunAsync(string root, string[] arguments, CancellationToken cancellationToken)
-    {
-        var result = await _gitClient.RunAsync(root, arguments, cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        if (!result.Succeeded)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"git {string.Join(' ', arguments)} failed, so nothing was checked: {result.FailureMessage}");
-        }
-
-        return result.StandardOutput;
+            $"No default branch was found to compare with (tried the remote's own HEAD"
+            + (dangling ? $", which names {name}, a branch not here" : string.Empty)
+            + $", then {string.Join(", ", DefaultBranchCandidates)}). Fetch the remote"
+            + (dangling ? ", or run git remote set-head origin --auto" : string.Empty)
+            + ", or use --current-tree or --current-commit.");
     }
 
     /// <summary>

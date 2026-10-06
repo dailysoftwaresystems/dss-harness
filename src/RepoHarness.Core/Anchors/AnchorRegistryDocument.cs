@@ -12,6 +12,12 @@ public enum AnchorFindingSeverity
 
     /// <summary>Every row was read, but the file will not render the way it reads.</summary>
     Warning,
+
+    /// <summary>
+    /// Every row was read and counted as it stands, but one may not say what its writer meant: reported, and failing
+    /// nothing.
+    /// </summary>
+    Note,
 }
 
 /// <summary>A problem in the structure of a registry file.</summary>
@@ -60,6 +66,11 @@ public sealed partial class AnchorRegistryDocument
 
     /// <summary>Structural problems, including a missing or duplicated anchor table.</summary>
     public IReadOnlyList<AnchorDocumentFinding> Findings { get; }
+
+    /// <summary>Whether the file has no fatal finding, so every row it holds was read: see <see cref="EnsureSound"/>.</summary>
+    public bool IsSound => !FatalFindings.Any();
+
+    private IEnumerable<AnchorDocumentFinding> FatalFindings => Findings.Where(finding => finding.Severity == AnchorFindingSeverity.Fatal);
 
     /// <summary>Reads a registry file's text.</summary>
     public static AnchorRegistryDocument Parse(string text, AnchorIdRules rules)
@@ -155,9 +166,7 @@ public sealed partial class AnchorRegistryDocument
     /// <exception cref="HarnessException">The file has a fatal finding.</exception>
     public void EnsureSound(string displayPath)
     {
-        var fatal = Findings.Where(finding => finding.Severity == AnchorFindingSeverity.Fatal).ToList();
-
-        if (fatal.Count == 0)
+        if (IsSound)
         {
             return;
         }
@@ -167,7 +176,7 @@ public sealed partial class AnchorRegistryDocument
             $"'{displayPath}' is malformed, so no anchor is read from it or written to it until it is repaired:",
         };
 
-        lines.AddRange(fatal.Select(finding => $"  line {finding.LineNumber}: {finding.Message}"));
+        lines.AddRange(FatalFindings.Select(finding => $"  line {finding.LineNumber}: {finding.Message}"));
         lines.Add($"'{ToolPackage.Command} read-anchors --lint' lists every problem in both registries.");
 
         throw new HarnessException(HarnessExit.CommandFailed, string.Join(Environment.NewLine, lines));
