@@ -1328,10 +1328,10 @@ rebuilds, kept in an action a light runner also runs, was started through that r
 `--manual-step` and built with no slot at all. A heavy step limited by `runOn` makes heavy the legs
 of those systems alone, and a step that performs a predefined action runs no program and cannot say
 it. A run check's runner whose action cannot be read counts as heavy, said as the run begins, builds
-nothing beyond what its runner requires, and is refused by the check that runs it, as before. A
-runner that only reads the tree - a repository guard - is light and starts at once. A runner saying
-`"heavy": false` while it requires the build, or while a phase of its own names `{product}` or
-`{buildDir}`, is refused: its build is heavy.
+nothing - not even where it declares `requireBuild` - and is refused by the check that runs it, as
+before. A runner that only reads the tree - a repository guard - is light and starts at once. A
+runner saying `"heavy": false` while it requires the build, or while a phase of its own names
+`{product}` or `{buildDir}`, is refused, naming all of them at once: its build is heavy.
 
 **Room is claimed as a leg is admitted.** Where its build's need is known - its `buildSpaceGiB`, or
 what a build recorded - and is more than its build directory already holds, a heavy leg is let start
@@ -1447,15 +1447,15 @@ tool replaces, where a green result had quietly stopped meaning anything.
   MSVC build it was in.
 - Every run has its own id, and every log is scoped to it. No two legs ever write to one
   file, so one leg's result can never be read as another's.
-- The programs a command will start are resolved on the host before a leg starts - each command
-  its own: a build its build's, a test its runner too, a run its steps' and its build's where it
+- The programs a command will start are resolved on the host before a leg starts - each command its
+  own: a build its build's, a test its runner too, a run its steps' and its build's where it
   builds, a sync none - so a missing tool is `skipped-tool-missing` and named, not a failure
-  halfway through. A program
-  named by name, or by a path absolute on the leg's platform, is looked for beforehand; one
-  named by a relative path or with a placeholder is the run's to find, and so is one started
-  under an environment the configuration declares that sets PATH - looked for, so its directory
-  reaches that PATH, and never required. One that will not start once the leg is running fails
-  the leg, naming the program and the reason the system gave: never a skip, and never `poisoned`.
+  halfway through. A program named by name, or by a path absolute on the leg's platform, is looked
+  for beforehand; one named by a relative path or with a placeholder is the run's to find, and so
+  is one started under an environment the configuration declares that sets PATH - looked for, so
+  its directory reaches that PATH, and never required. One that will not start once the leg is
+  running fails the leg, naming the program and the reason the system gave: never a skip, and never
+  `poisoned`.
 - A leg-running command asked for `--json` answers with its ledger whatever ended it, once its
   command line was read: a refusal before any leg was placed, a selection no host could take, a
   log another run holds, a refusal while the legs ran - each is the document too, with the code
@@ -1873,9 +1873,9 @@ heavy leg also claims its room as it is let start, held against every other comm
   directory already holds. A build records what its directory came to in its `.harness-build`,
   summed from the walk it already makes of the directory as it finishes.
 - **Nothing is walked to decide.** Each host is asked, in the same measuring that finds its
-  programs, the room on the filesystem its copies are kept on and, for a command that builds,
-  what each leg's build directory - and the main checkout's copy of the same variant - holds as
-  recorded, with the room where each is. The room is the filesystem's own count.
+  programs, the room on the filesystem its copies are kept on and, for each leg the command
+  builds, what that leg's build directory - and the main checkout's copy of the same variant -
+  holds as recorded, with the room where each is. The room is the filesystem's own count.
 - **Legs sharing a filesystem add up.** Legs building on one filesystem of one host are counted
   together, in the order they were selected, because every build directory stays once built. A
   leg that does not fit beside the ones before it is `skipped-unavailable`, naming what is free,
@@ -1883,7 +1883,9 @@ heavy leg also claims its room as it is let start, held against every other comm
 - **Unknown is not refused.** A leg nothing has measured that declares no `buildSpaceGiB` is
   placed as it always was, and so is one whose directory no build of this version recorded,
   since what that directory holds is an amount nothing measured.
-- **Only a command that builds.** `sync` and `clean` need no room: clean is how room is made.
+- **Only a leg its command builds.** `sync`, `clean` and a run's leg it does not build need no
+  room: clean is how room is made. A run builds a leg as its runner, its steps and its run checks
+  need, on that leg's system: a step limited by `runOn` asks only about the legs of its systems.
 - **A WSL distribution's disk grows on this machine's drive.** WSL 2 keeps a distribution's
   filesystem in a virtual disk file, and what the distribution measures is that disk's own room -
   a terabyte by default - whatever the drive holding it has left: measured, a distribution said
@@ -2066,10 +2068,11 @@ leg-running command gets. A runner that declares `requireBuild` has its leg buil
 a runner that calls a program the build produces otherwise runs against whatever was left there.
 
 **A step naming what the build makes builds its leg first, whichever runner starts it.** A run that
-runs a step whose run line or `workingDirectory` names `{product}` or `{buildDir}` - by default or
-named with `--manual-step`, through a runner that declares `requireBuild` or not - builds each leg
-before its steps start; one limited by `runOn` builds the legs of those systems alone, and a
-runner's own phase naming either builds as a step does. Read from the line rather than declared
+runs a step whose run line or `workingDirectory` names `{product}` or `{buildDir}` - however the
+run comes to run it: by default, named with `--manual-step` or under a runner's `steps`, or needed
+by one that is, through a runner that declares `requireBuild` or not - builds each leg before its
+steps start; one limited by `runOn` builds the legs of those systems alone, and a runner's own
+phase naming either builds as a step does. Read from the line rather than declared
 beside it, because a line naming the product reads the product whoever starts it: when the build
 was declared only on runners, a manual step naming `{product}`, kept in an action a runner that
 builds nothing also runs, was started through that runner and read whatever the last build left -
@@ -2078,13 +2081,31 @@ a runner that needs the build builds first as well: a check runs on the leg as t
 it left it, and is never built itself, since rebuilding mid-run would replace what the failure it
 explains came from. A leg that builds asks its host for the build's programs and room, and is heavy.
 
-A leg a run would build that cannot be built - it names no project, or no toolchain for its system
-- is refused before any host is measured, naming the leg and what builds it, and so is a step of
-the run's own runner naming `{product}` on a leg whose project declares no one file for its system.
-Found where the leg's build began, the first ended the whole run once its hosts were measured and
-its slots taken, naming neither the step nor the name that built it, and the second was refused
+A leg a run would build that cannot be built - it names no project, or no toolchain for its
+system - is refused before any host is measured, naming the leg and what builds it, and so is a
+step or phase of the run's own runner naming `{product}` on a leg whose project declares no one
+file for its system; one refusal names every such leg, of both kinds. For a runner requiring the
+build, the first was found only where the leg's build began: it ended the whole run once its hosts
+were measured and its slots taken, without saying what built the leg; and the second was refused
 only after the build it had just cost. A product a run check's step names is refused by the check
-that runs it, as everything about a check is.
+that runs it, when it runs: refused before the run, it would refuse a run whose checks may never
+run. The build a check needs is made before the run whether or not the check runs, so a leg it
+cannot build is refused then.
+
+**A runner is refused on a leg the run did not build, where what it runs reads the build.** The run
+decides the build, and says to each runner it starts - its own and each a run check starts - whether
+it built the leg; a runner requiring the build, or a step or phase naming `{product}` or
+`{buildDir}` among those that leg runs, is refused there before anything changes the tree, naming
+each. It is the rule above asked again of what will run, so a file edited between the run's reading
+it and the leg's is refused rather than started on whatever the last build left.
+
+**`cleanDirectories` never reaches what the run stands on.** Each is deleted, with all it holds,
+before the runner's first step - after the build a run makes first - so one that is the whole tree,
+lies outside it, or is, holds or is inside `build` (where every leg's build is kept, and stays
+incremental), `.harness-config`, `.git`, what orchestrators keep or the worktrees root is refused
+when the file is read, compared ignoring case. So are a phase with a blank name and two phases of
+one runner sharing a name: each writes the log its name names, and a resumed run skips the ones its
+name says were done.
 
 **`requireBuild` gates the build, never the sync.** A leg on an ssh host or a WSL distribution runs
 from that host's own copy of the tree — the host reads `config.json` and the runner's action file
@@ -2164,10 +2185,11 @@ sibling directory whose name merely starts the same way is outside, not inside.
   becomes a runner with legs of its own that a gate names like any other; the command line wins over
   the runner. Whichever chose them, the steps chosen are the file from then on: selection runs
   before `runOn`'s, and the tool policy, the names a step may use, the inputs a run may be given,
-  the programs a host is asked for, whether a leg is built first and the refusal of a leg that would
-  run nothing all read only what will run. A step lists under `needs` the steps declared before it that run first whenever it
-  does - one declared after it could not have run by then, one that does not run on every system the
-  step runs on would leave a leg there running the step without it, and a step every run runs
+  the programs a host is asked for, whether a leg is built first and the refusal of a leg that
+  would run nothing all read only what will run. A step lists under `needs` the steps declared
+  before it that run first whenever it does - one declared after it could not have run by then,
+  one that does not run on every system the step runs on would leave a leg there running the step
+  without it, and a step every run runs
   needing a manual one would make a plain run run it, so each is refused when the file is read.
   Steps of one name are one step to whatever names them, narrowed by a leg's system to the one it
   runs, so a manual step cannot share its name with one that is not. A manual step declares a

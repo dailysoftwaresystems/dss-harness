@@ -1755,7 +1755,10 @@ public sealed class ConfigStoreTests
         Assert.Contains("declare admission under hosts.local or defaults", exception.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>A runner that requires the build is heavy, since its build is: one saying heavy is false is refused rather than believed.</summary>
+    /// <summary>
+    /// A runner that requires the build is heavy, since its build is: one saying heavy is false is refused rather than
+    /// believed, offering either fix, since either works.
+    /// </summary>
     [Fact]
     public void ARunnerSayingItIsNotHeavy_WhileItRequiresTheBuild_IsRefused()
     {
@@ -1763,7 +1766,11 @@ public sealed class ConfigStoreTests
             { "predefinedRunners": { "bench": { "action": "bench/bench.yml", "requireBuild": true, "heavy": false } } }
             """);
 
-        Assert.Contains("predefined runner 'bench' says heavy is false and requires the build, which is heavy", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "predefined runner 'bench' says heavy is false, and builds its legs first, which is heavy - the runner requires the "
+            + "build: leave heavy out, or drop requireBuild",
+            exception.Message,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1941,9 +1948,10 @@ public sealed class ConfigStoreTests
 
     /// <summary>
     /// A run check runs on its leg as the runner carrying it left it, and is never built itself, so a check whose runner
-    /// needs the build - requiring it, or by a step naming what the build makes, on every system or on those its runOn
-    /// names - builds the carrier's legs first, and says whose need it is. One whose steps could not be read is heavy, and
-    /// builds nothing more than its runner requires: the check that runs it is refused.
+    /// needs the build - requiring it, or by a step or phase naming what the build makes, on every system or on those its
+    /// runOn names - builds the carrier's legs first, and says whose need it is. One whose steps could not be read is
+    /// heavy, and builds nothing, whatever its runner requires: the check that runs it is refused, so a build made for it
+    /// would be made for nothing.
     /// </summary>
     [Fact]
     public void ARunnerWhoseRunCheckNeedsTheBuild_BuildsItsLegsFirst()
@@ -1991,19 +1999,28 @@ public sealed class ConfigStoreTests
         Assert.True(requiring.Build);
         Assert.Equal("runner 'confirm', which a run check names, requires the build", Assert.Single(requiring.BuiltBy).Reason);
 
-        var unread = Core.Legs.LegWorkload.ForRunner(light, null, [("confirm", new RunnerConfig { Action = "b/b.yml" }, null, true)]);
+        var phased = new RunnerConfig { Phases = [new RunnerPhase { Name = "deps", Command = ["python3", "deps.py"], WorkingDirectory = "{buildDir}" }] };
+
+        Assert.Equal(
+            "phase 'deps' of runner 'confirm', which a run check names, names {buildDir}",
+            Assert.Single(Core.Legs.LegWorkload.ForRunner(light, null, [("confirm", phased, null, false)]).BuiltBy).Reason);
+
+        var unread = Core.Legs.LegWorkload.ForRunner(light, null, [("confirm", new RunnerConfig { Action = "b/b.yml", RequireBuild = true }, null, true)]);
 
         Assert.True(unread.Heavy);
         Assert.False(unread.Build);
+        Assert.Empty(unread.BuiltBy);
+        Assert.False(unread.On("linux").Build);
     }
 
     /// <summary>
     /// A leg a run would build that cannot be built - it names no project, or no toolchain for its system - is refused
     /// before any host is measured, naming every such leg, why, and what builds it; so is a step of the run's own runner
-    /// naming {product} on a leg whose project declares no one file for its system. A leg the run does not build is asked
-    /// nothing, and a product a run check's step names is that check's to refuse. Found where each leg's build began, the
-    /// first ended the whole run once its hosts were measured, naming neither the step nor the name that built it; the
-    /// second was refused only after the build it had cost.
+    /// naming {product} on a leg whose project declares no one file for its system; one refusal names both kinds at once.
+    /// A leg the run does not build is asked nothing, and a product a run check's step names is that check's to refuse.
+    /// For a runner requiring the build, the first was found only where the leg's build began: it ended the whole run
+    /// once its hosts were measured, without saying what built the leg; the second was refused only after the build it
+    /// had cost.
     /// </summary>
     [Fact]
     public void ALegARunWouldBuild_ThatCannotBeBuilt_OrHasNoProduct_IsRefusedBeforeAnythingStarts()
@@ -2067,17 +2084,18 @@ public sealed class ConfigStoreTests
             string.Join(
                 Environment.NewLine,
                 [
-                    "A run of runner 'probe' builds 2 legs first that cannot be built, so nothing was run. Leave them out of the "
-                        + "run - with --legs, or from the runner's own legs - or give each a project and a toolchain to build:",
-                    "  Leg 'lone' builds nothing: it names no project, and neither defaults.project nor a single declared project "
-                        + "supplies one. It is built first because step 'measure' names {product}.",
-                    "  Leg 'bare' names no toolchain, and project 'app' declares no default toolchain for linux. It is built first "
-                        + "because step 'measure' names {product}.",
+                    "A run of runner 'probe' cannot run every leg it reaches, so nothing was run.",
+                    "It builds 2 legs first that cannot be built: leave them out of the run - with --legs, or from the runner's own "
+                        + "legs - or give each a project and a toolchain to build:",
+                    "  - Leg 'lone' cannot be built: it names no project, and neither defaults.project nor a single declared "
+                        + "project supplies one. The run builds it first because step 'measure' names {product}.",
+                    "  - Leg 'bare' cannot be built: it names no toolchain, and project 'app' declares no default toolchain for "
+                        + "linux. The run builds it first because step 'measure' names {product}.",
                 ]),
             unbuildable.Message);
 
         Assert.Contains(
-            "It is built first because the runner requires the build.",
+            "The run builds it first because the runner requires the build.",
             Refusal(Run(requiring), "lone").Message,
             StringComparison.Ordinal);
 
@@ -2088,10 +2106,34 @@ public sealed class ConfigStoreTests
             string.Join(
                 Environment.NewLine,
                 [
-                    "A run of runner 'probe' runs a step naming {product} where no one product can fill it in, so nothing was run:",
-                    "  leg 'mac': step 'measure' names {product}, and project 'app' declares no buildOutputs for macos.",
+                    "A run of runner 'probe' cannot run every leg it reaches, so nothing was run.",
+                    "It runs a step or phase naming {product} where no one product fills it in: leave the leg out, or declare one "
+                        + "build output for its system:",
+                    "  - Leg 'mac': step 'measure' names {product}, and project 'app' declares no buildOutputs for macos.",
                 ]),
             productless.Message);
+
+        // Both kinds in one refusal, so the reader has every leg to deal with at once rather than one kind per run.
+        var both = Refusal(Run(requiring, "measure"), "lone", "mac");
+
+        Assert.Contains("It builds a leg first that cannot be built: leave it out of the run", both.Message, StringComparison.Ordinal);
+        Assert.Contains("  - Leg 'lone' cannot be built: it names no project", both.Message, StringComparison.Ordinal);
+        Assert.Contains("  - Leg 'mac': step 'measure' names {product}, and project 'app'", both.Message, StringComparison.Ordinal);
+
+        // A phase of the run's own runner naming {product} is refused as a step is, and called a phase.
+        var phased = new RunnerConfig { Phases = [new RunnerPhase { Name = "measure", Command = ["{product}"] }] };
+
+        Assert.Contains(
+            "  - Leg 'mac': phase 'measure' names {product}, and project 'app' declares no buildOutputs for macos.",
+            Refusal(Core.Legs.LegWorkload.ForRunner(phased, null), "mac").Message,
+            StringComparison.Ordinal);
+
+        // A workload that builds every leg as such names nothing that builds it, and says only why it cannot be built.
+        Assert.EndsWith(
+            "  - Leg 'lone' cannot be built: it names no project, and neither defaults.project nor a single declared project "
+                + "supplies one.",
+            Refusal(Core.Legs.LegWorkload.BuildOnly, "lone").Message,
+            StringComparison.Ordinal);
 
         // A product a run check's step names is the check's to refuse, when it runs; a leg the check builds and that
         // cannot be built is refused here, naming the check.
@@ -2104,14 +2146,83 @@ public sealed class ConfigStoreTests
         carrying.RequireBuildable(config, "probe", Legs("mac"));
 
         Assert.Contains(
-            "It is built first because step 'measure' of runner 'confirm', which a run check names, names {product}.",
+            "The run builds it first because step 'measure' of runner 'confirm', which a run check names, names {product}.",
             Refusal(carrying, "lone").Message,
             StringComparison.Ordinal);
     }
 
     /// <summary>
+    /// What a run's refusal gives for a leg is what builds that leg, on its own system - a step limited by runOn to
+    /// another names nothing there - and a leg is refused for its product only where a step names {product}: a step
+    /// naming the build directory alone reads no one file, so a project declaring several asks nothing of it, while one
+    /// naming the product is refused, naming the files there are to choose from.
+    /// </summary>
+    [Fact]
+    public void ARunsRefusal_NamesWhatBuildsTheLegOnItsSystem_AndAProductOnlyWhereOneIsNamed()
+    {
+        var config = new HarnessConfig
+        {
+            Toolchains = { ["sdk"] = new ToolchainConfig { Platforms = ["windows", "linux", "macos"] } },
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Projects = { new ProjectConfig { Name = "many", Type = "dotnet", Path = "many.csproj", BuildOutputs = [BuildOutput.Everywhere("a"), BuildOutput.Everywhere("b")] } },
+            Legs =
+            {
+                ["lone"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Project = "many" },
+                ["twice"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Toolchain = "sdk", Project = "many" },
+            },
+        };
+
+        var action = ActionKit.Parse(
+            Path.Combine("actions", "probe", "probe.yml"),
+            """
+            steps:
+              - name: version
+                run: python3 version.py
+              - name: measure
+                manual: true
+                successPattern: '^measured'
+                run: python3 measure.py --dss="{product}"
+              - name: winbench
+                manual: true
+                runOn: [windows]
+                successPattern: '^benched'
+                run: python3 bench.py --out={buildDir}
+              - name: linbench
+                manual: true
+                runOn: [linux]
+                successPattern: '^benched'
+                run: python3 bench.py --out={buildDir}
+            """);
+
+        var runner = new RunnerConfig { Action = "probe" };
+
+        Core.Legs.LegWorkload Run(params string[] manual)
+            => Core.Legs.LegWorkload.ForRunner(runner, Core.Runners.StepSelection.For(runner, manual).Apply("probe", action).File);
+
+        List<Core.Legs.SelectedLeg> Legs(params string[] names) => [.. names.Select(name => new Core.Legs.SelectedLeg(name, config.Legs[name]))];
+
+        // 'lone' names no toolchain, nor does its project for linux, so it cannot be built; winbench builds no linux leg.
+        var lone = Assert.Throws<Core.Results.HarnessException>(() => Run("measure", "winbench").RequireBuildable(config, "probe", Legs("lone")));
+
+        Assert.Contains("The run builds it first because step 'measure' names {product}.", lone.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("winbench", lone.Message, StringComparison.Ordinal);
+
+        Run("linbench").RequireBuildable(config, "probe", Legs("twice"));
+
+        var several = Assert.Throws<Core.Results.HarnessException>(() => Run("measure", "linbench").RequireBuildable(config, "probe", Legs("twice")));
+
+        Assert.Contains(
+            "  - Leg 'twice': step 'measure' names {product}, and project 'many' declares 2 buildOutputs for linux (a, b)",
+            several.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("linbench", several.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A runner's own phase naming what the build makes builds its legs, and a build is heavy: one saying heavy is false
-    /// beside it is refused, as one beside requireBuild is, rather than believed.
+    /// beside it is refused, as one beside requireBuild is, rather than believed. Every phase that builds is named, and
+    /// requireBuild beside them, and dropping requireBuild is not offered where a phase would still build: named one at a
+    /// time, the fix offered for the first led to a second refusal.
     /// </summary>
     [Fact]
     public void ARunnerSayingItIsNotHeavy_WhileAPhaseOfItBuilds_IsRefused()
@@ -2121,9 +2232,134 @@ public sealed class ConfigStoreTests
             """);
 
         Assert.Contains(
-            "predefined runner 'deps' says heavy is false, and its phase 'deps' names {buildDir}, which builds its legs first, "
-            + "and a build is heavy: leave heavy out",
+            "predefined runner 'deps' says heavy is false, and builds its legs first, which is heavy - phase 'deps' names "
+            + "{buildDir}: leave heavy out",
             exception.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("drop requireBuild", exception.Message, StringComparison.Ordinal);
+
+        var both = LoadInvalid("""
+            {
+              "predefinedRunners": {
+                "deps": {
+                  "requireBuild": true,
+                  "heavy": false,
+                  "phases": [
+                    { "name": "deps", "command": ["python3", "deps.py"], "workingDirectory": "{buildDir}" },
+                    { "name": "lint", "command": ["python3", "lint.py"] },
+                    { "name": "measure", "command": ["{product}", "--{{literal}}"] }
+                  ]
+                }
+              }
+            }
+            """);
+
+        Assert.Contains(
+            "predefined runner 'deps' says heavy is false, and builds its legs first, which is heavy - the runner requires the "
+            + "build; phase 'deps' names {buildDir}; phase 'measure' names {product}: leave heavy out",
+            both.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("drop requireBuild", both.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A runner's phases are told apart by name - each writes the log its name names, a resumed run skips the ones its
+    /// name says were done, a refusal names one by it - so a blank name, and one given twice in any case, are refused when
+    /// the file is read, rather than once a leg has been built for the run.
+    /// </summary>
+    [Fact]
+    public void ARunnersPhase_WithABlankName_OrANameGivenTwice_IsRefused()
+    {
+        var exception = LoadInvalid("""
+            {
+              "predefinedRunners": {
+                "blank": { "phases": [ { "name": " ", "command": ["python3", "a.py"] } ] },
+                "twice": {
+                  "phases": [
+                    { "name": "measure", "command": ["python3", "a.py"] },
+                    { "name": "Measure", "command": ["python3", "b.py"] },
+                    { "name": "report", "command": ["python3", "c.py"] }
+                  ]
+                }
+              }
+            }
+            """);
+
+        Assert.Contains("predefined runner 'blank' has a phase with a blank name", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("predefined runner 'twice' names phase 'measure' more than once", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("phase 'report' more than once", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A runner's cleanDirectories are deleted, with all they hold, before its first step starts - after the build a run
+    /// makes first - so one that is, holds or is inside what the run stands on is refused when the file is read: where the
+    /// builds are kept, which a run building first would delete straight after making, the harness's own directory, and
+    /// what a tree never moves; and so is the whole tree, one outside it and one misspelled. Compared ignoring case. A
+    /// directory of the run's own is taken.
+    /// </summary>
+    [Fact]
+    public void CleanDirectories_ThatHoldWhatTheRunStandsOn_AreRefused()
+    {
+        var exception = LoadInvalid("""
+            {
+              "worktrees": { "root": ".worktrees" },
+              "predefinedRunners": {
+                "corpus": {
+                  "phases": [ { "name": "corpus", "command": ["python3", "corpus.py"] } ],
+                  "cleanDirectories": [
+                    "out/run", "build", "Build/x64-gcc-debug", "./build", ".git", ".harness-config/runner",
+                    ".worktrees", ".orchestrators/agent", ".", "../elsewhere", "/abs/scratch", "out//run", "builds", "src/build"
+                  ]
+                }
+              }
+            }
+            """);
+
+        const string Setting = "predefined runner 'corpus' cleanDirectories";
+
+        foreach (var (declared, held) in new[]
+        {
+            ("build", "build"), ("Build/x64-gcc-debug", "build"), ("./build", "build"), (".git", ".git"),
+            (".harness-config/runner", ".harness-config"), (".worktrees", ".worktrees"), (".orchestrators/agent", ".orchestrators"),
+        })
+        {
+            Assert.Contains($"{Setting} names '{declared}', which is, holds or is inside '{held}', ", exception.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            $"{Setting} names 'build', which is, holds or is inside 'build', where every leg's build is kept: a build stays "
+            + "incremental, and a run that builds first would delete what it had just built",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains($"{Setting} names '.', which is the leg's whole tree", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"{Setting} entry '../elsewhere' must be a relative path inside the tree, without '..'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"{Setting} entry '/abs/scratch' must be a relative path inside the tree, without '..'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"{Setting} names 'out//run', which holds a '.' segment or a doubled separator", exception.Message, StringComparison.Ordinal);
+
+        foreach (var taken in new[] { "'out/run'", "'builds'", "'src/build'" })
+        {
+            Assert.DoesNotContain($"{Setting} names {taken}", exception.Message, StringComparison.Ordinal);
+        }
+
+        // The worktrees are made inside the harness's own directory unless the file says otherwise: one entry, one problem.
+        var nested = LoadInvalid("""
+            { "predefinedRunners": { "corpus": { "phases": [ { "name": "corpus", "command": ["python3", "corpus.py"] } ], "cleanDirectories": [".harness-config/worktrees/a"] } } }
+            """);
+
+        Assert.Single(nested.Message.Split('\n'), line => line.Contains("cleanDirectories names", StringComparison.Ordinal));
+
+        // One holding what the run stands on is refused as one inside it is: deleted, it takes that with it.
+        var holding = LoadInvalid("""
+            {
+              "worktrees": { "root": "scratch/worktrees" },
+              "predefinedRunners": { "corpus": { "phases": [ { "name": "corpus", "command": ["python3", "corpus.py"] } ], "cleanDirectories": ["scratch"] } }
+            }
+            """);
+
+        Assert.Contains(
+            "predefined runner 'corpus' cleanDirectories names 'scratch', which is, holds or is inside 'scratch/worktrees', which a "
+            + "tree never moves",
+            holding.Message,
             StringComparison.Ordinal);
     }
 

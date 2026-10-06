@@ -10,6 +10,7 @@ using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Runners;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
 
@@ -982,6 +983,7 @@ public sealed class LegRunServiceTests
         var harness = new HarnessFactory();
         var record = AdmissionRecord(temp);
         var elsewhere = harness.Platform.PlatformKey == PlatformNames.Linux ? PlatformNames.Windows : PlatformNames.Linux;
+        var os = runsHere ? harness.Platform.PlatformKey : elsewhere;
 
         // The one slot held, so a leg that asked would not be taken.
         AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
@@ -993,7 +995,38 @@ public sealed class LegRunServiceTests
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: true)
             {
-                Workload = LegWorkload.Copy with { HeavyOnlyOn = [runsHere ? harness.Platform.PlatformKey : elsewhere] },
+                Workload = LegWorkload.Copy with { HeavyOnlyOn = [os] },
+            });
+
+        Assert.Equal(runsHere ? "not-admitted" : "passed", verdicts["native"].Verdict);
+    }
+
+    /// <summary>
+    /// A step naming what the build makes, limited by runOn, builds - and so makes heavy - the legs of those systems
+    /// alone: a leg of this machine's system waits for the slot held here, and one of another's starts at once.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStepBuildingOnlyWhereItRuns_MakesHeavyTheLegsOfThoseSystemsAlone(bool runsHere)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var elsewhere = harness.Platform.PlatformKey == PlatformNames.Linux ? PlatformNames.Windows : PlatformNames.Linux;
+        var step = new ActionStep { Name = "deps", WorkingDirectory = "{buildDir}", RunOn = [runsHere ? harness.Platform.PlatformKey : elsewhere] };
+
+        // The one slot held, so a leg that asked would not be taken.
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "other"));
+
+        var verdicts = await RunAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), defaults: new AdmissionSettings { HeavyLegs = 1, MaxWaitMinutes = 1 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true)
+            {
+                Workload = LegWorkload.Copy with { BuiltBy = [BuildCause.Of(step)] },
             });
 
         Assert.Equal(runsHere ? "not-admitted" : "passed", verdicts["native"].Verdict);

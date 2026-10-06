@@ -57,7 +57,7 @@ public static class LegRoom
     /// <param name="comparison">How this machine compares paths.</param>
     /// <param name="workload">
     /// What the command has each leg do: a leg it builds - on that leg's system - has a build directory worth asking
-    /// about, and one it builds nothing on has none.
+    /// about, and one it does not build has none worth asking about.
     /// </param>
     public static IReadOnlyDictionary<HostId, RoomQuestions> Questions(
         HarnessContext context,

@@ -160,9 +160,9 @@ public sealed record StepSelection
     /// it under <c>steps</c>, or names none, does.
     /// </summary>
     /// <remarks>
-    /// A runner naming its own steps runs those alone and what they need, so said of every step that is not manual, that
-    /// a run of the runner that names no step runs it already was false of the rest: a runner naming only a self-test
-    /// was said to run the census beside it.
+    /// Said of every step that is not manual, "a run of the runner that names no step runs it already" was false of a
+    /// step outside the runner's own steps and what they need: a runner naming only a self-test was said to run the
+    /// census beside it.
     /// </remarks>
     private string NotManual(string runnerName, ActionFile file, IReadOnlyList<string> automatic, string available)
     {

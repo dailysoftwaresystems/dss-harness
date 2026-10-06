@@ -1270,24 +1270,37 @@ public static partial class HarnessConfigValidator
                 problems.Add($"predefined runner '{name}' has a negative stallSeconds");
             }
 
-            // Its build is heavy whatever the runner says, so a file saying it is not is refused rather than believed:
-            // the build it requires, or the one a phase of its own needs. A step of its action that names what the build
-            // makes builds whichever runner starts it, and is no runner's word to contradict.
-            if (runner.Heavy == false && runner.RequireBuild)
+            // Its build is heavy whatever the runner says, so a file saying it is not is refused rather than believed: the
+            // build it requires, and the one each phase of its own naming what the build makes needs, all named at once, so
+            // the fix offered is one that works. A step of its action naming either is not refused here: the action file
+            // is not read with config.json, and that step builds - and so weighs - whatever a runner of it says.
+            if (runner.Heavy == false && BuildCause.AllOf(runner, action: null) is { Count: > 0 } building)
             {
                 problems.Add(
-                    $"predefined runner '{name}' says heavy is false and requires the build, which is heavy: "
-                    + "leave heavy out, or drop requireBuild");
-            }
-            else if (runner.Heavy == false && runner.Phases.FirstOrDefault(phase => phase.NeedsBuild) is { } building)
-            {
-                problems.Add(
-                    $"predefined runner '{name}' says heavy is false, and its phase '{building.Name}' names "
-                    + $"{string.Join(" and ", building.NamesOfTheBuild.Select(spelled => $"{{{spelled}}}"))}, which builds its legs "
-                    + "first, and a build is heavy: leave heavy out");
+                    $"predefined runner '{name}' says heavy is false, and builds its legs first, which is heavy - "
+                    + $"{string.Join("; ", building.Select(cause => cause.Reason))}: leave heavy out"
+                    + (building.All(cause => cause.Step is null) ? ", or drop requireBuild" : string.Empty));
             }
 
+            ValidateCleanDirectories(config, name, runner, problems);
+
             ValidateExpectedExceptions(config, name, runner, problems);
+
+            // Named so a run can tell its phases apart: each writes the log its name names, a resumed run skips the
+            // ones its name says were done, and a refusal says which one it means. Refused when the file is read,
+            // rather than once a leg has been built for it.
+            if (runner.Phases.Any(phase => string.IsNullOrWhiteSpace(phase.Name)))
+            {
+                problems.Add($"predefined runner '{name}' has a phase with a blank name");
+            }
+
+            foreach (var repeated in runner.Phases
+                .Where(phase => !string.IsNullOrWhiteSpace(phase.Name))
+                .GroupBy(phase => phase.Name, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1))
+            {
+                problems.Add($"predefined runner '{name}' names phase '{repeated.Key}' more than once");
+            }
 
             foreach (var phase in runner.Phases)
             {
@@ -1310,6 +1323,63 @@ public static partial class HarnessConfigValidator
         foreach (var (name, _) in config.Exec.Where(entry => string.IsNullOrWhiteSpace(entry.Value.Command)))
         {
             problems.Add($"exec '{name}' has an empty command");
+        }
+    }
+
+    /// <summary>
+    /// Refuses each directory <paramref name="runner"/> names under <c>cleanDirectories</c> that a run must not delete.
+    /// </summary>
+    /// <remarks>
+    /// Each is deleted, with all it holds, from the leg's tree before the run's first step starts: after the build a run
+    /// makes first. So each must be a place inside the tree, and none may be, hold or sit inside what the run stands on:
+    /// where every leg's build is kept - a build stays incremental, and a run that built first would delete what it had
+    /// just built, its steps then naming a product that is not there - the harness's own directory, or what a tree never
+    /// moves. Nor may one be the whole tree, which the delete is never let reach. Compared ignoring case: on Windows and
+    /// macOS two spellings are one directory.
+    /// </remarks>
+    private static void ValidateCleanDirectories(HarnessConfig config, string name, RunnerConfig runner, List<string> problems)
+    {
+        var setting = $"predefined runner '{name}' cleanDirectories";
+
+        RequireRelativePaths(runner.CleanDirectories, setting, problems);
+
+        (string Path, string Why)[] kept =
+        [
+            (Build.VariantKey.BuildRootName, "where every leg's build is kept: a build stays incremental, and a run that builds first would delete what it had just built"),
+            (Repository.HarnessLayout.DirectoryName, "the harness's own, holding the run's configuration, its actions and its records"),
+            .. Repository.TreeFloor.Of(config.Worktrees.Root).Select(floor => (floor, "which a tree never moves: git's own, what orchestrators keep, or where worktrees are made")),
+        ];
+
+        static bool Within(string path, string directory)
+            => string.Equals(path, directory, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(directory + "/", StringComparison.OrdinalIgnoreCase);
+
+        foreach (var declared in runner.CleanDirectories.Where(declared => !string.IsNullOrWhiteSpace(declared)
+            && !PlatformPaths.IsRootedOnAnyPlatform(declared)
+            && !PlatformPaths.ClimbsOut(declared)))
+        {
+            if (Repository.PathPatterns.Misspelling(declared) is { } misspelled)
+            {
+                problems.Add($"{setting} names '{declared}', which {misspelled}");
+                continue;
+            }
+
+            var path = Repository.PathPatterns.Normalize(declared);
+
+            if (path is "" or ".")
+            {
+                problems.Add($"{setting} names '{declared}', which is the leg's whole tree");
+                continue;
+            }
+
+            // The first it reaches: the worktrees are made inside the harness's own directory unless the file says
+            // otherwise, and one entry is one problem.
+            var (directory, why) = kept.FirstOrDefault(held => Within(path, held.Path) || Within(held.Path, path));
+
+            if (directory is not null)
+            {
+                problems.Add($"{setting} names '{declared}', which is, holds or is inside '{directory}', {why}");
+            }
         }
     }
 

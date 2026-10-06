@@ -137,15 +137,9 @@ public sealed record PlacedLeg(
     /// declare either. A run refuses such a leg it would build before any host is measured.
     /// </exception>
     public ProjectConfig BuildableProject()
-    {
-        if (Variant.Unbuildable(Name, Project, Host.Os ?? Leg.Os) is { } why)
-        {
-            throw new HarnessException(HarnessExit.ConfigInvalid, why);
-        }
-
-        // A leg naming no project is one Unbuildable answers for, so this one names one.
-        return Project!;
-    }
+        => Variant.CanBuild(Name, Project, Host.Os ?? Leg.Os, out var why)
+            ? Project
+            : throw new HarnessException(HarnessExit.ConfigInvalid, why);
 
     /// <summary>
     /// Who this leg is, in the words a configured command can spell.
@@ -176,7 +170,7 @@ public sealed record PlacedLeg(
     /// another machine has a host tree root that is not this machine's, and a run re-invoked there
     /// resolves its own.
     /// </param>
-    /// <remarks>A single answer or none, as <see cref="ProjectConfig.Product"/> says why.</remarks>
+    /// <remarks>A single answer or none; <see cref="ProjectConfig.Product"/> says why.</remarks>
     public (string? Path, string? Problem) ProductFor(string buildDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
@@ -330,9 +324,11 @@ public static class LegRunPlan
         var config = context.Config;
         var leg = selected.Leg;
 
-        // Neither is required here. A leg that only runs a predefined runner compiles nothing, and
-        // making it declare a project it has no use for would be a demand the tool invents. The
-        // commands that do build refuse a leg with no project, naming what is missing.
+        // Neither is required here. A leg whose run builds nothing - its runner neither requires the
+        // build nor runs a step or phase naming {product} or {buildDir} - compiles nothing, and making
+        // it declare a project it has no use for would be a demand the tool invents. The commands that
+        // do build refuse a leg with no project, naming what is missing: a run before any host is
+        // measured, a build and a test as the build starts.
         var project = VariantKey.ProjectFor(config, leg);
         var variant = VariantKey.For(config, leg, host.Os ?? string.Empty);
 

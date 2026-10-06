@@ -94,6 +94,19 @@ public sealed record RunnerRunRequest
     /// </summary>
     public Execution.LegIdentity? Identity { get; init; }
 
+    /// <summary>
+    /// Whether this run built the leg before starting the runner: where it did not, a runner requiring the build, and a
+    /// step or phase naming <c>{product}</c> or <c>{buildDir}</c>, are refused before the first step starts. The caller
+    /// decides the build - <c>run</c>, from what the runner, the steps it runs and its run checks need - and says here
+    /// what it decided, for the runner it names and for each a run check starts.
+    /// </summary>
+    /// <remarks>
+    /// Said rather than assumed. Without it, a caller that did not build the leg - or a file edited between the run's
+    /// reading it and the leg's - started such a step on whatever the last build left: a product that was not there, and
+    /// the leg passed, or one an older commit built, measured as this one.
+    /// </remarks>
+    public bool Built { get; init; }
+
     /// <summary>The one file this leg's build is declared to produce, when there is exactly one.</summary>
     public string? Product { get; init; }
 
@@ -664,6 +677,9 @@ public sealed class RunnerRunService(
             // are its alone: a run line naming another step's is refused as naming nothing.
             RefuseUnknownNames(file, step => SuppliedTo(step).Keys);
 
+            // Before anything changes the tree, and over the steps this leg runs alone.
+            RefuseUnbuilt(request, BuildCause.AllOf(runner, file));
+
             // Performed before the first program starts: one settles what the steps read, the other
             // settles which tree they read it from, and a run that discovered either halfway through
             // would already have written into the wrong one.
@@ -690,6 +706,8 @@ public sealed class RunnerRunService(
                     $"Runner '{request.RunnerName}' runs phases of its own, and only an action's steps can be manual, "
                     + $"so {StepSelection.Option} names nothing it could run.");
             }
+
+            RefuseUnbuilt(request, BuildCause.AllOf(runner, action: null));
 
             Clean(request);
             phases = runner.Phases;
@@ -1259,6 +1277,34 @@ public sealed class RunnerRunService(
                     + "the command would all carry it. Hand it over through the environment instead.");
             }
         }
+    }
+
+    /// <summary>
+    /// Refuses a run on a leg this run did not build first, where what it runs reads the build.
+    /// </summary>
+    /// <param name="request">The run, saying whether it built the leg.</param>
+    /// <param name="building">
+    /// What, of what this leg runs, reads the build: the runner requiring it, and each step or phase naming what it makes.
+    /// </param>
+    /// <exception cref="HarnessException">The leg was not built, and something it runs reads the build; each is named.</exception>
+    /// <remarks>
+    /// The rule <see cref="BuildCause.AllOf"/> holds, asked again of the steps this leg actually runs, so a caller that
+    /// did not build the leg - or a file edited between the run's reading it and this one - is refused rather than
+    /// started on whatever the last build left. A run check's runner is asked as any other: the run carrying the check
+    /// built the leg where the check needs it.
+    /// </remarks>
+    private static void RefuseUnbuilt(RunnerRunRequest request, IReadOnlyList<BuildCause> building)
+    {
+        if (request.Built || building.Count == 0)
+        {
+            return;
+        }
+
+        throw new HarnessException(
+            HarnessExit.Refused,
+            $"Leg '{request.Leg}' was not built by this run, and runner '{request.RunnerName}' reads the build - "
+            + $"{string.Join("; ", building.Select(cause => cause.Reason))} - so nothing was run: unbuilt, it would read "
+            + "whatever the last build left there.");
     }
 
     /// <summary>Whether any element of <paramref name="command"/> holds a secret value.</summary>

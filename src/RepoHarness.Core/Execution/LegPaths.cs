@@ -243,6 +243,17 @@ public static partial class LegPathNames
     }
 
     /// <summary>
+    /// <paramref name="names"/> as a refusal writes them, each in its braces: <c>{product} and {buildDir}</c>.
+    /// </summary>
+    /// <param name="names">Names of this vocabulary, as <see cref="BuiltNamesIn"/> gives them.</param>
+    public static string Spelled(IEnumerable<string> names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+
+        return string.Join(" and ", names.Select(name => $"{{{name}}}"));
+    }
+
+    /// <summary>
     /// A brace group as it is written. Three shapes, in the order they are recognised: a doubled
     /// brace, which is how a literal one is written; another expander's <c>${NAME}</c>, which this
     /// one never touches; and a name in braces, which is this vocabulary's.

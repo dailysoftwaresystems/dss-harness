@@ -1,5 +1,6 @@
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Runners;
 
@@ -58,24 +59,11 @@ public sealed record ActionStep
     /// <summary>Whether a leg of <paramref name="os"/> runs this step.</summary>
     /// <param name="os">The leg's operating system.</param>
     /// <remarks>
-    /// Compared ignoring case, as a leg's <c>os</c> is everywhere else: a leg may declare
-    /// <c>Windows</c>, and read exactly it was refused as running no step, while the host it ran on
-    /// ran every one.
+    /// Read as every list of platforms is, by <see cref="PlatformScope.Applies"/>: ignoring case, as a
+    /// leg's <c>os</c> is everywhere else. A leg may declare <c>Windows</c>, and read exactly it was
+    /// refused as running no step, while the host it ran on ran every one.
     /// </remarks>
-    public bool RunsOn(string os) => RunsOn(RunOn, os);
-
-    /// <summary>
-    /// Whether a leg of <paramref name="os"/> runs what <paramref name="runOn"/> limits: every leg where it names no system,
-    /// and otherwise a leg of a system it names, ignoring case as <see cref="RunsOn(string)"/> does.
-    /// </summary>
-    /// <param name="runOn">The systems a step's <c>runOn</c> names; empty, every one.</param>
-    /// <param name="os">The leg's operating system.</param>
-    public static bool RunsOn(IReadOnlyList<string> runOn, string os)
-    {
-        ArgumentNullException.ThrowIfNull(runOn);
-
-        return runOn.Count == 0 || runOn.Contains(os, StringComparer.OrdinalIgnoreCase);
-    }
+    public bool RunsOn(string os) => PlatformScope.Applies(RunOn, os);
 
     /// <summary>Environment for this step, applied over the runner's own.</summary>
     public IReadOnlyDictionary<string, string> Env { get; init; }
@@ -144,9 +132,10 @@ public sealed record ActionStep
     public bool Manual { get; init; }
 
     /// <summary>
-    /// Whether the step's work is heavy, from <c>heavy</c>: every leg of a run that runs it - by default, or named with
-    /// <c>run --manual-step</c>, through whichever runner - is heavy, and where its machine declares admission waits for
-    /// a slot, the memory and room for its build, whatever that runner declares, false included. Limited by
+    /// Whether the step's work is heavy, from <c>heavy</c>: every leg of a run that runs it - however the run comes to run
+    /// it: by default, named with <c>run --manual-step</c> or under a runner's <c>steps</c>, or needed by one that is -
+    /// through whichever runner, is heavy, and where its machine declares admission waits for a slot, the memory and
+    /// room for its build, whatever that runner declares, false included. Limited by
     /// <see cref="RunOn"/>, it makes heavy the legs of those systems alone. A step that performs a predefined action runs
     /// no program, and cannot say it.
     /// </summary>
@@ -160,9 +149,10 @@ public sealed record ActionStep
     /// <summary>
     /// Whether the step needs its leg built first: a run line or its working directory names what the build makes -
     /// <c>{product}</c> or <c>{buildDir}</c>, the names <see cref="NamesOfTheBuild"/> lists. Every leg of a run that runs
-    /// it - by default, or named with <c>run --manual-step</c>, through whichever runner - is built before its steps
-    /// start, whatever that runner says of <c>requireBuild</c>. Limited by <see cref="RunOn"/>, it builds the legs of
-    /// those systems alone.
+    /// it - however the run comes to run it: by default, named with <c>run --manual-step</c> or under a runner's
+    /// <c>steps</c>, or needed by one that is - through whichever runner, is built before its steps start, whatever
+    /// that runner says of <c>requireBuild</c>. Limited by <see cref="RunOn"/>, it builds the legs of those systems
+    /// alone.
     /// </summary>
     /// <remarks>
     /// Read from the lines, because the work is the step's, as its weight is. When the build was declared only on
