@@ -120,6 +120,52 @@ public sealed class StepSelectionTests
         Assert.Contains("runner 'corpus' that names no step runs it already", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A runner naming its own steps runs those alone and what they need: a step that is not manual and that they do not
+    /// need is said to be run by a runner of the action that names it, or names none - never by a plain run of this
+    /// runner, which was said of a census beside a self-test - and one they need, by this runner already.
+    /// </summary>
+    [Fact]
+    public void AStepThatIsNotManual_OutsideTheRunnersOwnSteps_IsSaidToBeRunByAnotherRunner()
+    {
+        var action = Parse("""
+            name: census
+            steps:
+              - name: fetch
+                run: |
+                  git status
+              - name: census
+                run: |
+                  python3 census.py
+              - name: self-test
+                manual: true
+                needs: [fetch]
+                successPattern: '^ok'
+                run: |
+                  python3 self_test.py
+            """);
+
+        var alone = Assert.Throws<HarnessException>(
+            () => new StepSelection { RunnerSteps = ["self-test"], ManualSteps = ["census"] }.Apply("census-self-test", action));
+
+        Assert.Equal(HarnessExit.UsageError, alone.ExitCode);
+        Assert.Equal(
+            "--manual-step names 'census', which is not manual. Runner 'census-self-test' runs only the steps it names under "
+            + "steps - self-test - and what they need, so 'census' is run by a runner of this action that names it there, "
+            + "or names none. Its manual steps are self-test.",
+            alone.Message);
+
+        var both = Assert.Throws<HarnessException>(
+            () => new StepSelection { RunnerSteps = ["self-test"], ManualSteps = ["fetch", "census"] }.Apply("census-self-test", action));
+
+        Assert.Equal(
+            "--manual-step names 'fetch', 'census', which are not manual. A run of runner 'census-self-test' that names no "
+            + "step runs 'fetch' already. Runner 'census-self-test' runs only the steps it names under steps - self-test - and "
+            + "what they need, so 'census' is run by a runner of this action that names it there, or names none. Its manual "
+            + "steps are self-test.",
+            both.Message);
+    }
+
     /// <summary>A runner naming a step its action lacks is a configuration problem, refused naming every step there is.</summary>
     [Fact]
     public void ARunnerNamingAStepTheActionLacks_IsRefused_ListingTheSteps()

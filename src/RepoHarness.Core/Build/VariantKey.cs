@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
@@ -72,10 +73,11 @@ public sealed record VariantKey(string Processor, string Toolchain, string Confi
     /// The toolchain part of a variant whose leg compiles nothing.
     /// </summary>
     /// <remarks>
-    /// A leg that only runs a predefined runner needs no project and no compiler, but it still needs
-    /// a variant: the lock is keyed by one, and so is the directory contention watches. Naming the
-    /// absence keeps those keys distinct from a leg that does build, rather than making a repository
-    /// declare a project it has no use for.
+    /// A leg whose run builds nothing - its runner neither requires the build nor runs a step or phase
+    /// naming <c>{product}</c> or <c>{buildDir}</c>, and neither does a runner its run checks name -
+    /// needs no project and no compiler, but it still needs a variant: the lock is keyed by one, and
+    /// so is the directory contention watches. Naming the absence keeps those keys distinct from a
+    /// leg that does build, rather than making a repository declare a project it has no use for.
     /// </remarks>
     public const string NoToolchain = "none";
 
@@ -99,6 +101,41 @@ public sealed record VariantKey(string Processor, string Toolchain, string Confi
 
     /// <summary>Whether this variant names a compiler, and so can be built.</summary>
     public bool Buildable => !string.Equals(Toolchain, NoToolchain, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether the leg <paramref name="legName"/> can build <paramref name="project"/> as this variant on
+    /// <paramref name="os"/>, and, where it cannot, why: it names no project, or no toolchain for that system.
+    /// </summary>
+    /// <param name="legName">The leg, as the refusal names it.</param>
+    /// <param name="project">The project it builds, from <see cref="ProjectFor"/>: never null where it can be built.</param>
+    /// <param name="os">The operating system it builds on.</param>
+    /// <param name="why">Why it cannot be built, said as a sentence of its own; null where it can.</param>
+    /// <remarks>
+    /// Said here, once, for the refusal a build gives as it starts and the one a run gives before any host is measured,
+    /// so the two cannot come to name different causes; and said of a leg that cannot be built rather than of one that
+    /// builds nothing, since a run's refusal goes on to say what would have built it.
+    /// </remarks>
+    public bool CanBuild(string legName, [NotNullWhen(true)] ProjectConfig? project, string os, [NotNullWhen(false)] out string? why)
+    {
+        if (project is null)
+        {
+            why = $"Leg '{legName}' cannot be built: it names no project, and neither defaults.project nor a single "
+                + "declared project supplies one.";
+
+            return false;
+        }
+
+        if (!Buildable)
+        {
+            why = $"Leg '{legName}' cannot be built: it names no toolchain, and project '{project.Name}' declares no "
+                + $"default toolchain for {os}.";
+
+            return false;
+        }
+
+        why = null;
+        return true;
+    }
 
     /// <summary>
     /// The environment and cache variables this variant builds <paramref name="project"/> with: the

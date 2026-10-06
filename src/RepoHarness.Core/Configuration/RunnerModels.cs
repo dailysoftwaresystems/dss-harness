@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json.Serialization;
+using RepoHarness.Core.Execution;
 
 namespace RepoHarness.Core.Configuration;
 
@@ -56,7 +57,10 @@ public sealed class RunnerConfig
 
     /// <summary>
     /// Whether this runner needs the repository built before it runs. A runner that calls a program
-    /// the build produces otherwise runs against whatever was left there.
+    /// the build produces otherwise runs against whatever was left there. A step or phase it runs that
+    /// names what the build makes - <c>{product}</c> or <c>{buildDir}</c> - builds the leg whatever this
+    /// says: see <see cref="Runners.ActionStep.NeedsBuild"/>. Where a run check names this runner, it
+    /// builds the legs of the runner carrying the check first instead: a check is never built itself.
     /// </summary>
     /// <remarks>
     /// This gates the build alone, never the sync. A leg on an ssh host or a WSL distribution runs
@@ -64,15 +68,16 @@ public sealed class RunnerConfig
     /// action file from it — so the tree is put there whether or not anything is compiled. Use
     /// <c>--use-staged</c> to run against a copy already known to be current.
     /// </remarks>
-    [Description("build the leg before it runs")]
+    [Description("build its legs first; absent, only where a step or phase names {product} or {buildDir}")]
     public bool RequireBuild { get; init; }
 
     /// <summary>
     /// Whether each leg of this runner is heavy - taking one of its machine's heavy-leg slots before it starts, where
     /// that machine declares admission - or <see langword="null"/> to be heavy only where it builds, as a runner that
-    /// requires the build is. Given false beside <see cref="RequireBuild"/> it is refused: its build is heavy. A step of
-    /// its action that a run runs and that says <c>heavy: true</c> makes its legs heavy whatever this says, false
-    /// included: the step's work is the step's to declare.
+    /// requires the build is. Given false beside <see cref="RequireBuild"/>, or beside a phase naming <c>{product}</c> or
+    /// <c>{buildDir}</c>, it is refused: its build is heavy. A step of its action that a run runs and that says
+    /// <c>heavy: true</c> makes its legs heavy whatever this says, false included: the step's work is the step's to
+    /// declare. So does one naming <c>{product}</c> or <c>{buildDir}</c>, which builds them.
     /// </summary>
     [Description("its legs take a heavy-leg slot ('help admission'); absent, only where it builds or runs a step that says heavy")]
     public bool? Heavy { get; init; }
@@ -95,9 +100,15 @@ public sealed class RunnerConfig
     /// <summary>
     /// Directories under the leg's work directory to wipe before every run. Use for
     /// run and scratch directories, whose contents must never carry across runs.
-    /// Build directories are deliberately not listed: they stay incremental.
+    /// Build directories are deliberately not listed: they stay incremental, and a run that
+    /// builds first would delete what it had just built.
     /// </summary>
-    [Description("directories in the leg's tree deleted before every run")]
+    /// <remarks>
+    /// Refused when the file is read where one is the whole tree, lies outside it, or is, holds or
+    /// is inside where the builds are kept, the harness's own directory, or what a tree never moves:
+    /// git's own, what orchestrators keep, and the worktrees.
+    /// </remarks>
+    [Description("directories in the leg's tree deleted before every run; never build, .git or .harness-config")]
     public List<string> CleanDirectories { get; init; } = [];
 
     /// <summary>Environment applied to every phase.</summary>
@@ -115,7 +126,10 @@ public sealed class RunnerConfig
 /// </remarks>
 public sealed record RunnerPhase
 {
-    /// <summary>Name, used in progress output and to name this phase's log file.</summary>
+    /// <summary>
+    /// Name, used in progress output and to name this phase's log file. Refused blank, or given to two
+    /// phases of one runner in any case, when the file is read: each phase is told apart by it.
+    /// </summary>
     [Description("names its progress lines and its log")]
     public required string Name { get; init; }
 
@@ -126,6 +140,21 @@ public sealed record RunnerPhase
     /// <summary>Working directory, relative to the leg's work directory.</summary>
     [Description("where it runs, relative to the leg's tree; absent, the tree")]
     public string? WorkingDirectory { get; init; }
+
+    /// <summary>
+    /// Whether the phase needs its leg built first: its command or its working directory names what the build makes -
+    /// <c>{product}</c> or <c>{buildDir}</c> - as a step of an action does: see <see cref="Runners.ActionStep.NeedsBuild"/>.
+    /// </summary>
+    [JsonIgnore]
+    public bool NeedsBuild => NamesOfTheBuild.Count > 0;
+
+    /// <summary>
+    /// What the command or the working directory of this phase names that the build makes - <c>product</c>,
+    /// <c>buildDir</c> - each once, in the order it first names them; empty where it names neither. Read from what a
+    /// run fills in as it starts the phase: its program, its arguments and its directory.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> NamesOfTheBuild => LegPathNames.BuiltNamesIn([.. Command, WorkingDirectory]);
 
     /// <summary>Environment for this phase.</summary>
     [Description("its own variables ('help config' gives the order)")]

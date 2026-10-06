@@ -223,6 +223,37 @@ public static partial class LegPathNames
     ];
 
     /// <summary>
+    /// The names whose value the leg's build makes: its build directory, and the one file it is declared to make. A step
+    /// or a runner's phase naming either reads what the build left there, so a run that runs it builds the leg first:
+    /// see <see cref="BuiltNamesIn"/>.
+    /// </summary>
+    public static IReadOnlyList<string> Built { get; } = [BuildDirectory, Product];
+
+    /// <summary>
+    /// The names of <see cref="Built"/> that <paramref name="values"/> ask to have filled in, each once, in the order they
+    /// first name them; empty where they name neither. A doubled brace, and a group another expander owns, name nothing.
+    /// </summary>
+    /// <param name="values">The configured strings: a step's or a runner phase's run lines and working directory.</param>
+    /// <remarks>Read from what a line says rather than declared beside it: see <see cref="Runners.ActionStep.NeedsBuild"/>.</remarks>
+    public static IReadOnlyList<string> BuiltNamesIn(IEnumerable<string?> values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        return [.. values.SelectMany(NamesIn).Where(name => Built.Contains(name, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// <paramref name="names"/> as a refusal writes them, each in its braces: <c>{product} and {buildDir}</c>.
+    /// </summary>
+    /// <param name="names">Names of this vocabulary, as <see cref="BuiltNamesIn"/> gives them.</param>
+    public static string Spelled(IEnumerable<string> names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+
+        return string.Join(" and ", names.Select(name => $"{{{name}}}"));
+    }
+
+    /// <summary>
     /// A brace group as it is written. Three shapes, in the order they are recognised: a doubled
     /// brace, which is how a literal one is written; another expander's <c>${NAME}</c>, which this
     /// one never touches; and a name in braces, which is this vocabulary's.

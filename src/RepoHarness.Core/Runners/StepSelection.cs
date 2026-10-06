@@ -10,8 +10,9 @@ namespace RepoHarness.Core.Runners;
 /// <remarks>
 /// Decided once, from the action as it was read, and handed on as an action holding only the steps
 /// chosen. Everything that reads an action - the tool policy, the names a step may use, the inputs a
-/// run may be given, the programs a host is asked for, the leg that would run nothing - then reads
-/// exactly what will run, as it already reads only the steps a leg's operating system runs.
+/// run may be given, the programs a host is asked for, whether a leg is built first, the leg that
+/// would run nothing - then reads exactly what will run, as it already reads only the steps a leg's
+/// operating system runs.
 /// </remarks>
 public sealed record StepSelection
 {
@@ -104,11 +105,7 @@ public sealed record StepSelection
 
             if (automatic.Count > 0)
             {
-                throw new HarnessException(
-                    HarnessExit.UsageError,
-                    $"{Option} names {Quoted(automatic)}, which {(automatic.Count == 1 ? "is" : "are")} not manual: a run "
-                    + $"of runner '{runnerName}' that names no step runs {(automatic.Count == 1 ? "it" : "them")} already. "
-                    + $"{char.ToUpperInvariant(available[0])}{available[1..]}.");
+                throw new HarnessException(HarnessExit.UsageError, NotManual(runnerName, file, automatic, available));
             }
 
             named = ManualSteps;
@@ -155,6 +152,39 @@ public sealed record StepSelection
             Declared = file,
             Named = ManualSteps.Count > 0 ? ManualSteps : RunnerSteps,
         };
+    }
+
+    /// <summary>
+    /// The refusal of a <see cref="Option"/> naming <paramref name="automatic"/>, steps that are not manual: saying, of
+    /// each, whether a run of the runner that names no step runs it already, or only a runner of the action that names
+    /// it under <c>steps</c>, or names none, does.
+    /// </summary>
+    /// <remarks>
+    /// Said of every step that is not manual, "a run of the runner that names no step runs it already" was false of a
+    /// step outside the runner's own steps and what they need: a runner naming only a self-test was said to run the
+    /// census beside it.
+    /// </remarks>
+    private string NotManual(string runnerName, ActionFile file, IReadOnlyList<string> automatic, string available)
+    {
+        var plain = RunnerSteps.Count == 0 ? null : WithWhatTheyNeed(file, RunnerSteps);
+        var already = automatic.Where(name => plain is null || plain.Contains(name)).ToList();
+        var elsewhere = automatic.Except(already, StringComparer.Ordinal).ToList();
+        var said = $"{char.ToUpperInvariant(available[0])}{available[1..]}.";
+
+        if (elsewhere.Count == 0)
+        {
+            return $"{Option} names {Quoted(automatic)}, which {(automatic.Count == 1 ? "is" : "are")} not manual: a run "
+                + $"of runner '{runnerName}' that names no step runs {(automatic.Count == 1 ? "it" : "them")} already. {said}";
+        }
+
+        var runAlready = already.Count == 0
+            ? string.Empty
+            : $"A run of runner '{runnerName}' that names no step runs {Quoted(already)} already. ";
+
+        return $"{Option} names {Quoted(automatic)}, which {(automatic.Count == 1 ? "is" : "are")} not manual. {runAlready}"
+            + $"Runner '{runnerName}' runs only the steps it names under steps - {string.Join(", ", RunnerSteps)} - and what "
+            + $"they need, so {Quoted(elsewhere)} {(elsewhere.Count == 1 ? "is" : "are")} run by a runner of this action that "
+            + $"names {(elsewhere.Count == 1 ? "it" : "them")} there, or names none. {said}";
     }
 
     /// <summary><paramref name="named"/>, and every step any of them needs, however deep.</summary>

@@ -102,11 +102,11 @@ public sealed class LegsService(IHarnessContextLoader contextLoader, IHostInspec
         var candidates = selection.Legs.Select(leg => (leg, Hosts: LegPlacement.Candidates(config, leg.Leg, here is not null))).ToList();
         var reports = new Dictionary<HostId, HostReport>();
 
-        // Asked in the same measuring, for nothing: the room on each host, and - for a command that builds -
-        // what the build directories it would fill hold there. A command that builds nothing needs no room,
-        // so it asks about no build directory and none of its legs is turned away for room: clean, above all,
-        // is how room is made.
-        var room = LegRoom.Questions(context, candidates, here, _platform.PathComparison, workload.Build);
+        // Asked in the same measuring, for nothing: the room on each host, and - for each leg the command builds -
+        // what the build directories it would fill hold there. A leg the command does not build needs no room, so
+        // its build directory is not asked about and it is never turned away for room: clean, above all, is how
+        // room is made.
+        var room = LegRoom.Questions(context, candidates, here, _platform.PathComparison, workload);
 
         // This machine costs nothing to reach, so it is measured first. Other hosts are measured only
         // for the legs it cannot take at all - the wrong machine, or an emulator that does not work

@@ -531,7 +531,8 @@ public sealed class LegRunService(
         LegLedger ledger,
         CancellationToken cancellationToken)
     {
-        // Heavy as it is on this leg's system: a heavy step limited by runOn makes the legs of those systems alone heavy.
+        // Heavy as it is on this leg's system: a heavy step limited by runOn, or one that builds, makes the legs of those
+        // systems alone heavy.
         if (!request.Workload.On(leg.Leg.Os).Heavy
             || (request.Here is null && leg.Host.Host.Kind == HostKind.Ssh)
             || request.Here is { Kind: HostKind.Wsl })

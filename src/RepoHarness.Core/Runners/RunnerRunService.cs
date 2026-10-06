@@ -94,6 +94,19 @@ public sealed record RunnerRunRequest
     /// </summary>
     public Execution.LegIdentity? Identity { get; init; }
 
+    /// <summary>
+    /// Whether this run built the leg before starting the runner: where it did not, a runner requiring the build, and a
+    /// step or phase naming <c>{product}</c> or <c>{buildDir}</c>, are refused before the first step starts. The caller
+    /// decides the build - <c>run</c>, from what the runner, the steps it runs and its run checks need - and says here
+    /// what it decided, for the runner it names and for each a run check starts.
+    /// </summary>
+    /// <remarks>
+    /// Said rather than assumed. Without it, a caller that did not build the leg - or a file edited between the run's
+    /// reading it and the leg's - started such a step on whatever the last build left: a product that was not there, and
+    /// the leg passed, or one an older commit built, measured as this one.
+    /// </remarks>
+    public bool Built { get; init; }
+
     /// <summary>The one file this leg's build is declared to produce, when there is exactly one.</summary>
     public string? Product { get; init; }
 
@@ -132,11 +145,6 @@ public sealed record RunnerRunRequest
 /// What the checks decided about that entry. Unconfirmed, the failure stays genuine, and this says
 /// so rather than leaving an excusal that was never re-measured indistinguishable from one that was.
 /// </param>
-/// <param name="RequireBuild">
-/// Whether this runner needs its leg's tree synced and built first. Reported rather than acted on:
-/// syncing and building are the orchestrator's, and a service that did either itself would do it
-/// once per leg on a tree that legs share.
-/// </param>
 /// <param name="PerformedActions">
 /// The predefined actions this run performed before its first program started: reading the action
 /// file's inputs, and confirming the tree is the commit the file names. Reported so a reader can
@@ -150,7 +158,6 @@ public sealed record RunnerLegResult(
     IReadOnlyDictionary<string, RunOutcome> Union,
     ExpectedException? ExpectedException,
     RunCheckGateResult? Gate,
-    bool RequireBuild,
     IReadOnlyList<string> PerformedActions);
 
 /// <summary>Running one predefined runner on one leg.</summary>
@@ -482,7 +489,6 @@ public sealed class RunnerRunService(
             union,
             decided.Entry,
             decided.Gate,
-            request.Runner.RequireBuild,
             steps.PerformedActions);
     }
 
@@ -671,6 +677,9 @@ public sealed class RunnerRunService(
             // are its alone: a run line naming another step's is refused as naming nothing.
             RefuseUnknownNames(file, step => SuppliedTo(step).Keys);
 
+            // Before anything changes the tree, and over the steps this leg runs alone.
+            RefuseUnbuilt(request, BuildCause.AllOf(runner, file));
+
             // Performed before the first program starts: one settles what the steps read, the other
             // settles which tree they read it from, and a run that discovered either halfway through
             // would already have written into the wrong one.
@@ -697,6 +706,8 @@ public sealed class RunnerRunService(
                     $"Runner '{request.RunnerName}' runs phases of its own, and only an action's steps can be manual, "
                     + $"so {StepSelection.Option} names nothing it could run.");
             }
+
+            RefuseUnbuilt(request, BuildCause.AllOf(runner, action: null));
 
             Clean(request);
             phases = runner.Phases;
@@ -804,7 +815,7 @@ public sealed class RunnerRunService(
         {
             var unvalued = Unvalued(file, step, fillable(step));
 
-            foreach (var (text, setting) in Written(step))
+            foreach (var (text, setting) in step.Written)
             {
                 if (LegPathNames.NamesIn(text).FirstOrDefault(name => unvalued.Contains(name)) is { } name)
                 {
@@ -859,21 +870,6 @@ public sealed class RunnerRunService(
         => [.. file.Inputs.Concat(step.Inputs).Select(input => input.Name).Except(fillable, StringComparer.Ordinal)];
 
     /// <summary>
-    /// What <paramref name="step"/> writes that can name something - each run line's program and
-    /// arguments, then its working directory - with what a refusal calls each. Every check over a
-    /// step's names reads this one list, so none looks where another does not.
-    /// </summary>
-    private static IEnumerable<(string? Text, string Setting)> Written(ActionStep step)
-    {
-        foreach (var argument in step.Commands.SelectMany(command => command.Arguments))
-        {
-            yield return (argument, $"'{step.Name}' run line");
-        }
-
-        yield return (step.WorkingDirectory, $"'{step.Name}' workingDirectory");
-    }
-
-    /// <summary>
     /// Refuses a step naming something nothing can fill in, over the whole file and before its
     /// first program starts.
     /// </summary>
@@ -902,7 +898,7 @@ public sealed class RunnerRunService(
             var declared = fillable(step).ToList();
             var unvalued = Unvalued(file, step, declared);
 
-            foreach (var (text, setting) in Written(step))
+            foreach (var (text, setting) in step.Written)
             {
                 LegPathNames.RefuseUnknown(text, setting, extra: declared, unvalued: unvalued);
             }
@@ -1281,6 +1277,34 @@ public sealed class RunnerRunService(
                     + "the command would all carry it. Hand it over through the environment instead.");
             }
         }
+    }
+
+    /// <summary>
+    /// Refuses a run on a leg this run did not build first, where what it runs reads the build.
+    /// </summary>
+    /// <param name="request">The run, saying whether it built the leg.</param>
+    /// <param name="building">
+    /// What, of what this leg runs, reads the build: the runner requiring it, and each step or phase naming what it makes.
+    /// </param>
+    /// <exception cref="HarnessException">The leg was not built, and something it runs reads the build; each is named.</exception>
+    /// <remarks>
+    /// The rule <see cref="BuildCause.AllOf"/> holds, asked again of the steps this leg actually runs, so a caller that
+    /// did not build the leg - or a file edited between the run's reading it and this one - is refused rather than
+    /// started on whatever the last build left. A run check's runner is asked as any other: the run carrying the check
+    /// built the leg where the check needs it.
+    /// </remarks>
+    private static void RefuseUnbuilt(RunnerRunRequest request, IReadOnlyList<BuildCause> building)
+    {
+        if (request.Built || building.Count == 0)
+        {
+            return;
+        }
+
+        throw new HarnessException(
+            HarnessExit.Refused,
+            $"Leg '{request.Leg}' was not built by this run, and runner '{request.RunnerName}' reads the build - "
+            + $"{string.Join("; ", building.Select(cause => cause.Reason))} - so nothing was run: unbuilt, it would read "
+            + "whatever the last build left there.");
     }
 
     /// <summary>Whether any element of <paramref name="command"/> holds a secret value.</summary>

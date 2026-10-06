@@ -984,24 +984,112 @@ public sealed class RunnerRunServiceTests
         Assert.Equal(["fetch (harness/checkout)"], result.PerformedActions);
     }
 
+    /// <summary>
+    /// A runner that reads the build - requiring it, or by a phase naming {product} or {buildDir} - is run as its leg
+    /// stands where the run built the leg: whether a leg is built is the run command's to decide, from the runner, the
+    /// steps it runs and its run checks, and a service that built the leg itself would rebuild it for each run check it
+    /// starts, replacing what the failure being explained came from. Where the run did not build it, it is refused before
+    /// anything changes the tree - its cleanDirectories untouched, no record begun - naming everything that reads the
+    /// build: started, it read whatever the last build left.
+    /// </summary>
     [Fact]
-    public async Task RequireBuild_IsReportedRatherThanActedOn()
+    public async Task ARunnerThatReadsTheBuild_IsRunAsItsLegStands_WhereTheRunBuiltIt_AndRefusedWhereItDidNot()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
+        var scratch = Directory.CreateDirectory(temp.Combine("scratch")).FullName;
 
-        var runner = new RunnerConfig
+        List<RunnerPhase> phases =
+        [
+            Phase("measure", "echo-args", ["measured"], successPattern: "measured"),
+            Phase("report", "echo-args", ["{buildDir}"]),
+        ];
+
+        var runner = new RunnerConfig { RequireBuild = true, CleanDirectories = ["scratch"], Phases = phases };
+
+        var request = Request(temp, runner) with { BuildDirectory = temp.Combine("build", "x86_64-gcc-release") };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            request,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $"Leg '{Leg}' was not built by this run, and runner 'corpus' reads the build - the runner requires the build; "
+            + "phase 'report' names {buildDir} - so nothing was run: unbuilt, it would read whatever the last build left there.",
+            refusal.Message);
+        Assert.True(Directory.Exists(scratch), "nothing was cleaned for a run that did not start");
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+
+        // A phase alone, with the runner requiring nothing, is refused the same way.
+        var named = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            request with { Runner = new RunnerConfig { CleanDirectories = ["scratch"], Phases = phases } },
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("runner 'corpus' reads the build - phase 'report' names {buildDir} - so nothing", named.Message, StringComparison.Ordinal);
+
+        var result = await Service(factory).RunAsync(Config(), request with { Built = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["measure", "report"], result.Phases.Select(phase => phase.Phase));
+        Assert.False(Directory.Exists(scratch), "a run that started cleaned its directories");
+
+        // A runner that reads nothing of the build runs on a leg the run did not build.
+        var reads = new RunnerConfig { Phases = [Phase("measure", "echo-args", ["measured"], successPattern: "measured")] };
+
+        Assert.Equal(
+            LegVerdict.Passed,
+            (await Service(factory).RunAsync(Config(), Request(temp, reads) with { SegmentId = "s2" }, TestContext.Current.CancellationToken)).Verdict.Verdict);
+    }
+
+    /// <summary>
+    /// A step of an action naming what the build makes is refused on a leg the run did not build, before its action's
+    /// predefined actions or its cleanDirectories touch the tree; a step limited by runOn to another system is not asked
+    /// about, since this leg does not run it.
+    /// </summary>
+    [Fact]
+    public async Task AnActionStepNamingTheBuild_OnALegTheRunDidNotBuild_IsRefusedBeforeAnythingChanges()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { StallSeconds = 0 }, Tools = { new ToolConfig { Name = "dotnet" } } };
+        var other = factory.Platform.PlatformKey == "linux" ? "windows" : "linux";
+        var scratch = Directory.CreateDirectory(temp.Combine("scratch")).FullName;
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "corpus", "corpus.yml"),
+            $$"""
+            name: corpus
+            steps:
+              - name: version
+                run: dotnet --version
+              - name: elsewhere
+                runOn: [{{other}}]
+                run: dotnet --version --out={product}
+              - name: measure
+                workingDirectory: '{buildDir}'
+                run: dotnet --version
+            """);
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml", CleanDirectories = ["scratch"] }) with
         {
-            RequireBuild = true,
-            Phases = [Phase("measure", "echo-args", ["measured"], successPattern: "measured")],
+            BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+            Identity = new Core.Execution.LegIdentity(Leg, factory.Platform.PlatformKey, "x86_64", "gcc", "release", "x86_64-gcc-release", "local", RunId),
         };
 
-        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            request,
+            TestContext.Current.CancellationToken));
 
-        // Syncing and building belong to the orchestrator: a service that did either itself would do
-        // it once per leg on a tree that legs share.
-        Assert.True(result.RequireBuild);
-        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $"Leg '{Leg}' was not built by this run, and runner 'corpus' reads the build - step 'measure' names {{buildDir}} - so "
+            + "nothing was run: unbuilt, it would read whatever the last build left there.",
+            refusal.Message);
+        Assert.True(Directory.Exists(scratch), "nothing was cleaned for a run that did not start");
     }
 
     /// <summary>
@@ -2115,7 +2203,7 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
-    /// A name this leg has nothing for, in an argument of a later step - {product} on a leg with no
+    /// A name this leg has nothing for, in an argument of a later step - {product} on a leg built with no
     /// product - is refused before the first step runs: found only when its own step began, the steps
     /// before it had already run.
     /// </summary>
@@ -2136,7 +2224,7 @@ public sealed class RunnerRunServiceTests
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
             Config(),
-            Request(temp, runner),
+            Request(temp, runner) with { Built = true },
             TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);

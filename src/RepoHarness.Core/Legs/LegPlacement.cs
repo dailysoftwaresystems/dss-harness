@@ -26,7 +26,7 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
 
     /// <summary>
     /// What the leg's build still needs where it was placed, where something says; <see langword="null"/> where nothing
-    /// does, or the command builds nothing.
+    /// does, or the command does not build the leg.
     /// </summary>
     public RoomNeed? Need { get; init; }
 

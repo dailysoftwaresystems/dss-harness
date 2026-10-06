@@ -5,6 +5,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Runners;
 
 namespace RepoHarness.Tests;
 
@@ -564,6 +565,33 @@ public sealed class LegsServiceTests
 
         var building = fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room;
         Assert.Equal("/home/pi/repo/build/arm64-none-debug", Assert.Single(building.Builds));
+    }
+
+    /// <summary>
+    /// A command that builds the legs of some systems alone - a step naming {buildDir} limited by runOn - asks about the
+    /// build directory of a leg of those systems, and of no other: a leg it does not build needs no room. The system is
+    /// matched ignoring case, as a leg's os is everywhere else.
+    /// </summary>
+    [Fact]
+    public async Task ACommandBuildingOnlySomeSystems_AsksAboutTheBuildDirectoriesOfTheirLegsAlone()
+    {
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = 1 } },
+            rooms: (_, path) => Room(path, exists: false, recorded: null, free: 8));
+
+        static BuildCause Deps(string os) => BuildCause.Of(new ActionStep { Name = "deps", WorkingDirectory = "{buildDir}", RunOn = [os] });
+
+        var elsewhere = new LegWorkload(Build: false, Test: false, ["python3"]) { BuiltBy = [Deps("windows")] };
+        await fixture.Service.CheckAsync(Root, null, elsewhere, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Empty(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
+
+        var linux = elsewhere with { BuiltBy = [Deps("Linux")] };
+        await fixture.Service.CheckAsync(Root, null, linux, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "/home/pi/repo/build/arm64-none-debug",
+            Assert.Single(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds));
     }
 
     /// <summary>What a host answers about a build directory: whether it is there, what it recorded, the room on '/'.</summary>
