@@ -1679,9 +1679,9 @@ public static partial class HarnessConfigValidator
 
             // Here rather than when the leg runs. A name nothing fills in reaches the runner as the
             // literal text it was written as, and what a runner makes of a directory that cannot
-            // exist is its own business: ctest reports no tests and exits 8, which reads as a suite
-            // that ran and found nothing. Found here it names the line to fix, and has cost nobody
-            // the build that would have preceded it.
+            // exist is its own business: ctest says it cannot change into it and exits 1, which reads
+            // as a suite that failed. Found here it names the line to fix, and has cost nobody the
+            // build that would have preceded it.
             CheckPlaceholders(invocation.Args, $"{setting}.args", problems);
             CheckPlaceholders(
                 invocation.WorkingDirectory is null ? null : [invocation.WorkingDirectory],
@@ -1732,11 +1732,26 @@ public static partial class HarnessConfigValidator
                 + "without one, a runner that exits 0 having run nothing would pass");
         }
 
-        // Every leg a host runs is given them, once a sync has taken the tree there, and a refusal there
-        // ends the run: found here it names the line, and costs no host its sync. Merged per operating
-        // system as the run merges them, and each refusal said once, with the systems it holds for.
-        var unfit = applicable
+        // Each operating system's invocation, merged as the run merges them.
+        var merged = applicable
             .Select(entry => (entry.Platform, Invocation: TestInvocationResolver.InvocationFor(test, entry.Platform)))
+            .ToList();
+
+        // How --filter, --label and --exclude reach ctest, each problem said once with the systems it
+        // holds for: read otherwise, they run the opposite of what was asked, and say nothing.
+        var misread = merged
+            .SelectMany(entry => TestInvocationResolver.Misread(entry.Invocation).Select(problem => (entry.Platform, Problem: problem)))
+            .GroupBy(entry => entry.Problem, StringComparer.Ordinal);
+
+        foreach (var problem in misread)
+        {
+            problems.Add($"{owner} test on {string.Join(", ", problem.Select(entry => entry.Platform))}: {problem.Key}");
+        }
+
+        // Every leg a host runs is given them, once a sync has taken the tree there, and a refusal there
+        // ends the run: found here it names the line, and costs no host its sync. Each refusal said once,
+        // with the systems it holds for.
+        var unfit = merged
             .Where(entry => entry.Invocation.RemoteExcludes is { Count: > 0 } && !string.IsNullOrWhiteSpace(entry.Invocation.Runner))
             .Select(entry => (entry.Platform, Refusal: RemoteExclusionRefusal(entry.Invocation)))
             .Where(entry => entry.Refusal is not null)

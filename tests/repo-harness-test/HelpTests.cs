@@ -155,8 +155,9 @@ public sealed partial class HelpTests
     /// <summary>
     /// The config topic says how test --filter, --exclude and --label reach a runner, what each is
     /// for ctest, that a label can now be chosen as well as left out, how several exclusions reach
-    /// a runner that would not leave out each of them given apart, and what a leg on a host's copy
-    /// leaves out beside them.
+    /// a runner that would not leave out each of them given apart, what a leg on a host's copy
+    /// leaves out beside them, that a selection ctest could only find empty is refused before the
+    /// build and how its values are judged, and which invocations are refused when the file is read.
     /// </summary>
     [Fact]
     public async Task ConfigTopic_SaysHowTheTestSelectionReachesTheRunner()
@@ -171,6 +172,14 @@ public sealed partial class HelpTests
             "one the sync made, or one it took over - whose history is not this checkout's. Each",
             "sync makes its index hold the files it carried, so a build there fingerprints its",
             "remoteExcludes are given to every leg a host runs, beside --exclude's, and to none",
+            "reads there unless the args or a preset choose tests by name too - or beside a test",
+            "preset that takes a union or cannot be read. So is a selection ctest could only find",
+            "another leaves out by the same part of a test - its name, or a label - where either is",
+            "only -LE and no test preset they name adds one. Values are judged as written: spelled",
+            "has been built; where it still finds none, the detail of a leg that did not pass says",
+            "so, unless --no-tests=ignore keeps ctest quiet. A label beside labels the args or a",
+            "When the file is read, ctest is also refused an invocation that would pass an option",
+            "'|', which ctest would read as part of one pattern that leaves out nothing.",
         })
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
@@ -546,7 +555,8 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The balance says what it measures from, what it does not credit and what it refuses - a base that moved on, an
-    /// unfinished merge, the bookkeeping pair, a lost row - where the anchors are described.
+    /// unfinished merge, the bookkeeping pair, the open copy of an anchor closed already, an id with two rows, a lost row
+    /// and the one it only notes - where the anchors are described.
     /// </summary>
     [Fact]
     public async Task AnchorsTopic_StatesWhatTheBalanceMeasuresFrom_AndDoesNotCredit()
@@ -561,8 +571,11 @@ public sealed partial class HelpTests
             $"a closure whose Trigger opens with {AnchorStatus.ClosedMark}{AnchorStatus.BookkeepingMark} records work that already existed",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("an anchor open where the change began is in neither registry now", prose, StringComparison.Ordinal);
-        Assert.Contains("a lost one is not credited either", prose, StringComparison.Ordinal);
+        Assert.Contains("an anchor open or closed where the change began is in neither registry now", prose, StringComparison.Ordinal);
+        Assert.Contains("a lost one that was open is not credited either", prose, StringComparison.Ordinal);
+        Assert.Contains("Nor is it for taking away the open row of an anchor that had a closed row already", prose, StringComparison.Ordinal);
+        Assert.Contains("an id has more than one row", prose, StringComparison.Ordinal);
+        Assert.Contains("one whose Anchor cell named no id, or more than one, is noted instead", prose, StringComparison.Ordinal);
         Assert.Contains("during an unfinished merge, HEAD is taken merged with what the merge brings in", prose, StringComparison.Ordinal);
     }
 

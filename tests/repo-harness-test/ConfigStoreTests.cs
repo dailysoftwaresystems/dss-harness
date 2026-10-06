@@ -875,12 +875,54 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "excludeArg": "-LE", "remoteExcludes": ["git-state"] }""", "with no excludeJoin it would take them apart, never leaving out what each names; declare \"excludeJoin\": \"|\"")]
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "args": ["--rerun-failed"], "excludeArg": "-LE", "excludeJoin": "|", "remoteExcludes": ["git-state"] }""", "run ctest with --rerun-failed")]
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "args": ["-U", "ON"], "excludeArg": "-LE", "excludeJoin": "|", "remoteExcludes": ["git-state"] }""", "run ctest with --union")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "args": ["-U", "ON", "-R", "unit"], "excludeArg": "-E", "excludeJoin": "|", "remoteExcludes": ["git_state"] }""", "run ctest with --union and -R")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "args": ["-L", "git-state"], "excludeArg": "-LE", "excludeJoin": "|", "remoteExcludes": ["git-state"] }""", "remoteExcludes cannot reach the runner on windows, linux, macos: -L 'git-state' in the test settings' args chooses only tests carrying a label that matches it, and the exclusion 'git-state', given with -LE, leaves every one of them out, so ctest would choose no test")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "filterArg": "-E" }""", "test on windows, linux, macos: filterArg '-E' leaves tests out to ctest, so --filter would run every test but those it names; declare an option that chooses them, such as '-R'")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "labelArg": "--label-exclude" }""", "test on windows, linux, macos: labelArg '--label-exclude' leaves tests out to ctest, so --label would run every test but those carrying it; declare '-L'")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "labelArg": "-R" }""", "test on windows, linux, macos: labelArg '-R' chooses tests by name to ctest, so --label would read a label as a name; declare '-L'")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "excludeArg": "-L" }""", "test on windows, linux, macos: excludeArg '-L' chooses tests to ctest, so --exclude would run only the tests it names; declare an option that leaves them out, such as '-LE'")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "excludeArg": "-LE", "excludeJoin": ";" }""", "test on windows, linux, macos: excludeJoin ';' joins nothing to ctest, which reads what it joins as one pattern holding ';', so joined exclusions would leave out no test; declare \"excludeJoin\": \"|\"")]
     public void Load_RejectsATestInvocationThatCannotWork(string invocation, string expected)
     {
         var exception = LoadInvalid(
             $$"""{ "projects": [ { "name": "main", "type": "cmake", "test": { "all": {{invocation}} } } ] }""");
 
         Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// How --filter, --label and --exclude reach ctest is judged on each operating system's merged invocation, each
+    /// problem said once with the systems it holds for; another runner's options are its own.
+    /// </summary>
+    [Fact]
+    public void Load_RejectsAnOptionCtestWouldReadOtherwise_OnTheSystemsItHoldsFor()
+    {
+        var exception = LoadInvalid("""
+            {
+              "projects": [
+                {
+                  "name": "main",
+                  "type": "cmake",
+                  "test": {
+                    "all": { "runner": "ctest", "successPattern": "ok", "filterArg": "-R", "excludeArg": "-LE", "excludeJoin": "|" },
+                    "windows": { "filterArg": "-E" },
+                    "linux": { "excludeJoin": "," },
+                    "macos": { "filterArg": "-E" }
+                  }
+                },
+                {
+                  "name": "app",
+                  "type": "cmake",
+                  "test": { "all": { "runner": "dart", "successPattern": "ok", "filterArg": "-E", "excludeJoin": ";" } }
+                }
+              ]
+            }
+            """);
+
+        Assert.Contains("test on windows, macos: filterArg '-E' leaves tests out to ctest", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("test on linux: excludeJoin ','", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("linux, macos: filterArg", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("excludeJoin ';'", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>

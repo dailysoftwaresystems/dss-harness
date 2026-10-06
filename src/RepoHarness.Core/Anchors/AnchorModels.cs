@@ -155,6 +155,9 @@ public sealed record AnchorRegistry(AnchorRegistryKind Kind, string RelativePath
     /// <summary>A problem at no one line of this registry as it stands now, that stops it being trusted.</summary>
     public AnchorFinding Fatal(string message) => new(RelativePath, 0, AnchorFindingSeverity.Fatal, message);
 
+    /// <summary>Something about this registry at no one line of it as it stands now, that fails nothing.</summary>
+    public AnchorFinding Note(string message) => new(RelativePath, 0, AnchorFindingSeverity.Note, message);
+
     /// <summary>Something about a row this registry holds, as its file stands now, that fails nothing.</summary>
     public AnchorFinding Note(AnchorRow row, string message)
     {
@@ -491,6 +494,23 @@ public sealed record AnchorEntry(AnchorRow Row, AnchorRegistry Registry)
 
         return documents.SelectMany(pair => pair.Document.Rows.Select(row => new AnchorEntry(row, pair.Registry)));
     }
+
+    /// <summary>
+    /// A finding on each row of an id that more than one row of <paramref name="documents"/> holds, across both
+    /// registries: a duplicate hands a reader two histories under one name.
+    /// </summary>
+    public static IEnumerable<AnchorFinding> Duplicates(IEnumerable<(AnchorRegistryDocument Document, AnchorRegistry Registry)> documents)
+        => Of(documents)
+            .GroupBy(entry => entry.Row.Id, AnchorIdMatch.Comparer)
+            .Where(group => group.Count() > 1)
+            .SelectMany(group =>
+            {
+                var locations = string.Join(", ", group.Select(entry => $"{entry.Registry.RelativePath}:{entry.Row.LineNumber}"));
+
+                return group.Select(entry => entry.Registry.Fatal(
+                    entry.Row,
+                    $"'{group.Key}' has {group.Count()} rows ({locations}); one id has one row"));
+            });
 }
 
 /// <summary>One changed cell.</summary>
@@ -556,9 +576,20 @@ public sealed record AnchorOpening(string Id, string Excerpt, bool Disclosed);
 /// <param name="Id">The anchor.</param>
 /// <param name="Bookkeeping">
 /// Whether its closure only repairs the mark of work done before the change that closes it, and so is not counted to the
-/// change's credit.
+/// change's credit: a row of it says so, or it had a closed row already where the change began, beside its open one.
 /// </param>
 public sealed record AnchorClosing(string Id, bool Bookkeeping);
+
+/// <summary>
+/// An anchor whose id had a row where the change began (<see cref="AnchorBalanceReport.Commit"/>) and has none in either
+/// registry now: deleted, or renamed by hand, since a row moves between the registries and is never deleted.
+/// </summary>
+/// <param name="Id">The anchor.</param>
+/// <param name="AlreadyClosed">
+/// Whether every row it had there was closed, so it counted nowhere and its loss changes no count. One open there leaves
+/// the open count, and is not credited to the change, as a closure would be.
+/// </param>
+public sealed record AnchorLoss(string Id, bool AlreadyClosed);
 
 /// <summary>What check-anchor-balance measured.</summary>
 /// <param name="Base">The base as given.</param>
@@ -576,9 +607,11 @@ public sealed record AnchorClosing(string Id, bool Bookkeeping);
 /// <param name="OpenNow">Distinct ids open in the working tree.</param>
 /// <param name="Closed">Anchors open at <paramref name="Commit"/> and closed now, in id order.</param>
 /// <param name="Lost">
-/// Ids open at <paramref name="Commit"/> that neither registry holds now, in id order: deleted, or renamed by hand. Each
-/// leaves the open count and is not credited to the change, as a closure would be; where both registries were read whole,
-/// each is a finding too.
+/// Anchors whose id had a row at <paramref name="Commit"/> and has none in either registry now, in id order: deleted, or
+/// renamed by hand, and each a finding: a note, where its Anchor cell there did not name one id, since repairing that
+/// cell changes the id its row reads as. One open there leaves the open count and is not credited to the change, as a
+/// closure would be; one closed there changes no count. None where a registry is missing or malformed now: that is its
+/// own finding, and every row it hides would read as lost.
 /// </param>
 /// <param name="Opened">Anchors open now and not at <paramref name="Commit"/>, in id order.</param>
 /// <param name="MissingAtBase">Registries that did not exist at <paramref name="Commit"/>, and so count as empty there.</param>
@@ -594,7 +627,7 @@ public sealed record AnchorBalanceReport(
     int OpenAtBase,
     int OpenNow,
     IReadOnlyList<AnchorClosing> Closed,
-    IReadOnlyList<string> Lost,
+    IReadOnlyList<AnchorLoss> Lost,
     IReadOnlyList<AnchorOpening> Opened,
     IReadOnlyList<string> MissingAtBase,
     IReadOnlyList<string> MalformedAtBase,
@@ -609,13 +642,16 @@ public sealed record AnchorBalanceReport(
     /// <summary>How many closures only repair the mark of work done before the change that closes them.</summary>
     public int Bookkeeping => Closed.Count(closing => closing.Bookkeeping);
 
+    /// <summary>How many lost anchors were closed already where the change began, and so change no count.</summary>
+    public int AlreadyClosed => Lost.Count(loss => loss.AlreadyClosed);
+
     /// <summary>
     /// The rise the balance counts: the anchors the change created less those its work closed - the change in open
-    /// anchors, less those newly disclosed, plus the closures that are bookkeeping and the anchors lost. The first two
+    /// anchors, less those newly disclosed, plus the closures that are bookkeeping and the open anchors lost. The first two
     /// corrections pull opposite ways for one reason: a disclosed anchor records debt that already existed, so writing it
     /// down is not creating it, and a bookkeeping closure records work that already existed, so marking it is not doing
-    /// it. A bookkeeping or a lost anchor still leaves the open count, as a row closed or gone must, while the change is
-    /// credited with nothing for it.
+    /// it. A bookkeeping anchor, or a lost one that was open, still leaves the open count, as a row closed or gone must,
+    /// while the change is credited with nothing for it.
     /// </summary>
     public int NetNew => Opened.Count - Disclosed - (Closed.Count - Bookkeeping);
 

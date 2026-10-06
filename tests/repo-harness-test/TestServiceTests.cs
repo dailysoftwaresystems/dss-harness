@@ -18,6 +18,9 @@ public sealed class TestServiceTests
     private const string Leg = "win-msvc-release";
     private const string Fixture = "corpus/sample.txt";
 
+    /// <summary>What a leg's detail says of ctest that had no test to run.</summary>
+    private const string NoTestFound = "ctest found no test to run - what chose its tests chose none, or it looked where there are none";
+
     /// <summary>How long a file system watch is given to deliver what it saw, before and after a restore.</summary>
     private static readonly TimeSpan SettleDelay = TimeSpan.FromMilliseconds(250);
 
@@ -282,6 +285,72 @@ public sealed class TestServiceTests
         Assert.Contains("refused over the test settings' remoteExcludes - git-state,   -", overThem.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("remoteExcludes", overWhatWasAsked.Message, StringComparison.Ordinal);
         service.Check(Config(), remote with { Excludes = ["slow"], Remote = false });
+    }
+
+    /// <summary>
+    /// A host's leg asked for a label its remoteExcludes leave out would choose no test, which ctest says only once the
+    /// leg has been built: refused before the build, naming the leg and the remoteExcludes. A leg this machine runs is
+    /// not given them, and runs as asked.
+    /// </summary>
+    [Fact]
+    public void ALabelTheRemoteExcludesLeaveOut_IsRefusedBeforeTheBuild_NamingTheLeg()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var service = Service(factory);
+        var ctest = new TestInvocation { Runner = "ctest", Args = ["--test-dir", "{buildDir}"], SuccessPattern = "tests passed" };
+        var request = Request(temp, ctest, excludeArg: "-LE", labelArg: "-L", remoteExcludes: ["git-state"]) with { Labels = ["git-state"] };
+
+        var refusal = Assert.Throws<HarnessException>(() => service.Check(Config(), request with { Remote = true }));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.StartsWith(
+            "The label 'git-state', given with -L, chooses only tests carrying a label that matches it, and the exclusion "
+            + "'git-state', given with -LE, leaves every one of them out, so ctest would choose no test",
+            refusal.Message,
+            StringComparison.Ordinal);
+        Assert.EndsWith(
+            $"It is refused over the test settings' remoteExcludes - git-state - which leg '{Leg}' is given beside what "
+            + "--exclude gives, as every leg a host runs is.",
+            refusal.Message,
+            StringComparison.Ordinal);
+        service.Check(Config(), request);
+    }
+
+    /// <summary>
+    /// ctest that found no test to run says so in the detail of a leg that did not pass, whichever way it ended:
+    /// exiting 8 under --no-tests=error, or 0 with its success pattern unmatched, as measured with ctest 4.3.2 - and
+    /// 0 too where it was given no option at all and found no test configuration. Another runner printing the same
+    /// line is not read as ctest, a leg whose success pattern matched passed as it declared, and a ctest that failed
+    /// without the line, or printed it beside the summary of tests that ran - a test running ctest itself - is not
+    /// read as one that found none.
+    /// </summary>
+    [Theory]
+    [InlineData("ctest", 8, "tests passed", "No tests were found!!!", LegVerdict.Failed, "test exited 8: " + NoTestFound)]
+    [InlineData("CTEST.EXE", 0, "tests passed", "No tests were found!!!", LegVerdict.Unwitnessed, "test exited 0 and its success pattern never matched its output: " + NoTestFound)]
+    [InlineData("ctest", 0, "tests passed", "No test configuration file found!", LegVerdict.Unwitnessed, "test exited 0 and its success pattern never matched its output: " + NoTestFound)]
+    [InlineData("tools/run-tests", 8, "tests passed", "No tests were found!!!", LegVerdict.Failed, "test exited 8")]
+    [InlineData("ctest", 0, "were found", "No tests were found!!!", LegVerdict.Passed, "")]
+    [InlineData("ctest", 8, "tests passed", "The following tests FAILED", LegVerdict.Failed, "test exited 8")]
+    [InlineData("ctest", 8, "All tests passed", "No tests were found!!!\n50% tests passed, 1 tests failed out of 2", LegVerdict.Failed, "test exited 8")]
+    public async Task CtestThatFoundNoTest_SaysSoInTheLegsDetail(
+        string program,
+        int exitCode,
+        string successPattern,
+        string output,
+        LegVerdict verdict,
+        string detail)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+
+        var result = await Service(factory, new ScriptedRunner(() => Task.CompletedTask, exitCode, output)).RunAsync(
+            Config(),
+            Request(temp, new TestInvocation { Runner = program, Args = [], SuccessPattern = successPattern }),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal((verdict, detail), (result.Verdict.Verdict, result.Verdict.Detail));
     }
 
     [Fact]

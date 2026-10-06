@@ -128,36 +128,44 @@ public sealed class TestInvocation
 
     /// <summary>
     /// Argument introducing a test filter, such as <c>-R</c> for ctest or
-    /// <c>--filter</c> for dotnet, so one <c>--filter</c> option works everywhere.
+    /// <c>--filter</c> for dotnet, so one <c>--filter</c> option works everywhere. For ctest, one of
+    /// its options that choose tests: one that leaves them out is refused when the configuration is
+    /// read, since <c>--filter</c> would run every test but those it names.
     /// </summary>
     public string? FilterArg { get; init; }
 
     /// <summary>
     /// Argument introducing a test exclusion, such as <c>-LE</c> for ctest, so one <c>--exclude</c>
     /// option works everywhere; what <see cref="RemoteExcludes"/> leave out on a host's legs reaches
-    /// the runner through it too.
+    /// the runner through it too. For ctest, one of its options that leave tests out: one that
+    /// chooses them is refused when the configuration is read, since <c>--exclude</c> would run only
+    /// the tests it names.
     /// </summary>
     public string? ExcludeArg { get; init; }
 
     /// <summary>
-    /// What joins several exclusions into the one value <see cref="ExcludeArg"/> is given, such as
-    /// <c>|</c> for ctest, for a runner that does not leave out each of them when given the argument
-    /// more than once. Unset or empty, each exclusion is given an <see cref="ExcludeArg"/> of its own;
-    /// empty says so in an operating system's section over a join the shared one declares.
+    /// What joins several exclusions into the one value <see cref="ExcludeArg"/> is given - <c>|</c>
+    /// for ctest, the only join it reads - for a runner that does not leave out each of them when given
+    /// the argument more than once. Unset or empty, each exclusion is given an <see cref="ExcludeArg"/>
+    /// of its own; empty says so in an operating system's section over a join the shared one declares.
     /// </summary>
     /// <remarks>
     /// Measured with ctest 4.3.2: given <c>-LE slow -LE gpu</c> it leaves out only a test whose labels
     /// match both, and given <c>-E a -E b</c> only what the last matches, so a test run told to leave
     /// out slow tests and gpu tests ran the gpu-only ones on a machine with no GPU. One regular expression
-    /// joined by <c>|</c> leaves out what any of them matches.
+    /// joined by <c>|</c> leaves out what any of them matches; joined by anything else it is one pattern
+    /// holding that join, which leaves out nothing - <c>-LE "slow;gpu"</c> ran every test - so ctest is
+    /// refused any other join when the configuration is read.
     /// <para>
     /// Exclusions the <see cref="Args"/> already give are kept as ctest reads them: those given are added
     /// to each <c>-LE</c> value there, and to the last <c>-E</c>, in whatever spelling and form it was
     /// written. Another runner's values there are joined with those given. Where none is given, the args
     /// run as written. ctest is refused an exclusion beside another given apart with no join; beside a
     /// test preset that leaves tests out the same way itself, takes a union, or cannot be read; beside
-    /// <c>--rerun-failed</c>; and, by <c>-LE</c>, beside <c>--union</c> in the args, where ctest reads
-    /// <c>-E</c> alone.
+    /// <c>--rerun-failed</c>; beside <c>--union</c> in the args by <c>-LE</c>, which ctest passes over
+    /// there, and by <c>-E</c> where <c>-R</c> or the preset chooses tests by name too, when it narrows
+    /// only their choice; and where it leaves out every test that a value chosen by the same part of a
+    /// test chooses, a selection ctest could only find empty.
     /// </para>
     /// </remarks>
     public string? ExcludeJoin { get; init; }
@@ -187,7 +195,8 @@ public sealed class TestInvocation
     /// <c>--label</c> option works everywhere. Beside <see cref="FilterArg"/>, which selects by name,
     /// and <see cref="ExcludeArg"/>, which a label can already be left out by: a group a runner labels
     /// could otherwise be left out but never chosen, only matched by a name pattern that happens to
-    /// cover the same tests.
+    /// cover the same tests. For ctest, its option that chooses tests by label: one that leaves them
+    /// out, or chooses them by name, is refused when the configuration is read.
     /// </summary>
     public string? LabelArg { get; init; }
 

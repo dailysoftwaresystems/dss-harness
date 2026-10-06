@@ -67,6 +67,17 @@ public sealed class AnchorIdRules
     /// <summary>Whether an Anchor cell holds nothing but one id in backticks.</summary>
     public bool IsBareBacktickedId(string cell) => _backticked.IsMatch(cell.Trim());
 
+    /// <summary>
+    /// Whether an Anchor cell names one id, however often, so that <see cref="Identify"/> reads its row as that id and
+    /// repairing the cell keeps it: one naming none reads as its own text, and of more than one a repair may keep another.
+    /// </summary>
+    public bool NamesOneId(string anchorCell)
+    {
+        ArgumentNullException.ThrowIfNull(anchorCell);
+
+        return _token.Matches(anchorCell).Select(match => match.Value).Distinct(AnchorIdMatch.Comparer).Take(2).Count() == 1;
+    }
+
     /// <summary>An id new anchors could use, for examples in documentation.</summary>
     public string Example()
     {

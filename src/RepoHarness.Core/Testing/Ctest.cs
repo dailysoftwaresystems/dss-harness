@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace RepoHarness.Core.Testing;
 
 /// <summary>
@@ -28,23 +30,63 @@ internal static class Ctest
     /// <summary>The option naming a test preset.</summary>
     private const string PresetArg = "--preset";
 
+    /// <summary>
+    /// What ctest prints where it has no test to run, given any option at all and not --no-tests=ignore: what chose its
+    /// tests chose none, or it found none where it looked.
+    /// </summary>
+    public const string NoTestsLine = "No tests were found!!!";
+
+    /// <summary>What ctest prints, given no option at all, where it finds no test where it looked.</summary>
+    public const string NoConfigurationLine = "No test configuration file found!";
+
     /// <summary>The spellings of the option that takes the union of the tests -I and -R choose.</summary>
     private static readonly string[] UnionArgs = ["-U", "--union"];
+
+    /// <summary>The line ctest ends a run that ran tests with, which it never prints where it ran none.</summary>
+    private static readonly Regex Summary = new(@"^\d+% tests passed, \d+ tests failed out of \d+$", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// What ctest's patterns read specially - every other character matches itself - and more besides, so a pattern
+    /// holding none of them is plain text whatever ctest's regular expressions turn out to read.
+    /// </summary>
+    private static readonly char[] Special = ['\\', '.', '^', '$', '|', '?', '*', '+', '(', ')', '[', ']', '{', '}'];
+
+    /// <summary>The option that chooses tests by name, beside which --union reads no -E either.</summary>
+    private static readonly Selection ByName = new(["-R", "--tests-regex"], Excludes: false, Part.Name, Narrows: false, ReadBesideUnion: false);
 
     /// <summary>
     /// ctest's options that choose its tests by name or by label. Measured with ctest 4.3.2: given one
     /// of them more than once, in any of its spellings, it keeps only the last where it names tests, and
     /// runs or leaves out only a test every one matches where it names labels; and a test preset that sets
     /// the same filter is combined with it the same way. Beside --union given in its args, whatever its
-    /// value, it reads -E alone.
+    /// value, it also runs every test -I picks - every test, where the args give no -I - so none of them
+    /// decides which tests run; but -E, given where nothing chooses tests by name - no -R, and no test
+    /// preset setting filter.include.name - still leaves its tests out first. Beside -R it narrows only
+    /// what -R chooses.
     /// </summary>
     private static readonly Selection[] Selections =
     [
-        new(["-R", "--tests-regex"], "include.name", Narrows: false, ReadBesideUnion: false),
-        new(["-E", "--exclude-regex"], "exclude.name", Narrows: false, ReadBesideUnion: true),
-        new(["-L", "--label-regex"], "include.label", Narrows: true, ReadBesideUnion: false),
-        new(["-LE", "--label-exclude"], "exclude.label", Narrows: true, ReadBesideUnion: false),
+        ByName,
+        new(["-E", "--exclude-regex"], Excludes: true, Part.Name, Narrows: false, ReadBesideUnion: true),
+        new(["-L", "--label-regex"], Excludes: false, Part.Label, Narrows: true, ReadBesideUnion: false),
+        new(["-LE", "--label-exclude"], Excludes: true, Part.Label, Narrows: true, ReadBesideUnion: false),
     ];
+
+    /// <summary>The part of a test one of ctest's options that choose tests matches.</summary>
+    public enum Part
+    {
+        /// <summary>The test's name.</summary>
+        Name,
+
+        /// <summary>Any one of the labels the test carries.</summary>
+        Label,
+    }
+
+    /// <summary>The filter a test preset chooses tests by name with, beside which --union reads no -E.</summary>
+    public static string ByNamePresetFilter => ByName.PresetFilter;
+
+    /// <summary>The filters a test preset sets the options that choose tests with: <c>include.name</c> and the like.</summary>
+    public static IEnumerable<string> PresetFilters => Selections.Select(selection => selection.PresetFilter);
 
     /// <summary>
     /// The option <paramref name="argument"/> is to ctest, where <paramref name="runner"/> is ctest and
@@ -54,6 +96,68 @@ internal static class Ctest
     /// <param name="argument">The argument an invocation introduces a filter, an exclusion or a label with.</param>
     public static Selection? SelectionOf(string runner, string? argument)
         => IsCtest(runner) ? Selections.FirstOrDefault(selection => selection.Spellings.Contains(argument, StringComparer.Ordinal)) : null;
+
+    /// <summary>
+    /// Each of ctest's options that choose its tests that <paramref name="args"/> give, with the values they give it,
+    /// in every spelling and form, where <paramref name="runner"/> is ctest; none otherwise.
+    /// </summary>
+    /// <param name="runner">The test runner an invocation starts, by name or path.</param>
+    /// <param name="args">The invocation's own arguments.</param>
+    public static IEnumerable<(Selection Option, IReadOnlyList<string> Values)> SelectionsIn(string runner, IReadOnlyList<string> args)
+        => IsCtest(runner)
+            ? Selections.Select(option => (option, Values(args, option.Spellings).Values)).Where(given => given.Values.Count > 0)
+            : [];
+
+    /// <summary>
+    /// Whether <paramref name="runner"/> is ctest and <paramref name="args"/> give it -R, in either spelling and any
+    /// form, with a value: an empty one it reads as not given.
+    /// </summary>
+    /// <param name="runner">The test runner an invocation starts, by name or path.</param>
+    /// <param name="args">The invocation's own arguments.</param>
+    public static bool ChoosesByName(string runner, IReadOnlyList<string> args)
+        => IsCtest(runner) && Values(args, ByName.Spellings).Values.Any(value => value.Length > 0);
+
+    /// <summary>
+    /// Whether <paramref name="runner"/> is ctest and <paramref name="output"/> says it had no test to run: a line of
+    /// its own saying so, and no summary of tests that ran. Measured with ctest 4.3.2, a test that fails having printed
+    /// the same line - one running ctest itself - leaves it in the output beside the summary, which ctest prints only
+    /// where tests ran.
+    /// </summary>
+    /// <param name="runner">The test runner an invocation starts, by name or path.</param>
+    /// <param name="output">What it printed.</param>
+    public static bool FoundNone(string runner, string output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        if (!IsCtest(runner))
+        {
+            return false;
+        }
+
+        var lines = output.ReplaceLineEndings("\n").Split('\n').Select(line => line.Trim()).ToList();
+
+        return lines.Any(line => line is NoTestsLine or NoConfigurationLine) && !lines.Any(Summary.IsMatch);
+    }
+
+    /// <summary>
+    /// Whether every name or label ctest finds <paramref name="chosen"/> in it finds <paramref name="leftOut"/> in too,
+    /// as far as their spelling alone tells: the two are spelled the same, or both are plain text and the first holds
+    /// the second, since ctest finds a pattern anywhere in what it reads. Measured with ctest 4.3.2: -L git-state beside
+    /// -LE git chooses no test.
+    /// </summary>
+    /// <param name="chosen">A pattern an option chooses tests by.</param>
+    /// <param name="leftOut">A pattern an option leaves tests out by, reading the same part of a test.</param>
+    public static bool Covers(string chosen, string leftOut)
+    {
+        ArgumentNullException.ThrowIfNull(chosen);
+        ArgumentNullException.ThrowIfNull(leftOut);
+
+        return string.Equals(chosen, leftOut, StringComparison.Ordinal)
+            || (Plain(chosen) && Plain(leftOut) && chosen.Contains(leftOut, StringComparison.Ordinal));
+    }
+
+    /// <summary>Whether <paramref name="pattern"/> is text ctest matches as it is spelled, and something to match.</summary>
+    private static bool Plain(string pattern) => pattern.Length > 0 && pattern.IndexOfAny(Special) < 0;
 
     /// <summary>
     /// The test preset <paramref name="args"/> name, where <paramref name="runner"/> is ctest; <see langword="null"/>
@@ -96,7 +200,9 @@ internal static class Ctest
     /// <summary>
     /// Whether <paramref name="runner"/> is ctest and <paramref name="args"/> give it --union, in either
     /// spelling and any form. Measured with ctest 4.3.2, it takes a value, and given any - OFF and 0 among
-    /// them - runs every test -R, -L and -LE would leave out, reading -E alone; given none, it refuses to run.
+    /// them - also runs every test -I picks, every test where the args give no -I, whatever -R, -L, -LE and
+    /// -E say: only -E, given where nothing chooses tests by name, still leaves its tests out. Given none, it
+    /// refuses to run.
     /// </summary>
     /// <param name="runner">The test runner an invocation starts, by name or path.</param>
     /// <param name="args">The invocation's own arguments.</param>
@@ -165,17 +271,30 @@ internal static class Ctest
         }
     }
 
-    /// <summary>Whether <paramref name="runner"/> is ctest, by its program's name, however its path is spelled.</summary>
+    /// <summary>
+    /// Whether <paramref name="runner"/> is ctest, by its program's name, however its path is spelled: ctest, or ctest3,
+    /// as the packages carrying CMake 3 beside an older CMake name it.
+    /// </summary>
     private static bool IsCtest(string runner)
-        => string.Equals(Path.GetFileNameWithoutExtension(runner), Program, StringComparison.OrdinalIgnoreCase);
+        => Path.GetFileNameWithoutExtension(runner) is var name
+            && (string.Equals(name, Program, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(name, Program + "3", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>One of ctest's options that choose its tests.</summary>
     /// <param name="Spellings">Its spellings.</param>
-    /// <param name="PresetFilter">The filter a test preset sets it with, under <c>filter</c>: <c>include.name</c> and the like.</param>
+    /// <param name="Excludes">Whether it leaves out the tests it matches, rather than choosing them.</param>
+    /// <param name="Reads">The part of a test it matches.</param>
     /// <param name="Narrows">
     /// Whether ctest, given it twice, reads both - running or leaving out only a test every one matches - rather
     /// than keeping the last.
     /// </param>
-    /// <param name="ReadBesideUnion">Whether ctest still reads it beside --union given in its args.</param>
-    public sealed record Selection(IReadOnlyList<string> Spellings, string PresetFilter, bool Narrows, bool ReadBesideUnion);
+    /// <param name="ReadBesideUnion">
+    /// Whether ctest still leaves out what it matches beside --union given in its args: where nothing chooses tests
+    /// by name besides.
+    /// </param>
+    public sealed record Selection(IReadOnlyList<string> Spellings, bool Excludes, Part Reads, bool Narrows, bool ReadBesideUnion)
+    {
+        /// <summary>The filter a test preset sets it with, under <c>filter</c>: <c>include.name</c> and the like.</summary>
+        public string PresetFilter => $"{(Excludes ? "exclude" : "include")}.{(Reads == Part.Label ? "label" : "name")}";
+    }
 }
