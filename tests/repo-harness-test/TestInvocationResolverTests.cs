@@ -248,14 +248,17 @@ public sealed class TestInvocationResolverTests
     /// ctest reads presets from - which ctest combines with the command line's so that neither leaves out
     /// what it names: a preset's label exclusion and -LE leave out only a test both match, and -E replaces
     /// the preset's. An empty value clears nothing, measured: ctest takes the first value along the inherits
-    /// that says something, and one alone says nothing. A preset that leaves out nothing, or only another way,
-    /// runs as asked, and one that cannot be found or read is refused, as nothing can say.
+    /// that says something, and one alone says nothing. A preset that leaves out nothing, or only another way -
+    /// choosing tests by the part an exclusion reads among them - runs as asked, and one that cannot be found or
+    /// read is refused, as nothing can say.
     /// </summary>
     [Theory]
     [InlineData("plain", "-LE", false)]
     [InlineData("clearing", "-LE", false)]
     [InlineData("labels", "-LE", true)]
     [InlineData("labels", "-E", false)]
+    [InlineData("including", "-E", false)]
+    [InlineData("labeled", "-LE", false)]
     [InlineData("inheriting", "-LE", true)]
     [InlineData("overriding", "-LE", true)]
     [InlineData("firstEmpty", "-LE", true)]
@@ -394,9 +397,10 @@ public sealed class TestInvocationResolverTests
     /// <summary>
     /// Beside a test preset that takes the union of the tests its filters choose, beside --union in the args -
     /// in either spelling and any form, whatever its value - and beside --rerun-failed, every option that
-    /// chooses tests is refused, a label among them: measured with ctest 4.3.2, the preset's union runs tests
-    /// none of them would, the args' reads -E alone, and --rerun-failed passes over -R, -L and -LE and runs
-    /// others for -E.
+    /// chooses tests is refused, an exclusion by -LE and a label among them: measured with ctest 4.3.2, the
+    /// preset's union runs tests none of them would, beside the args' ctest also runs every test -I picks -
+    /// every test, where the args give no -I - whatever -R, -L and -LE say, and --rerun-failed passes over -R,
+    /// -L and -LE and runs others for -E.
     /// </summary>
     [Theory]
     [InlineData(new[] { "--preset", "union" }, "filter")]
@@ -518,22 +522,38 @@ public sealed class TestInvocationResolverTests
 
     /// <summary>
     /// An exclusion by -E beside --union in the args runs as asked: measured with ctest 4.3.2, whatever value
-    /// --union is given, ctest still reads -E beside it, and -E alone.
+    /// --union is given, ctest leaves out what -E names first, where nothing chooses tests by name too - a test
+    /// preset choosing them by label among them.
     /// </summary>
-    [Fact]
-    public void AnExclusionByName_RunsAsAsked_BesideAUnionInTheArgs()
-        => Assert.Equal(
-            ["-U", "ON", "-E", "slow"],
-            TestInvocationResolver.CommandFor(Invocation(args: ["-U", "ON"], excludeArg: "-E"), cores: 6, filter: null, excludes: ["slow"]).Arguments);
+    [Theory]
+    [InlineData(new[] { "-U", "ON" }, new[] { "-U", "ON", "-E", "slow" })]
+    [InlineData(new[] { "--preset", "labeled", "-U", "ON" }, new[] { "--preset", "labeled", "-U", "ON", "-E", "slow" })]
+    public void AnExclusionByName_RunsAsAsked_BesideAUnionInTheArgs(string[] args, string[] expected)
+    {
+        using var temp = new TempDirectory();
+
+        WritePresets(temp);
+
+        var command = TestInvocationResolver.CommandFor(
+            Invocation(args: args, excludeArg: "-E"),
+            cores: 6,
+            filter: null,
+            excludes: ["slow"],
+            new LegPaths(temp.Path, temp.Combine("build")),
+            fileSystem: FileSystem());
+
+        Assert.Equal(expected, command.Arguments);
+    }
 
     /// <summary>
     /// But not where the args choose tests by name as well, or the test preset they name does: measured with ctest
-    /// 4.3.2, beside --union and -R, or a preset setting filter.include.name, ctest runs every test and reads no -E.
+    /// 4.3.2, beside --union and -R, or a preset setting filter.include.name, -E narrows only the tests that choice
+    /// makes, and ctest also runs every test -I picks - every test, where the args give no -I.
     /// </summary>
     [Theory]
-    [InlineData(new[] { "-U", "ON", "-R", "parser" }, "with --union and -R, beside both of which")]
-    [InlineData(new[] { "--tests-regex=parser", "--union=1" }, "with --union and -R, beside both of which")]
-    [InlineData(new[] { "--preset", "including", "-U", "ON" }, "with --union and test preset 'including', which sets filter.include.name")]
+    [InlineData(new[] { "-U", "ON", "-R", "parser" }, "with --union and -R, beside both of which - measured with ctest 4.3.2 - -E narrows only the tests -R chooses")]
+    [InlineData(new[] { "--tests-regex=parser", "--union=1" }, "with --union and -R, beside both of which - measured with ctest 4.3.2 - -E narrows only the tests -R chooses")]
+    [InlineData(new[] { "--preset", "including", "-U", "ON" }, "with --union and test preset 'including', which sets filter.include.name: beside both - measured with ctest 4.3.2 - -E narrows only the tests that filter chooses")]
     public void AnExclusionByName_IsRefused_BesideAUnionAndAChoiceByName(string[] args, string beside)
     {
         using var temp = new TempDirectory();
@@ -550,15 +570,16 @@ public sealed class TestInvocationResolverTests
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains(beside, refusal.Message, StringComparison.Ordinal);
-        Assert.Contains("ctest runs every test, reading no -E", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("and ctest also runs every test -I picks, every test where the args give no -I", refusal.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// A selection ctest could only find empty is refused before anything is built for it: a value one option chooses
     /// tests by that another leaves out by the same part of a test, where the filter, a label or an exclusion given is
-    /// one of the two - the other given too, or one the args give. Measured with ctest 4.3.2, -L x beside -LE x, and -R
-    /// x beside -E x, choose no test, and ctest says so only after the build: 'No tests were found!!!', exiting 8 under
-    /// --no-tests=error.
+    /// one of the two - the other given too, or one the args give, their only -LE beside a test preset that leaves no
+    /// label out among them. Measured with ctest 4.3.2, -L x beside -LE x, and -R x beside -E x, choose no test, nor do
+    /// -L git-state beside -LE git and -R parser_unit beside -E parser, since ctest finds a pattern anywhere in what it
+    /// reads; and ctest says so only after the build: 'No tests were found!!!', exiting 8 under --no-tests=error.
     /// </summary>
     [Theory]
     [InlineData(new string[0], "-LE", null, new[] { "git-state" }, new[] { "git-state" }, "The label 'git-state', given with -L, chooses only tests carrying a label that matches it, and the exclusion 'git-state', given with -LE, leaves every one of them out")]
@@ -570,10 +591,23 @@ public sealed class TestInvocationResolverTests
     [InlineData(new string[0], "-E", "parser", new[] { "parser" }, new string[0], "The filter 'parser', given with -R, chooses only tests whose name matches it, and the exclusion 'parser', given with -E,")]
     [InlineData(new[] { "-E", "flaky", "--exclude-regex", "parser" }, "-LE", "parser", new string[0], new string[0], "and -E 'parser' in the test settings' args")]
     [InlineData(new[] { "-R", "lexer", "--tests-regex", "parser" }, "-E", null, new[] { "parser" }, new string[0], "-R 'parser' in the test settings' args chooses only tests whose name matches it")]
+    [InlineData(new[] { "--preset", "plain", "-LE", "manual" }, "-LE", null, new string[0], new[] { "manual" }, "and -LE 'manual' in the test settings' args leaves every one of them out")]
+    [InlineData(new string[0], "-LE", null, new[] { "git" }, new[] { "git-state" }, "The label 'git-state', given with -L, chooses only tests carrying a label that matches it, and the exclusion 'git', given with -LE, leaves every one of them out, since ctest finds 'git' in all 'git-state' matches")]
+    [InlineData(new string[0], "-E", "parser_unit", new[] { "parser" }, new string[0], "The filter 'parser_unit', given with -R, chooses only tests whose name matches it, and the exclusion 'parser', given with -E, leaves every one of them out, since ctest finds 'parser' in all 'parser_unit' matches")]
     public void ASelectionCtestCouldOnlyFindEmpty_IsRefused(string[] args, string excludeArg, string? filter, string[] excludes, string[] labels, string said)
     {
+        using var temp = new TempDirectory();
+
+        WritePresets(temp);
+
         var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
-            Invocation(args: args, filterArg: "-R", excludeArg: excludeArg, excludeJoin: "|", labelArg: "-L"), cores: 6, filter, excludes, labels: labels));
+            Invocation(args: args, filterArg: "-R", excludeArg: excludeArg, excludeJoin: "|", labelArg: "-L"),
+            cores: 6,
+            filter,
+            excludes,
+            new LegPaths(temp.Path, temp.Combine("build")),
+            labels,
+            FileSystem()));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.Contains(said, refusal.Message, StringComparison.Ordinal);
@@ -582,21 +616,34 @@ public sealed class TestInvocationResolverTests
 
     /// <summary>
     /// Only a selection ctest is bound to find empty is refused, read as ctest reads its options: two patterns spelled
-    /// apart may still choose a test; a name is not a label; of two values the args give -LE ctest leaves out only a
-    /// test both match, and of two they give -R or -E it keeps the last; a preset the args name could leave out tests
-    /// by label too, so their one -LE may not be all there is; another runner's options are its own; and the args alone
-    /// run as their author wrote them.
+    /// apart may still choose a test - a pattern ctest reads specially, a value that holds the other only the other
+    /// way round, or one spelled in another case, since ctest matches case as written; a name is not a label; of two
+    /// values the args give -LE ctest leaves out only a test both match, and of two they give -R or -E it keeps the
+    /// last; a preset the args name that leaves out tests by label too may leave out only a test both match, so their
+    /// one -LE is not all there is; another runner's options are its own; and the args alone run as their author wrote
+    /// them. Measured with ctest 4.3.2: -L git-state beside -LE ^git-state$ runs a test labelled git-state-slow, -R
+    /// parser beside -E parser_unit runs parser, -L Git-State beside -LE git-state runs a test labelled Git-State, and
+    /// a preset leaving out one label beside -LE nightly and -L nightly runs a test labelled nightly alone.
     /// </summary>
     [Theory]
-    [InlineData("ctest", new string[0], "-LE", null, new[] { "git-state" }, new[] { "^git-state$" })]
-    [InlineData("ctest", new string[0], "-E", null, new[] { "git-state" }, new[] { "git-state" })]
-    [InlineData("ctest", new[] { "-LE", "slow", "-LE", "manual" }, "-LE", null, new string[0], new[] { "manual" })]
-    [InlineData("ctest", new[] { "-R", "parser", "-R", "lexer" }, "-E", null, new[] { "parser" }, new string[0])]
-    [InlineData("ctest", new[] { "-E", "parser", "-E", "flaky" }, "-LE", "parser", new string[0], new string[0])]
-    [InlineData("ctest", new[] { "--preset", "plain", "-LE", "manual" }, "-LE", null, new string[0], new[] { "manual" })]
-    [InlineData("ctest", new[] { "-L", "unit", "-LE", "unit" }, "-LE", null, new string[0], new string[0])]
-    [InlineData("dart", new string[0], "-LE", null, new[] { "git-state" }, new[] { "git-state" })]
-    public void ASelectionCtestMayFindATestIn_RunsAsAsked(string runner, string[] args, string excludeArg, string? filter, string[] excludes, string[] labels)
+    [InlineData("ctest", new string[0], "-LE", null, new[] { "^git-state$" }, new[] { "git-state" }, new[] { "-LE", "^git-state$", "-L", "git-state" })]
+    [InlineData("ctest", new[] { "-R", "parser" }, "-E", null, new[] { "parser_unit" }, new string[0], new[] { "-R", "parser", "-E", "parser_unit" })]
+    [InlineData("ctest", new string[0], "-LE", null, new[] { "git-state" }, new[] { "Git-State" }, new[] { "-LE", "git-state", "-L", "Git-State" })]
+    [InlineData("ctest", new string[0], "-E", null, new[] { "git-state" }, new[] { "git-state" }, new[] { "-E", "git-state", "-L", "git-state" })]
+    [InlineData("ctest", new[] { "-LE", "slow", "-LE", "manual" }, "-LE", null, new string[0], new[] { "manual" }, new[] { "-LE", "slow", "-LE", "manual", "-L", "manual" })]
+    [InlineData("ctest", new[] { "-R", "parser", "-R", "lexer" }, "-E", null, new[] { "parser" }, new string[0], new[] { "-R", "parser", "-R", "lexer", "-E", "parser" })]
+    [InlineData("ctest", new[] { "-E", "parser", "-E", "flaky" }, "-LE", "parser", new string[0], new string[0], new[] { "-E", "parser", "-E", "flaky", "-R", "parser" })]
+    [InlineData("ctest", new[] { "--preset", "labels", "-LE", "nightly" }, "-LE", null, new string[0], new[] { "nightly" }, new[] { "--preset", "labels", "-LE", "nightly", "-L", "nightly" })]
+    [InlineData("ctest", new[] { "-L", "unit", "-LE", "unit" }, "-LE", null, new string[0], new string[0], new[] { "-L", "unit", "-LE", "unit" })]
+    [InlineData("dart", new string[0], "-LE", null, new[] { "git-state" }, new[] { "git-state" }, new[] { "-LE", "git-state", "-L", "git-state" })]
+    public void ASelectionCtestMayFindATestIn_RunsAsAsked(
+        string runner,
+        string[] args,
+        string excludeArg,
+        string? filter,
+        string[] excludes,
+        string[] labels,
+        string[] expected)
     {
         using var temp = new TempDirectory();
 
@@ -611,7 +658,7 @@ public sealed class TestInvocationResolverTests
             labels,
             FileSystem());
 
-        Assert.Equal(labels.SelectMany(label => new[] { "-L", label }), command.Arguments.TakeLast(labels.Length * 2));
+        Assert.Equal(expected, command.Arguments);
     }
 
     /// <summary>

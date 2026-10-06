@@ -59,7 +59,7 @@ internal static class CtestPresets
 
             var filters = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (var filter in new[] { "include.name", "include.label", "exclude.name", "exclude.label" })
+            foreach (var filter in Ctest.PresetFilters)
             {
                 if (Sets(presets, name, filter, []))
                 {

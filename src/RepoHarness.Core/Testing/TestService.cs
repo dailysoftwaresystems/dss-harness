@@ -435,9 +435,10 @@ public sealed class TestService(
     }
 
     /// <summary>
-    /// The verdict <paramref name="phase"/> gives its leg, saying so where ctest had no test to run: it exits 8 then under
-    /// --no-tests=error, and 0 otherwise with its success pattern unmatched, and either alone reads as a suite that
-    /// failed, or one that ran nothing for a reason of its own.
+    /// The verdict <paramref name="phase"/> gives its leg, saying so where it did not pass and ctest had no test to run:
+    /// ctest exits 8 then under --no-tests=error, and 0 otherwise with the success pattern unmatched, and either alone
+    /// reads as a suite that failed, or one that ran nothing for a reason of its own. Under --no-tests=ignore ctest says
+    /// nothing of it, and nothing here can.
     /// </summary>
     private static ReachedVerdict Explained(PhaseResult phase, TestCommand command)
     {

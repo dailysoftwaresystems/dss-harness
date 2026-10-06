@@ -19,11 +19,11 @@ public interface IAnchorBalanceService
 /// <remarks>
 /// Anchors are compared by id across both registries, so moving a row from one to the other is
 /// neither progress nor regression. The count that must not rise is open anchors, less those newly
-/// disclosed and plus those whose closure is bookkeeping or whose open row was lost: a disclosed anchor records
-/// debt that already existed, a bookkeeping closure work that already existed, and a lost row no work at
-/// all. A lost row is refused whether it was open or closed, since a row moves between the registries and is
-/// never deleted. The registries are also checked as they stand, because a closed anchor left in the pending
-/// registry, or an open one in the done registry, makes both counts wrong.
+/// disclosed and plus those whose closure is bookkeeping or that were open and have no row now: a disclosed
+/// anchor records debt that already existed, a bookkeeping closure work that already existed, and a lost row
+/// no work at all. A lost row fails the balance whether it was open or closed, since a row moves between the
+/// registries and is never deleted. The registries are also checked as they stand, because a closed anchor left
+/// in the pending registry, an open one in the done registry, or an id with two rows makes both counts wrong.
 /// </remarks>
 public sealed class AnchorBalanceService(
     IHarnessContextLoader contextLoader,
@@ -172,6 +172,10 @@ public sealed class AnchorBalanceService(
             findings.AddRange(document.Rows.Select(row => registry.SplitVerdict(row, settings)).OfType<AnchorFinding>());
         }
 
+        // And an id with more than one row, as --lint reports one: everything here is counted by id, so two rows of one
+        // id count as one, and what becomes of either cannot be told apart.
+        findings.AddRange(AnchorEntry.Duplicates(now));
+
         var openAtBase = OpenAnchors(atBase);
         var openNow = OpenAnchors(now);
         var rowsAtBase = AnchorEntry.Of(atBase).ToLookup(entry => entry.Row.Id, AnchorIdMatch.Comparer);
@@ -179,23 +183,40 @@ public sealed class AnchorBalanceService(
 
         // An id with a row where the change began and none now was lost - deleted, or renamed by hand - whether that row
         // was open or closed: a row moves between the registries and is never deleted. One open there leaves the open
-        // count, and that is no work done, so it is not credited; one closed there leaves no count, and only this
-        // comparison can see it go, since --lint reads the registries as they stand. Each is said of the registry its row
-        // was read from there, its open row's where it had one.
+        // count, and that is no work done, so it is not credited; one closed there leaves no count, and no other check
+        // compares the registries with where the change began - --lint reads them as they stand, and
+        // check-anchor-citations notices only a citation the row leaves behind. Each is said of the registry its row was
+        // read from there, its open row's where it had one. Judged only where both registries were read whole: a missing
+        // or malformed one is its own finding, and every row it hides would read as lost - every closed anchor the done
+        // registry ever recorded among them.
+        var readWhole = now.Count == registries.All.Count && now.All(pair => pair.Document.IsSound);
+
         var lost = rowsAtBase
-            .Where(rows => !rowsNow.Contains(rows.Key))
+            .Where(rows => readWhole && !rowsNow.Contains(rows.Key))
             .Select(rows => openAtBase.TryGetValue(rows.Key, out var open)
-                ? (Loss: new AnchorLoss(rows.Key, Closed: false), open.Registry)
-                : (Loss: new AnchorLoss(rows.Key, Closed: true), rows.First().Registry))
+                ? (Loss: new AnchorLoss(rows.Key, AlreadyClosed: false), Entry: open)
+                : (Loss: new AnchorLoss(rows.Key, AlreadyClosed: true), Entry: rows.First()))
             .OrderBy(pair => pair.Loss.Id, StringComparer.Ordinal)
             .ToList();
 
-        // An id open where the change began and not now that still has rows, every one closed, was closed by the change.
+        // An id open where the change began and not now that still has rows, every one closed, was closed by the change:
+        // its work, unless a row of it says the closure is bookkeeping, or it had a closed row there already beside the
+        // open one, when the change took away only the open copy of a duplicate.
+        bool ClosedAlready(string id) => rowsAtBase[id].Any(entry => entry.Row.IsClosed);
+
         var closed = openAtBase.Keys
             .Where(id => !openNow.ContainsKey(id) && rowsNow.Contains(id))
             .Order(StringComparer.Ordinal)
-            .Select(id => new AnchorClosing(id, rowsNow[id].Any(entry => entry.Row.IsBookkeepingClosure(settings))))
+            .Select(id => new AnchorClosing(id, ClosedAlready(id) || rowsNow[id].Any(entry => entry.Row.IsBookkeepingClosure(settings))))
             .ToList();
+
+        findings.AddRange(closed
+            .Where(closing => ClosedAlready(closing.Id))
+            .Select(closing => rowsNow[closing.Id].First())
+            .Select(entry => entry.Registry.Note(
+                entry.Row,
+                $"anchor '{entry.Row.Id}' had a closed row already where this change began, beside its open one, so closing "
+                + "it is no work and is not credited")));
 
         // A closure whose Trigger opens with the bookkeeping pair that is not read as one is credited as work, which its
         // writer may not have meant: said, and counted as it reads.
@@ -204,15 +225,18 @@ public sealed class AnchorBalanceService(
             .Select(entry => entry.Registry.UnreadBookkeepingPair(entry.Row, settings))
             .OfType<AnchorFinding>());
 
-        // A lost row is a finding only where both registries were read whole: a missing or malformed one is its own
-        // finding, and every row it hides would read as lost.
-        if (now.Count == registries.All.Count && now.All(pair => pair.Document.IsSound))
-        {
-            findings.AddRange(lost.Select(pair => pair.Registry.Fatal(
-                $"anchor '{pair.Loss.Id}' was {(pair.Loss.Closed ? "closed" : "open")} where this change began and neither "
-                + "registry holds it now: a row moves between the registries and is never deleted, so its row was lost - "
-                + "deleted, or its id changed by hand")));
-        }
+        // A row whose Anchor cell did not name one id there read as the cell's text, or as the first id it named, so
+        // repairing that cell, as --lint asks, changes the id it reads as, which cannot be told from a loss by id: noted,
+        // since failing would fail the change repairing it.
+        findings.AddRange(lost.Select(pair => rules.NamesOneId(pair.Entry.Row.AnchorCell)
+            ? pair.Entry.Registry.Fatal(
+                $"anchor '{pair.Loss.Id}' was {(pair.Loss.AlreadyClosed ? "closed" : "open")} where this change began and "
+                + "neither registry holds it now: a row moves between the registries and is never deleted, so its row was "
+                + "lost - deleted, or its id changed by hand")
+            : pair.Entry.Registry.Note(
+                $"the row read as '{pair.Loss.Id}' where this change began did not name one id in its Anchor cell, and no "
+                + $"row reads as '{pair.Loss.Id}' now: repairing that cell changes what its row reads as, so whether the row "
+                + "was repaired or lost cannot be told")));
 
         var opened = openNow
             .Where(pair => !openAtBase.ContainsKey(pair.Key))

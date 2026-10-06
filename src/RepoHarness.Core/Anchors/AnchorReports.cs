@@ -224,7 +224,6 @@ public static class AnchorReports
     private static List<string> BalanceText(AnchorBalanceReport report)
     {
         var created = report.Opened.Count - report.Disclosed;
-        var lostClosed = report.Lost.Count(loss => loss.Closed);
 
         var lines = new List<string>
         {
@@ -233,14 +232,14 @@ public static class AnchorReports
             $"open      {report.OpenAtBase} {Measured(report)}, {report.OpenNow} now",
             $"change    {report.Closed.Count} closed ({report.Bookkeeping} bookkeeping), "
             + (report.Lost.Count > 0
-                ? $"{report.Lost.Count} lost{(lostClosed > 0 ? $" ({lostClosed} already closed)" : string.Empty)}, "
+                ? $"{report.Lost.Count} lost{(report.AlreadyClosed > 0 ? $" ({report.AlreadyClosed} already closed)" : string.Empty)}, "
                 : string.Empty)
             + $"{report.Opened.Count} opened ({created} created, {report.Disclosed} disclosed); counted {SignedCount(report.NetNew)}",
         };
 
         lines.AddRange(report.Closed.Select(closing =>
             $"  - {closing.Id}{(closing.Bookkeeping ? "   [bookkeeping: not credited]" : string.Empty)}"));
-        lines.AddRange(report.Lost.Select(loss => $"  ! {loss.Id}   [lost: {(loss.Closed ? "already closed" : "not credited")}]"));
+        lines.AddRange(report.Lost.Select(loss => $"  ! {loss.Id}   [lost: {(loss.AlreadyClosed ? "already closed" : "not credited")}]"));
         lines.AddRange(report.Opened.Select(opening =>
             $"  + {opening.Id}   {opening.Excerpt}{(opening.Disclosed ? "   [disclosed: not counted]" : string.Empty)}"));
 
@@ -290,7 +289,7 @@ public static class AnchorReports
             ["lost"] = new JsonArray([.. report.Lost.Select(loss => (JsonNode)new JsonObject
             {
                 ["anchor"] = loss.Id,
-                ["closed"] = loss.Closed,
+                ["alreadyClosed"] = loss.AlreadyClosed,
             })]),
             ["opened"] = new JsonArray([.. report.Opened.Select(opening => (JsonNode)new JsonObject
             {

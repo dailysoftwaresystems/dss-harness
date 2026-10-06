@@ -464,15 +464,8 @@ public sealed class AnchorRegistryService(
             }
         }
 
-        // One id, one row, across both registries: a duplicate hands a reader two histories under one name.
-        foreach (var group in AnchorEntry.Of(documents).GroupBy(entry => entry.Row.Id, AnchorIdMatch.Comparer).Where(group => group.Count() > 1))
-        {
-            var locations = string.Join(", ", group.Select(entry => $"{entry.Registry.RelativePath}:{entry.Row.LineNumber}"));
-
-            findings.AddRange(group.Select(entry => entry.Registry.Fatal(
-                entry.Row,
-                $"'{group.Key}' has {group.Count()} rows ({locations}); one id has one row")));
-        }
+        // One id, one row, across both registries.
+        findings.AddRange(AnchorEntry.Duplicates(documents));
 
         return [.. findings
             .OrderBy(finding => finding.File == registries.Pending.RelativePath ? 0 : 1)

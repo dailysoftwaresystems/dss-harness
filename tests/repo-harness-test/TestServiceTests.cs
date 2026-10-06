@@ -318,22 +318,34 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
-    /// ctest that found no test to run says so in the leg's detail, however it ends: exiting 8 under --no-tests=error,
-    /// or 0 with its success pattern unmatched, as measured with ctest 4.3.2. Another runner printing the same line is
-    /// not read as ctest, and a leg whose success pattern matched passed as it declared.
+    /// ctest that found no test to run says so in the detail of a leg that did not pass, whichever way it ended:
+    /// exiting 8 under --no-tests=error, or 0 with its success pattern unmatched, as measured with ctest 4.3.2 - and
+    /// 0 too where it was given no option at all and found no test configuration. Another runner printing the same
+    /// line is not read as ctest, a leg whose success pattern matched passed as it declared, and a ctest that failed
+    /// without the line, or printed it beside the summary of tests that ran - a test running ctest itself - is not
+    /// read as one that found none.
     /// </summary>
     [Theory]
-    [InlineData("ctest", 8, "tests passed", LegVerdict.Failed, "test exited 8: " + NoTestFound)]
-    [InlineData("CTEST.EXE", 0, "tests passed", LegVerdict.Unwitnessed, "test exited 0 and its success pattern never matched its output: " + NoTestFound)]
-    [InlineData("tools/run-tests", 8, "tests passed", LegVerdict.Failed, "test exited 8")]
-    [InlineData("ctest", 0, "were found", LegVerdict.Passed, "")]
-    public async Task CtestThatFoundNoTest_SaysSoInTheLegsDetail(string program, int exitCode, string successPattern, LegVerdict verdict, string detail)
+    [InlineData("ctest", 8, "tests passed", "No tests were found!!!", LegVerdict.Failed, "test exited 8: " + NoTestFound)]
+    [InlineData("CTEST.EXE", 0, "tests passed", "No tests were found!!!", LegVerdict.Unwitnessed, "test exited 0 and its success pattern never matched its output: " + NoTestFound)]
+    [InlineData("ctest", 0, "tests passed", "No test configuration file found!", LegVerdict.Unwitnessed, "test exited 0 and its success pattern never matched its output: " + NoTestFound)]
+    [InlineData("tools/run-tests", 8, "tests passed", "No tests were found!!!", LegVerdict.Failed, "test exited 8")]
+    [InlineData("ctest", 0, "were found", "No tests were found!!!", LegVerdict.Passed, "")]
+    [InlineData("ctest", 8, "tests passed", "The following tests FAILED", LegVerdict.Failed, "test exited 8")]
+    [InlineData("ctest", 8, "All tests passed", "No tests were found!!!\n50% tests passed, 1 tests failed out of 2", LegVerdict.Failed, "test exited 8")]
+    public async Task CtestThatFoundNoTest_SaysSoInTheLegsDetail(
+        string program,
+        int exitCode,
+        string successPattern,
+        string output,
+        LegVerdict verdict,
+        string detail)
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
         temp.WriteFile(Fixture, "fixture");
 
-        var result = await Service(factory, new ScriptedRunner(() => Task.CompletedTask, exitCode, "No tests were found!!!")).RunAsync(
+        var result = await Service(factory, new ScriptedRunner(() => Task.CompletedTask, exitCode, output)).RunAsync(
             Config(),
             Request(temp, new TestInvocation { Runner = program, Args = [], SuccessPattern = successPattern }),
             TestContext.Current.CancellationToken);

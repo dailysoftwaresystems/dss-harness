@@ -15,6 +15,7 @@ public sealed class AnchorBalanceServiceTests
     private const string StaleMark = "D-AREA-TOPIC-STALEMARK";
     private const string WorkDone = "D-AREA-TOPIC-WORKDONE";
     private const string NewDebt = "D-AREA-TOPIC-NEWDEBT";
+    private const string Repaired = "D-AREA-TOPIC-REPAIRED";
 
     /// <summary>A Trigger that carries a closure by this change's work.</summary>
     private const string Worked = "✅ **CLOSED** 2026-10-01: the work landed in this change";
@@ -166,7 +167,8 @@ public sealed class AnchorBalanceServiceTests
 
     /// <summary>
     /// A closure is bookkeeping where any row its id has says so, whichever row comes first. Every row an id still has is
-    /// closed, and crediting the closure would take every one of them saying the work was done by this change.
+    /// closed, and crediting the closure would take every one of them saying the work was done by this change. Two rows
+    /// of one id are a finding of their own, on each row, as --lint's are.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -185,6 +187,61 @@ public sealed class AnchorBalanceServiceTests
 
         Assert.Equal([new AnchorClosing(One, Bookkeeping: true)], report.Closed);
         Assert.Equal(0, report.NetNew);
+        Assert.False(report.Passed);
+        Assert.Equal(2, report.Findings.Count(finding => finding.Message.Contains($"'{One}' has 2 rows", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// An id with two rows fails the balance with the findings --lint gives it, one on each row: everything here is
+    /// counted by id, so the two count as one, and what becomes of either cannot be told apart.
+    /// </summary>
+    [Fact]
+    public async Task AnIdWithTwoRows_FailsTheBalance_AsItFailsLint()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp, One);
+        File.AppendAllText(DonePath(temp), $"| `{One}` | P1 | ✅ CLOSED | t | - | - |\n");
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
+        var lint = await harness.AnchorRegistryService.LintAsync(temp.Path, cancellationToken);
+
+        Assert.Equal((1, 1, 0), (report.OpenAtBase, report.OpenNow, report.NetNew));
+        Assert.False(report.Passed);
+        Assert.Equal(2, report.Findings.Count);
+        Assert.Equal(
+            lint.Select(finding => (finding.File, finding.LineNumber, finding.Severity, finding.Message)).Order(),
+            report.Findings.Select(finding => (finding.File, finding.LineNumber, finding.Severity, finding.Message)).Order());
+    }
+
+    /// <summary>
+    /// An anchor that had a closed row already where the change began, beside its open one, is not credited when the
+    /// change takes the open row away: the work was recorded as done before the change, which took away only the open
+    /// copy of a duplicate. Credited, deleting a row by hand paid for a new anchor. Noted, failing nothing itself.
+    /// </summary>
+    [Fact]
+    public async Task TakingAwayTheOpenCopyOfAnAnchorClosedAlready_CreditsTheChangeNothing()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp, One);
+        File.AppendAllText(DonePath(temp), $"| `{One}` | P1 | ✅ CLOSED | t | - | - |\n");
+        await harness.CommitAllAsync(temp.Path, "a closed copy beside the open original", cancellationToken);
+
+        TakeRowByHand(PendingPath(temp), One);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
+
+        Assert.Equal([new AnchorClosing(One, Bookkeeping: true)], report.Closed);
+        Assert.Empty(report.Lost);
+        Assert.Equal(1, report.NetNew);
+        Assert.False(report.Passed);
+
+        var note = Assert.Single(report.Findings);
+        Assert.Equal((AnchorSettings.DefaultDoneAnchorsPath, AnchorFindingSeverity.Note), (note.File, note.Severity));
+        Assert.Contains($"anchor '{One}' had a closed row already where this change began, beside its open one", note.Message, StringComparison.Ordinal);
+        Assert.Contains($"  - {One}   [bookkeeping: not credited]", AnchorReports.Balance(report, json: false).Data);
     }
 
     /// <summary>
@@ -204,7 +261,7 @@ public sealed class AnchorBalanceServiceTests
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, TestContext.Current.CancellationToken);
 
-        Assert.Equal([new AnchorLoss(One, Closed: false)], report.Lost);
+        Assert.Equal([new AnchorLoss(One, AlreadyClosed: false)], report.Lost);
         Assert.Empty(report.Closed);
         Assert.Equal([Two], report.Opened.Select(opening => opening.Id));
         Assert.Equal(1, report.NetNew);
@@ -226,7 +283,7 @@ public sealed class AnchorBalanceServiceTests
         Assert.Equal(
             [(One, false)],
             json.RootElement.GetProperty("lost").EnumerateArray()
-                .Select(lost => (lost.GetProperty("anchor").GetString(), lost.GetProperty("closed").GetBoolean())));
+                .Select(lost => (lost.GetProperty("anchor").GetString(), lost.GetProperty("alreadyClosed").GetBoolean())));
         Assert.Empty(json.RootElement.GetProperty("closed").EnumerateArray());
     }
 
@@ -251,14 +308,14 @@ public sealed class AnchorBalanceServiceTests
             report.Findings,
             finding => finding.Severity == AnchorFindingSeverity.Fatal
                 && finding.Message.Contains($"'{Two}' was open where this change began", StringComparison.Ordinal));
-        Assert.Equal([new AnchorLoss(Two, Closed: false)], report.Lost);
+        Assert.Equal([new AnchorLoss(Two, AlreadyClosed: false)], report.Lost);
         Assert.False(report.Passed);
     }
 
     /// <summary>
     /// A row closed where the change began moves between the registries and is never deleted too, so one neither
     /// registry holds now fails the balance as an open one does, whether it was deleted or its id changed by hand. It
-    /// was counted nowhere, so it is listed apart and charges the change nothing; unrefused, the done registry lost the
+    /// was counted nowhere, so it is listed apart and charges the change nothing; unreported, the done registry lost the
     /// record of work every later read of it trusts was kept.
     /// </summary>
     [Theory]
@@ -283,7 +340,7 @@ public sealed class AnchorBalanceServiceTests
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
 
-        Assert.Equal([new AnchorLoss(One, Closed: true)], report.Lost);
+        Assert.Equal([new AnchorLoss(One, AlreadyClosed: true)], report.Lost);
         Assert.Empty(report.Closed);
         Assert.Empty(report.Opened);
         Assert.Equal((0, 0, 0), (report.OpenAtBase, report.OpenNow, report.NetNew));
@@ -301,7 +358,115 @@ public sealed class AnchorBalanceServiceTests
 
         using var json = JsonDocument.Parse(AnchorReports.Balance(report, json: true).Data[0]);
         var lost = Assert.Single(json.RootElement.GetProperty("lost").EnumerateArray());
-        Assert.Equal((One, true), (lost.GetProperty("anchor").GetString(), lost.GetProperty("closed").GetBoolean()));
+        Assert.Equal((One, true), (lost.GetProperty("anchor").GetString(), lost.GetProperty("alreadyClosed").GetBoolean()));
+    }
+
+    /// <summary>
+    /// Rows lost from both registries in one change are each a finding, said of the registry each was read from where
+    /// the change began, and listed apart in id order: the open one not credited, the closed one changing no count.
+    /// </summary>
+    [Fact]
+    public async Task RowsLostFromBothRegistries_AreEachAFinding_OfTheRegistryEachWasReadFrom()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp, One, Two);
+        var done = await HoldingAsync(harness, temp, AnchorRegistryKind.Done, Two);
+        await harness.CommitAllAsync(temp.Path, "closed before the change", cancellationToken);
+
+        TakeRowByHand(PendingPath(temp), One);
+        TakeRowByHand(done, Two);
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
+
+        Assert.Equal([new AnchorLoss(One, AlreadyClosed: false), new AnchorLoss(Two, AlreadyClosed: true)], report.Lost);
+        Assert.Equal((1, 0, 0), (report.OpenAtBase, report.OpenNow, report.NetNew));
+        Assert.False(report.Passed);
+        Assert.Equal(
+            [
+                (AnchorSettings.DefaultDoneAnchorsPath, AnchorFindingSeverity.Fatal, $"anchor '{Two}' was closed where this change began"),
+                (AnchorSettings.DefaultPendingAnchorsPath, AnchorFindingSeverity.Fatal, $"anchor '{One}' was open where this change began"),
+            ],
+            report.Findings.Select(finding => (finding.File, finding.Severity, finding.Message[..finding.Message.IndexOf(" and ", StringComparison.Ordinal)])));
+
+        var receipt = AnchorReports.Balance(report, json: false);
+        Assert.Contains("change    0 closed (0 bookkeeping), 2 lost (1 already closed), 0 opened (0 created, 0 disclosed); counted 0", receipt.Data);
+        Assert.Equal(
+            [$"  ! {One}   [lost: not credited]", $"  ! {Two}   [lost: already closed]"],
+            receipt.Data.Where(line => line.StartsWith("  ! ", StringComparison.Ordinal)));
+        Assert.Equal("2 problem(s) in the registries must be fixed first", receipt.Message);
+
+        using var json = JsonDocument.Parse(AnchorReports.Balance(report, json: true).Data[0]);
+        Assert.Equal(
+            [(One, false), (Two, true)],
+            json.RootElement.GetProperty("lost").EnumerateArray()
+                .Select(lost => (lost.GetProperty("anchor").GetString(), lost.GetProperty("alreadyClosed").GetBoolean())));
+    }
+
+    /// <summary>
+    /// A closed row lost from the pending registry it was misfiled in where the change began is said of that registry,
+    /// where its row was: the done registry never held it.
+    /// </summary>
+    [Fact]
+    public async Task AClosedRowLostFromPending_IsAFindingOfPending()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp);
+        File.AppendAllText(PendingPath(temp), $"| `{One}` | P1 | ✅ CLOSED | t | - | - |\n");
+        await harness.CommitAllAsync(temp.Path, "misfiled before the change", cancellationToken);
+        TakeRowByHand(PendingPath(temp), One);
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
+
+        Assert.Equal([new AnchorLoss(One, AlreadyClosed: true)], report.Lost);
+        var finding = Assert.Single(report.Findings);
+        Assert.Equal((AnchorSettings.DefaultPendingAnchorsPath, AnchorFindingSeverity.Fatal), (finding.File, finding.Severity));
+        Assert.Contains($"anchor '{One}' was closed where this change began", finding.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A row whose Anchor cell named no id, or more than one, read as the cell's text or as the first id it named, so
+    /// repairing that cell - as --lint asks - changes the id it reads as, which cannot be told from a loss by id: noted,
+    /// whether it was open or closed, rather than failing the change repairing it. An open one still leaves the open
+    /// count uncredited, and its repaired id is counted as opened. A cell naming one id, however often and backticked or
+    /// not, keeps its id through a repair, so its row rewritten to another id was lost.
+    /// </summary>
+    [Theory]
+    [InlineData("an anchor with no id", false, AnchorFindingSeverity.Note)]
+    [InlineData("an anchor with no id", true, AnchorFindingSeverity.Note)]
+    [InlineData($"`{One}` and `{Two}`", false, AnchorFindingSeverity.Note)]
+    [InlineData(One, false, AnchorFindingSeverity.Fatal)]
+    [InlineData($"~~`{One}`~~ `{One}`", false, AnchorFindingSeverity.Fatal)]
+    public async Task ARowRewrittenToAnotherId_IsNoted_WhereItsAnchorCellNamedNoOneId(string anchorCell, bool open, AnchorFindingSeverity severity)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp);
+        var (path, status) = open ? (PendingPath(temp), "🟠 OPEN") : (DonePath(temp), "✅ CLOSED");
+        File.AppendAllText(path, $"| {anchorCell} | P1 | {status} | t | - | - |\n");
+        await harness.CommitAllAsync(temp.Path, "a row --lint refuses", cancellationToken);
+
+        TakeRowByHand(path, anchorCell);
+        File.AppendAllText(path, $"| `{Repaired}` | P1 | {status} | t | - | - |\n");
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
+
+        Assert.Equal(!open, Assert.Single(report.Lost).AlreadyClosed);
+        Assert.Equal(open ? [Repaired] : [], report.Opened.Select(opening => opening.Id));
+        Assert.Equal(open ? 1 : 0, report.NetNew);
+        Assert.Equal(!open && severity == AnchorFindingSeverity.Note, report.Passed);
+
+        var finding = Assert.Single(report.Findings);
+        Assert.Equal(
+            (open ? AnchorSettings.DefaultPendingAnchorsPath : AnchorSettings.DefaultDoneAnchorsPath, severity),
+            (finding.File, finding.Severity));
+        Assert.Contains(
+            severity == AnchorFindingSeverity.Note
+                ? "did not name one id in its Anchor cell"
+                : "neither registry holds it now",
+            finding.Message,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -511,6 +676,8 @@ public sealed class AnchorBalanceServiceTests
 
         Assert.False(report.Passed);
         Assert.Contains("outside any table", Assert.Single(report.Findings).Message, StringComparison.Ordinal);
+        Assert.Empty(report.Lost);
+        Assert.DoesNotContain(AnchorReports.Balance(report, json: false).Data, line => line.StartsWith("  ! ", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -734,6 +901,7 @@ public sealed class AnchorBalanceServiceTests
 
         Assert.False(report.Passed);
         Assert.Contains(missing, Assert.Single(report.Findings).Message, StringComparison.Ordinal);
+        Assert.Empty(report.Lost);
     }
 
     /// <summary>
