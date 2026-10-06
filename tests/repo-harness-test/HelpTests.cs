@@ -155,8 +155,9 @@ public sealed partial class HelpTests
     /// <summary>
     /// The config topic says how test --filter, --exclude and --label reach a runner, what each is
     /// for ctest, that a label can now be chosen as well as left out, how several exclusions reach
-    /// a runner that would not leave out each of them given apart, and what a leg on a host's copy
-    /// leaves out beside them.
+    /// a runner that would not leave out each of them given apart, what a leg on a host's copy
+    /// leaves out beside them, and that a selection ctest could only find empty is refused before
+    /// the build.
     /// </summary>
     [Fact]
     public async Task ConfigTopic_SaysHowTheTestSelectionReachesTheRunner()
@@ -171,6 +172,9 @@ public sealed partial class HelpTests
             "one the sync made, or one it took over - whose history is not this checkout's. Each",
             "sync makes its index hold the files it carried, so a build there fingerprints its",
             "remoteExcludes are given to every leg a host runs, beside --exclude's, and to none",
+            "reads there unless the args or a preset choose tests by name too - or beside a test",
+            "preset that takes a union or cannot be read. So is a selection ctest could only find",
+            "says it found no test only once the leg has been built. Where it still finds none, the",
         })
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
@@ -561,8 +565,8 @@ public sealed partial class HelpTests
             $"a closure whose Trigger opens with {AnchorStatus.ClosedMark}{AnchorStatus.BookkeepingMark} records work that already existed",
             prose,
             StringComparison.Ordinal);
-        Assert.Contains("an anchor open where the change began is in neither registry now", prose, StringComparison.Ordinal);
-        Assert.Contains("a lost one is not credited either", prose, StringComparison.Ordinal);
+        Assert.Contains("an anchor open or closed where the change began is in neither registry now", prose, StringComparison.Ordinal);
+        Assert.Contains("a lost one that was open is not credited either", prose, StringComparison.Ordinal);
         Assert.Contains("during an unfinished merge, HEAD is taken merged with what the merge brings in", prose, StringComparison.Ordinal);
     }
 

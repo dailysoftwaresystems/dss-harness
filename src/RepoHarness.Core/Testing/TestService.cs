@@ -162,8 +162,8 @@ public interface ITestService
     /// <summary>
     /// Refuses <paramref name="request"/> where its tests could not be run as asked - no settings, a
     /// runner or pattern missing, a pattern that is not a regular expression, a filter, an exclusion or
-    /// a label the runner would read otherwise - before anything is built for them: whatever the run
-    /// refuses before it starts, refused as the run refuses it.
+    /// a label the runner would read otherwise, a selection ctest could only find empty - before anything
+    /// is built for them: whatever the run refuses before it starts, refused as the run refuses it.
     /// </summary>
     /// <param name="config">The whole configuration.</param>
     /// <param name="request">The leg's test run.</param>
@@ -346,7 +346,7 @@ public sealed class TestService(
 
         ContentionWarnings.Write(_output, CommandName, request.Leg, contention, config.Contention);
 
-        var reached = seen.Decide(request.Leg, [phase.Verdict()]);
+        var reached = seen.Decide(request.Leg, [Explained(phase, command)]);
         var entry = new LegEntry
         {
             Leg = request.Leg,
@@ -415,11 +415,12 @@ public sealed class TestService(
         }
         catch (HarnessException refused) when (remote.Count > 0 && Holds(() => Given(request.Excludes)))
         {
-            // Refused over what a host's leg leaves out beside what was asked, which nobody typed: said so.
+            // Refused over what a host's leg leaves out beside what was asked, which nobody typed: said so, and of
+            // which leg, since the legs this machine runs are not given them.
             throw new HarnessException(
                 refused.ExitCode,
                 $"{refused.Message} It is refused over the test settings' remoteExcludes - {string.Join(", ", remote)} - "
-                + "which every leg a host runs is given beside what --exclude gives.",
+                + $"which leg '{request.Leg}' is given beside what --exclude gives, as every leg a host runs is.",
                 refused);
         }
 
@@ -431,6 +432,24 @@ public sealed class TestService(
         _ = PhaseRunner.Patterns(request.Leg, request.PhaseName, invocation.SuccessPattern, TimingPatterns(config, request));
 
         return (settings, invocation, cores, command, counter);
+    }
+
+    /// <summary>
+    /// The verdict <paramref name="phase"/> gives its leg, saying so where ctest had no test to run: it exits 8 then under
+    /// --no-tests=error, and 0 otherwise with its success pattern unmatched, and either alone reads as a suite that
+    /// failed, or one that ran nothing for a reason of its own.
+    /// </summary>
+    private static ReachedVerdict Explained(PhaseResult phase, TestCommand command)
+    {
+        var verdict = phase.Verdict();
+
+        return !phase.Passed && Ctest.FoundNone(command.Program, phase.Output)
+            ? verdict with
+            {
+                Detail = $"{verdict.Detail}: ctest found no test to run - what chose its tests chose none, or it looked "
+                    + "where there are none",
+            }
+            : verdict;
     }
 
     /// <summary>Whether <paramref name="command"/> can be made, where the one asked for was refused.</summary>

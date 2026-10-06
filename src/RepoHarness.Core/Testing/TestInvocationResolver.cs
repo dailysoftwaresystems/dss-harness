@@ -102,8 +102,10 @@ public static class TestInvocationResolver
     /// preset that sets the same filter, is refused rather than run on a selection nobody asked for. A
     /// label is not, since ctest reads it as one more a test must carry, which is what it asks. Beside
     /// what voids the options, any of the three is refused: --rerun-failed, --union in the args - which
-    /// leaves ctest reading -E alone - a preset that takes a union, and a preset that could not be read
-    /// to say what it chooses.
+    /// leaves ctest reading -E alone, and that only where nothing chooses tests by name - a preset that
+    /// takes a union, and a preset that could not be read to say what it chooses. And so is a selection
+    /// ctest could only find empty, where any of the three is part of it (see <see cref="RefuseChoosingNone"/>):
+    /// ctest says so only once the leg has been built for it.
     /// </para>
     /// </remarks>
     public static TestCommand CommandFor(
@@ -184,6 +186,8 @@ public static class TestInvocationResolver
             }
         }
 
+        RefuseChoosingNone(invocation, filter, excludes ?? [], labels ?? [], preset.Present);
+
         // Through CoreCounts rather than spelled again here. A second implementation of the same
         // rule is how an explicit '-j 2' in args ends up beside a spliced '-j 6', with the runner
         // picking one and the report saying which it asked for rather than which it got.
@@ -263,7 +267,106 @@ public static class TestInvocationResolver
                 + "leave out, reading -E alone. Take --union out of the args.");
         }
 
+        if (option.ReadBesideUnion && Ctest.Unites(invocation.Runner, invocation.Args) && Ctest.ChoosesByName(invocation.Args))
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                $"{what} was given as {option.Spellings[0]}, and the test settings run ctest with --union and -R, beside "
+                + $"both of which - measured with ctest 4.3.2 - ctest runs every test, reading no {option.Spellings[0]}. "
+                + "Take --union out of the args.");
+        }
+
         preset.Refuse(option, what, sameFilterRefuses);
+    }
+
+    /// <summary>
+    /// Refuses a selection ctest could only find empty: a value one of its options chooses tests by, which another
+    /// leaves out by the same part of a test - its name, or one of its labels - where the filter, a label or an
+    /// exclusion given is either of the two. Measured with ctest 4.3.2, -L x beside -LE x, and -R x beside -E x,
+    /// choose no test, and ctest says so - 'No tests were found!!!', exiting 8 under --no-tests=error - only once
+    /// the leg has been built for it.
+    /// </summary>
+    /// <remarks>
+    /// A value counts where ctest is bound to read it. Of the options choosing tests, every value of one it reads
+    /// each of - a label - and the last of one it keeps only the last of. Of those leaving tests out, every
+    /// exclusion given, since each leaves its tests out whatever else does (see <see cref="Excluding"/>); the last
+    /// value the args give -E; and the value they give -LE where it is their only one and no test preset can add
+    /// another, since ctest leaves out only a test every one matches. Beside --union or --rerun-failed ctest reads
+    /// the options otherwise, and nothing is judged there: anything given beside them that they void is refused
+    /// already. Two values are the same only spelled the same: two patterns spelled apart may still match alike,
+    /// and a guess would refuse a selection that runs. Nor are the args judged alone, which run as their author
+    /// wrote them.
+    /// </remarks>
+    private static void RefuseChoosingNone(
+        ResolvedTestInvocation invocation,
+        string? filter,
+        IReadOnlyList<string> excludes,
+        IReadOnlyList<string> labels,
+        bool presetNamed)
+    {
+        if (Ctest.Unites(invocation.Runner, invocation.Args) || Ctest.RerunsFailed(invocation.Runner, invocation.Args))
+        {
+            return;
+        }
+
+        var chosen = new List<Choice>();
+        var leftOut = new List<Choice>();
+
+        if (filter is not null && Ctest.SelectionOf(invocation.Runner, invocation.FilterArg) is { Excludes: false } filterOption)
+        {
+            chosen.Add(new Choice(filterOption, invocation.FilterArg!, filter, "filter"));
+        }
+
+        var labelOption = Ctest.SelectionOf(invocation.Runner, invocation.LabelArg);
+
+        if (labelOption is { Excludes: false })
+        {
+            chosen.AddRange((labelOption.Narrows ? labels : labels.TakeLast(1))
+                .Select(label => new Choice(labelOption, invocation.LabelArg!, label, "label")));
+        }
+
+        if (Ctest.SelectionOf(invocation.Runner, invocation.ExcludeArg) is { Excludes: true } excludeOption)
+        {
+            leftOut.AddRange(excludes.Select(exclude => new Choice(excludeOption, invocation.ExcludeArg!, exclude, "exclusion")));
+        }
+
+        foreach (var (option, values) in Ctest.SelectionsIn(invocation.Runner, invocation.Args))
+        {
+            var spelled = option.Spellings[0];
+
+            if (!option.Excludes && option.Narrows)
+            {
+                chosen.AddRange(values.Select(value => new Choice(option, spelled, value, Given: null)));
+            }
+            else if (!option.Excludes && !(option == labelOption && labels.Count > 0))
+            {
+                // A label given through the same option comes after the args' own, and ctest keeps only that.
+                chosen.Add(new Choice(option, spelled, values[^1], Given: null));
+            }
+            else if (option.Excludes && (!option.Narrows || (values.Count == 1 && !presetNamed)))
+            {
+                leftOut.Add(new Choice(option, spelled, values[^1], Given: null));
+            }
+        }
+
+        var none = chosen
+            .SelectMany(choice => leftOut.Select(exclusion => (Chosen: choice, LeftOut: exclusion)))
+            .FirstOrDefault(pair => (pair.Chosen.Given ?? pair.LeftOut.Given) is not null
+                && string.Equals(pair.Chosen.Option.Reads, pair.LeftOut.Option.Reads, StringComparison.Ordinal)
+                && string.Equals(pair.Chosen.Value, pair.LeftOut.Value, StringComparison.Ordinal));
+
+        if (none.Chosen is null)
+        {
+            return;
+        }
+
+        var matching = none.Chosen.Option.Reads == "label" ? "carrying a label that matches it" : "whose name matches it";
+
+        throw new HarnessException(
+            HarnessExit.UsageError,
+            $"{none.Chosen.Said(start: true)} chooses only tests {matching}, and {none.LeftOut.Said(start: false)} leaves every "
+            + "one of them out, so ctest would choose no test - and say so only once the leg had been built for it. Take "
+            + "one of them out.");
     }
 
     /// <summary>What ctest makes of one of its options given twice, to end a sentence.</summary>
@@ -360,6 +463,9 @@ public static class TestInvocationResolver
 
         private (IReadOnlySet<string>? Filters, string? Unread)? _read;
 
+        /// <summary>Whether the args name a test preset.</summary>
+        public bool Present => _name is not null;
+
         /// <summary>The preset the args name, its placeholders filled in as every other argument's are, where the leg is in hand.</summary>
         private static string? Named(ResolvedTestInvocation invocation, LegPaths? paths)
             => Ctest.PresetIn(invocation.Runner, invocation.Args) is { } written && paths is not null
@@ -411,7 +517,30 @@ public static class TestInvocationResolver
                     + $"filter.{option.PresetFilter} itself; given that and {option.Spellings[0]}, ctest {Twice(option)}. Declare "
                     + "it in the preset, or run ctest without one.");
             }
+
+            if (option.ReadBesideUnion && Ctest.Unites(invocation.Runner, invocation.Args) && filters.Contains(Ctest.ByNamePresetFilter))
+            {
+                throw new HarnessException(
+                    HarnessExit.UsageError,
+                    $"{what} was given as {option.Spellings[0]}, and the test settings run ctest with --union and test preset "
+                    + $"'{_name}', which sets filter.{Ctest.ByNamePresetFilter}: beside both - measured with ctest 4.3.2 - ctest "
+                    + $"runs every test, reading no {option.Spellings[0]}. Take --union out of the args.");
+            }
         }
+    }
+
+    /// <summary>A value one of ctest's options is given that chooses tests, or leaves them out.</summary>
+    /// <param name="Option">The option.</param>
+    /// <param name="Spelled">The option as the test settings declare it, or its first spelling for a value the args give.</param>
+    /// <param name="Value">The value.</param>
+    /// <param name="Given">What was given as it - the filter, a label or an exclusion - or null for the args' own.</param>
+    private sealed record Choice(Ctest.Selection Option, string Spelled, string Value, string? Given)
+    {
+        /// <summary>The value, as a sentence names it, starting one where <paramref name="start"/>.</summary>
+        public string Said(bool start)
+            => Given is null
+                ? $"{Spelled} '{Value}' in the test settings' args"
+                : $"{(start ? "The" : "the")} {Given} '{Value}', given with {Spelled},";
     }
 
     /// <summary>

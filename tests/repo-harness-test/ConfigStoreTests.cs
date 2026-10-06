@@ -875,6 +875,8 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "excludeArg": "-LE", "remoteExcludes": ["git-state"] }""", "with no excludeJoin it would take them apart, never leaving out what each names; declare \"excludeJoin\": \"|\"")]
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "args": ["--rerun-failed"], "excludeArg": "-LE", "excludeJoin": "|", "remoteExcludes": ["git-state"] }""", "run ctest with --rerun-failed")]
     [InlineData("""{ "runner": "ctest", "successPattern": "ok", "args": ["-U", "ON"], "excludeArg": "-LE", "excludeJoin": "|", "remoteExcludes": ["git-state"] }""", "run ctest with --union")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "args": ["-U", "ON", "-R", "unit"], "excludeArg": "-E", "excludeJoin": "|", "remoteExcludes": ["git_state"] }""", "run ctest with --union and -R")]
+    [InlineData("""{ "runner": "ctest", "successPattern": "ok", "args": ["-L", "git-state"], "excludeArg": "-LE", "excludeJoin": "|", "remoteExcludes": ["git-state"] }""", "remoteExcludes cannot reach the runner on windows, linux, macos: -L 'git-state' in the test settings' args chooses only tests carrying a label that matches it, and the exclusion 'git-state', given with -LE, leaves every one of them out, so ctest would choose no test")]
     public void Load_RejectsATestInvocationThatCannotWork(string invocation, string expected)
     {
         var exception = LoadInvalid(

@@ -28,23 +28,33 @@ internal static class Ctest
     /// <summary>The option naming a test preset.</summary>
     private const string PresetArg = "--preset";
 
+    /// <summary>What ctest prints where it has no test to run: what chose its tests chose none, or it found none where it looked.</summary>
+    public const string NoTestsLine = "No tests were found!!!";
+
     /// <summary>The spellings of the option that takes the union of the tests -I and -R choose.</summary>
     private static readonly string[] UnionArgs = ["-U", "--union"];
+
+    /// <summary>The option that chooses tests by name, beside which --union reads no -E either.</summary>
+    private static readonly Selection ByName = new(["-R", "--tests-regex"], Excludes: false, Reads: "name", Narrows: false, ReadBesideUnion: false);
 
     /// <summary>
     /// ctest's options that choose its tests by name or by label. Measured with ctest 4.3.2: given one
     /// of them more than once, in any of its spellings, it keeps only the last where it names tests, and
     /// runs or leaves out only a test every one matches where it names labels; and a test preset that sets
     /// the same filter is combined with it the same way. Beside --union given in its args, whatever its
-    /// value, it reads -E alone.
+    /// value, it reads -E alone, and that only where nothing chooses tests by name: beside -R as well, or a
+    /// test preset setting filter.include.name, it runs every test.
     /// </summary>
     private static readonly Selection[] Selections =
     [
-        new(["-R", "--tests-regex"], "include.name", Narrows: false, ReadBesideUnion: false),
-        new(["-E", "--exclude-regex"], "exclude.name", Narrows: false, ReadBesideUnion: true),
-        new(["-L", "--label-regex"], "include.label", Narrows: true, ReadBesideUnion: false),
-        new(["-LE", "--label-exclude"], "exclude.label", Narrows: true, ReadBesideUnion: false),
+        ByName,
+        new(["-E", "--exclude-regex"], Excludes: true, Reads: "name", Narrows: false, ReadBesideUnion: true),
+        new(["-L", "--label-regex"], Excludes: false, Reads: "label", Narrows: true, ReadBesideUnion: false),
+        new(["-LE", "--label-exclude"], Excludes: true, Reads: "label", Narrows: true, ReadBesideUnion: false),
     ];
+
+    /// <summary>The filter a test preset chooses tests by name with, beside which --union reads no -E.</summary>
+    public static string ByNamePresetFilter => ByName.PresetFilter;
 
     /// <summary>
     /// The option <paramref name="argument"/> is to ctest, where <paramref name="runner"/> is ctest and
@@ -54,6 +64,31 @@ internal static class Ctest
     /// <param name="argument">The argument an invocation introduces a filter, an exclusion or a label with.</param>
     public static Selection? SelectionOf(string runner, string? argument)
         => IsCtest(runner) ? Selections.FirstOrDefault(selection => selection.Spellings.Contains(argument, StringComparer.Ordinal)) : null;
+
+    /// <summary>
+    /// Each of ctest's options that choose its tests that <paramref name="args"/> give, with the values they give it,
+    /// in every spelling and form, where <paramref name="runner"/> is ctest; none otherwise.
+    /// </summary>
+    /// <param name="runner">The test runner an invocation starts, by name or path.</param>
+    /// <param name="args">The invocation's own arguments.</param>
+    public static IEnumerable<(Selection Option, IReadOnlyList<string> Values)> SelectionsIn(string runner, IReadOnlyList<string> args)
+        => IsCtest(runner)
+            ? Selections.Select(option => (option, Values(args, option.Spellings).Values)).Where(given => given.Values.Count > 0)
+            : [];
+
+    /// <summary>Whether <paramref name="args"/> give ctest -R, in either spelling and any form.</summary>
+    /// <param name="args">An invocation's own arguments.</param>
+    public static bool ChoosesByName(IReadOnlyList<string> args) => Values(args, ByName.Spellings).Values.Count > 0;
+
+    /// <summary>
+    /// Whether <paramref name="runner"/> is ctest and <paramref name="output"/> holds the line it prints where it has
+    /// no test to run.
+    /// </summary>
+    /// <param name="runner">The test runner an invocation starts, by name or path.</param>
+    /// <param name="output">What it printed.</param>
+    public static bool FoundNone(string runner, string output)
+        => IsCtest(runner)
+            && output.ReplaceLineEndings("\n").Split('\n').Any(line => string.Equals(line.Trim(), NoTestsLine, StringComparison.Ordinal));
 
     /// <summary>
     /// The test preset <paramref name="args"/> name, where <paramref name="runner"/> is ctest; <see langword="null"/>
@@ -171,11 +206,18 @@ internal static class Ctest
 
     /// <summary>One of ctest's options that choose its tests.</summary>
     /// <param name="Spellings">Its spellings.</param>
-    /// <param name="PresetFilter">The filter a test preset sets it with, under <c>filter</c>: <c>include.name</c> and the like.</param>
+    /// <param name="Excludes">Whether it leaves out the tests it matches, rather than choosing them.</param>
+    /// <param name="Reads">The part of a test it matches: <c>name</c>, or <c>label</c>, any one of the test's labels.</param>
     /// <param name="Narrows">
     /// Whether ctest, given it twice, reads both - running or leaving out only a test every one matches - rather
     /// than keeping the last.
     /// </param>
-    /// <param name="ReadBesideUnion">Whether ctest still reads it beside --union given in its args.</param>
-    public sealed record Selection(IReadOnlyList<string> Spellings, string PresetFilter, bool Narrows, bool ReadBesideUnion);
+    /// <param name="ReadBesideUnion">
+    /// Whether ctest still reads it beside --union given in its args - where nothing chooses tests by name besides.
+    /// </param>
+    public sealed record Selection(IReadOnlyList<string> Spellings, bool Excludes, string Reads, bool Narrows, bool ReadBesideUnion)
+    {
+        /// <summary>The filter a test preset sets it with, under <c>filter</c>: <c>include.name</c> and the like.</summary>
+        public string PresetFilter => $"{(Excludes ? "exclude" : "include")}.{Reads}";
+    }
 }

@@ -204,7 +204,7 @@ public sealed class AnchorBalanceServiceTests
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, TestContext.Current.CancellationToken);
 
-        Assert.Equal([One], report.Lost);
+        Assert.Equal([new AnchorLoss(One, Closed: false)], report.Lost);
         Assert.Empty(report.Closed);
         Assert.Equal([Two], report.Opened.Select(opening => opening.Id));
         Assert.Equal(1, report.NetNew);
@@ -223,7 +223,10 @@ public sealed class AnchorBalanceServiceTests
         Assert.Contains("1 problem(s)", receipt.Message, StringComparison.Ordinal);
 
         using var json = JsonDocument.Parse(AnchorReports.Balance(report, json: true).Data[0]);
-        Assert.Equal([One], json.RootElement.GetProperty("lost").EnumerateArray().Select(lost => lost.GetProperty("anchor").GetString()));
+        Assert.Equal(
+            [(One, false)],
+            json.RootElement.GetProperty("lost").EnumerateArray()
+                .Select(lost => (lost.GetProperty("anchor").GetString(), lost.GetProperty("closed").GetBoolean())));
         Assert.Empty(json.RootElement.GetProperty("closed").EnumerateArray());
     }
 
@@ -248,8 +251,57 @@ public sealed class AnchorBalanceServiceTests
             report.Findings,
             finding => finding.Severity == AnchorFindingSeverity.Fatal
                 && finding.Message.Contains($"'{Two}' was open where this change began", StringComparison.Ordinal));
-        Assert.Equal([Two], report.Lost);
+        Assert.Equal([new AnchorLoss(Two, Closed: false)], report.Lost);
         Assert.False(report.Passed);
+    }
+
+    /// <summary>
+    /// A row closed where the change began moves between the registries and is never deleted too, so one neither
+    /// registry holds now fails the balance as an open one does, whether it was deleted or its id changed by hand. It
+    /// was counted nowhere, so it is listed apart and charges the change nothing; unrefused, the done registry lost the
+    /// record of work every later read of it trusts was kept.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnAnchorClosedAtTheBaseThatNeitherRegistryHoldsNow_FailsTheBalance(bool renamed)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareCommittedAsync(temp, One);
+        var done = await HoldingAsync(harness, temp, AnchorRegistryKind.Done, One);
+        await harness.CommitAllAsync(temp.Path, "closed before the change", cancellationToken);
+
+        if (renamed)
+        {
+            File.WriteAllText(done, File.ReadAllText(done).Replace($"`{One}`", $"`{Two}`", StringComparison.Ordinal));
+        }
+        else
+        {
+            TakeRowByHand(done, One);
+        }
+
+        var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, cancellationToken);
+
+        Assert.Equal([new AnchorLoss(One, Closed: true)], report.Lost);
+        Assert.Empty(report.Closed);
+        Assert.Empty(report.Opened);
+        Assert.Equal((0, 0, 0), (report.OpenAtBase, report.OpenNow, report.NetNew));
+        Assert.False(report.Passed);
+
+        var finding = Assert.Single(report.Findings);
+        Assert.Equal((AnchorSettings.DefaultDoneAnchorsPath, AnchorFindingSeverity.Fatal), (finding.File, finding.Severity));
+        Assert.Contains($"anchor '{One}' was closed where this change began and neither registry holds it now", finding.Message, StringComparison.Ordinal);
+
+        var receipt = AnchorReports.Balance(report, json: false);
+        Assert.Contains("change    0 closed (0 bookkeeping), 1 lost (1 already closed), 0 opened (0 created, 0 disclosed); counted 0", receipt.Data);
+        Assert.Contains($"  ! {One}   [lost: already closed]", receipt.Data);
+        Assert.Equal(AnchorExit.Findings, receipt.ExitCode);
+        Assert.Equal("1 problem(s) in the registries must be fixed first", receipt.Message);
+
+        using var json = JsonDocument.Parse(AnchorReports.Balance(report, json: true).Data[0]);
+        var lost = Assert.Single(json.RootElement.GetProperty("lost").EnumerateArray());
+        Assert.Equal((One, true), (lost.GetProperty("anchor").GetString(), lost.GetProperty("closed").GetBoolean()));
     }
 
     /// <summary>
@@ -433,16 +485,23 @@ public sealed class AnchorBalanceServiceTests
 
     /// <summary>
     /// A registry malformed now is its own finding: an anchor whose row it no longer reads is not reported lost
-    /// besides, since the row is there, where nothing reads it - whichever registry holds it.
+    /// besides, since the row is there, where nothing reads it - whichever registry holds it, and whether it was open
+    /// or closed where the change began.
     /// </summary>
     [Theory]
-    [InlineData(AnchorRegistryKind.Pending)]
-    [InlineData(AnchorRegistryKind.Done)]
-    public async Task ARegistryMalformedNow_IsItsOwnFinding_NotEveryAnchorItHidesLost(AnchorRegistryKind kind)
+    [InlineData(AnchorRegistryKind.Pending, false)]
+    [InlineData(AnchorRegistryKind.Done, false)]
+    [InlineData(AnchorRegistryKind.Done, true)]
+    public async Task ARegistryMalformedNow_IsItsOwnFinding_NotEveryAnchorItHidesLost(AnchorRegistryKind kind, bool closedAtBase)
     {
         using var temp = new TempDirectory();
         var harness = await PrepareCommittedAsync(temp, One);
         var path = await HoldingAsync(harness, temp, kind, One);
+
+        if (closedAtBase)
+        {
+            await harness.CommitAllAsync(temp.Path, "closed before the change", TestContext.Current.CancellationToken);
+        }
 
         // Stranded below a paragraph, outside the table.
         var row = TakeRowByHand(path, One);
@@ -651,16 +710,25 @@ public sealed class AnchorBalanceServiceTests
 
     /// <summary>
     /// A registry missing now is its own finding: the anchors it held are not reported lost besides, since nothing
-    /// could have been read where they would be - whichever registry it is.
+    /// could have been read where they would be - whichever registry it is, and whether they were open or closed where
+    /// the change began.
     /// </summary>
     [Theory]
-    [InlineData(AnchorRegistryKind.Pending, "no pending registry")]
-    [InlineData(AnchorRegistryKind.Done, "no done registry")]
-    public async Task ARegistryMissingNow_IsOneFinding_NotEveryAnchorItHeldLost(AnchorRegistryKind kind, string missing)
+    [InlineData(AnchorRegistryKind.Pending, "no pending registry", false)]
+    [InlineData(AnchorRegistryKind.Done, "no done registry", false)]
+    [InlineData(AnchorRegistryKind.Done, "no done registry", true)]
+    public async Task ARegistryMissingNow_IsOneFinding_NotEveryAnchorItHeldLost(AnchorRegistryKind kind, string missing, bool closedAtBase)
     {
         using var temp = new TempDirectory();
         var harness = await PrepareCommittedAsync(temp, One, Two);
-        File.Delete(await HoldingAsync(harness, temp, kind, One));
+        var path = await HoldingAsync(harness, temp, kind, One);
+
+        if (closedAtBase)
+        {
+            await harness.CommitAllAsync(temp.Path, "closed before the change", TestContext.Current.CancellationToken);
+        }
+
+        File.Delete(path);
 
         var report = await harness.AnchorBalanceService.CheckAsync(temp.Path, null, TestContext.Current.CancellationToken);
 

@@ -560,6 +560,17 @@ public sealed record AnchorOpening(string Id, string Excerpt, bool Disclosed);
 /// </param>
 public sealed record AnchorClosing(string Id, bool Bookkeeping);
 
+/// <summary>
+/// An anchor whose id had a row where the change began (<see cref="AnchorBalanceReport.Commit"/>) and has none in either
+/// registry now: deleted, or renamed by hand, since a row moves between the registries and is never deleted.
+/// </summary>
+/// <param name="Id">The anchor.</param>
+/// <param name="Closed">
+/// Whether every row it had there was closed, so it counted nowhere and its loss changes no count. One open there leaves
+/// the open count, and is not credited to the change, as a closure would be.
+/// </param>
+public sealed record AnchorLoss(string Id, bool Closed);
+
 /// <summary>What check-anchor-balance measured.</summary>
 /// <param name="Base">The base as given.</param>
 /// <param name="BaseCommit">The commit it resolved to.</param>
@@ -576,9 +587,9 @@ public sealed record AnchorClosing(string Id, bool Bookkeeping);
 /// <param name="OpenNow">Distinct ids open in the working tree.</param>
 /// <param name="Closed">Anchors open at <paramref name="Commit"/> and closed now, in id order.</param>
 /// <param name="Lost">
-/// Ids open at <paramref name="Commit"/> that neither registry holds now, in id order: deleted, or renamed by hand. Each
-/// leaves the open count and is not credited to the change, as a closure would be; where both registries were read whole,
-/// each is a finding too.
+/// Anchors whose id had a row at <paramref name="Commit"/> and has none in either registry now, in id order: deleted, or
+/// renamed by hand. One open there leaves the open count and is not credited to the change, as a closure would be; one
+/// closed there changes no count. Where both registries were read whole, each is a finding too.
 /// </param>
 /// <param name="Opened">Anchors open now and not at <paramref name="Commit"/>, in id order.</param>
 /// <param name="MissingAtBase">Registries that did not exist at <paramref name="Commit"/>, and so count as empty there.</param>
@@ -594,7 +605,7 @@ public sealed record AnchorBalanceReport(
     int OpenAtBase,
     int OpenNow,
     IReadOnlyList<AnchorClosing> Closed,
-    IReadOnlyList<string> Lost,
+    IReadOnlyList<AnchorLoss> Lost,
     IReadOnlyList<AnchorOpening> Opened,
     IReadOnlyList<string> MissingAtBase,
     IReadOnlyList<string> MalformedAtBase,
@@ -611,11 +622,11 @@ public sealed record AnchorBalanceReport(
 
     /// <summary>
     /// The rise the balance counts: the anchors the change created less those its work closed - the change in open
-    /// anchors, less those newly disclosed, plus the closures that are bookkeeping and the anchors lost. The first two
+    /// anchors, less those newly disclosed, plus the closures that are bookkeeping and the open anchors lost. The first two
     /// corrections pull opposite ways for one reason: a disclosed anchor records debt that already existed, so writing it
     /// down is not creating it, and a bookkeeping closure records work that already existed, so marking it is not doing
-    /// it. A bookkeeping or a lost anchor still leaves the open count, as a row closed or gone must, while the change is
-    /// credited with nothing for it.
+    /// it. A bookkeeping anchor, or a lost one that was open, still leaves the open count, as a row closed or gone must,
+    /// while the change is credited with nothing for it.
     /// </summary>
     public int NetNew => Opened.Count - Disclosed - (Closed.Count - Bookkeeping);
 

@@ -739,7 +739,7 @@ has no history and is refused.
 
 Anchors are compared by id across both registries, so moving a row counts as nothing. The
 check fails when open anchors rose, less the anchors newly disclosed and plus the closures that
-are bookkeeping and the anchors lost: when the change created more anchors than its work
+are bookkeeping and the open anchors lost: when the change created more anchors than its work
 closed. The first two corrections pull opposite ways for one reason. Disclosure records debt
 that already existed, so writing it down is not creating it. A bookkeeping closure - a row
 closed since the change began whose Trigger opens with the bookkeeping pair, `✅🧾`, where
@@ -753,12 +753,14 @@ pair is credited as work, as it reads, and noted.
 The check also fails whenever the registries as they stand are unsound: a closed anchor in
 pending, a live anchor in done, a Status that is none of the four spellings, a row stating two
 verdicts where `anchors.triggerCarriesVerdict` holds, a missing registry, or a structural
-problem. And it fails when an anchor open where the change began is in neither registry now: a
-row moves between them and is never deleted, so a lost row - deleted, or renamed by hand - is
-listed apart and not credited; counted as closed, it paid for an anchor the change created,
-which went unreported until the row came back. A lost row is a finding only where both
-registries were read whole, since every row a missing or malformed registry hides would read as
-lost. Every problem is reported at once.
+problem. And it fails when an anchor that had a row where the change began, open or closed, is
+in neither registry now: a row moves between them and is never deleted, so a lost row -
+deleted, or renamed by hand - is listed apart. One open there is not credited; counted as
+closed, it paid for an anchor the change created, which went unreported until the row came
+back. One closed there changes no count, but the done registry is the record of the work done,
+and nothing else sees its row go: `read-anchors --lint` reads the registries as they stand. A
+lost row is a finding only where both registries were read whole, since every row a missing or
+malformed registry hides would read as lost. Every problem is reported at once.
 
 ### Citations
 

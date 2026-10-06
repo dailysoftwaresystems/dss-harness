@@ -527,6 +527,94 @@ public sealed class TestInvocationResolverTests
             TestInvocationResolver.CommandFor(Invocation(args: ["-U", "ON"], excludeArg: "-E"), cores: 6, filter: null, excludes: ["slow"]).Arguments);
 
     /// <summary>
+    /// But not where the args choose tests by name as well, or the test preset they name does: measured with ctest
+    /// 4.3.2, beside --union and -R, or a preset setting filter.include.name, ctest runs every test and reads no -E.
+    /// </summary>
+    [Theory]
+    [InlineData(new[] { "-U", "ON", "-R", "parser" }, "with --union and -R, beside both of which")]
+    [InlineData(new[] { "--tests-regex=parser", "--union=1" }, "with --union and -R, beside both of which")]
+    [InlineData(new[] { "--preset", "including", "-U", "ON" }, "with --union and test preset 'including', which sets filter.include.name")]
+    public void AnExclusionByName_IsRefused_BesideAUnionAndAChoiceByName(string[] args, string beside)
+    {
+        using var temp = new TempDirectory();
+
+        WritePresets(temp);
+
+        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
+            Invocation(args: args, excludeArg: "-E"),
+            cores: 6,
+            filter: null,
+            excludes: ["slow"],
+            new LegPaths(temp.Path, temp.Combine("build")),
+            fileSystem: FileSystem()));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Contains(beside, refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("ctest runs every test, reading no -E", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A selection ctest could only find empty is refused before anything is built for it: a value one option chooses
+    /// tests by that another leaves out by the same part of a test, where the filter, a label or an exclusion given is
+    /// one of the two - the other given too, or one the args give. Measured with ctest 4.3.2, -L x beside -LE x, and -R
+    /// x beside -E x, choose no test, and ctest says so only after the build: 'No tests were found!!!', exiting 8 under
+    /// --no-tests=error.
+    /// </summary>
+    [Theory]
+    [InlineData(new string[0], "-LE", null, new[] { "git-state" }, new[] { "git-state" }, "The label 'git-state', given with -L, chooses only tests carrying a label that matches it, and the exclusion 'git-state', given with -LE, leaves every one of them out")]
+    [InlineData(new string[0], "-LE", null, new[] { "slow", "git-state" }, new[] { "git-state", "unit" }, "The label 'git-state', given with -L,")]
+    [InlineData(new[] { "-L", "git-state" }, "-LE", null, new[] { "git-state" }, new string[0], "-L 'git-state' in the test settings' args chooses only tests carrying a label that matches it, and the exclusion 'git-state'")]
+    [InlineData(new[] { "--label-regex=unit", "-L", "fast" }, "-LE", null, new[] { "unit" }, new string[0], "-L 'unit' in the test settings' args")]
+    [InlineData(new[] { "-LE", "manual" }, "-LE", null, new string[0], new[] { "manual" }, "and -LE 'manual' in the test settings' args leaves every one of them out")]
+    [InlineData(new[] { "-LE", "manual" }, "-LE", null, new[] { "slow" }, new[] { "manual" }, "and -LE 'manual' in the test settings' args leaves every one of them out")]
+    [InlineData(new string[0], "-E", "parser", new[] { "parser" }, new string[0], "The filter 'parser', given with -R, chooses only tests whose name matches it, and the exclusion 'parser', given with -E,")]
+    [InlineData(new[] { "-E", "flaky", "--exclude-regex", "parser" }, "-LE", "parser", new string[0], new string[0], "and -E 'parser' in the test settings' args")]
+    [InlineData(new[] { "-R", "lexer", "--tests-regex", "parser" }, "-E", null, new[] { "parser" }, new string[0], "-R 'parser' in the test settings' args chooses only tests whose name matches it")]
+    public void ASelectionCtestCouldOnlyFindEmpty_IsRefused(string[] args, string excludeArg, string? filter, string[] excludes, string[] labels, string said)
+    {
+        var refusal = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
+            Invocation(args: args, filterArg: "-R", excludeArg: excludeArg, excludeJoin: "|", labelArg: "-L"), cores: 6, filter, excludes, labels: labels));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Contains(said, refusal.Message, StringComparison.Ordinal);
+        Assert.EndsWith("so ctest would choose no test - and say so only once the leg had been built for it. Take one of them out.", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only a selection ctest is bound to find empty is refused, read as ctest reads its options: two patterns spelled
+    /// apart may still choose a test; a name is not a label; of two values the args give -LE ctest leaves out only a
+    /// test both match, and of two they give -R or -E it keeps the last; a preset the args name could leave out tests
+    /// by label too, so their one -LE may not be all there is; another runner's options are its own; and the args alone
+    /// run as their author wrote them.
+    /// </summary>
+    [Theory]
+    [InlineData("ctest", new string[0], "-LE", null, new[] { "git-state" }, new[] { "^git-state$" })]
+    [InlineData("ctest", new string[0], "-E", null, new[] { "git-state" }, new[] { "git-state" })]
+    [InlineData("ctest", new[] { "-LE", "slow", "-LE", "manual" }, "-LE", null, new string[0], new[] { "manual" })]
+    [InlineData("ctest", new[] { "-R", "parser", "-R", "lexer" }, "-E", null, new[] { "parser" }, new string[0])]
+    [InlineData("ctest", new[] { "-E", "parser", "-E", "flaky" }, "-LE", "parser", new string[0], new string[0])]
+    [InlineData("ctest", new[] { "--preset", "plain", "-LE", "manual" }, "-LE", null, new string[0], new[] { "manual" })]
+    [InlineData("ctest", new[] { "-L", "unit", "-LE", "unit" }, "-LE", null, new string[0], new string[0])]
+    [InlineData("dart", new string[0], "-LE", null, new[] { "git-state" }, new[] { "git-state" })]
+    public void ASelectionCtestMayFindATestIn_RunsAsAsked(string runner, string[] args, string excludeArg, string? filter, string[] excludes, string[] labels)
+    {
+        using var temp = new TempDirectory();
+
+        WritePresets(temp);
+
+        var command = TestInvocationResolver.CommandFor(
+            Invocation(args: args, filterArg: "-R", excludeArg: excludeArg, excludeJoin: "|", labelArg: "-L", runner: runner),
+            cores: 6,
+            filter,
+            excludes,
+            new LegPaths(temp.Path, temp.Combine("build")),
+            labels,
+            FileSystem());
+
+        Assert.Equal(labels.SelectMany(label => new[] { "-L", label }), command.Arguments.TakeLast(labels.Length * 2));
+    }
+
+    /// <summary>
     /// A filter, an exclusion or a label given empty, or as spaces alone, is refused: ctest reads an empty one as
     /// not given at all, and joined with another as matching everything, and spaces alone are a value lost on the
     /// way. So is an empty exclusion in the args one given would be joined with.
