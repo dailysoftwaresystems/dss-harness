@@ -984,8 +984,13 @@ public sealed class RunnerRunServiceTests
         Assert.Equal(["fetch (harness/checkout)"], result.PerformedActions);
     }
 
+    /// <summary>
+    /// A runner that requires the build is run as its leg stands: building is the orchestrator's, which decides it from
+    /// the runner, the steps it runs and its run checks, and a service that built the leg itself would build it once per
+    /// leg on a tree legs share.
+    /// </summary>
     [Fact]
-    public async Task RequireBuild_IsReportedRatherThanActedOn()
+    public async Task ARunnerThatRequiresTheBuild_IsRunAsItsLegStands()
     {
         using var temp = new TempDirectory();
         var factory = new HarnessFactory();
@@ -998,10 +1003,8 @@ public sealed class RunnerRunServiceTests
 
         var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
 
-        // Syncing and building belong to the orchestrator: a service that did either itself would do
-        // it once per leg on a tree that legs share.
-        Assert.True(result.RequireBuild);
         Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal("measure", Assert.Single(result.Phases).Phase);
     }
 
     /// <summary>

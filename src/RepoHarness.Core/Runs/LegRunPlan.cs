@@ -77,7 +77,7 @@ public sealed record PlacedLeg(
 
     /// <summary>
     /// What the leg's build still needs on its host, as it was placed there: what its admission claims of the room on
-    /// that machine; <see langword="null"/> where nothing says, or the command builds nothing.
+    /// that machine; <see langword="null"/> where nothing says, or the command does not build the leg.
     /// </summary>
     public RoomNeed? Need { get; init; }
 
@@ -106,7 +106,7 @@ public sealed record PlacedLeg(
     /// <param name="time">Whether to report the profile timing.</param>
     /// <remarks>
     /// Made here once, for every command that builds a leg - a build, a test that builds first, a run
-    /// whose runner needs the compiler - so what the host declares reaches every one of them or none.
+    /// that builds first - so what the host declares reaches every one of them or none.
     /// </remarks>
     /// <exception cref="HarnessException">The leg builds nothing; see <see cref="BuildableProject"/>.</exception>
     public BuildRequest BuildRequestFor(HarnessConfig config, string runDirectory, bool time = false)
@@ -132,25 +132,19 @@ public sealed record PlacedLeg(
     /// The project this leg builds, or a refusal naming what is missing.
     /// </summary>
     /// <exception cref="HarnessException">
-    /// The leg names no project, or no toolchain for the host it landed on. Asked only by the
-    /// commands that build, so a leg that only runs a predefined runner never has to declare either.
+    /// The leg names no project, or no toolchain for the host it landed on. Asked only where a
+    /// command builds the leg, so a leg that only runs a runner which builds nothing never has to
+    /// declare either. A run refuses such a leg it would build before any host is measured.
     /// </exception>
     public ProjectConfig BuildableProject()
     {
-        if (Project is null)
+        if (Variant.Unbuildable(Name, Project, Host.Os ?? Leg.Os) is { } why)
         {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                $"Leg '{Name}' builds nothing: it names no project, and neither defaults.project nor a "
-                + "single declared project supplies one.");
+            throw new HarnessException(HarnessExit.ConfigInvalid, why);
         }
 
-        return Variant.Buildable
-            ? Project
-            : throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                $"Leg '{Name}' names no toolchain, and project '{Project.Name}' declares no default "
-                + $"toolchain for {Host.Os}.");
+        // A leg naming no project is one Unbuildable answers for, so this one names one.
+        return Project!;
     }
 
     /// <summary>
@@ -182,13 +176,7 @@ public sealed record PlacedLeg(
     /// another machine has a host tree root that is not this machine's, and a run re-invoked there
     /// resolves its own.
     /// </param>
-    /// <remarks>
-    /// A single answer or none. <c>buildOutputs</c> is a list, every entry of which must exist for a
-    /// build to be witnessed, so "the product" is a well-formed question only where the list holds
-    /// exactly one path for this platform. Where it holds several, this returns the reason instead
-    /// of a guess: an instrument pointed at the wrong one of three binaries measures something
-    /// nobody asked about and reports it as a success.
-    /// </remarks>
+    /// <remarks>A single answer or none, as <see cref="ProjectConfig.Product"/> says why.</remarks>
     public (string? Path, string? Problem) ProductFor(string buildDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
@@ -198,24 +186,9 @@ public sealed record PlacedLeg(
             return (null, $"leg '{Name}' builds nothing, so it has no product");
         }
 
-        var platform = Host.Os ?? Leg.Os;
+        var (product, problem) = Project.Product(Host.Os ?? Leg.Os);
 
-        var declared = Project.BuildOutputs
-            .Select(output => output.For(platform))
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => path!)
-            .ToList();
-
-        return declared.Count switch
-        {
-            1 => (Path.Combine(buildDirectory, declared[0]), null),
-            0 => (null, $"project '{Project.Name}' declares no buildOutputs for {platform}"),
-            _ => (
-                null,
-                $"project '{Project.Name}' declares {declared.Count} buildOutputs for {platform} "
-                + $"({string.Join(", ", declared)}), so which one is 'the product' is not something "
-                + "this tool can decide"),
-        };
+        return product is null ? (null, problem) : (Path.Combine(buildDirectory, product), null);
     }
 
     /// <summary>

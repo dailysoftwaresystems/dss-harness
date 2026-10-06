@@ -111,7 +111,8 @@ even when its machines do not — a license server, a network share, a sync's ba
 
 Both are counted by one command. Where a machine declares `admission` — under `defaults`, or its own
 under `hosts.local` or an ssh host — its heavy legs (a build, a test, a runner that requires the build
-or says `"heavy": true`, a run of an action step that says `heavy: true`) share it across every command
+or says `"heavy": true`, a run of an action step that names `{product}` or `{buildDir}` — which builds
+its leg first — or says `heavy: true`) share it across every command
 this user runs there: each waits for one of its `heavyLegs` slots, in the order they asked, then for
 the memory in use to fall below `maxMemoryPercent`, then - where its build's need is known - for room
 on the filesystem it fills beside what the other admitted legs claim, says who holds each slot while

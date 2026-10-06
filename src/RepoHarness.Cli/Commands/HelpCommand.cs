@@ -205,7 +205,9 @@ internal static class HelpCommand
         builder.AppendLine("  build   the project's build program, ninja for a Ninja generator, and the");
         builder.AppendLine("          compilers CC and CXX name");
         builder.AppendLine("  test    those, and the test runner; with --no-build, the runner alone");
-        builder.AppendLine("  run     what the runner's steps start, and the build's too with requireBuild");
+        builder.AppendLine("  run     what the runner's steps start, and the build's too where it builds:");
+        builder.AppendLine("          where it, or a runner its run checks name, requires the build or runs a");
+        builder.AppendLine("          step or phase naming {product} or {buildDir}");
         builder.AppendLine("  sync    nothing: a copy starts no program");
         builder.AppendLine("  clean   nothing: removing a directory starts no program");
         builder.AppendLine("  legs    what build and test start");
@@ -383,7 +385,8 @@ internal static class HelpCommand
         builder.AppendLine("they need - so work that belongs with one action, a benchmark beside the build it");
         builder.AppendLine("shares modules with, can be a runner of its own with legs of its own. What");
         builder.AppendLine($"{StepSelection.Option} names wins over a runner's steps. A leg lists the steps it ran as");
-        builder.AppendLine("ranSteps on its line, and the manual ones among them as manualSteps.");
+        builder.AppendLine("ranSteps on its line, and the manual ones among them as manualSteps. Whichever runner");
+        builder.AppendLine("starts it, a step naming {product} or {buildDir} has its leg built first (below).");
         builder.AppendLine();
         builder.AppendLine("A manual step declares successPattern: it runs only when named, and a line of its own");
         builder.AppendLine("output is what says it did the work it was named for. A step can need only one");
@@ -429,6 +432,18 @@ internal static class HelpCommand
         builder.AppendLine("  <input name>                        any input the action declares, or the step");
         builder.AppendLine("                                      declares for itself, by its name");
         builder.AppendLine($"  <value name>                        any value the runner's {HarnessLayout.RunnerEnvDirectoryName} holds, by its name");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A step whose run line or workingDirectory names {buildDir} or {product} reads what the build made, so "
+            + "every leg of a run that runs it is built first - by default or named with "
+            + $"{StepSelection.Option}, whichever runner starts it, requireBuild or not; one limited by runOn builds "
+            + "the legs of those systems alone, and a runner's own phase naming either builds as a step does. So "
+            + "does a runner whose run checks name a runner that needs the build: a check runs on the leg as the "
+            + "runner carrying it left it. Left unbuilt, such a step would read whatever the last build left: "
+            + "nothing, or what an older commit built. A leg a run would build that cannot be built - it names no "
+            + "project, or no toolchain for its system - and a {product} its project declares no one file for, are "
+            + "refused before anything starts, naming each leg and what builds it or names its product.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -673,11 +688,13 @@ internal static class HelpCommand
 
         builder.AppendLine("Heavy legs on one machine");
         builder.AppendLine();
-        builder.AppendLine("A leg that builds or tests is heavy. So is a run's leg where its runner, or a runner");
-        builder.AppendLine("its expected exceptions' run checks name, requires the build, says \"heavy\": true, or");
-        builder.AppendLine("runs a step whose action says heavy: true - by default or named with --manual-step,");
-        builder.AppendLine("whichever runner starts it; a step limited by runOn makes heavy the legs of those");
-        builder.AppendLine("systems alone. A runner that only reads the tree is light, and starts at once.");
+        builder.AppendLine("A leg that builds or tests is heavy. A run's leg builds where its runner, or a runner");
+        builder.AppendLine("its expected exceptions' run checks name, requires the build or runs a step or phase");
+        builder.AppendLine("naming {product} or {buildDir}, and is heavy, too, where one of them says \"heavy\":");
+        builder.AppendLine("true or runs a step whose action says heavy: true. Either kind of step counts by");
+        builder.AppendLine("default or named with --manual-step, whichever runner starts it, and one limited by");
+        builder.AppendLine("runOn builds, or makes heavy, the legs of those systems alone. A runner that only");
+        builder.AppendLine("reads the tree is light, and starts at once.");
         builder.AppendLine("Where a machine declares admission, each heavy leg -");
         builder.AppendLine("its tree synced and its lock taken - waits for the machine to take it: first one of");
         builder.AppendLine("its slots, shared by every command this user runs there - worktrees each running a");

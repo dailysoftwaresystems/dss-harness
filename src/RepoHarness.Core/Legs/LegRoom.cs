@@ -47,28 +47,35 @@ public static class LegRoom
     private const long Gibibyte = 1L << 30;
 
     /// <summary>
-    /// What to ask each candidate host about the room on it: where its copies are kept, and each selected
-    /// leg's build directory there with the main checkout's copy of the same variant.
+    /// What to ask each candidate host about the room on it: where its copies are kept, and the build
+    /// directory there of each selected leg the command builds, with the main checkout's copy of the same
+    /// variant.
     /// </summary>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="candidates">Each selected leg, with the hosts it could be placed on.</param>
     /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
     /// <param name="comparison">How this machine compares paths.</param>
-    /// <param name="builds">Whether the command builds, so that its legs' build directories are worth asking about.</param>
+    /// <param name="workload">
+    /// What the command has each leg do: a leg it builds - on that leg's system - has a build directory worth asking
+    /// about, and one it builds nothing on has none.
+    /// </param>
     public static IReadOnlyDictionary<HostId, RoomQuestions> Questions(
         HarnessContext context,
         IEnumerable<(SelectedLeg Leg, IReadOnlyList<HostId> Hosts)> candidates,
         HostId? here,
         StringComparison comparison,
-        bool builds)
+        LegWorkload workload)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(workload);
 
         var asked = new Dictionary<HostId, (string? SpaceAt, List<string> Builds)>();
 
         foreach (var (leg, hosts) in candidates)
         {
+            var builds = workload.On(leg.Leg.Os).Build;
+
             foreach (var host in hosts)
             {
                 // A host that declares nowhere to keep a copy is refused where the leg is placed on it; asked

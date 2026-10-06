@@ -645,9 +645,9 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
-    /// A run check whose runner's steps cannot be read leaves the run to go on, its legs counted heavy, and says so as the
-    /// run begins: refused here, a run was refused for a check that may never run, and the check that runs it refuses it
-    /// as it always did; taken as light, its legs could build with no slot at all.
+    /// A run check whose runner's steps cannot be read leaves the run to go on, its legs counted heavy and built only as
+    /// its runner requires, and says so as the run begins: refused here, a run was refused for a check that may never run,
+    /// and the check that runs it refuses it as it always did; taken as light, its legs could build with no slot at all.
     /// </summary>
     [Fact]
     public async Task ARunCheckWhoseStepsCannotBeRead_CountsHeavy_SayingSo_AndTheRunGoesOn()
@@ -691,7 +691,8 @@ public sealed partial class CliEndToEndTests
 
         Assert.Equal(HarnessExit.Success, run.ExitCode);
         Assert.Contains(
-            "run check 'confirm' of runner 'probe' could not be read to know how heavy it is, so its legs count as heavy: ",
+            "run check 'confirm' of runner 'probe' could not be read to know how heavy it is or whether it needs the build, "
+            + "so its legs count as heavy, and are built only as its runner requires: ",
             run.StandardError,
             StringComparison.Ordinal);
     }
@@ -1579,6 +1580,119 @@ public sealed partial class CliEndToEndTests
         Assert.True(legs.Count == 1, $"exit {result.ExitCode}: {result.StandardError}");
         Assert.Equal("failed", legs[0].GetProperty("verdict").GetString());
         Assert.Contains(legs[0].GetProperty("logTail").EnumerateArray(), line => line.GetString()!.Contains("MSB1003", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A step naming {product}, named with --manual-step through a runner that declares no requireBuild, builds its
+    /// leg first - limited by runOn to this leg's system or not: here the build fails, as it does on every machine -
+    /// the tree holds no project file - and the leg says so. Unbuilt, the step was handed a product that was not there,
+    /// and the leg passed. A plain run of the same runner, whose step names nothing the build makes, builds nothing, and
+    /// passes.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AStepNamingTheProduct_BuildsItsLegFirst_ThroughARunnerThatDeclaresNoBuild(bool limitedToThisSystem)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            Toolchains = { ["sdk"] = new ToolchainConfig { Platforms = [platform.PlatformKey] } },
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Projects = { new ProjectConfig { Name = "app", Type = "dotnet", Path = ".", BuildOutputs = [BuildOutput.Everywhere("app.dll")] } },
+            Tools = { new ToolConfig { Name = "git" } },
+            Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Toolchain = "sdk" } },
+            PredefinedRunners = { ["self-test"] = new RunnerConfig { Action = "probe/probe.yml", Steps = ["self-test"] } },
+        });
+
+        var runOn = limitedToThisSystem ? $"    runOn: [{platform.PlatformKey}]\n" : string.Empty;
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
+            "name: probe\nsteps:\n"
+            + "  - name: self-test\n    manual: true\n    successPattern: '^git version'\n    run: git --version\n"
+            + $"  - name: measure\n    manual: true\n{runOn}    successPattern: '^git version'\n"
+            + "    run: git -c harness.product=\"{product}\" --version\n");
+
+        var plain = await CliRunner.RunAsync(["run", "self-test", "--legs", "native", "--json", "-C", temp.Path], token);
+
+        Assert.True(plain.ExitCode == HarnessExit.Success, $"exit {plain.ExitCode}: {plain.StandardError}");
+        Assert.DoesNotContain("MSB1003", plain.StandardError, StringComparison.Ordinal);
+
+        var measured = await CliRunner.RunAsync(["run", "self-test", "--manual-step", "measure", "--legs", "native", "--json", "-C", temp.Path], token);
+
+        using var document = JsonDocument.Parse(measured.StandardOutput);
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        Assert.True(leg.GetProperty("verdict").GetString() == "failed", measured.StandardError);
+        Assert.Contains(leg.GetProperty("logTail").EnumerateArray(), line => line.GetString()!.Contains("MSB1003", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A step naming {product}, where the leg's project declares no product for its system, is refused before anything
+    /// starts - no host measured, no run begun, nothing built - naming the leg and the step. Since naming the product
+    /// builds the leg first, found where the step began it would have cost a build; here that build would fail, as it
+    /// does on every machine, and the leg would have said its build failed instead.
+    /// </summary>
+    [Fact]
+    public async Task AStepNamingAProductThatIsNotDeclared_IsRefusedBeforeTheLegBuilds()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var platform = new HarnessFactory().Platform;
+
+        await ABuildThatFailsAsync(temp, new TestInvocation { Runner = "dotnet", Args = ["--version"], SuccessPattern = @"^\d+\.\d+" }, token);
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
+            "name: probe\nsteps:\n  - name: measure\n    run: dotnet --version --product=\"{product}\"\n");
+
+        var result = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "--json", "-C", temp.Path], token);
+
+        Assert.True(result.ExitCode == HarnessExit.ConfigInvalid, $"exit {result.ExitCode}: {result.StandardError}");
+        Assert.Contains(
+            $"leg 'native': step 'measure' names {{product}}, and project 'app' declares no buildOutputs for {platform.PlatformKey}.",
+            result.StandardError,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("MSB1003", result.StandardError, StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(result.StandardOutput);
+
+        Assert.Empty(document.RootElement.GetProperty("legs").EnumerateArray());
+        Assert.False(document.RootElement.TryGetProperty("runDirectory", out _), "no run began, so none has records");
+    }
+
+    /// <summary>
+    /// A step naming {buildDir} on a leg that builds nothing - it names no project - would build the leg first, which
+    /// cannot be built: refused before anything starts, naming the leg, why and the step. Found where the leg's build
+    /// began, it ended the whole run once its host was measured, saying only that the leg builds nothing.
+    /// </summary>
+    [Fact]
+    public async Task AStepNamingTheBuildDirectory_OnALegThatBuildsNothing_IsRefusedBeforeAnythingStarts()
+    {
+        using var temp = new TempDirectory();
+        await PrepareRunnerAsync(temp);
+
+        temp.WriteFile(
+            Path.Combine(".harness-config", "runner", "actions", "probe", "probe.yml"),
+            "name: probe\nsteps:\n  - name: deps\n    workingDirectory: '{buildDir}'\n    run: dotnet --version\n");
+
+        var result = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "--json", "-C", temp.Path], TestContext.Current.CancellationToken);
+
+        Assert.True(result.ExitCode == HarnessExit.ConfigInvalid, $"exit {result.ExitCode}: {result.StandardError}");
+        Assert.Contains(
+            "Leg 'native' builds nothing: it names no project, and neither defaults.project nor a single declared project "
+            + "supplies one. It is built first because step 'deps' names {buildDir}.",
+            result.StandardError,
+            StringComparison.Ordinal);
+
+        using var document = JsonDocument.Parse(result.StandardOutput);
+
+        Assert.False(document.RootElement.TryGetProperty("runDirectory", out _), "no run began, so none has records");
     }
 
     /// <summary>

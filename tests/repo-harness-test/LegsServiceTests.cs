@@ -566,6 +566,30 @@ public sealed class LegsServiceTests
         Assert.Equal("/home/pi/repo/build/arm64-none-debug", Assert.Single(building.Builds));
     }
 
+    /// <summary>
+    /// A command that builds the legs of some systems alone - a step naming {product} limited by runOn - asks about the
+    /// build directory of a leg of those systems, and of no other: a leg it builds nothing on needs no room.
+    /// </summary>
+    [Fact]
+    public async Task ACommandBuildingOnlySomeSystems_AsksAboutTheBuildDirectoriesOfTheirLegsAlone()
+    {
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = 1 } },
+            rooms: (_, path) => Room(path, exists: false, recorded: null, free: 8));
+
+        var elsewhere = new LegWorkload(Build: false, Test: false, ["python3"]) { BuiltBy = [new BuildCause(null, "deps", ["buildDir"], ["windows"])] };
+        await fixture.Service.CheckAsync(Root, null, elsewhere, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Empty(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
+
+        var linux = elsewhere with { BuiltBy = [new BuildCause(null, "deps", ["buildDir"], ["Linux"])] };
+        await fixture.Service.CheckAsync(Root, null, linux, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "/home/pi/repo/build/arm64-none-debug",
+            Assert.Single(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds));
+    }
+
     /// <summary>What a host answers about a build directory: whether it is there, what it recorded, the room on '/'.</summary>
     private static BuildDirectoryRoom Room(string path, bool exists, long? recorded, long free)
         => new(path, exists, recorded, new DiskSpace(free << 30, 48L << 30, "/"), null);

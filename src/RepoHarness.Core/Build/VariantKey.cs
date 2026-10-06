@@ -101,6 +101,26 @@ public sealed record VariantKey(string Processor, string Toolchain, string Confi
     public bool Buildable => !string.Equals(Toolchain, NoToolchain, StringComparison.Ordinal);
 
     /// <summary>
+    /// Why the leg <paramref name="legName"/>, building <paramref name="project"/> as this variant on
+    /// <paramref name="os"/>, cannot be built, or <see langword="null"/> where it can: it names no project, or no
+    /// toolchain for that system.
+    /// </summary>
+    /// <param name="legName">The leg, as the refusal names it.</param>
+    /// <param name="project">The project it builds, from <see cref="ProjectFor"/>.</param>
+    /// <param name="os">The operating system it builds on.</param>
+    /// <remarks>
+    /// Said here, once, for the refusal a build gives as it starts and the one a run gives before any host is measured,
+    /// so the two cannot come to name different causes.
+    /// </remarks>
+    public string? Unbuildable(string legName, ProjectConfig? project, string os)
+        => project is null
+            ? $"Leg '{legName}' builds nothing: it names no project, and neither defaults.project nor a single "
+                + "declared project supplies one."
+            : Buildable
+                ? null
+                : $"Leg '{legName}' names no toolchain, and project '{project.Name}' declares no default toolchain for {os}.";
+
+    /// <summary>
     /// The environment and cache variables this variant builds <paramref name="project"/> with: the
     /// toolchain, then the build configuration, then the sanitizer, then the project, each layered
     /// over the last.

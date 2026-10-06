@@ -154,16 +154,18 @@ internal static class RunCommand
             // none of the steps this run named runs would run only what they need and pass. Refused here,
             // like a mistyped action, before a host is measured and naming every such leg at once,
             // rather than once per leg after each one's run has begun.
-            var reached = LegSelection.Resolve(harness.Config, selected).Legs.Select(leg => (leg.Name, leg.Leg.Os)).ToList();
+            var legs = LegSelection.Resolve(harness.Config, selected).Legs;
+            var reached = legs.Select(leg => (leg.Name, leg.Leg.Os)).ToList();
 
             file?.File.RequireAStepOn(runnerName, reached);
             file?.RequireANamedStepOn(runnerName, reached);
 
             // The runners its expected exceptions' run checks name, which run within its legs, each with the steps a run of
-            // it that names none runs: a heavy one among them makes the legs heavy, as this runner would. Read only to know
-            // that: one whose steps cannot be read counts heavy, said here, and is refused by the run check that runs it,
-            // as it always was, rather than refusing a run whose checks may never run.
-            var checks = new List<(RunnerConfig Runner, ActionFile? Action, bool Unread)>();
+            // it that names none runs: one among them that needs the build builds the legs first, since a check runs on the
+            // leg as this runner left it, and a heavy one makes them heavy, as this runner would. Read only to know those:
+            // one whose steps cannot be read counts heavy, said here, builds nothing beyond what its runner requires, and is
+            // refused by the run check that runs it, as it always was, rather than refusing a run whose checks may never run.
+            var checks = new List<(string Name, RunnerConfig Runner, ActionFile? Action, bool Unread)>();
 
             foreach (var check in runner.ExpectedExceptions
                 .SelectMany(entry => entry.RunChecks)
@@ -174,17 +176,27 @@ internal static class RunCommand
 
                 try
                 {
-                    checks.Add((checkRunner, (await StepsAsync(check, checkRunner, []).ConfigureAwait(false))?.File, false));
+                    checks.Add((check, checkRunner, (await StepsAsync(check, checkRunner, []).ConfigureAwait(false))?.File, false));
                 }
                 catch (HarnessException ex)
                 {
                     context.Get<IHarnessOutput>().Warn(
                         Name,
-                        $"run check '{check}' of runner '{runnerName}' could not be read to know how heavy it is, so its legs "
-                        + $"count as heavy: {ex.Message}");
-                    checks.Add((checkRunner, null, true));
+                        $"run check '{check}' of runner '{runnerName}' could not be read to know how heavy it is or whether it "
+                        + $"needs the build, so its legs count as heavy, and are built only as its runner requires: {ex.Message}");
+                    checks.Add((check, checkRunner, null, true));
                 }
             }
+
+            // Built only where the runner, or a runner its run checks name, requires the build or runs a step or
+            // phase naming {product} or {buildDir}, and never tested: a host needs cmake for a runner that measures
+            // a build product, and not for one that only runs a script. Decided once, here, for every leg: whether
+            // a leg builds is this workload read for its system.
+            var workload = LegWorkload.ForRunner(runner, file?.File, checks);
+
+            // A leg it would build that cannot be built, and a product nothing can name, refused here as a leg
+            // that would run nothing is: before a host is measured, naming every such leg and what builds it.
+            workload.RequireBuildable(harness.Config, runnerName, legs);
 
             return await context.Get<LegRunService>()
                 .RunAsync(
@@ -199,12 +211,9 @@ internal static class RunCommand
                         arguments.GetValue(DispatchOptions.Here),
                         RunnerRunService.RemoteArguments(runnerName, arguments.GetValue(TimeOption), inputs, manualSteps))
                     {
-                        // Built only where the runner requires it, and never tested: a host needs
-                        // cmake for a runner that measures a build product, and not for one that
-                        // only runs a script.
-                        Workload = LegWorkload.ForRunner(runner, file?.File, checks),
+                        Workload = workload,
                     },
-                    (work, token) => RunLegAsync(runners, builds, runnerName, inputs, manualSteps, work, token),
+                    (work, token) => RunLegAsync(runners, builds, runnerName, inputs, manualSteps, workload, work, token),
                     cancellationToken)
                 .ConfigureAwait(false);
         }, JsonOption));
@@ -230,6 +239,7 @@ internal static class RunCommand
         string runnerName,
         IReadOnlyDictionary<string, string> inputs,
         IReadOnlyList<string> manualSteps,
+        LegWorkload workload,
         LegWork work,
         CancellationToken cancellationToken)
     {
@@ -238,15 +248,17 @@ internal static class RunCommand
         var runner = Resolve(config, runnerName);
         var started = Stopwatch.GetTimestamp();
 
-        // Built before the runner starts, when the runner says it needs the compiler. Otherwise it
-        // calls a program the build produces and runs against whatever was left there last time.
-        // Only a runner that builds names the compilers: one that does not may never touch the build.
+        // Built before the runner starts where the workload says so for this leg's system: the runner,
+        // or a runner its run checks name, requires the build, or a step or phase this leg runs names
+        // what it makes - {product} or {buildDir}. Otherwise that step reads whatever was left there
+        // last time: a file that is not there, or one an older commit built. Only a leg that builds names
+        // the compilers: one that does not may never touch the build.
         IReadOnlyList<CompilerFact> compilers = [];
 
         // What the build says beyond its verdict, which the leg's line carries as the build's own does.
         IReadOnlyList<string> built = [];
 
-        if (runner.RequireBuild)
+        if (workload.On(leg.Leg.Os).Build)
         {
             var build = await builds
                 .BuildAsync(config, leg.BuildRequestFor(config, work.RunDirectory), cancellationToken)
@@ -306,9 +318,9 @@ internal static class RunCommand
     /// <remarks>
     /// One level deep, and enforced here as well as by the configuration: the runner this reaches is
     /// given no way to invoke another, so even a configuration that slipped past validation cannot
-    /// make a check confirm itself. A runner reached this way needs no build of its own — the leg was
-    /// already built for the runner carrying the check, and rebuilding it mid-run would replace the
-    /// binaries the failure being explained came from.
+    /// make a check confirm itself. A runner reached this way never builds the leg: the runner
+    /// carrying the check built it first where the check needs the build, and rebuilding it mid-run
+    /// would replace the binaries the failure being explained came from.
     /// </remarks>
     private static async Task<RunOutcome> ConfirmAsync(
         IRunnerRunService runners,

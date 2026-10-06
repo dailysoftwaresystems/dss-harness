@@ -1767,8 +1767,8 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
-    /// Build and test legs are heavy; a runner's are where it requires the build or says it is heavy; a copy's, and a
-    /// runner's that only reads the tree, are light.
+    /// Build and test legs are heavy; a runner's are where it builds or says it is heavy; a copy's, and a runner's that
+    /// only reads the tree, are light.
     /// </summary>
     [Fact]
     public void WhatIsHeavy_IsWhatBuildsOrTests_OrARunnerSaysIs()
@@ -1793,13 +1793,13 @@ public sealed class ConfigStoreTests
     {
         var light = new RunnerConfig { Action = "a/a.yml" };
 
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml", Heavy = true }, null, false)]).Heavy);
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml", RequireBuild = true }, null, false)]).Heavy);
-        Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml" }, null, false)]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [("b", new RunnerConfig { Action = "b/b.yml", Heavy = true }, null, false)]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [("b", new RunnerConfig { Action = "b/b.yml", RequireBuild = true }, null, false)]).Heavy);
+        Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, [("b", new RunnerConfig { Action = "b/b.yml" }, null, false)]).Heavy);
         Assert.False(Core.Legs.LegWorkload.ForRunner(light, null, []).Heavy);
 
         // One whose steps could not be read counts heavy: nothing says it is not.
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(new RunnerConfig { Action = "b/b.yml" }, null, true)]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [("b", new RunnerConfig { Action = "b/b.yml" }, null, true)]).Heavy);
     }
 
     /// <summary>
@@ -1848,7 +1848,283 @@ public sealed class ConfigStoreTests
         var checks = new RunnerConfig { Action = "sqlite", Steps = ["recompile"] };
         var light = new RunnerConfig { Action = "a/a.yml" };
 
-        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [(checks, Core.Runners.StepSelection.For(checks, []).Apply("rebuild", action).File, false)]).Heavy);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(light, null, [("rebuild", checks, Core.Runners.StepSelection.For(checks, []).Apply("rebuild", action).File, false)]).Heavy);
+    }
+
+    /// <summary>
+    /// A step whose run line - its program included - or working directory names what the build makes, {product} or
+    /// {buildDir}, builds every leg of a run that runs it first: by default, named with --manual-step, or needed by a step
+    /// named, through a runner that declares no requireBuild or says it is light; and a run that leaves it out builds
+    /// nothing. One limited by runOn builds, and so makes heavy, the legs of those systems alone. A brace written
+    /// doubled, and another expander's ${...}, name nothing. A runner's own phase naming either - in its command, or as
+    /// its working directory - builds as a step does. Unbuilt, such a step read whatever the last build left.
+    /// </summary>
+    [Fact]
+    public void AStepNamingWhatTheBuildMakes_BuildsTheLegsOfARunThatRunsIt_WhicheverRunnerStartsIt()
+    {
+        var action = ActionKit.Parse(
+            Path.Combine("actions", "sqlite", "sqlite.yml"),
+            """
+            steps:
+              - name: self-test
+                run: python3 self_test.py --dss={{product}} ${buildDir}
+              - name: recompile
+                manual: true
+                successPattern: '^built'
+                run: python3 recompile.py --dss="{product}" --out={buildDir}/recompile
+              - name: report
+                manual: true
+                needs: [recompile]
+                successPattern: '^reported'
+                run: python3 report.py
+              - name: deps
+                manual: true
+                successPattern: '^deps'
+                workingDirectory: '{buildDir}'
+                run: python3 deps.py
+              - name: bench
+                manual: true
+                successPattern: '^benched'
+                run: '{buildDir}/bin/app --bench'
+              - name: profile
+                manual: true
+                runOn: [linux]
+                successPattern: '^profiled'
+                run: perf record {buildDir}/bin/app
+            """);
+
+        Assert.Equal([false, true, false, true, true, true], action.Steps.Select(step => step.NeedsBuild));
+        Assert.Equal(["product", "buildDir"], action.Steps[1].NamesOfTheBuild);
+
+        Core.Legs.LegWorkload Run(RunnerConfig runner, params string[] manual)
+            => Core.Legs.LegWorkload.ForRunner(runner, Core.Runners.StepSelection.For(runner, manual).Apply("sqlite", action).File);
+
+        foreach (var runner in new[] { new RunnerConfig { Action = "sqlite" }, new RunnerConfig { Action = "sqlite", Heavy = false } })
+        {
+            Assert.False(Run(runner).On("linux").Build);
+            Assert.False(Run(runner).On("linux").Heavy);
+            Assert.True(Run(runner, "recompile").On("windows").Build);
+            Assert.True(Run(runner, "recompile").On("windows").Heavy);
+            Assert.True(Run(runner, "report").On("windows").Build);
+            Assert.True(Run(runner, "deps").On("windows").Build);
+            Assert.True(Run(runner, "bench").On("windows").Build);
+            Assert.True(Run(runner, "profile").On("Linux").Build);
+            Assert.True(Run(runner, "profile").On("linux").Heavy);
+            Assert.False(Run(runner, "profile").On("windows").Build);
+            Assert.False(Run(runner, "profile").On("windows").Heavy);
+        }
+
+        // Which legs a step limited by runOn builds is known once each leg's system is: asked before, it builds none yet.
+        Assert.False(Run(new RunnerConfig { Action = "sqlite" }, "profile").Build);
+
+        Assert.Equal("step 'recompile' names {product} and {buildDir}", Assert.Single(Run(new RunnerConfig { Action = "sqlite" }, "recompile").BuiltBy).Reason);
+
+        // A step every run runs builds every leg of a run that names none.
+        var corpus = ActionKit.Parse(
+            Path.Combine("actions", "corpus", "corpus.yml"),
+            """
+            steps:
+              - name: corpus
+                run: python3 corpus.py --dss="{product}"
+            """);
+
+        Assert.True(Core.Legs.LegWorkload.ForRunner(new RunnerConfig { Action = "corpus" }, Core.Runners.StepSelection.Default.Apply("corpus", corpus).File).Build);
+
+        var phases = new RunnerConfig { Phases = [new RunnerPhase { Name = "deps", Command = ["python3", "deps.py", "{buildDir}"] }] };
+        var inTheBuild = new RunnerConfig { Phases = [new RunnerPhase { Name = "ctest", Command = ["ctest"], WorkingDirectory = "{buildDir}" }] };
+        var reads = new RunnerConfig { Phases = [new RunnerPhase { Name = "lint", Command = ["python3", "lint.py"], WorkingDirectory = "{treeDir}" }] };
+
+        Assert.True(Core.Legs.LegWorkload.ForRunner(phases, null).Build);
+        Assert.True(Core.Legs.LegWorkload.ForRunner(inTheBuild, null).Build);
+        Assert.False(Core.Legs.LegWorkload.ForRunner(reads, null).Build);
+    }
+
+    /// <summary>
+    /// A run check runs on its leg as the runner carrying it left it, and is never built itself, so a check whose runner
+    /// needs the build - requiring it, or by a step naming what the build makes, on every system or on those its runOn
+    /// names - builds the carrier's legs first, and says whose need it is. One whose steps could not be read is heavy, and
+    /// builds nothing more than its runner requires: the check that runs it is refused.
+    /// </summary>
+    [Fact]
+    public void ARunnerWhoseRunCheckNeedsTheBuild_BuildsItsLegsFirst()
+    {
+        var action = ActionKit.Parse(
+            Path.Combine("actions", "sqlite", "sqlite.yml"),
+            """
+            steps:
+              - name: self-test
+                run: python3 self_test.py
+              - name: recompile
+                manual: true
+                successPattern: '^built'
+                run: python3 recompile.py --dss="{product}"
+              - name: profile
+                manual: true
+                runOn: [linux]
+                successPattern: '^profiled'
+                run: perf record {product}
+            """);
+
+        var light = new RunnerConfig { Action = "a/a.yml" };
+
+        Core.Legs.LegWorkload Carrying(params string[] steps)
+        {
+            var check = new RunnerConfig { Action = "sqlite", Steps = steps.Length == 0 ? null : [.. steps] };
+
+            return Core.Legs.LegWorkload.ForRunner(
+                light,
+                null,
+                [("confirm", check, Core.Runners.StepSelection.For(check, []).Apply("confirm", action).File, false)]);
+        }
+
+        Assert.True(Carrying("recompile").Build);
+        Assert.Equal(
+            "step 'recompile' of runner 'confirm', which a run check names, names {product}",
+            Assert.Single(Carrying("recompile").BuiltBy).Reason);
+        Assert.False(Carrying().Build);
+        Assert.False(Carrying("profile").Build);
+        Assert.True(Carrying("profile").On("linux").Build);
+        Assert.False(Carrying("profile").On("windows").Build);
+
+        var requiring = Core.Legs.LegWorkload.ForRunner(light, null, [("confirm", new RunnerConfig { Action = "b/b.yml", RequireBuild = true }, null, false)]);
+
+        Assert.True(requiring.Build);
+        Assert.Equal("runner 'confirm', which a run check names, requires the build", Assert.Single(requiring.BuiltBy).Reason);
+
+        var unread = Core.Legs.LegWorkload.ForRunner(light, null, [("confirm", new RunnerConfig { Action = "b/b.yml" }, null, true)]);
+
+        Assert.True(unread.Heavy);
+        Assert.False(unread.Build);
+    }
+
+    /// <summary>
+    /// A leg a run would build that cannot be built - it names no project, or no toolchain for its system - is refused
+    /// before any host is measured, naming every such leg, why, and what builds it; so is a step of the run's own runner
+    /// naming {product} on a leg whose project declares no one file for its system. A leg the run does not build is asked
+    /// nothing, and a product a run check's step names is that check's to refuse. Found where each leg's build began, the
+    /// first ended the whole run once its hosts were measured, naming neither the step nor the name that built it; the
+    /// second was refused only after the build it had cost.
+    /// </summary>
+    [Fact]
+    public void ALegARunWouldBuild_ThatCannotBeBuilt_OrHasNoProduct_IsRefusedBeforeAnythingStarts()
+    {
+        var config = new HarnessConfig
+        {
+            Toolchains = { ["sdk"] = new ToolchainConfig { Platforms = ["windows", "linux", "macos"] } },
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Projects =
+            {
+                new ProjectConfig { Name = "app", Type = "dotnet", Path = "app.csproj", BuildOutputs = [BuildOutput.Keyed([new("windows", "app.exe"), new("linux", "app")])] },
+                new ProjectConfig { Name = "tool", Type = "dotnet", Path = "tool.csproj" },
+            },
+            Legs =
+            {
+                ["win"] = new LegConfig { Os = "windows", Processor = "x86_64", Config = "debug", Toolchain = "sdk", Project = "app" },
+                ["mac"] = new LegConfig { Os = "macos", Processor = "arm64", Config = "debug", Toolchain = "sdk", Project = "app" },
+                ["lone"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug" },
+                ["bare"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Project = "app" },
+            },
+        };
+
+        var action = ActionKit.Parse(
+            Path.Combine("actions", "probe", "probe.yml"),
+            """
+            steps:
+              - name: version
+                run: python3 version.py
+              - name: measure
+                manual: true
+                successPattern: '^measured'
+                run: python3 measure.py --dss="{product}"
+              - name: winbench
+                manual: true
+                runOn: [windows]
+                successPattern: '^benched'
+                run: python3 bench.py --out={buildDir}
+            """);
+
+        var light = new RunnerConfig { Action = "probe" };
+        var requiring = new RunnerConfig { Action = "probe", RequireBuild = true };
+
+        Core.Legs.LegWorkload Run(RunnerConfig runner, params string[] manual)
+            => Core.Legs.LegWorkload.ForRunner(runner, Core.Runners.StepSelection.For(runner, manual).Apply("probe", action).File);
+
+        List<Core.Legs.SelectedLeg> Legs(params string[] names) => [.. names.Select(name => new Core.Legs.SelectedLeg(name, config.Legs[name]))];
+
+        Core.Results.HarnessException Refusal(Core.Legs.LegWorkload workload, params string[] names)
+            => Assert.Throws<Core.Results.HarnessException>(() => workload.RequireBuildable(config, "probe", Legs(names)));
+
+        // A run that builds nothing is asked nothing, nor one building a leg it can build whose product it can name, nor
+        // one whose step limited by runOn builds no leg of the system asked about.
+        Run(light).RequireBuildable(config, "probe", Legs("lone", "bare", "mac"));
+        Run(light, "measure").RequireBuildable(config, "probe", Legs("win"));
+        Run(light, "winbench").RequireBuildable(config, "probe", Legs("lone", "bare"));
+
+        var unbuildable = Refusal(Run(light, "measure"), "lone", "bare", "win");
+
+        Assert.Equal(Core.Results.HarnessExit.ConfigInvalid, unbuildable.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                [
+                    "A run of runner 'probe' builds 2 legs first that cannot be built, so nothing was run. Leave them out of the "
+                        + "run - with --legs, or from the runner's own legs - or give each a project and a toolchain to build:",
+                    "  Leg 'lone' builds nothing: it names no project, and neither defaults.project nor a single declared project "
+                        + "supplies one. It is built first because step 'measure' names {product}.",
+                    "  Leg 'bare' names no toolchain, and project 'app' declares no default toolchain for linux. It is built first "
+                        + "because step 'measure' names {product}.",
+                ]),
+            unbuildable.Message);
+
+        Assert.Contains(
+            "It is built first because the runner requires the build.",
+            Refusal(Run(requiring), "lone").Message,
+            StringComparison.Ordinal);
+
+        var productless = Refusal(Run(requiring, "measure"), "mac", "win");
+
+        Assert.Equal(Core.Results.HarnessExit.ConfigInvalid, productless.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                [
+                    "A run of runner 'probe' runs a step naming {product} where no one product can fill it in, so nothing was run:",
+                    "  leg 'mac': step 'measure' names {product}, and project 'app' declares no buildOutputs for macos.",
+                ]),
+            productless.Message);
+
+        // A product a run check's step names is the check's to refuse, when it runs; a leg the check builds and that
+        // cannot be built is refused here, naming the check.
+        var check = new RunnerConfig { Action = "probe", Steps = ["measure"] };
+        var carrying = Core.Legs.LegWorkload.ForRunner(
+            light,
+            Core.Runners.StepSelection.For(light, []).Apply("probe", action).File,
+            [("confirm", check, Core.Runners.StepSelection.For(check, []).Apply("confirm", action).File, false)]);
+
+        carrying.RequireBuildable(config, "probe", Legs("mac"));
+
+        Assert.Contains(
+            "It is built first because step 'measure' of runner 'confirm', which a run check names, names {product}.",
+            Refusal(carrying, "lone").Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A runner's own phase naming what the build makes builds its legs, and a build is heavy: one saying heavy is false
+    /// beside it is refused, as one beside requireBuild is, rather than believed.
+    /// </summary>
+    [Fact]
+    public void ARunnerSayingItIsNotHeavy_WhileAPhaseOfItBuilds_IsRefused()
+    {
+        var exception = LoadInvalid("""
+            { "predefinedRunners": { "deps": { "phases": [ { "name": "deps", "command": ["python3", "deps.py", "{buildDir}"] } ], "heavy": false } } }
+            """);
+
+        Assert.Contains(
+            "predefined runner 'deps' says heavy is false, and its phase 'deps' names {buildDir}, which builds its legs first, "
+            + "and a build is heavy: leave heavy out",
+            exception.Message,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

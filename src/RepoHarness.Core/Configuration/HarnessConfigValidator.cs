@@ -1270,12 +1270,21 @@ public static partial class HarnessConfigValidator
                 problems.Add($"predefined runner '{name}' has a negative stallSeconds");
             }
 
-            // Its build is heavy whatever the runner says, so a file saying it is not is refused rather than believed.
+            // Its build is heavy whatever the runner says, so a file saying it is not is refused rather than believed:
+            // the build it requires, or the one a phase of its own needs. A step of its action that names what the build
+            // makes builds whichever runner starts it, and is no runner's word to contradict.
             if (runner.Heavy == false && runner.RequireBuild)
             {
                 problems.Add(
                     $"predefined runner '{name}' says heavy is false and requires the build, which is heavy: "
                     + "leave heavy out, or drop requireBuild");
+            }
+            else if (runner.Heavy == false && runner.Phases.FirstOrDefault(phase => phase.NeedsBuild) is { } building)
+            {
+                problems.Add(
+                    $"predefined runner '{name}' says heavy is false, and its phase '{building.Name}' names "
+                    + $"{string.Join(" and ", building.NamesOfTheBuild.Select(spelled => $"{{{spelled}}}"))}, which builds its legs "
+                    + "first, and a build is heavy: leave heavy out");
             }
 
             ValidateExpectedExceptions(config, name, runner, problems);

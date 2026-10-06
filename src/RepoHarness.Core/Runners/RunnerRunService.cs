@@ -132,11 +132,6 @@ public sealed record RunnerRunRequest
 /// What the checks decided about that entry. Unconfirmed, the failure stays genuine, and this says
 /// so rather than leaving an excusal that was never re-measured indistinguishable from one that was.
 /// </param>
-/// <param name="RequireBuild">
-/// Whether this runner needs its leg's tree synced and built first. Reported rather than acted on:
-/// syncing and building are the orchestrator's, and a service that did either itself would do it
-/// once per leg on a tree that legs share.
-/// </param>
 /// <param name="PerformedActions">
 /// The predefined actions this run performed before its first program started: reading the action
 /// file's inputs, and confirming the tree is the commit the file names. Reported so a reader can
@@ -150,7 +145,6 @@ public sealed record RunnerLegResult(
     IReadOnlyDictionary<string, RunOutcome> Union,
     ExpectedException? ExpectedException,
     RunCheckGateResult? Gate,
-    bool RequireBuild,
     IReadOnlyList<string> PerformedActions);
 
 /// <summary>Running one predefined runner on one leg.</summary>
@@ -482,7 +476,6 @@ public sealed class RunnerRunService(
             union,
             decided.Entry,
             decided.Gate,
-            request.Runner.RequireBuild,
             steps.PerformedActions);
     }
 
@@ -804,7 +797,7 @@ public sealed class RunnerRunService(
         {
             var unvalued = Unvalued(file, step, fillable(step));
 
-            foreach (var (text, setting) in Written(step))
+            foreach (var (text, setting) in step.Written)
             {
                 if (LegPathNames.NamesIn(text).FirstOrDefault(name => unvalued.Contains(name)) is { } name)
                 {
@@ -859,21 +852,6 @@ public sealed class RunnerRunService(
         => [.. file.Inputs.Concat(step.Inputs).Select(input => input.Name).Except(fillable, StringComparer.Ordinal)];
 
     /// <summary>
-    /// What <paramref name="step"/> writes that can name something - each run line's program and
-    /// arguments, then its working directory - with what a refusal calls each. Every check over a
-    /// step's names reads this one list, so none looks where another does not.
-    /// </summary>
-    private static IEnumerable<(string? Text, string Setting)> Written(ActionStep step)
-    {
-        foreach (var argument in step.Commands.SelectMany(command => command.Arguments))
-        {
-            yield return (argument, $"'{step.Name}' run line");
-        }
-
-        yield return (step.WorkingDirectory, $"'{step.Name}' workingDirectory");
-    }
-
-    /// <summary>
     /// Refuses a step naming something nothing can fill in, over the whole file and before its
     /// first program starts.
     /// </summary>
@@ -902,7 +880,7 @@ public sealed class RunnerRunService(
             var declared = fillable(step).ToList();
             var unvalued = Unvalued(file, step, declared);
 
-            foreach (var (text, setting) in Written(step))
+            foreach (var (text, setting) in step.Written)
             {
                 LegPathNames.RefuseUnknown(text, setting, extra: declared, unvalued: unvalued);
             }

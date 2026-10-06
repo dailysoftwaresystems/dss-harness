@@ -1,4 +1,5 @@
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 
 namespace RepoHarness.Core.Runners;
 
@@ -61,7 +62,20 @@ public sealed record ActionStep
     /// <c>Windows</c>, and read exactly it was refused as running no step, while the host it ran on
     /// ran every one.
     /// </remarks>
-    public bool RunsOn(string os) => RunOn.Count == 0 || RunOn.Contains(os, StringComparer.OrdinalIgnoreCase);
+    public bool RunsOn(string os) => RunsOn(RunOn, os);
+
+    /// <summary>
+    /// Whether a leg of <paramref name="os"/> runs what <paramref name="runOn"/> limits: every leg where it names no system,
+    /// and otherwise a leg of a system it names, ignoring case as <see cref="RunsOn(string)"/> does.
+    /// </summary>
+    /// <param name="runOn">The systems a step's <c>runOn</c> names; empty, every one.</param>
+    /// <param name="os">The leg's operating system.</param>
+    public static bool RunsOn(IReadOnlyList<string> runOn, string os)
+    {
+        ArgumentNullException.ThrowIfNull(runOn);
+
+        return runOn.Count == 0 || runOn.Contains(os, StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>Environment for this step, applied over the runner's own.</summary>
     public IReadOnlyDictionary<string, string> Env { get; init; }
@@ -142,6 +156,45 @@ public sealed record ActionStep
     /// all.
     /// </remarks>
     public bool Heavy { get; init; }
+
+    /// <summary>
+    /// Whether the step needs its leg built first: a run line or its working directory names what the build makes -
+    /// <c>{product}</c> or <c>{buildDir}</c>, the names <see cref="NamesOfTheBuild"/> lists. Every leg of a run that runs
+    /// it - by default, or named with <c>run --manual-step</c>, through whichever runner - is built before its steps
+    /// start, whatever that runner says of <c>requireBuild</c>. Limited by <see cref="RunOn"/>, it builds the legs of
+    /// those systems alone.
+    /// </summary>
+    /// <remarks>
+    /// Read from the lines, because the work is the step's, as its weight is. When the build was declared only on
+    /// runners, a manual step naming the product, kept in an action a runner that builds nothing also runs, was
+    /// started through that runner and read whatever the last build left: a file that was not there, and the leg
+    /// passed - or one an older commit built, measured as this one.
+    /// </remarks>
+    public bool NeedsBuild => NamesOfTheBuild.Count > 0;
+
+    /// <summary>
+    /// What a run line or the working directory of this step names that the build makes - <c>product</c>,
+    /// <c>buildDir</c> - each once, in the order it first names them; empty where it names neither.
+    /// </summary>
+    public IReadOnlyList<string> NamesOfTheBuild => LegPathNames.BuiltNamesIn(Written.Select(written => written.Text));
+
+    /// <summary>
+    /// What this step writes that can name something - each run line's program and arguments, then its working
+    /// directory - with what a refusal calls each. Every check over a step's names reads this one list, so none looks
+    /// where another does not.
+    /// </summary>
+    public IEnumerable<(string? Text, string Setting)> Written
+    {
+        get
+        {
+            foreach (var argument in Commands.SelectMany(command => command.Arguments))
+            {
+                yield return (argument, $"'{Name}' run line");
+            }
+
+            yield return (WorkingDirectory, $"'{Name}' workingDirectory");
+        }
+    }
 
     /// <summary>
     /// The steps declared before this one that run first whenever it runs, from <c>needs</c>, as they

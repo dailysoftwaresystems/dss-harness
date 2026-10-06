@@ -113,6 +113,37 @@ public sealed class ProjectConfig : VariantOverlay
     /// </remarks>
     public List<BuildOutput> BuildOutputs { get; init; } = [];
 
+    /// <summary>
+    /// The one file this project's build is declared to make on <paramref name="platformKey"/>, relative to its build
+    /// directory, or why there is not one: it declares no <see cref="BuildOutputs"/> for that platform, or several.
+    /// </summary>
+    /// <param name="platformKey">The operating system the leg builds on.</param>
+    /// <remarks>
+    /// A single answer or none. <see cref="BuildOutputs"/> is a list, every entry of which must exist for a build to be
+    /// witnessed, so "the product" is a well-formed question only where the list holds exactly one path for this
+    /// platform. Where it holds several, this returns the reason instead of a guess: an instrument pointed at the wrong
+    /// one of three binaries measures something nobody asked about and reports it as a success.
+    /// </remarks>
+    public (string? Path, string? Problem) Product(string platformKey)
+    {
+        var declared = BuildOutputs
+            .Select(output => output.For(platformKey))
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path!)
+            .ToList();
+
+        return declared.Count switch
+        {
+            1 => (declared[0], null),
+            0 => (null, $"project '{Name}' declares no buildOutputs for {platformKey}"),
+            _ => (
+                null,
+                $"project '{Name}' declares {declared.Count} buildOutputs for {platformKey} "
+                + $"({string.Join(", ", declared)}), so which one is 'the product' is not something "
+                + "this tool can decide"),
+        };
+    }
+
     /// <summary>Default toolchain per platform, used when a leg names none.</summary>
     public Dictionary<string, string> DefaultToolchain { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 

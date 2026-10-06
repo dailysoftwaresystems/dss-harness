@@ -274,7 +274,8 @@ public sealed class ToolResolutionTests
     /// <summary>
     /// Each command asks for what it will start and nothing more: a build never needs the test
     /// runner, a test given --no-build needs nothing but the runner, a run what its steps start and
-    /// the build's only when the runner requires a build, and a copy nothing at all.
+    /// the build's only where it builds the leg - its runner requires the build, or a step it runs on
+    /// the leg's system names {product} or {buildDir} - and a copy nothing at all.
     /// </summary>
     [Fact]
     public void EachCommand_AsksForWhatItWillStart_AndNothingMore()
@@ -287,6 +288,34 @@ public sealed class ToolResolutionTests
         Assert.Empty(LegPrograms.For(config, leg, LegWorkload.Copy, NoSettings));
         Assert.Equal(["python3"], LegPrograms.For(config, leg, new LegWorkload(Build: false, Test: false, ["python3"]), NoSettings));
         Assert.Equal(["cmake", "ninja", "gcc", "python3"], LegPrograms.For(config, leg, new LegWorkload(Build: true, Test: false, ["python3"]), NoSettings));
+
+        var action = ActionKit.Parse(
+            Path.Combine("actions", "bench", "bench.yml"),
+            """
+            steps:
+              - name: lint
+                run: python3 lint.py
+              - name: bench
+                manual: true
+                needs: [lint]
+                successPattern: '^benched'
+                run: perf stat {product}
+              - name: winbench
+                manual: true
+                needs: [lint]
+                runOn: [windows]
+                successPattern: '^benched'
+                run: wpr -start {product}
+            """);
+
+        var light = new RunnerConfig { Action = "bench" };
+
+        LegWorkload Run(params string[] manual)
+            => LegWorkload.ForRunner(light, Core.Runners.StepSelection.For(light, manual).Apply("bench", action).File);
+
+        Assert.Equal(["python3"], LegPrograms.For(config, leg, Run(), NoSettings));
+        Assert.Equal(["cmake", "ninja", "gcc", "python3", "perf"], LegPrograms.For(config, leg, Run("bench"), NoSettings));
+        Assert.Equal(["python3"], LegPrograms.For(config, leg, Run("winbench"), NoSettings));
     }
 
     /// <summary>

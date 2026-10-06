@@ -1,5 +1,8 @@
+using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Processes;
+using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
 
 namespace RepoHarness.Core.Legs;
@@ -10,7 +13,8 @@ namespace RepoHarness.Core.Legs;
 /// </summary>
 /// <param name="Build">
 /// Whether the leg is built: its project's build program, ninja where its toolchain asks for the
-/// Ninja generator, and the compilers its variant names.
+/// Ninja generator, and the compilers its variant names. What builds a run's legs, and on which
+/// systems, is <see cref="BuiltBy"/>.
 /// </param>
 /// <param name="Test">Whether the leg's tests are run: its test runner.</param>
 /// <param name="Programs">
@@ -40,15 +44,24 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     public IReadOnlyList<OsScopedStart> OnlyOn { get; init; } = [];
 
     /// <summary>
+    /// What builds a run's legs first, each with the operating systems whose legs it builds: its runner, or a runner its
+    /// run checks name, requiring the build, or a step or phase of one of them naming what the build makes. One limited
+    /// by <c>runOn</c> builds the legs of those systems alone, so <see cref="Build"/> says only what builds every leg;
+    /// read through <see cref="On"/>, which keeps what builds a leg of that system. A command that builds every leg as
+    /// such - build, test - says so in <see cref="Build"/>, and names nothing here.
+    /// </summary>
+    public IReadOnlyList<BuildCause> BuiltBy { get; init; } = [];
+
+    /// <summary>
     /// Whether the command starts any program on the leg's host. A copy starts none, so nothing has to
     /// be set up there for it - not even the developer environment the leg's toolchain names.
     /// </summary>
-    public bool StartsPrograms => Build || Test || Programs.Count > 0 || UnderOwnPath.Count > 0 || OnlyOn.Count > 0;
+    public bool StartsPrograms => Build || BuiltBy.Count > 0 || Test || Programs.Count > 0 || UnderOwnPath.Count > 0 || OnlyOn.Count > 0;
 
     /// <summary>
     /// Whether what the command runs says its legs are heavy, where they build nothing: the runner, a step of it this run
-    /// runs on every system, or a runner its expected exceptions' run checks name - requiring the build, saying so, or
-    /// running such a step.
+    /// runs on every system, or a runner its expected exceptions' run checks name - saying so, running such a step, or
+    /// one whose steps could not be read.
     /// </summary>
     public bool DeclaredHeavy { get; init; }
 
@@ -75,8 +88,8 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     public static LegWorkload Copy { get; } = new(Build: false, Test: false, []);
 
     /// <summary>
-    /// What running <paramref name="runner"/> has a leg do: its steps, and a build first where it
-    /// requires one.
+    /// What running <paramref name="runner"/> has a leg do: its steps, and a build first where it, or a
+    /// runner its run checks name, requires one or runs a step or phase that needs one.
     /// </summary>
     /// <param name="runner">The runner.</param>
     /// <param name="action">Its action file, when it runs one rather than phases of its own.</param>
@@ -84,18 +97,26 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// A step whose environment - its own or the runner's - sets PATH finds its program on that PATH,
     /// which no survey can see, so its program is the run's to find rather than a demand on the host,
     /// and is only asked about: see <see cref="UnderOwnPath"/>.
+    /// <para>
+    /// A leg is built first where the runner requires the build, or where a step or phase it runs names what the build
+    /// makes, whatever the runner says: see <see cref="ActionStep.NeedsBuild"/>.
+    /// </para>
     /// </remarks>
     /// <param name="checks">
-    /// The runners its expected exceptions' run checks name, which run within its legs, each with the action steps a
-    /// run of it runs, or whether those could not be read: any of them heavy - requiring the build, or saying so, itself
-    /// or by a step - makes its legs heavy, as the runner itself would, and so does one whose steps could not be read.
+    /// The runners its expected exceptions' run checks name, which run within its legs, each by name with the action
+    /// steps a run of it runs, or whether those could not be read: any of them needing the build - requiring it, or by a
+    /// step or phase naming <c>{product}</c> or <c>{buildDir}</c> - builds its legs first, since a check runs on the leg
+    /// as the runner carrying it left it, and is never built itself; any heavy, itself or by a step, makes its legs
+    /// heavy, as the runner itself would; and so does one whose steps could not be read.
     /// </param>
     public static LegWorkload ForRunner(
         RunnerConfig runner,
         ActionFile? action,
-        IEnumerable<(RunnerConfig Runner, ActionFile? Action, bool Unread)>? checks = null)
+        IEnumerable<(string Name, RunnerConfig Runner, ActionFile? Action, bool Unread)>? checks = null)
     {
         ArgumentNullException.ThrowIfNull(runner);
+
+        var checking = (checks ?? []).ToList();
 
         var runnerPath = ProcessRunner.SetsPath(runner.Env.Keys);
 
@@ -109,15 +130,143 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
 
         var everywhere = starts.Where(start => start.RunOn.Count == 0).ToList();
         var own = Heaviness(runner, action);
-        var checked_ = (checks ?? []).Select(check => (Wholly: check.Runner.RequireBuild || check.Unread, Steps: Heaviness(check.Runner, check.Action))).ToList();
+        var checked_ = checking.Select(check => (check.Unread, Steps: Heaviness(check.Runner, check.Action))).ToList();
 
-        return new LegWorkload(Build: runner.RequireBuild, Test: false, [.. everywhere.Where(start => !start.OwnPath).Select(start => start.Program)])
+        List<BuildCause> causes =
+        [
+            .. Causes(null, runner, action),
+            .. checking.SelectMany(check => Causes(check.Name, check.Runner, check.Action)),
+        ];
+
+        return new LegWorkload(
+            Build: causes.Any(cause => cause.RunOn.Count == 0),
+            Test: false,
+            [.. everywhere.Where(start => !start.OwnPath).Select(start => start.Program)])
         {
             UnderOwnPath = [.. everywhere.Where(start => start.OwnPath).Select(start => start.Program)],
             OnlyOn = [.. starts.Where(start => start.RunOn.Count > 0)],
-            DeclaredHeavy = own.Everywhere || checked_.Any(check => check.Wholly || check.Steps.Everywhere),
+            BuiltBy = causes,
+            DeclaredHeavy = own.Everywhere || checked_.Any(check => check.Unread || check.Steps.Everywhere),
             HeavyOnlyOn = [.. own.OnlyOn.Concat(checked_.SelectMany(check => check.Steps.OnlyOn)).Distinct(StringComparer.OrdinalIgnoreCase)],
         };
+    }
+
+    /// <summary>
+    /// What builds the legs of a run of <paramref name="runner"/> first: its requiring the build, and each phase of its own
+    /// and each step of <paramref name="action"/> - the steps a run of it runs - naming what the build makes.
+    /// </summary>
+    /// <param name="check">The runner's name where a run check names it, or <see langword="null"/> for the run's own.</param>
+    /// <param name="runner">The runner.</param>
+    /// <param name="action">The steps a run of it runs, or <see langword="null"/> where it runs phases of its own or its action could not be read.</param>
+    /// <remarks>
+    /// Every one, not only the first: a step naming <c>{product}</c> under a runner that requires the build is still
+    /// a step whose product must be there. An action that could not be read names no step, and builds nothing more than
+    /// its runner requires: a run check whose action cannot be read is refused by the check that runs it, which reads no
+    /// build. A runner declares phases or an action, never both, so one that runs an action has no phase here.
+    /// </remarks>
+    private static IEnumerable<BuildCause> Causes(string? check, RunnerConfig runner, ActionFile? action)
+    {
+        if (runner.RequireBuild)
+        {
+            yield return new BuildCause(check, null, [], []);
+        }
+
+        foreach (var phase in runner.Phases.Where(phase => phase.NeedsBuild))
+        {
+            yield return new BuildCause(check, phase.Name, phase.NamesOfTheBuild, []);
+        }
+
+        foreach (var step in action?.Steps.Where(step => step.NeedsBuild) ?? [])
+        {
+            yield return new BuildCause(check, step.Name, step.NamesOfTheBuild, step.RunOn);
+        }
+    }
+
+    /// <summary>
+    /// Refuses, before any host is measured, each of <paramref name="legs"/> this workload builds first that cannot be
+    /// built - it names no project, or no toolchain for its system - and each where a step or phase of the run's own
+    /// runner names <c>{product}</c> and its project declares no one product for its system.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="runnerName">The runner the run was given, as the refusal names it.</param>
+    /// <param name="legs">The legs the run reaches.</param>
+    /// <exception cref="HarnessException">
+    /// A leg is built first that cannot be built, or a product cannot be named; every such leg is named, with what builds
+    /// it or names its product.
+    /// </exception>
+    /// <remarks>
+    /// Asked of the configuration alone, as a leg on whose system no step runs is, so nothing is synced, locked or
+    /// built for a run that cannot happen. Found where the leg's build began, the first ended the whole run once its
+    /// hosts were measured and its slots taken, naming neither the step nor the name that built it; and a product that
+    /// could not be named was refused only after the build it had just cost. A product a run check's step names is the
+    /// check's to refuse, when it runs, as everything else about a check is: refused here, it would refuse a run whose
+    /// checks may never run.
+    /// </remarks>
+    public void RequireBuildable(HarnessConfig config, string runnerName, IEnumerable<SelectedLeg> legs)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runnerName);
+        ArgumentNullException.ThrowIfNull(legs);
+
+        var unbuildable = new List<string>();
+        var productless = new List<string>();
+
+        foreach (var leg in legs)
+        {
+            var here = On(leg.Leg.Os);
+
+            if (!here.Build)
+            {
+                continue;
+            }
+
+            var project = VariantKey.ProjectFor(config, leg.Leg);
+
+            if (VariantKey.For(config, leg.Leg, leg.Leg.Os).Unbuildable(leg.Name, project, leg.Leg.Os) is { } why)
+            {
+                unbuildable.Add($"  {why} It is built first because {string.Join("; ", here.BuiltBy.Select(cause => cause.Reason))}.");
+                continue;
+            }
+
+            if (project?.Product(leg.Leg.Os).Problem is not { } problem)
+            {
+                continue;
+            }
+
+            foreach (var cause in here.BuiltBy.Where(cause => cause.Check is null && cause.Names.Contains(LegPathNames.Product, StringComparer.Ordinal)))
+            {
+                productless.Add($"  leg '{leg.Name}': step '{cause.Step}' names {{{LegPathNames.Product}}}, and {problem}.");
+            }
+        }
+
+        if (unbuildable.Count > 0)
+        {
+            var one = unbuildable.Count == 1;
+
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                string.Join(
+                    Environment.NewLine,
+                    [
+                        $"A run of runner '{runnerName}' builds {(one ? "a leg" : $"{unbuildable.Count} legs")} first that cannot be "
+                            + $"built, so nothing was run. Leave {(one ? "it" : "them")} out of the run - with --legs, or from the "
+                            + $"runner's own legs - or give {(one ? "it" : "each")} a project and a toolchain to build:",
+                        .. unbuildable,
+                    ]));
+        }
+
+        if (productless.Count > 0)
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                string.Join(
+                    Environment.NewLine,
+                    [
+                        $"A run of runner '{runnerName}' runs a step naming {{{LegPathNames.Product}}} where no one product can fill "
+                            + "it in, so nothing was run:",
+                        .. productless,
+                    ]));
+        }
     }
 
     /// <summary>
@@ -136,7 +285,7 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
 
     /// <summary>
     /// What the command starts on a leg of <paramref name="os"/>: what it starts on every leg, and
-    /// what the steps that system runs add.
+    /// what the steps that system runs add - a build first among them, where one of those needs it.
     /// </summary>
     /// <param name="os">The leg's operating system.</param>
     public LegWorkload On(string os)
@@ -144,10 +293,13 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
         ArgumentException.ThrowIfNullOrWhiteSpace(os);
 
         // Ignoring case, as a leg's os is compared everywhere else.
-        var here = OnlyOn.Where(start => start.RunOn.Contains(os, StringComparer.OrdinalIgnoreCase)).ToList();
+        var here = OnlyOn.Where(start => ActionStep.RunsOn(start.RunOn, os)).ToList();
+        var built = BuiltBy.Where(cause => ActionStep.RunsOn(cause.RunOn, os)).ToList();
 
         return this with
         {
+            Build = Build || built.Count > 0,
+            BuiltBy = built,
             Programs = [.. Programs, .. here.Where(start => !start.OwnPath).Select(start => start.Program)],
             UnderOwnPath = [.. UnderOwnPath, .. here.Where(start => start.OwnPath).Select(start => start.Program)],
             OnlyOn = [],
@@ -155,6 +307,27 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
             HeavyOnlyOn = [],
         };
     }
+}
+
+/// <summary>What builds a run's legs first, and the operating systems whose legs it builds.</summary>
+/// <param name="Check">
+/// The runner whose need it is where a run check names it, or <see langword="null"/> where it is the run's own runner's.
+/// </param>
+/// <param name="Step">The step or phase naming what the build makes, or <see langword="null"/> where the runner requires the build.</param>
+/// <param name="Names">What the step names that the build makes - <c>product</c>, <c>buildDir</c> - in the order it names them.</param>
+/// <param name="RunOn">The operating systems whose legs it builds; empty, every one.</param>
+public sealed record BuildCause(string? Check, string? Step, IReadOnlyList<string> Names, IReadOnlyList<string> RunOn)
+{
+    /// <summary>What builds the legs, as a refusal of the run says it.</summary>
+    public string Reason => (Check, Step) switch
+    {
+        (null, null) => "the runner requires the build",
+        (null, { } step) => $"step '{step}' names {Spelled}",
+        ({ } check, null) => $"runner '{check}', which a run check names, requires the build",
+        ({ } check, { } step) => $"step '{step}' of runner '{check}', which a run check names, names {Spelled}",
+    };
+
+    private string Spelled => string.Join(" and ", Names.Select(name => $"{{{name}}}"));
 }
 
 /// <summary>A program a command starts, where, and whether under an environment that sets PATH.</summary>
