@@ -32,6 +32,12 @@ public sealed class GitClient(
     /// </summary>
     private const string StagingIndexSuffix = ".harness-sync";
 
+    /// <summary>
+    /// How git says a directory is in no repository it can open: in none at all, or below a .git file naming one that is
+    /// not there - in its own words since git 2.56, where older git said "not a git repository" for that too.
+    /// </summary>
+    private static readonly string[] NotARepositoryAnswers = ["not a git repository", "gitfile does not point to a valid repository"];
+
     private readonly IProcessRunner _processRunner = processRunner;
     private readonly IHarnessOutput _output = output;
     private readonly IFilePermissions _filePermissions = filePermissions ?? FilePermissionsFactory.Create();
@@ -1430,7 +1436,7 @@ public sealed class GitClient(
     /// untranslated.
     /// </summary>
     /// <remarks>
-    /// "not a git repository" and "not a gitdir" are recognised by their text, and a translated
+    /// "not a git repository" (<see cref="NotARepositoryAnswers"/>) and "not a gitdir" are recognised by their text, and a translated
     /// git answers in another language, so these queries run under <c>LC_ALL=C</c>. The override is kept
     /// to them alone: every other git command, including those that run the user's hooks,
     /// keeps the user's locale, because forcing C onto a hook changes how it handles
@@ -1677,14 +1683,14 @@ public sealed class GitClient(
 
     /// <summary>
     /// Distinguishes git's "not a repository" answer from a genuine failure to run.
-    /// git reports the former on stderr in a recognisable form; everything else
+    /// git reports the former on stderr in a recognisable form (<see cref="NotARepositoryAnswers"/>); everything else
     /// (dubious ownership, a corrupt config, an unreadable object store, a timeout) is a
     /// failure whose own message tells the user what to do.
     /// </summary>
     private static void EnsureNotAnError(GitCommandResult result, string directory)
     {
         if (!result.TimedOut
-            && result.StandardError.Contains("not a git repository", StringComparison.OrdinalIgnoreCase))
+            && NotARepositoryAnswers.Any(answer => result.StandardError.Contains(answer, StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }

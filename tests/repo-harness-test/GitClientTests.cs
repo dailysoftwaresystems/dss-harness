@@ -1194,15 +1194,23 @@ public sealed class GitClientProtocolTests
         Assert.False(requests[1].Environment.ContainsKey("LC_ALL"));
     }
 
-    [Fact]
-    public async Task NotARepository_IsAnAnswer()
+    /// <summary>
+    /// git's answer that a directory is in no repository it can open is an answer, in either wording: below a .git file
+    /// naming a repository that is gone - a worktree whose record was deleted - git 2.56 says so in its own words, where
+    /// older git said "not a git repository". Read as a failure, deleting such a worktree stopped as unchecked.
+    /// </summary>
+    [Theory]
+    [InlineData(NotARepository)]
+    [InlineData("fatal: gitfile does not point to a valid repository: /somewhere/.git")]
+    public async Task NotARepository_IsAnAnswer(string answer)
     {
-        var (git, _) = Scripted(Exited(128, stderr: NotARepository));
+        var (git, _) = Scripted(Exited(128, stderr: answer));
         var cancellationToken = TestContext.Current.CancellationToken;
 
         Assert.False(await git.IsRepositoryAsync("/somewhere", cancellationToken));
         Assert.Null(await git.GetRepositoryRootAsync("/somewhere", cancellationToken));
         Assert.Null(await git.GetMainWorktreeAsync("/somewhere", cancellationToken));
+        Assert.Null(await git.GetLocationAsync("/somewhere", cancellationToken));
     }
 
     [Fact]
