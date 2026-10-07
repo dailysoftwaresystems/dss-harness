@@ -254,8 +254,9 @@ public static partial class HostProbes
     }
 
     /// <summary>
-    /// The line in which ssh said it never connected to the host - the name did not resolve, or nothing
-    /// took the connection at the address - or <see langword="null"/> where it said no such thing.
+    /// The line in which ssh said it never connected to the host - the name did not resolve, nothing took
+    /// the connection at the address, or what took it never answered as an ssh server - or
+    /// <see langword="null"/> where it said no such thing.
     /// </summary>
     /// <param name="standardError">What ssh printed on standard error.</param>
     /// <remarks>
@@ -263,7 +264,11 @@ public static partial class HostProbes
     /// resolve is "ssh: Could not resolve hostname", and an address where nothing answers "ssh: connect to
     /// host ... port ...: Connection timed out", from each. A refused connection is "ssh: connect to host"
     /// from Git's, and "banner exchange: Connection to UNKNOWN port -1" from the Windows builds, whose
-    /// connection has no far end to name. Anything else ssh fails over came after the host answered.
+    /// connection has no far end to name. One taken where nothing then said it was an ssh server within the
+    /// connect timeout - a host asleep behind whatever took the connection for it, or one still waking - is
+    /// "Connection timed out during banner exchange", then "Connection to ... port ... timed out", from
+    /// 10.0p2 and 10.5p1 alike, measured against a listener that never spoke: no session began, so nothing
+    /// ran there. Anything else ssh fails over came after the host answered.
     /// </remarks>
     public static string? NeverConnected(string standardError)
     {
@@ -531,7 +536,7 @@ public static partial class HostProbes
     [GeneratedRegex(@"Authenticating to (?<address>[0-9A-Za-z.:%_-]+):(?<port>[0-9]+) as '", RegexOptions.CultureInvariant)]
     private static partial Regex SshAuthenticatingTo();
 
-    [GeneratedRegex(@"^(?:ssh(?:\.exe)?: (?:Could not resolve hostname |connect to host \S+ port \S+: )|banner exchange: Connection to UNKNOWN port -1: )", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^(?:ssh(?:\.exe)?: (?:Could not resolve hostname |connect to host \S+ port \S+: )|banner exchange: Connection to UNKNOWN port -1: |Connection timed out during banner exchange$)", RegexOptions.CultureInvariant)]
     private static partial Regex SshNeverConnected();
 
     [GeneratedRegex(@"^(?<version>\d+\.\d+\.\d+\S*)\s+\[(?<location>.+)\]$", RegexOptions.CultureInvariant)]

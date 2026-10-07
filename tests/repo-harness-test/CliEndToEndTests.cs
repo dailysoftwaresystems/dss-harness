@@ -2210,10 +2210,13 @@ public sealed partial class CliEndToEndTests
     /// does, by the CMake on this machine: its answer names C's compiler with no id, and C is identified
     /// from CMake's own record of it - named on the leg's line, and held to the toolchain's compilerId,
     /// a matching one building and another failing the leg, never leaving it unwitnessed. A test of the
-    /// build it did not make identifies C the same way, from a record the answer ties to it; after a
-    /// configure since that identified C again and failed - writing no answer, and leaving a record newer
-    /// than the last - nothing ties that record to the build, and C is unwitnessed rather than named
-    /// from it. Skipped where this machine has no CMake, no Ninja, or no C or C++ compiler.
+    /// build it did not make identifies C the same way, from a record the answer ties to it. After a
+    /// configure since that identified C again and failed - writing no answer, and leaving a record dated
+    /// after the last - C is unwitnessed where CMake's error index says a configure failed since, and
+    /// named from the record where CMake before 4 leaves nothing to say so, the record naming the
+    /// compiler the answer names; after one that identified another program for C, nothing ties the
+    /// record to the build, and C is unwitnessed rather than named from it. Never by the record's date.
+    /// Skipped where this machine has no CMake, no Ninja, or no C or C++ compiler.
     /// </summary>
     [Fact]
     public async Task ALanguageOnlyADependencyEnables_IsIdentified_AndHeldToTheToolchain()
@@ -2230,9 +2233,8 @@ public sealed partial class CliEndToEndTests
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
 
-        // Real builds, which a build system orders by the times of the files they write, and records
-        // held to answers by theirs: on a clock that steps, what they do proves nothing here. Watched
-        // from before the files they build from are written.
+        // Real builds, which a build system orders by the times of the files they write: on a clock that
+        // steps, what they do proves nothing here. Watched from before the files they build from are written.
         using var clock = new ClockWatch();
 
         HarnessConfig Config(params (string Language, string Id)[] declared)
@@ -2273,6 +2275,30 @@ public sealed partial class CliEndToEndTests
         }
 
         Task<(JsonElement Leg, string Said, string Records)> BuildAsync() => RunAsync("build");
+
+        // A configure of the leg's directory from outside the harness, run with --fresh so it identifies C
+        // again - with cCompiler - and failing after the dependency enabled C. Returns the error index CMake
+        // left in place of an answer, by file name, as CMake 4 does; or null where it left none.
+        async Task<string?> FailedConfigureAsync(string cCompiler)
+        {
+            var directory = temp.Combine("build", $"{platform.Processor}-cc-debug");
+            var failed = await harness.ProcessRunner.RunAsync(
+                new ProcessRequest
+                {
+                    FileName = programs["cmake"]!,
+                    Arguments = ["--fresh", "-S", temp.Path, "-B", directory, "-G", "Ninja", $"-DCMAKE_MAKE_PROGRAM={programs["ninja"]}", "-DFAIL=ON"],
+                    Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["CC"] = cCompiler, ["CXX"] = cxx },
+                    AppendToPath = [.. programs.Values.Select(found => Path.GetDirectoryName(found)!).Distinct(StringComparer.Ordinal)],
+                },
+                token);
+
+            Assert.True(failed.ExitCode != 0, $"the configure meant to fail passed: {failed.StandardOutput}");
+
+            return Directory.EnumerateFiles(Path.Combine(directory, ".cmake", "api", "v1", "reply"), "error-*.json")
+                .Select(Path.GetFileName)
+                .Order(StringComparer.Ordinal)
+                .LastOrDefault();
+        }
 
         await harness.InitializeHarnessAsync(temp.Path, token, Config());
 
@@ -2337,23 +2363,28 @@ public sealed partial class CliEndToEndTests
                 tested.GetProperty("compilers").EnumerateArray(),
                 compiler => compiler.GetProperty("language").GetString() == "C" && compiler.GetProperty("id").GetString() == ids["C"]);
 
-            var failed = await harness.ProcessRunner.RunAsync(
-                new ProcessRequest
-                {
-                    FileName = programs["cmake"]!,
-                    Arguments = ["--fresh", "-S", temp.Path, "-B", temp.Combine("build", $"{platform.Processor}-cc-debug"), "-G", "Ninja", $"-DCMAKE_MAKE_PROGRAM={programs["ninja"]}", "-DFAIL=ON"],
-                    Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["CC"] = c, ["CXX"] = cxx },
-                    AppendToPath = [.. programs.Values.Select(found => Path.GetDirectoryName(found)!).Distinct(StringComparer.Ordinal)],
-                },
-                token);
+            // The same compiler identified again by a configure that failed: from CMake 4 its error index says one
+            // failed since the answer, and before it nothing does, so the record is read as it names that compiler.
+            var failedSince = await FailedConfigureAsync(c);
+            var (again, againSaid, _) = await RunAsync("test", "--no-build");
 
-            Assert.True(failed.ExitCode != 0, $"the configure meant to fail passed: {failed.StandardOutput}");
+            if (failedSince is { } errorIndex)
+            {
+                Assert.True(again.GetProperty("verdict").GetString() == "unwitnessed", againSaid);
+                Assert.Contains($"CMake's '{errorIndex}' says one failed since that answer", again.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.True(again.GetProperty("verdict").GetString() == "passed", againSaid);
+            }
+
+            // Another program identified for C by one: whatever CMake leaves of the configure, nothing ties the record to the answer.
+            await FailedConfigureAsync(cxx);
 
             var (untied, untiedSaid, _) = await RunAsync("test", "--no-build");
 
             Assert.True(untied.GetProperty("verdict").GetString() == "unwitnessed", untiedSaid);
             Assert.Contains("CMake identified none for it", untied.GetProperty("detail").GetString(), StringComparison.Ordinal);
-            Assert.Contains("was written after that answer", untied.GetProperty("detail").GetString(), StringComparison.Ordinal);
         }
         catch (Exception ex) when (!clock.Held)
         {

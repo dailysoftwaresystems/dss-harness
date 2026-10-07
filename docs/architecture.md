@@ -164,20 +164,26 @@ at once, with the line it concerns where the parser knows it:
   given another, or run with `--fresh` - rewrites it, and one that then fails writes no answer,
   which leaves the last one's beside a record of a compiler that built nothing there. Read that
   way, `test --no-build` named a compiler its binaries were not built with. So the record must name
-  the compiler the answer names, where the answer names one, and must have been written no later
-  than the answer, which a configure writes after every record it writes; a record nothing ties to
-  the answer identifies nothing, and the language is `unwitnessed`, with why. The answer keeps a
-  toolchain file's value as written, where the record holds what CMake's
+  the compiler the answer names, where the answer names one; a record nothing ties to the answer
+  identifies nothing, and the language is `unwitnessed`, with why. The answer keeps a toolchain
+  file's value as written, where the record holds what CMake's
   `Modules/CMakeDetermineCompiler.cmake` made of it, so the two are compared as that: a list's
   first item - `gcc.exe;-m64` names `gcc.exe` - a path tidied of `.`, `..` and doubled separators,
   with forward slashes, and a name alone found as a program, with `.com` or `.exe` after it on
-  Windows. Each tie leaves a case to the other: the time alone tells a later record apart where the
-  answer names no compiler, as under Visual Studio, where it names one by its name alone, which a
-  program of that name elsewhere answers to, and where the same file was replaced in place; the
-  compiler alone does where a clock stepped back since the answer was written. Measured with CMake
-  3.29 and 4.3: MSVC through Ninja and through Visual Studio 18 2026, gcc on Windows and on Linux,
-  toolchain files naming the compiler each of those ways, and a configure that failed after
-  identifying the compiler again. A language
+  Windows. Measured with CMake 3.29 and 4.3: MSVC through Ninja and through Visual Studio 18 2026,
+  gcc on Windows and on Linux, toolchain files naming the compiler each of those ways, and a
+  configure that failed after identifying the compiler again. Never by when either was written: a
+  host whose clock steps forward for a moment stamps a file ahead of one written after it - on a
+  consumer's WSL host, two files written a fraction of a second apart came out 24 seconds apart, and
+  a configure's own record came out dated after its answer, failing a leg as `unwitnessed` - and a
+  phase that starts and ends outside the step measures no drift. Read for the configure that wrote
+  it, the record can be no later configure's: only what that configure answered is read, and nothing
+  configures between it and the reading. Read for a directory a leg did not configure, a configure
+  since is told apart by what CMake leaves of it: one that identified another program by the
+  program the record names, and one that failed, whatever it identified, by the error index CMake 4
+  writes in place of an answer - kept beside the last answer, where a configure that answers
+  removes every one before it, measured with CMake 4.3. Before CMake 4 a configure that failed
+  leaves nothing of itself there, and the record is read as it names it. A language
   CMake identified nowhere, such as the resource compiler it lists on Windows, is left out of the
   compilers, and a toolchain declaring one is told what CMake's answer named for it and why that
   is no id, never that CMake named none. `test --no-build` names what its build
@@ -1010,6 +1016,17 @@ Both ends must be the same build, so before anything runs on a host:
 - The version and the SHA-256 of the tool's assembly are both compared. A build from source
   reports the same version as the published package, while the assembly installed from one
   package is the same bytes on every operating system.
+- An install or update is said with whether the host then answered as this build - the
+  DssHarness it now runs read back, not the installer's word - and what stopped the host
+  answering after one is said as coming after it: `updated DssHarness 0.6.8 to 0.6.9, then the
+  host could not be reached: ssh said Connection timed out during banner exchange`. Said alone,
+  an update beside a warning for every leg on that host that DssHarness there did not answer left
+  a consumer unable to tell which version the host ran.
+- A host that takes the connection and never says it is an ssh server within the connect
+  timeout - asleep behind whatever took the connection, or still waking - could not be reached,
+  as one whose name did not resolve could not: ssh's "Connection timed out during banner
+  exchange" means no session began, so nothing ran there, and a host's `wakeWaitSeconds` waits
+  it out as a connection opens, as it waits out a name that did not resolve.
 
 `host-exec` returns the exit code of the command it ran on the host, unchanged, and 15 when
 nothing could run there: the host is unreachable, has no SDK, could not be brought to this
@@ -1355,6 +1372,12 @@ since commands of repositories that declare different counts share one record, a
 only while it is fewer legs from the front than the fewest any leg up to it allows: the legs holding
 slots are always the front of the line, no leg runs beside more legs than its own configuration
 allows, and none passes a leg that asked before it.
+
+A waiting leg says where it stands as it starts each wait - who holds the slots, the memory in use, or
+the room and who claims it - again whenever the holders or the claimants change, and again, as it reads
+then and with how long it has waited of `maxWaitMinutes`, at least every 5 minutes: a consumer's leg
+waited 39 minutes for the memory with one line, which its reader's pipe - passing each line on only
+once the next came - delivered with the leg's admission, so the wait read as a hang.
 
 A leg holds its slot until its work ends - a runner's steps after its build, and a WSL leg's whole
 run there, included - and keeps its lock while it waits, so another run of its variant is

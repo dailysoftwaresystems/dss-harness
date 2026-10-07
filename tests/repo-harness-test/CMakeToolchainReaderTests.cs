@@ -153,29 +153,83 @@ public sealed class CMakeToolchainReaderTests
 
     /// <summary>
     /// A record nothing ties to the answer identifies nothing, as a configure after the answer's can leave
-    /// one - one that identified the compiler again and then failed writes no answer: a record of another
-    /// compiler than the answer names, by path or by a toolchain file's program name, one naming none, and
-    /// one written after the answer, whether or not the answer names a compiler.
+    /// one - one that identified another compiler and then failed writes no answer: a record of another
+    /// compiler than the answer names, by path or by a toolchain file's program name, and one naming none.
     /// </summary>
     [Theory]
-    [InlineData("C:/Strawberry/c/bin/gcc.exe", Cl, false, $"names '{Cl}', another compiler")]
-    [InlineData("gcc", "C:/Program Files/LLVM/bin/clang.exe", false, "names 'C:/Program Files/LLVM/bin/clang.exe', another compiler")]
-    [InlineData(Cl, null, false, "names no compiler")]
-    [InlineData(Cl, Cl, true, "was written after that answer")]
-    [InlineData(null, Cl, true, "was written after that answer")]
-    public void Read_IdentifiesNothingFromARecordNothingTiesToTheAnswer(string? answered, string? recorded, bool later, string expected)
+    [InlineData("C:/Strawberry/c/bin/gcc.exe", Cl, $"names '{Cl}', another compiler")]
+    [InlineData("gcc", "C:/Program Files/LLVM/bin/clang.exe", "names 'C:/Program Files/LLVM/bin/clang.exe', another compiler")]
+    [InlineData(Cl, null, "names no compiler")]
+    public void Read_IdentifiesNothingFromARecordNothingTiesToTheAnswer(string? answered, string? recorded, string expected)
     {
         using var temp = new TempDirectory();
         var build = WriteSubprojectReply(temp, c: answered);
         var names = recorded is null ? string.Empty : $"set(CMAKE_C_COMPILER \"{recorded}\")\n";
 
-        WriteRecord(build, "C", $"{names}set(CMAKE_C_COMPILER_ID \"MSVC\")\nset(CMAKE_C_COMPILER_VERSION \"19.51.36257.0\")\n", later ? Answered.AddSeconds(1) : null);
+        WriteRecord(build, "C", $"{names}set(CMAKE_C_COMPILER_ID \"MSVC\")\nset(CMAKE_C_COMPILER_VERSION \"19.51.36257.0\")\n");
 
         var reading = Reader().Read(build);
 
         Assert.Equal(["CXX"], reading.Compilers.Select(compiler => compiler.Language));
         Assert.StartsWith($"its answer names {(answered is null ? "no compiler" : $"'{answered}'")} for C and no id, and its record of identifying C's compiler, ", reading.Unidentified["C"], StringComparison.Ordinal);
         Assert.EndsWith(expected, reading.Unidentified["C"], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A record is tied to the answer by the compiler it names, never by when either was written: a host
+    /// whose clock steps forward for a moment stamps the configure's own record after its answer - measured
+    /// on a WSL host, two files written a fraction of a second apart dated 24 seconds apart - and a phase
+    /// that starts and ends outside the step measures no drift. Identified for the configure it asked, and
+    /// for a directory read afresh, whether or not the answer names a compiler.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "/usr/bin/gcc")]
+    [InlineData(false, "/usr/bin/gcc")]
+    [InlineData(true, null)]
+    [InlineData(false, null)]
+    public void Read_IdentifiesALanguage_FromARecordAClockStepDatedAfterTheAnswer(bool asked, string? answered)
+    {
+        using var temp = new TempDirectory();
+        var reader = Reader();
+        var question = asked ? reader.Ask(temp.Combine("build")) : null;
+        var build = WriteSubprojectReply(temp, c: answered);
+
+        WriteRecord(build, "C", "set(CMAKE_C_COMPILER \"/usr/bin/gcc\")\nset(CMAKE_C_COMPILER_ID \"GNU\")\nset(CMAKE_C_COMPILER_VERSION \"13.3.0\")\n", Answered.AddSeconds(24));
+
+        var reading = reader.Read(build, question);
+
+        Assert.False(reading.Unidentified.ContainsKey("C"), reading.Unidentified.GetValueOrDefault("C"));
+        Assert.Equal(new CompilerFact("C", "GNU", "13.3.0"), reading.Compilers[0]);
+    }
+
+    /// <summary>
+    /// A configure that failed since the answer can have identified the compiler again, whatever it
+    /// identified: CMake 4 leaves its error index beside the last answer, where a configure that answers
+    /// removes every one before it, and a record beside one identifies nothing for a directory read afresh,
+    /// even a record of the compiler the answer names. A configure this build asked is read for what it
+    /// answered alone, beside whatever error index was there before it.
+    /// </summary>
+    [Fact]
+    public void Read_IdentifiesNothingFromARecord_WhereAConfigureFailedSinceTheAnswer()
+    {
+        using var temp = new TempDirectory();
+        var reader = Reader();
+        var build = WriteSubprojectReply(temp);
+        var replies = Path.Combine(build, ".cmake", "api", "v1", "reply");
+        const string Failed = "error-2026-09-22T12-01-00-0000.json";
+
+        WriteRecord(build, "C", $"set(CMAKE_C_COMPILER \"{Cl}\")\nset(CMAKE_C_COMPILER_ID \"MSVC\")\nset(CMAKE_C_COMPILER_VERSION \"19.51.36257.0\")\n");
+        temp.WriteFile(Path.Combine(replies, Failed), """{ "reply": { "toolchains-v1": { "error": "no buildsystem generated" } } }""");
+
+        var afresh = reader.Read(build);
+
+        Assert.Equal(["CXX"], afresh.Compilers.Select(compiler => compiler.Language));
+        Assert.EndsWith($"can be a later configure's: CMake's '{Failed}' says one failed since that answer", afresh.Unidentified["C"], StringComparison.Ordinal);
+
+        var asked = reader.Ask(build);
+        WriteSubprojectReply(temp, index: "index-2026-09-22T12-02-00-0000.json");
+
+        Assert.Equal(new CompilerFact("C", "MSVC", "19.51.36257.0"), reader.Read(build, asked).Compilers[0]);
     }
 
     /// <summary>
@@ -530,20 +584,20 @@ public sealed class CMakeToolchainReaderTests
     /// <summary>
     /// Writes the index and toolchains answer CMake 4.3 wrote, measured, for a C++ project whose C a
     /// subproject enables: C with no id - the path <paramref name="c"/>, or none - C++ identified, and
-    /// the resource compiler with its path alone. The index names the CMake <paramref name="version"/>
-    /// that answered, or none, and was written at <see cref="Answered"/>.
+    /// the resource compiler with its path alone. The <paramref name="index"/> names the CMake
+    /// <paramref name="version"/> that answered, or none, and was written at <see cref="Answered"/>.
     /// </summary>
-    private static string WriteSubprojectReply(TempDirectory temp, string? version = "4.3.2", string? c = Cl)
+    private static string WriteSubprojectReply(TempDirectory temp, string? version = "4.3.2", string? c = Cl, string index = "index-2026-09-22T12-00-00-0000.json")
     {
         var build = temp.Combine("build");
         var replies = Path.Combine(build, ".cmake", "api", "v1", "reply");
         var cmake = version is null ? string.Empty : $$""" "cmake": { "version": { "major": 4, "minor": 3, "patch": 2, "string": "{{version}}", "suffix": "" } }, """;
-        var index = Path.Combine(replies, "index-2026-09-22T12-00-00-0000.json");
+        var indexFile = Path.Combine(replies, index);
 
-        temp.WriteFile(index, $$"""
+        temp.WriteFile(indexFile, $$"""
             { {{cmake}} "reply": { "toolchains-v1": { "jsonFile": "toolchains-v1-a.json", "kind": "toolchains", "version": { "major": 1, "minor": 1 } } } }
             """);
-        File.SetLastWriteTimeUtc(index, Answered);
+        File.SetLastWriteTimeUtc(indexFile, Answered);
         temp.WriteFile(Path.Combine(replies, "toolchains-v1-a.json"), $$"""
             {
               "kind": "toolchains",

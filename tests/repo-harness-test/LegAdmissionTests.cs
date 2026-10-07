@@ -136,6 +136,63 @@ public sealed class LegAdmissionTests
     }
 
     /// <summary>
+    /// A long wait says where it stands again at least every five minutes - with the memory in use as read now, and how
+    /// long of the time it may wait it has waited - so a wait never goes silent for long: measured, a reader's pipe
+    /// passed a line on only once the next one came, and a leg's one line of a 39-minute wait arrived with its admission.
+    /// </summary>
+    [Fact]
+    public async Task ALongWaitForTheMemory_SaysWhereItStandsAgain_EveryFiveMinutes()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        // Read every 30 seconds: 84.1% at first, 83% for the next 21 reads, then 75.9%.
+        double?[] readings = [84.1, .. Enumerable.Repeat<double?>(83, 21), 75.9];
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(readings), clock)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said), TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(
+            [
+                "holds a heavy-leg slot, and waits for the memory 84.1% in use (84.1 of 100 by the test) to fall below 76%",
+                "holds a heavy-leg slot, and still waits for the memory 83.0% in use (83 of 100 by the test) to fall below 76%, after 5m00s of the 1h00m it may wait",
+                "holds a heavy-leg slot, and still waits for the memory 83.0% in use (83 of 100 by the test) to fall below 76%, after 10m00s of the 1h00m it may wait",
+                "admitted after 11m00s, memory 75.9% in use (75.9 of 100 by the test)",
+            ],
+            said);
+    }
+
+    /// <summary>
+    /// A wait for a slot whose holders stay the same says so again at least every five minutes too, naming them, as it
+    /// does whenever they change.
+    /// </summary>
+    [Fact]
+    public async Task ALongWaitForASlot_SaysWhoHoldsThemAgain_EveryFiveMinutes()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"));
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, pollSeconds: 60, maxWaitMinutes: 12), said), TestContext.Current.CancellationToken);
+
+        Assert.False(admitted.Fact.Admitted);
+        Assert.Collection(
+            said,
+            line => Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
+            line => Assert.StartsWith("still waits for one of this machine's 1 heavy-leg slot(s), after 5m00s of the 12m00s it may wait, 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
+            line => Assert.StartsWith("still waits for one of this machine's 1 heavy-leg slot(s), after 10m00s of the 12m00s it may wait, 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// Where another leg holds a slot, a reading below the limit is read again after a settle, and the leg starts only
     /// if it still is: two legs taking their slots together would otherwise both start on one reading. One whose
     /// reading rose during the settle goes on waiting.
