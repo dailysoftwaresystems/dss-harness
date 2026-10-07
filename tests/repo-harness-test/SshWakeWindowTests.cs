@@ -12,7 +12,10 @@ public sealed class SshWakeWindowTests
 {
     private static readonly DateTimeOffset Start = new(2026, 9, 24, 18, 0, 0, TimeSpan.Zero);
 
-    /// <summary>A name that answers on the window's third lookup resolves, counted with the lookups before it, to its IPv4 address.</summary>
+    /// <summary>
+    /// A name that answers on the window's third lookup resolves, counted with the lookups before it, to its IPv4
+    /// address, with every address it answered with kept beside it.
+    /// </summary>
     [Fact]
     public async Task AName_ThatAnswersPartWayThroughTheWindow_Resolves_CountingEveryLookup()
     {
@@ -25,6 +28,7 @@ public sealed class SshWakeWindowTests
         Assert.True(resolution.Resolved);
         Assert.Equal(6, resolution.Attempts);
         Assert.Equal("192.0.2.7", resolution.ResolvedTo);
+        Assert.Equal(["fe80::7", "192.0.2.7"], resolution.Addresses);
     }
 
     /// <summary>A name that never answers is looked up until the window ends, and no longer.</summary>

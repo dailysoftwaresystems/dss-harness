@@ -29,6 +29,9 @@ public sealed class ToolProvisionServiceTests
     /// <summary>The ssh host a fixture declares when asked to reach its leg over ssh.</summary>
     private const string SshName = "build-box";
 
+    /// <summary>The name an ssh host may be declared by, which resolves to 192.0.2.10.</summary>
+    private const string ResolvedName = "build-box.invalid";
+
     private const string Home = "/home/harness";
 
     private const string Credential = "not-a-real-password";
@@ -628,6 +631,28 @@ public sealed class ToolProvisionServiceTests
         var outcome = Assert.Single(Assert.Single(report.Legs).Tools, entry => entry.Tool == "ninja");
 
         Assert.Contains("probe", outcome.Detail ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What a tool printed over ssh is quoted with every address the host's name resolved to written as the
+    /// host's item declares it, as everything a host prints is.
+    /// </summary>
+    [Fact]
+    public async Task WhatAToolPrintedOverSsh_NamesTheHostAsDeclared_NeverByAnAddressItsNameResolvedTo()
+    {
+        using var fixture = new Fixture(
+            tools: [Apt("ninja", minVersion: "1.12.0", regex: "never matches this")],
+            present: new() { ["ninja"] = "1.10.0 built on 192.0.2.10" },
+            ssh: true,
+            sshAddress: ResolvedName);
+
+        var report = await fixture.ProvisionAsync();
+
+        var outcome = Assert.Single(Assert.Single(report.Legs).Tools, entry => entry.Tool == "ninja");
+
+        Assert.Equal(
+            $"the probe regex of 'ninja' matched nothing in what it printed: ninja version 1.10.0 built on {ResolvedName}",
+            outcome.Detail);
     }
 
     /// <summary>
@@ -1370,7 +1395,8 @@ public sealed class ToolProvisionServiceTests
             bool homeUnreadable = false,
             bool ssh = false,
             Func<HostId, HostCommand, bool>? transportStops = null,
-            Action<HarnessConfig>? configure = null)
+            Action<HarnessConfig>? configure = null,
+            string sshAddress = "192.0.2.10")
         {
             var declared = tools ?? [];
 
@@ -1394,7 +1420,7 @@ public sealed class ToolProvisionServiceTests
 
             if (ssh)
             {
-                _repository.WriteFile(Path.Combine(".harness-config", "sshItems", SshName, ".env"), "ADDRESS=192.0.2.10\nUSER=harness\n");
+                _repository.WriteFile(Path.Combine(".harness-config", "sshItems", SshName, ".env"), $"ADDRESS={sshAddress}\nUSER=harness\n");
                 _repository.WriteFile(Path.Combine(".harness-config", "sshItems", SshName, ".key"), "not a real key");
                 _repository.WriteFile(Path.Combine(".harness-config", "sshItems", SshName, "known_hosts"), "192.0.2.10 ssh-ed25519 AAAA\n");
             }
@@ -1473,7 +1499,7 @@ public sealed class ToolProvisionServiceTests
             var commands = new ScriptedHostCommands(Host.Respond);
             var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
             var secrets = new HostSecretsStore(fileSystem, permissions, platform);
-            var addresses = new HostAddressResolver(new NoLookup(), TimeProvider.System, TimeSpan.Zero);
+            var addresses = new HostAddressResolver(new NameLookup(), TimeProvider.System, TimeSpan.Zero);
             var programs = new HostProgramResolver(new LocalProgramResolver(platform, permissions, () => "/usr/bin"), commands);
             var connector = new HostConnector(
                 platform,
@@ -1526,11 +1552,16 @@ public sealed class ToolProvisionServiceTests
             return processes;
         }
 
-        /// <summary>No ssh host is reached here, so no name is ever looked up.</summary>
-        private sealed class NoLookup : INameLookup
+        /// <summary>
+        /// Resolves the one name an ssh host here may be declared by, <see cref="ResolvedName"/>; every other ssh
+        /// host is declared by its address, so no other name is ever looked up.
+        /// </summary>
+        private sealed class NameLookup : INameLookup
         {
             public Task<IReadOnlyList<string>> LookupAsync(string name, CancellationToken cancellationToken = default)
-                => throw new InvalidOperationException("No ssh host is declared, so no name should be looked up.");
+                => name == ResolvedName
+                    ? Task.FromResult<IReadOnlyList<string>>(["192.0.2.10"])
+                    : throw new InvalidOperationException($"'{name}' was looked up, and only '{ResolvedName}' should be.");
         }
     }
 }

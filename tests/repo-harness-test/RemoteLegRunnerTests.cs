@@ -222,6 +222,44 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// What a host's leg printed is carried under the name the configuration declares, never by an address the
+    /// host's name resolved to: the reason it gave, and the last lines its failed phase printed - the lines its
+    /// standard error carried here already say it so.
+    /// </summary>
+    [Theory]
+    [InlineData("skipped-unavailable", "ssh mac: no route to mac.invalid")]
+    [InlineData("failed", "no route to mac.invalid")]
+    public async Task WhatAHostsLegPrinted_NamesTheHostAsDeclared_NeverByAnAddressItsNameResolvedTo(string verdict, string detail)
+    {
+        var written = LedgerReport
+            .From(
+                [new LegEntry { Leg = "wsl-debug", Verdict = Verdicts.Parse(verdict)!.Value, Detail = "no route to 192.0.2.10", LogTail = ["connect 192.0.2.10: refused"] }],
+                durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var mac = HostId.Ssh("mac");
+        var connection = new HostConnection
+        {
+            Host = mac,
+            Address = "mac.invalid",
+            Resolved = new ResolvedAddresses("mac.invalid", ["192.0.2.10"], NSubstitute.Substitute.For<IHostAddressResolver>()),
+        };
+        var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
+
+        var entry = await Runner(hosts).RunAsync("build", leg, [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(detail, entry.Detail);
+        Assert.Equal(["connect mac.invalid: refused"], entry.LogTail);
+    }
+
+    /// <summary>
     /// The project and test set a host's count belongs to travel with the count, read from the very
     /// document the host writes: the host ran what it had, and this machine compares the count with
     /// its siblings as it was counted there, never as its own configuration would name it now.

@@ -1067,7 +1067,11 @@ internal static class HelpCommand
         builder.AppendLine("where ssh reaches the host through a ProxyJump or a ProxyCommand, which do their own");
         builder.AppendLine("lookup, or where the address would change anything else ssh does; and an address that");
         builder.AppendLine("stops taking the connection, or shows a key the name is not known by, is dropped, and");
-        builder.AppendLine("ssh looks the name up itself.");
+        builder.AppendLine("ssh looks the name up itself. No reason, relayed line or document names an address");
+        builder.AppendLine("the name resolved to: wherever ssh, or a program there, names one as a word, it reads");
+        builder.AppendLine("as the address declared. The name is looked up again, afresh, before every call that");
+        builder.AppendLine("lets ssh look it up itself - one never pinned, or once its pin is dropped - so an");
+        builder.AppendLine("address it has moved to is withheld too.");
         builder.AppendLine();
         builder.AppendLine("A host that sleeps between commands can be given hosts.ssh.<name>.wakeWaitSeconds.");
         builder.AppendLine($"Its name is then looked up again, and a connection nothing took or that timed out");

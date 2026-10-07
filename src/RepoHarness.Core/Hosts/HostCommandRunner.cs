@@ -34,6 +34,14 @@ public sealed record HostConnection
     /// </summary>
     public SshPin? Pin { get; init; }
 
+    /// <summary>
+    /// Every address the name ssh dials has resolved to here, <see cref="Pin"/>'s among them, shared by every copy
+    /// of the connection: ssh names whichever it dialled when it fails, and each is written as <see cref="Address"/>
+    /// wherever what the host said is shown or kept. <see langword="null"/> where no name was looked up here,
+    /// as for a host reached through a jump host or a command. ssh only.
+    /// </summary>
+    public ResolvedAddresses? Resolved { get; init; }
+
     /// <summary>The user ssh logs in as, read from the item's <c>.env</c>. ssh only.</summary>
     public string? User { get; init; }
 
@@ -227,7 +235,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
     private async Task<ProcessResult> OverSshAsync(HostConnection connection, Func<ProcessRequest> build, CancellationToken cancellationToken)
     {
         var pinned = connection.Pin is { Holds: true };
-        var result = await ThroughTransportAsync(connection.Host.ToString(), build(), cancellationToken).ConfigureAwait(false);
+        var result = await AttemptAsync(connection, build, cancellationToken).ConfigureAwait(false);
 
         if (!pinned || !HostProbes.FailedBeforeAnySession(result))
         {
@@ -236,9 +244,25 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
 
         connection.Pin!.Drop();
 
-        var again = await ThroughTransportAsync(connection.Host.ToString(), build(), cancellationToken).ConfigureAwait(false);
+        var again = await AttemptAsync(connection, build, cancellationToken).ConfigureAwait(false);
 
         return again with { StandardError = result.StandardError + again.StandardError };
+    }
+
+    /// <summary>
+    /// Runs the ssh call <paramref name="build"/> makes once; where ssh is to look the host's name up itself - the
+    /// connection was never pinned, or its pin was dropped - the name is learnt afresh first, so that whichever
+    /// address ssh dials is known, and written as the address declared in every line it says, as it says it (see
+    /// <see cref="ResolvedAddresses"/>).
+    /// </summary>
+    private async Task<ProcessResult> AttemptAsync(HostConnection connection, Func<ProcessRequest> build, CancellationToken cancellationToken)
+    {
+        if (connection.Pin is not { Holds: true } && connection.Resolved is { } resolved)
+        {
+            await resolved.LearnAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return await ThroughTransportAsync(connection.Host.ToString(), build(), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

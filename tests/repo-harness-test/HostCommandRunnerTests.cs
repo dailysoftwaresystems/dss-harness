@@ -215,6 +215,106 @@ public sealed class HostCommandRunnerTests
         _ = processRunner.Received(1).RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// A pin dropped has ssh look the name up itself, so the name is learnt again first, afresh, past the answer
+    /// kept: the machine may have woken with another lease, and the address ssh dials then is said, in a line
+    /// relayed as it arrives, as the address declared.
+    /// </summary>
+    [Fact]
+    public async Task APinDropped_HasTheNameLearntAfresh_BeforeSshLooksItUpItself()
+    {
+        var (lookup, learnt) = await LearntAsync(["192.0.2.10"], ["192.0.2.23"]);
+        var connection = Ssh() with { Pin = new SshPin("192.0.2.10", "[host.invalid]:2222"), Resolved = learnt };
+        var relayed = new List<string>();
+        var processRunner = Substitute.For<IProcessRunner>();
+        processRunner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(
+            _ => Task.FromResult(HostResults.Failed(255, "ssh: connect to host 192.0.2.10 port 2222: Connection timed out\n")),
+            call =>
+            {
+                call.Arg<ProcessRequest>().OnErrorLine!("Connection reset by 192.0.2.23 port 2222");
+                return Task.FromResult(HostResults.Failed(255, "Connection reset by 192.0.2.23 port 2222\n"));
+            });
+        var listing = ListSdks with { OnErrorLine = line => relayed.Add(HostProbes.AsConfigured(line, connection)) };
+
+        var result = await new HostCommandRunner(processRunner).RunAsync(connection, listing, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Connection reset by host.invalid port 2222"], relayed);
+        Assert.Equal(["192.0.2.10", "192.0.2.23"], learnt.All);
+        Assert.Equal(
+            "ssh: connect to host host.invalid port 2222: Connection timed out\nConnection reset by host.invalid port 2222\n",
+            HostProbes.AsConfigured(result.StandardError, connection));
+        Assert.Equal(2, lookup.Asked);
+    }
+
+    /// <summary>
+    /// A call that lets ssh look the name up itself has the name learnt afresh first, past the answer kept a moment
+    /// ago, so that whichever address ssh dials is said as the address declared in every line it relays as it comes.
+    /// </summary>
+    [Fact]
+    public async Task AnUnpinnedCall_HasTheNameLearntAfreshFirst()
+    {
+        var (lookup, learnt) = await LearntAsync(["192.0.2.10"], ["192.0.2.23"]);
+        var connection = Ssh() with { Resolved = learnt };
+        var relayed = new List<string>();
+        var processRunner = Substitute.For<IProcessRunner>();
+        processRunner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            call.Arg<ProcessRequest>().OnErrorLine!("Connection to 192.0.2.23 port 2222 timed out");
+            return Task.FromResult(HostResults.Failed(255, "Connection to 192.0.2.23 port 2222 timed out\n"));
+        });
+        var listing = ListSdks with { OnErrorLine = line => relayed.Add(HostProbes.AsConfigured(line, connection)) };
+
+        await new HostCommandRunner(processRunner).RunAsync(connection, listing, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Connection to host.invalid port 2222 timed out"], relayed);
+        Assert.Equal(["192.0.2.10", "192.0.2.23"], learnt.All);
+        Assert.Equal(2, lookup.Asked);
+    }
+
+    /// <summary>
+    /// A call over a pin that holds has nothing looked up: ssh dials the address pinned, which is known, whatever the
+    /// call comes to - unless it failed before any session, and the pin was dropped.
+    /// </summary>
+    [Theory]
+    [InlineData(0, "")]
+    [InlineData(255, "harness@192.0.2.10: Permission denied (publickey).\n")]
+    public async Task ACallOverAPinThatHolds_HasNothingLookedUp(int exitCode, string said)
+    {
+        var (lookup, learnt) = await LearntAsync(["192.0.2.10"], ["192.0.2.23"]);
+        var connection = Ssh() with { Pin = new SshPin("192.0.2.10", "[host.invalid]:2222"), Resolved = learnt };
+        var processRunner = Substitute.For<IProcessRunner>();
+        processRunner.RunAsync(Arg.Any<ProcessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ProcessResult(exitCode, string.Empty, said, TimeSpan.Zero, TimedOut: false)));
+
+        await new HostCommandRunner(processRunner).RunAsync(connection, ListSdks, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, lookup.Asked);
+        Assert.Equal(["192.0.2.10"], learnt.All);
+    }
+
+    /// <summary>
+    /// The addresses a connection to host.invalid has learnt, from a first lookup that found <paramref name="first"/>;
+    /// every lookup after it finds <paramref name="later"/>.
+    /// </summary>
+    private static async Task<(Answers Lookup, ResolvedAddresses Learnt)> LearntAsync(IReadOnlyList<string> first, IReadOnlyList<string> later)
+    {
+        var lookup = new Answers(first, later);
+        var resolver = new HostAddressResolver(lookup, new ManualClock(), TimeSpan.Zero);
+        var found = await resolver.ResolveAsync("host.invalid", TestContext.Current.CancellationToken);
+
+        return (lookup, new ResolvedAddresses("host.invalid", found.Addresses, resolver));
+    }
+
+    /// <summary>A name that resolves one way when first looked up and another way every time after.</summary>
+    private sealed class Answers(IReadOnlyList<string> first, IReadOnlyList<string> later) : INameLookup
+    {
+        /// <summary>How many times the name was looked up.</summary>
+        public int Asked { get; private set; }
+
+        public Task<IReadOnlyList<string>> LookupAsync(string name, CancellationToken cancellationToken = default)
+            => Task.FromResult(Asked++ == 0 ? first : later);
+    }
+
     [Fact]
     public void Ssh_WithoutAKey_StartsNothing()
     {

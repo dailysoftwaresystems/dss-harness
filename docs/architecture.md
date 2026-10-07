@@ -941,7 +941,20 @@ is not dependable on such a host.
   anything but the address changed, as a `Match` block keyed by the host would, is looked up here
   but not pinned. A pinned call that fails before any session - the address takes no connection,
   or shows a key the name is not known by - drops the pin for the rest of the connection and runs
-  again, with ssh looking the name up itself.
+  again, with ssh looking the name up itself. No reason, relayed line or document names an address
+  the name resolved to, since it is not the reader's to publish: wherever ssh, or a program on the
+  host, names one as a word - the pinned address timing out, a key refused as `user@<address>:
+  Permission denied`, another of the name's addresses dialled once the pin is dropped, an address
+  with its port after it in ssh's debug lines, one with a label stuck to its front as `ifconfig`
+  prints it - it is written as the address declared. An IPv6 address is matched as the address it
+  is, because ssh on Linux names a link-local one's scope by its interface (`%eth0` for the `%2` it
+  was given), and an IPv4 one only as it is always spelt, so a version such as `192.0.522` is never
+  taken for `192.0.2.10`. The addresses are shared by every copy of the connection, and the name is
+  looked up again, afresh, before every call that lets ssh look it up itself - one never pinned, or
+  once its pin is dropped, since a machine that slept can wake with another lease - so whichever
+  address ssh dials is known before it is named. That holds for what the host's own programs print
+  as well - its relayed lines on both streams, its leg's reason and last lines, and what it found
+  about itself - so no two copies of a line differ in what they name.
 - **Hosts that sleep.** A personal Mac reached by its mDNS name falls back asleep between commands
   and answers again moments later; three quick lookups miss it, and a consumer saw a run skip it
   seconds after a check had reached it, three times in fifteen minutes. A host given

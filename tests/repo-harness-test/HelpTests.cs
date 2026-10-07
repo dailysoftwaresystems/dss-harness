@@ -833,6 +833,23 @@ public sealed partial class HelpTests
         Assert.Contains("a key or a login the host refuses is never waited on", text, StringComparison.Ordinal);
     }
 
+    /// <summary>The legs topic says that no address a host's name resolved to is ever named, wherever ssh names one.</summary>
+    [Fact]
+    public async Task LegsTopic_SaysNoAddressAHostsNameResolvedToIsNamed()
+    {
+        var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Contains(
+            "No reason, relayed line or document names an address the name resolved to: wherever ssh, or a program there, names one as a word, it reads as the address declared.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The name is looked up again, afresh, before every call that lets ssh look it up itself - one never pinned, or once its pin is dropped - so an address it has moved to is withheld too.",
+            text,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The space topic says what clean leaves alone and why it frees a full disk: nothing is written first,
     /// a build of the leg holds it off, and a host behind this machine's build needs room to be updated.

@@ -990,6 +990,92 @@ public sealed class HostInspectorTests
     }
 
     /// <summary>
+    /// No reason names an address this machine resolved the host's name to: wherever ssh names one, the host is
+    /// named as its item declares it. Measured shapes: the pinned link-local address timing out, a key refused,
+    /// a banner that never came from the address as Linux's ssh spells it, another of the name's addresses -
+    /// which ssh dials once the pin is dropped - and the host's own shell failing.
+    /// </summary>
+    [Theory]
+    [InlineData("fe80::1c2b:3d4e:5f60:7182%12", 255, "ssh: connect to host fe80::1c2b:3d4e:5f60:7182%12 port 2222: Connection timed out", "the host could not be reached: ssh said ssh: connect to host host.invalid port 2222: Connection timed out")]
+    [InlineData("192.0.2.10", 255, "harness@192.0.2.10: Permission denied (publickey).", "the host could not be reached: ssh said harness@host.invalid: Permission denied (publickey).")]
+    [InlineData("fe80::1c2b:3d4e:5f60:7182%2", 255, "Connection timed out during banner exchange\nConnection to fe80::1c2b:3d4e:5f60:7182%eth0 port 2222 timed out", "the host could not be reached: ssh said Connection timed out during banner exchange / Connection to host.invalid port 2222 timed out")]
+    [InlineData("192.0.2.10,fe80::1c2b:3d4e:5f60:7182%12", 255, "ssh: connect to host 192.0.2.10 port 2222: Connection timed out\nConnection to fe80::1c2b:3d4e:5f60:7182%12 port 2222 timed out", "the host could not be reached: ssh said ssh: connect to host host.invalid port 2222: Connection timed out / Connection to host.invalid port 2222 timed out")]
+    [InlineData("192.0.2.10", 1, "/etc/profile: line 3: 192.0.2.10: command not found", "its shell could not run echo (exit 1): /etc/profile: line 3: host.invalid: command not found")]
+    public async Task Ssh_NamesTheHostAsDeclared_NeverByAnAddressItsNameResolvedTo(string resolvesTo, int exitCode, string said, string reason)
+    {
+        var addresses = resolvesTo.Split(',');
+        using var fixture = new Fixture(PlatformId.Linux, resolvesTo: addresses);
+        fixture.Commands.ShellProbe = HostResults.Failed(exitCode, said + "\n");
+
+        var report = await fixture.InspectAsync(HostId.Ssh(SshName));
+
+        Assert.False(report.Available);
+        Assert.StartsWith(reason + " (using ", report.Reason, StringComparison.Ordinal);
+        Assert.All(addresses, address => Assert.DoesNotContain(address.Split('%')[0], report.Reason, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// What a host found about itself is said under the name its item declares, never by an address its name
+    /// resolved to: an emulator's witness and reason, a developer environment's reason, a program's, and why its
+    /// space, or a build directory's room, went unmeasured. The build directory's path, which is matched as it is,
+    /// stays as it was.
+    /// </summary>
+    [Fact]
+    public async Task WhatAHostFoundAboutItself_NamesItAsDeclared_NeverByAnAddressItsNameResolvedTo()
+    {
+        using var fixture = new Fixture(PlatformId.Linux, respond: HostThat(agent: _ => HostResults.Ok(JsonSerializer.Serialize(
+            new HostAgentInfo
+            {
+                Version = Root.Version,
+                AssemblySha256 = Root.AssemblySha256,
+                Os = "linux",
+                Processor = "x86_64",
+                Emulators = new(StringComparer.OrdinalIgnoreCase) { ["qemu-arm64"] = new EmulatorCheck(false, "its witness printed '192.0.2.10'", "192.0.2.10") },
+                DeveloperEnvironments = new(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["vs"] = new DeveloperEnvironmentCheck(DeveloperEnvironmentFound.Unreadable, "vswhere could not reach 192.0.2.10", null, null),
+                },
+                Programs = [new ProgramLocation("cmake", ProgramFound.Unknown, Reason: "the share at 192.0.2.10 did not answer")],
+                SpaceUnmeasured = "df could not reach 192.0.2.10",
+                Builds = [new BuildDirectoryRoom("/srv/repo/build", Exists: true, RecordedBytes: null, Disk: null, "df could not reach 192.0.2.10")],
+            },
+            HostAgentProtocol.JsonOptions))));
+
+        var report = await fixture.InspectAsync(HostId.Ssh(SshName));
+
+        Assert.True(report.Available, report.Reason);
+        Assert.Equal("its witness printed 'host.invalid'", report.Emulators["qemu-arm64"].Reason);
+        Assert.Equal("host.invalid", report.Emulators["qemu-arm64"].Witnessed);
+        Assert.Equal("vswhere could not reach host.invalid", report.DeveloperEnvironments["vs"].Reason);
+        Assert.Equal("the share at host.invalid did not answer", report.Programs["cmake"].Reason);
+        Assert.Equal("df could not reach host.invalid", report.SpaceUnmeasured);
+        Assert.Equal("df could not reach host.invalid", Assert.Single(report.Builds).Unmeasured);
+        Assert.Equal("/srv/repo/build", Assert.Single(report.Builds).Path);
+    }
+
+    /// <summary>
+    /// What a host printed is quoted with every address its name resolved to written as its item declares it,
+    /// whatever printed it: an SDK listing this build cannot read, and an answer that holds no document.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "dotnet --list-sdks printed nothing this build can read as an SDK: Welcome to .NET on host.invalid!")]
+    [InlineData(false, "answered with no document: Welcome to host.invalid")]
+    public async Task WhatAHostPrinted_NamesItAsDeclared_NeverByAnAddressItsNameResolvedTo(bool inTheSdkListing, string quoted)
+    {
+        using var fixture = new Fixture(
+            PlatformId.Linux,
+            respond: inTheSdkListing
+                ? HostThat(sdks: "Welcome to .NET on 192.0.2.10!\n")
+                : HostThat(agent: _ => HostResults.Ok("Welcome to 192.0.2.10\n")));
+
+        var report = await fixture.InspectAsync(HostId.Ssh(SshName));
+
+        Assert.False(report.Available);
+        Assert.Contains(quoted, report.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("192.0.2.10", report.Reason, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Every ssh call a connection makes is given, while the pin holds, the address this machine resolved the
     /// name ssh would look up to, so that name is looked up once, with retries, and not by ssh; the key is
     /// looked up under the name, off port 22 as known_hosts spells such a host. An address declared as one is
@@ -1263,7 +1349,8 @@ public sealed class HostInspectorTests
             INameLookup? wakeLookup = null,
             int holdAwakeSeconds = 0,
             TimeSpan? wakePoll = null,
-            IWslDiskImages? diskImages = null)
+            IWslDiskImages? diskImages = null,
+            IReadOnlyList<string>? resolvesTo = null)
         {
             Repository = new TempDirectory();
 
@@ -1331,7 +1418,7 @@ public sealed class HostInspectorTests
                 new RecordingLauncher(),
                 HomeShorthand.Of(platform, fileSystem));
             var secrets = new HostSecretsStore(fileSystem, Permissions, platform);
-            _lookup = new FixedLookup(resolves);
+            _lookup = new FixedLookup(resolves ? resolvesTo ?? ["192.0.2.10"] : []);
             var addresses = new HostAddressResolver(_lookup, TimeProvider.System, TimeSpan.Zero);
             var programs = new HostProgramResolver(new LocalProgramResolver(platform, FilePermissionsFactory.Create()), Commands);
             CopyRefusals = new SyncedCopyRefusals(new ConsoleHarnessOutput(new StringWriter(), _copyNotices, verbose: false));
@@ -1386,8 +1473,8 @@ public sealed class HostInspectorTests
 
         public void Dispose() => Repository.Dispose();
 
-        /// <summary>A resolver that either answers for every name or for none, with no network involved.</summary>
-        private sealed class FixedLookup(bool resolves) : INameLookup
+        /// <summary>A resolver that answers every name with the same addresses, or none, with no network involved.</summary>
+        private sealed class FixedLookup(IReadOnlyList<string> answer) : INameLookup
         {
             private readonly List<string> _names = [];
 
@@ -1409,7 +1496,7 @@ public sealed class HostInspectorTests
                     _names.Add(name);
                 }
 
-                return Task.FromResult<IReadOnlyList<string>>(resolves ? ["192.0.2.10"] : []);
+                return Task.FromResult(answer);
             }
         }
     }

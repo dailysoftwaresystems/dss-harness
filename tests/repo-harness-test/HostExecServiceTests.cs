@@ -128,6 +128,38 @@ public sealed class HostExecServiceTests
     }
 
     /// <summary>
+    /// What the command writes, on either stream, is shown under the name the configuration declares, never by an
+    /// address the host's name resolved to.
+    /// </summary>
+    [Fact]
+    public async Task WhatTheCommandWrites_NamesTheHostAsDeclared_NeverByAnAddressItsNameResolvedTo()
+    {
+        var fixture = Create(
+            report: host => Reachable(host) with
+            {
+                Session = new HostSession(
+                    Reachable(host).Session!.Connection with
+                    {
+                        Resolved = new ResolvedAddresses("host.invalid", ["192.0.2.10"], NSubstitute.Substitute.For<IHostAddressResolver>()),
+                    },
+                    ".dotnet/tools/dssharness"),
+            },
+            respond: (_, command) =>
+            {
+                ScriptedHostCommands.Answer(command, "legs: 192.0.2.10 answered");
+
+                return HostResults.Finished(command, 0, "legs: 192.0.2.10 took the leg\n");
+            });
+
+        var outcome = await fixture.Service.RunAsync(Root, "vps", null, ["legs"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, outcome.ExitCode);
+        Assert.Contains("legs: host.invalid answered", fixture.Output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("legs: host.invalid took the leg", fixture.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("192.0.2.10", fixture.Output.ToString() + fixture.Error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// What a host's login shell writes before its agent runs is the host's own business, and never reaches
     /// this command's output on either stream.
     /// </summary>

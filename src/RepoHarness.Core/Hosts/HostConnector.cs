@@ -323,6 +323,7 @@ public sealed class HostConnector(
 
             connection = connection with
             {
+                Resolved = new ResolvedAddresses(resolution.Address, resolution.Addresses, _addresses),
                 Pin = seen is null ? null : await PinAsync(connection, seen, resolution, cancellationToken).ConfigureAwait(false),
             };
         }
@@ -353,8 +354,8 @@ public sealed class HostConnector(
             var refusal = probe switch
             {
                 { TimedOut: true } => $"the host could not be reached: it did not answer within {budget.TotalSeconds:0} seconds ({client})",
-                { ExitCode: HostProbes.SshFailed } => $"{HostProbes.CouldNotReach(HostProbes.Excerpt(probe.StandardError))} ({client})",
-                _ => $"{HostProbes.Failure("its shell could not run echo", probe)} ({client})",
+                { ExitCode: HostProbes.SshFailed } => $"{HostProbes.CouldNotReach(probe, connection)} ({client})",
+                _ => $"{HostProbes.Failure("its shell could not run echo", probe, connection)} ({client})",
             };
 
             if (window is { } waited && HostProbes.MayBeWaking(probe))

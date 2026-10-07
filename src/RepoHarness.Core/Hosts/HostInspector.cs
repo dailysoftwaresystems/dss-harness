@@ -344,7 +344,7 @@ public sealed class HostInspector(
         {
             return found with
             {
-                Reason = $"dotnet --list-sdks printed nothing this build can read as an SDK: {HostProbes.Excerpt(sdks.StandardOutput)}",
+                Reason = $"dotnet --list-sdks printed nothing this build can read as an SDK: {HostProbes.Excerpt(HostProbes.AsConfigured(sdks.StandardOutput, connection))}",
             };
         }
 
@@ -510,7 +510,7 @@ public sealed class HostInspector(
 
         if (start < 0)
         {
-            return found with { Reason = $"{ToolPackage.Id} at {shownTool} answered with no document: {HostProbes.Excerpt(answer.StandardOutput)}" };
+            return found with { Reason = $"{ToolPackage.Id} at {shownTool} answered with no document: {HostProbes.Excerpt(HostProbes.AsConfigured(answer.StandardOutput, connection))}" };
         }
 
         var document = answer.StandardOutput[start..];
@@ -550,7 +550,27 @@ public sealed class HostInspector(
 
         return info is null
             ? found with { Reason = $"{ToolPackage.Id} at {shownTool} answered with an empty document" }
-            : Answered(found, info, new HostSession(connection, toolPath));
+            : Answered(found, info with
+            {
+                // What the host found is said under the name the configuration declares, as everything the host
+                // says is: an emulator's witness, a developer environment, a program or a disk can print the host's
+                // address. What is matched or used as it is - a path, a version - is left as it is.
+                Emulators = info.Emulators.ToDictionary(
+                    check => check.Key,
+                    check => check.Value with
+                    {
+                        Reason = Said(check.Value.Reason, connection),
+                        Witnessed = Said(check.Value.Witnessed, connection),
+                    },
+                    StringComparer.OrdinalIgnoreCase),
+                DeveloperEnvironments = info.DeveloperEnvironments.ToDictionary(
+                    check => check.Key,
+                    check => check.Value with { Reason = Said(check.Value.Reason, connection) },
+                    StringComparer.OrdinalIgnoreCase),
+                Programs = [.. info.Programs.Select(location => location with { Reason = Said(location.Reason, connection) })],
+                SpaceUnmeasured = Said(info.SpaceUnmeasured, connection),
+                Builds = [.. info.Builds.Select(room => room with { Unmeasured = Said(room.Unmeasured, connection) })],
+            }, new HostSession(connection, toolPath));
     }
 
     /// <summary>
@@ -672,6 +692,9 @@ public sealed class HostInspector(
                 HoldStandardInputOpen = holdOpen,
             },
             cancellationToken);
+
+    /// <summary><paramref name="text"/>, which the host said, under the name the configuration declares; nothing where it said nothing.</summary>
+    private static string? Said(string? text, HostConnection connection) => text is null ? null : HostProbes.AsConfigured(text, connection);
 
     /// <summary>What the DssHarness on a host said about it, recorded in the report.</summary>
     private static HostReport Answered(HostReport found, HostAgentInfo info, HostSession? session) => found with
