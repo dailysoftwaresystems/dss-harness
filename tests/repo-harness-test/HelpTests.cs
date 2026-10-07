@@ -133,7 +133,7 @@ public sealed partial class HelpTests
             + "only ninja's lines are read.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
-        Assert.Contains($" {HarnessExit.Incomplete}  stopped                    Find out what stopped the build, then run again", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($" {HarnessExit.Incomplete}  stopped                    Find out what stopped its work, then run again", result.StandardOutput, StringComparison.Ordinal);
 
         // Each verdict a leg reaches without one of its own shows the code its run exits with, and a remedy.
         Assert.All(
@@ -145,6 +145,30 @@ public sealed partial class HelpTests
             "A run killed, or stopped with its machine, before it finished says nothing more: the next build, test or run in its "
             + "tree on that machine to own its run directory says it was abandoned - its run id, process and start, and where its "
             + "records are - and releases its claim on them.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The verdicts topic names the three verdicts only a mutation arm reaches, each with the code its run exits with and
+    /// its remedy, and says an arm that was due and never driven is stopped, saying why, rather than any of them.
+    /// </summary>
+    [Fact]
+    public async Task VerdictsTopic_NamesWhatAMutationArmReaches_WithItsCodeAndRemedy()
+    {
+        var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Contains($"{LegExit.Violated,3}  violated                   Fix the arm's declaration, or the code it guards", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"{LegExit.Survived,3}  survived                   Strengthen the test that should have failed", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"{LegExit.Unattributed,3}  unattributed               Contain the crash or hang in the case, or make", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(new string(' ', 32) + "the runner write its report", result.StandardOutput, StringComparison.Ordinal);
+        Assert.All(
+            ["violated", "survived", "unattributed"],
+            verdict => Assert.Contains($"  {verdict,-22} counts as failure ", result.StandardOutput, StringComparison.Ordinal));
+        Assert.Contains(
+            "An arm that was due and never driven - its sweep cancelled, no worker left to run it, or the unmutated run of "
+            + "its test binary not passing - is stopped, saying why.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
     }

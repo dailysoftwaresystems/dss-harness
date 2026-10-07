@@ -1192,7 +1192,10 @@ from the report.
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict | **yes** |
-| `stopped` | Something stopped its build from outside before it finished: ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build | no: incomplete |
+| `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a mutation arm was never driven, its sweep cancelled, no worker left to run it, or the unmutated run of its test binary not passing | no: incomplete |
+| `violated` | A mutation arm's declaration did not hold: its text was not in its site exactly once, its target does not depend on the site, its mutation reddened other cases than it declares, ran another number of cases or left out its diagnostic, or a mutation declared to stop the build built | **yes** |
+| `survived` | A mutation arm's mutation built and ran, and no case reddened | **yes** |
+| `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, an unreadable one, a failing exit whose report names no failing case, or a run stopped for passing its bound | **yes** |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
 "the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
@@ -1219,11 +1222,20 @@ write one file and each would read the other's output as its own. The remedies d
 waiting for the lock, against finding out which run still holds a finished run's logs - and a
 reader who cannot tell which fired cannot pick either.
 
+`violated`, `survived` and `unattributed` are reached only by an arm of `check-mutations`
+(see *Mutation testing*), and a leg's verdict there is the worst of its own and its arms'. They
+are three findings with three remedies: a declaration that does not hold is fixed in the
+registry or in the code it guards; a mutation no test noticed calls for a stronger test; and a
+failure nothing ties to a case calls for containing the crash or hang, or for a runner that
+writes its report.
+
 When several apply, the more fundamental one is reported: `poisoned`, then
 `unmeasured`, `inputs-moved`, `contended`, `log-held`, `refused-locked`, `not-admitted`,
-`failed`, and `unwitnessed`, with `stopped` before the skips, whose legs' work never began, and
-before `passed`, since it reached no verdict of its own. A leg whose inputs moved is not reported
-as failed even if its tests failed, because what failed was a tree that never existed.
+`failed`, `violated`, `survived`, `unattributed` and `unwitnessed`, with `stopped` before the
+skips, whose legs' work never began, and before `passed`, since it reached no verdict of its own.
+A finding about the code outranks the absence of evidence, so the three a mutation arm reaches
+come before `unwitnessed`, as `failed` does. A leg whose inputs moved is not reported as failed
+even if its tests failed, because what failed was a tree that never existed.
 
 **A leg that reached no verdict is never counted among the legs that passed.** A skip is not a
 failure — a switched-off machine is normal — and nor is a stopped build, but neither is a pass,
@@ -2419,24 +2431,28 @@ unchanged, or 15 when that command never reported how it finished.
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the
 per-command codes above, are maintained by hand.
 
-Commands that run legs (`build`, `run`, `test`) use five codes from the range reserved for
-command contracts, because each calls for a different remedy:
+Commands that run legs (`build`, `run`, `test`, `check-mutations`) use eight codes from the
+range reserved for command contracts, because each calls for a different remedy; 1, 2 and 8
+are reached only by a mutation arm, so only `check-mutations` exits with them:
 
 | Code | Verdict | Remedy |
 |---|---|---|
+| 1 | `violated` | Fix the arm's declaration, or the code it guards |
+| 2 | `survived` | Strengthen the test that should have failed |
 | 3 | `inputs-moved` or `unmeasured` | Let the tree settle, then run again |
 | 4 | `contended` | Wait for the other run |
 | 5 | `unwitnessed` | Find out what actually ran |
 | 6 | `log-held` | Find out which run still owns this leg's logs |
 | 7 | `not-admitted` | Wait for the heavy legs its line names, free memory or room on the filesystem it names, or raise the machine's limits |
+| 8 | `unattributed` | Contain the crash or hang in the case, or make the runner write its report |
 
 `failed` reports 20, `refused-locked` 13 and `poisoned` 70; `stopped`, `skipped-unavailable`
 and `skipped-tool-missing`, where nothing failed, 21 (`Incomplete`). When legs disagree, the
 more fundamental verdict decides the code, in the order given under *Verdict vocabulary*.
 Six outcomes therefore carry six codes — refused before starting, the tree moved under the
 run, another run in the build directory, another run holding the logs, a machine with no room
-for another heavy leg, and a zero exit code with no witness — because a reader who cannot tell
-which fired cannot pick the remedy.
+for another heavy leg, and a zero exit code with no witness — and a mutation sweep's three
+findings three more, because a reader who cannot tell which fired cannot pick the remedy.
 
 ## Success witnesses
 

@@ -42,6 +42,9 @@ public sealed class LegVerdictTests
         Assert.Equal("not-admitted", Verdicts.Display(LegVerdict.NotAdmitted));
         Assert.Equal("poisoned", Verdicts.Display(LegVerdict.Poisoned));
         Assert.Equal("stopped", Verdicts.Display(LegVerdict.Stopped));
+        Assert.Equal("violated", Verdicts.Display(LegVerdict.Violated));
+        Assert.Equal("survived", Verdicts.Display(LegVerdict.Survived));
+        Assert.Equal("unattributed", Verdicts.Display(LegVerdict.Unattributed));
     }
 
     [Fact]
@@ -57,6 +60,9 @@ public sealed class LegVerdictTests
             LegVerdict.RefusedLocked,
             LegVerdict.NotAdmitted,
             LegVerdict.Failed,
+            LegVerdict.Violated,
+            LegVerdict.Survived,
+            LegVerdict.Unattributed,
             LegVerdict.Unwitnessed,
         ];
 
@@ -100,6 +106,9 @@ public sealed class LegVerdictTests
         Assert.Equal(LegExit.Unwitnessed, Verdicts.ExitCodeFor(LegVerdict.Unwitnessed));
         Assert.Equal(LegExit.LogHeld, Verdicts.ExitCodeFor(LegVerdict.LogHeld));
         Assert.Equal(LegExit.NotAdmitted, Verdicts.ExitCodeFor(LegVerdict.NotAdmitted));
+        Assert.Equal(LegExit.Violated, Verdicts.ExitCodeFor(LegVerdict.Violated));
+        Assert.Equal(LegExit.Survived, Verdicts.ExitCodeFor(LegVerdict.Survived));
+        Assert.Equal(LegExit.Unattributed, Verdicts.ExitCodeFor(LegVerdict.Unattributed));
 
         // A warning is not a failure - a switched-off machine is normal - and nor is a stopped build,
         // but a run whose worst verdict is one of them is incomplete, never a pass. A leg nobody asked
@@ -132,6 +141,19 @@ public sealed class LegVerdictTests
             other => Assert.True(Verdicts.Rank(none) < Verdicts.Rank(other), $"{none} must outrank {other}")));
     }
 
+    /// <summary>
+    /// The codes a mutation arm's verdicts exit with are the ones docs/architecture.md and help map a mutation
+    /// harness's own exit codes onto, and a repository moving its sweep to check-mutations adapts its callers to them:
+    /// renumbered here, every such caller would read another verdict than the one reported.
+    /// </summary>
+    [Fact]
+    public void MutationCodes_AreTheOnesTheDocumentMapsOnto()
+    {
+        Assert.Equal(1, LegExit.Violated);
+        Assert.Equal(2, LegExit.Survived);
+        Assert.Equal(8, LegExit.Unattributed);
+    }
+
     [Fact]
     public void LegCodes_StayInsideThePerCommandRange()
     {
@@ -142,8 +164,15 @@ public sealed class LegVerdictTests
         Assert.InRange(LegExit.Unwitnessed, 1, 9);
         Assert.InRange(LegExit.LogHeld, 1, 9);
         Assert.InRange(LegExit.NotAdmitted, 1, 9);
+        Assert.InRange(LegExit.Violated, 1, 9);
+        Assert.InRange(LegExit.Survived, 1, 9);
+        Assert.InRange(LegExit.Unattributed, 1, 9);
 
-        int[] codes = [LegExit.InputsMoved, LegExit.Contended, LegExit.Unwitnessed, LegExit.LogHeld, LegExit.NotAdmitted];
+        int[] codes =
+        [
+            LegExit.InputsMoved, LegExit.Contended, LegExit.Unwitnessed, LegExit.LogHeld, LegExit.NotAdmitted,
+            LegExit.Violated, LegExit.Survived, LegExit.Unattributed,
+        ];
         Assert.Equal(codes.Length, codes.Distinct().Count());
 
         foreach (var code in codes)
@@ -159,6 +188,7 @@ public sealed class LegVerdictTests
                  {
                      LegVerdict.Failed, LegVerdict.Unwitnessed, LegVerdict.InputsMoved, LegVerdict.Unmeasured,
                      LegVerdict.Contended, LegVerdict.RefusedLocked, LegVerdict.NotAdmitted, LegVerdict.LogHeld, LegVerdict.Poisoned,
+                     LegVerdict.Violated, LegVerdict.Survived, LegVerdict.Unattributed,
                  })
         {
             Assert.True(Verdicts.IsFailure(verdict), $"{verdict} counts as a failure");
@@ -205,6 +235,9 @@ public sealed class LegVerdictTests
         Assert.Equal(LegVerdict.SkippedToolMissing, Verdicts.ForRefusal(HarnessExit.ToolMissing));
         Assert.Equal(LegVerdict.LogHeld, Verdicts.ForRefusal(LegExit.LogHeld));
         Assert.Equal(LegVerdict.NotAdmitted, Verdicts.ForRefusal(LegExit.NotAdmitted));
+        Assert.Equal(LegVerdict.Violated, Verdicts.ForRefusal(LegExit.Violated));
+        Assert.Equal(LegVerdict.Survived, Verdicts.ForRefusal(LegExit.Survived));
+        Assert.Equal(LegVerdict.Unattributed, Verdicts.ForRefusal(LegExit.Unattributed));
         Assert.Equal(LegVerdict.Poisoned, Verdicts.ForRefusal(HarnessExit.InternalError));
     }
 }

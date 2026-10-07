@@ -80,12 +80,36 @@ public enum LegVerdict
     Poisoned,
 
     /// <summary>
-    /// Something stopped its build from outside before it finished: ninja, which says why whenever it ends a build
-    /// itself, said nothing of why, or said it was interrupted. Says nothing about the code: distinct from
-    /// <see cref="Failed"/>, which running again repeats, where running again finishes this one. Not a failure, and
-    /// not a pass: a run whose legs include one, and nothing failed, is incomplete.
+    /// Its work was begun or due, and was stopped before it reached a verdict of its own. Something stopped its build
+    /// from outside before it finished: ninja, which says why whenever it ends a build itself, said nothing of why, or
+    /// said it was interrupted. Or a mutation arm was never driven: its sweep was cancelled, no worker was left to run
+    /// it, or the unmutated run of its test binary did not pass, leaving nothing to judge its own run against. Says
+    /// nothing about the code: distinct from <see cref="Failed"/>, which running again repeats, where running again
+    /// finishes this one. Not a failure, and not a pass: a run whose legs include one, and nothing failed, is
+    /// incomplete.
     /// </summary>
     Stopped,
+
+    /// <summary>
+    /// A mutation arm's declaration did not hold: the text it mutates was not in its site exactly once, its target does
+    /// not depend on the site, its mutation reddened other cases than it declares, ran another number of cases, or left
+    /// out its diagnostic, or a mutation declared to stop the build built. The registry's words, or the code the arm
+    /// guards, are wrong - distinct from <see cref="Survived"/>, where the declaration held and the tests did not fail.
+    /// </summary>
+    Violated,
+
+    /// <summary>
+    /// A mutation arm's mutation built and ran, and no case reddened: the tests that guard the mutated code never
+    /// failed, so they prove nothing about it. The finding mutation testing exists to make.
+    /// </summary>
+    Survived,
+
+    /// <summary>
+    /// A mutation arm's run failed, and nothing ties the failure to a case: the runner wrote no report, or one that
+    /// cannot be read, or exited failing with a report naming no failing case - a crash after it was written, a leak
+    /// checker at exit - or ran past its bound and was stopped. Something failed, and nothing says which case did.
+    /// </summary>
+    Unattributed,
 }
 
 /// <summary>Everything the report and the exit code need to know about one verdict.</summary>
@@ -145,13 +169,14 @@ public static class Verdicts
 {
     private static readonly IReadOnlyDictionary<LegVerdict, VerdictInfo> Table = new Dictionary<LegVerdict, VerdictInfo>
     {
-        // Ranks 0-8 are the failures, in the order docs/architecture.md gives for disagreeing legs, each
-        // deciding the exit code of a run it is the worst verdict of; unmeasured shares inputs-moved's. Every
-        // failure outranks everything that is none, and every verdict a leg reaches without one of its own -
-        // a stopped build and the two skips, whose code is incomplete - outranks a pass, so the worst verdict
-        // of a run is a failure wherever one failed, and one of those wherever it is incomplete: a run with
-        // an unavailable leg summarises as that, never as an unqualified success. A leg nobody asked for
-        // outranks nothing at all.
+        // Ranks 0-11 are the failures, in the order docs/architecture.md gives for disagreeing legs, each
+        // deciding the exit code of a run it is the worst verdict of; unmeasured shares inputs-moved's. A
+        // finding about the code outranks the absence of evidence: failed, and the three a mutation arm
+        // reaches, come before unwitnessed. Every failure outranks everything that is none, and every verdict
+        // a leg reaches without one of its own - a stopped build and the two skips, whose code is incomplete -
+        // outranks a pass, so the worst verdict of a run is a failure wherever one failed, and one of those
+        // wherever it is incomplete: a run with an unavailable leg summarises as that, never as an unqualified
+        // success. A leg nobody asked for outranks nothing at all.
         [LegVerdict.Poisoned] = new(LegVerdict.Poisoned, "poisoned", true, 0, HarnessExit.InternalError),
         [LegVerdict.Unmeasured] = new(LegVerdict.Unmeasured, "unmeasured", true, 1, LegExit.InputsMoved),
         [LegVerdict.InputsMoved] = new(LegVerdict.InputsMoved, "inputs-moved", true, 2, LegExit.InputsMoved),
@@ -160,14 +185,17 @@ public static class Verdicts
         [LegVerdict.RefusedLocked] = new(LegVerdict.RefusedLocked, "refused-locked", true, 5, HarnessExit.Refused),
         [LegVerdict.NotAdmitted] = new(LegVerdict.NotAdmitted, "not-admitted", true, 6, LegExit.NotAdmitted),
         [LegVerdict.Failed] = new(LegVerdict.Failed, "failed", true, 7, HarnessExit.CommandFailed),
-        [LegVerdict.Unwitnessed] = new(LegVerdict.Unwitnessed, "unwitnessed", true, 8, LegExit.Unwitnessed),
+        [LegVerdict.Violated] = new(LegVerdict.Violated, "violated", true, 8, LegExit.Violated),
+        [LegVerdict.Survived] = new(LegVerdict.Survived, "survived", true, 9, LegExit.Survived),
+        [LegVerdict.Unattributed] = new(LegVerdict.Unattributed, "unattributed", true, 10, LegExit.Unattributed),
+        [LegVerdict.Unwitnessed] = new(LegVerdict.Unwitnessed, "unwitnessed", true, 11, LegExit.Unwitnessed),
 
-        // Above the skips, since its leg's work was begun and stopped, where theirs never began.
-        [LegVerdict.Stopped] = new(LegVerdict.Stopped, "stopped", false, 9, HarnessExit.Incomplete),
-        [LegVerdict.SkippedUnavailable] = new(LegVerdict.SkippedUnavailable, "skipped-unavailable", false, 10, HarnessExit.Incomplete),
-        [LegVerdict.SkippedToolMissing] = new(LegVerdict.SkippedToolMissing, "skipped-tool-missing", false, 11, HarnessExit.Incomplete),
-        [LegVerdict.Passed] = new(LegVerdict.Passed, "passed", false, 12, HarnessExit.Success),
-        [LegVerdict.SkippedNotSelected] = new(LegVerdict.SkippedNotSelected, "skipped-not-selected", false, 13, HarnessExit.Success),
+        // Above the skips, since its leg's work was begun or due and was stopped, where theirs never began.
+        [LegVerdict.Stopped] = new(LegVerdict.Stopped, "stopped", false, 12, HarnessExit.Incomplete),
+        [LegVerdict.SkippedUnavailable] = new(LegVerdict.SkippedUnavailable, "skipped-unavailable", false, 13, HarnessExit.Incomplete),
+        [LegVerdict.SkippedToolMissing] = new(LegVerdict.SkippedToolMissing, "skipped-tool-missing", false, 14, HarnessExit.Incomplete),
+        [LegVerdict.Passed] = new(LegVerdict.Passed, "passed", false, 15, HarnessExit.Success),
+        [LegVerdict.SkippedNotSelected] = new(LegVerdict.SkippedNotSelected, "skipped-not-selected", false, 16, HarnessExit.Success),
     };
 
     /// <summary>Every verdict, most fundamental first.</summary>
@@ -285,11 +313,14 @@ public static class Verdicts
         HarnessExit.ToolMissing => LegVerdict.SkippedToolMissing,
         HarnessExit.HostUnavailable => LegVerdict.SkippedUnavailable,
         HarnessExit.CommandFailed => LegVerdict.Failed,
+        LegExit.Violated => LegVerdict.Violated,
+        LegExit.Survived => LegVerdict.Survived,
         LegExit.InputsMoved => LegVerdict.InputsMoved,
         LegExit.Contended => LegVerdict.Contended,
         LegExit.Unwitnessed => LegVerdict.Unwitnessed,
         LegExit.LogHeld => LegVerdict.LogHeld,
         LegExit.NotAdmitted => LegVerdict.NotAdmitted,
+        LegExit.Unattributed => LegVerdict.Unattributed,
         _ => LegVerdict.Poisoned,
     };
 }

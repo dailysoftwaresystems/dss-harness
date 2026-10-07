@@ -61,6 +61,8 @@ internal static class HelpCommand
     /// <summary>What to do about each verdict that has a remedy worth saying, in the order help lists them, one line apiece.</summary>
     private static readonly (LegVerdict[] Verdicts, string[] Remedy)[] Remedies =
     [
+        ([LegVerdict.Violated], ["Fix the arm's declaration, or the code it guards"]),
+        ([LegVerdict.Survived], ["Strengthen the test that should have failed"]),
         ([LegVerdict.InputsMoved, LegVerdict.Unmeasured], ["Let the tree settle, then run again"]),
         ([LegVerdict.Contended], ["Wait for the other run"]),
         ([LegVerdict.Unwitnessed], ["Find out what actually ran"]),
@@ -72,7 +74,13 @@ internal static class HelpCommand
                 "or room on the filesystem it names, or raise the",
                 "machine's limits ('help admission')",
             ]),
-        ([LegVerdict.Stopped], ["Find out what stopped the build, then run again"]),
+        (
+            [LegVerdict.Unattributed],
+            [
+                "Contain the crash or hang in the case, or make",
+                "the runner write its report",
+            ]),
+        ([LegVerdict.Stopped], ["Find out what stopped its work, then run again"]),
         ([LegVerdict.SkippedUnavailable], ["Make what its line names available, then run again"]),
         ([LegVerdict.SkippedToolMissing], ["Install the tool its line names, then run again"]),
     ];
@@ -686,6 +694,13 @@ internal static class HelpCommand
         builder.AppendLine("says it was abandoned - its run id, process and start, and where its records are -");
         builder.AppendLine("and releases its claim on them.");
         builder.AppendLine();
+        builder.AppendLine("check-mutations judges each arm of a repository's mutation registry, and a leg's");
+        builder.AppendLine("verdict there is the worst of its own and its arms': violated where an arm's");
+        builder.AppendLine("declaration did not hold, survived where its mutation built and ran and no case");
+        builder.AppendLine("failed, and unattributed where its run failed and nothing ties that to a case. An");
+        builder.AppendLine("arm that was due and never driven - its sweep cancelled, no worker left to run it,");
+        builder.AppendLine("or the unmutated run of its test binary not passing - is stopped, saying why.");
+        builder.AppendLine();
         builder.AppendLine("When several apply the more fundamental one is reported, in the order above.");
         builder.AppendLine("A leg whose inputs moved is not reported as failed even when its tests failed,");
         builder.AppendLine("because what failed was a tree that never existed.");
@@ -891,13 +906,17 @@ internal static class HelpCommand
         builder.AppendLine($"    {CiExit.LegRed,3}  a leg is red");
         builder.AppendLine($"    {CiExit.MatrixDidNotRun,3}  the matrix did not run, which is never read as every leg passing");
         builder.AppendLine();
-        builder.AppendLine("  build, test, run");
+        builder.AppendLine("  build, test, run, check-mutations");
+        builder.AppendLine($"    {LegExit.Violated,3}  violated, check-mutations only: fix the arm's declaration, or the code it guards");
+        builder.AppendLine($"    {LegExit.Survived,3}  survived, check-mutations only: strengthen the test that should have failed");
         builder.AppendLine($"    {LegExit.InputsMoved,3}  inputs-moved or unmeasured: let the tree settle, then run again");
         builder.AppendLine($"    {LegExit.Contended,3}  contended: wait for the other run");
         builder.AppendLine($"    {LegExit.Unwitnessed,3}  unwitnessed: find out what actually ran");
         builder.AppendLine($"    {LegExit.LogHeld,3}  log-held: find out which run still owns this leg's logs");
         builder.AppendLine($"    {LegExit.NotAdmitted,3}  not-admitted: wait for the heavy legs it names, free memory or room on the");
         builder.AppendLine("         filesystem it names, or raise the machine's limits ('help admission')");
+        builder.AppendLine($"    {LegExit.Unattributed,3}  unattributed, check-mutations only: contain the crash or hang in the case, or");
+        builder.AppendLine("         make the runner write its report");
         builder.AppendLine();
         builder.AppendLine("host-exec returns the exit code of the command it ran on the host, unchanged, or");
         builder.AppendLine($"{HarnessExit.HostUnavailable} when nothing ran there, or the command never reported how it finished.");

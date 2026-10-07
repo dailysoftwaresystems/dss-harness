@@ -80,6 +80,9 @@ public sealed class ExitCodeContractTests
         Assert.InRange(LegExit.Unwitnessed, 1, 9);
         Assert.InRange(LegExit.LogHeld, 1, 9);
         Assert.InRange(LegExit.NotAdmitted, 1, 9);
+        Assert.InRange(LegExit.Violated, 1, 9);
+        Assert.InRange(LegExit.Survived, 1, 9);
+        Assert.InRange(LegExit.Unattributed, 1, 9);
     }
 
     [Fact]
@@ -93,6 +96,9 @@ public sealed class ExitCodeContractTests
         Assert.Equal(LegExit.Unwitnessed, Verdicts.ExitCodeFor(LegVerdict.Unwitnessed));
         Assert.Equal(LegExit.LogHeld, Verdicts.ExitCodeFor(LegVerdict.LogHeld));
         Assert.Equal(LegExit.NotAdmitted, Verdicts.ExitCodeFor(LegVerdict.NotAdmitted));
+        Assert.Equal(LegExit.Violated, Verdicts.ExitCodeFor(LegVerdict.Violated));
+        Assert.Equal(LegExit.Survived, Verdicts.ExitCodeFor(LegVerdict.Survived));
+        Assert.Equal(LegExit.Unattributed, Verdicts.ExitCodeFor(LegVerdict.Unattributed));
 
         // And the three that reuse a shared code, because their remedy is the shared one.
         Assert.Equal(HarnessExit.CommandFailed, Verdicts.ExitCodeFor(LegVerdict.Failed));
@@ -107,12 +113,12 @@ public sealed class ExitCodeContractTests
         // per-command code from shipping undocumented.
         var result = await CliRunner.RunAsync(["help", "exit-codes"], TestContext.Current.CancellationToken);
 
-        foreach (var expected in new[] { "install-missing-tools", "check-ci-legs", "build, test, run" })
+        foreach (var expected in new[] { "install-missing-tools", "check-ci-legs", "build, test, run, check-mutations" })
         {
             Assert.Contains(expected, result.StandardOutput, StringComparison.Ordinal);
         }
 
-        foreach (var verdict in new[] { "inputs-moved", "contended", "unwitnessed", "log-held", "not-admitted" })
+        foreach (var verdict in new[] { "inputs-moved", "contended", "unwitnessed", "log-held", "not-admitted", "violated", "survived", "unattributed" })
         {
             Assert.Contains(verdict, result.StandardOutput, StringComparison.Ordinal);
         }
