@@ -949,10 +949,15 @@ public sealed partial class CliEndToEndTests
 
         Assert.Equal(HarnessExit.Success, served.ExitCode);
 
-        // The agent has answered and ended; the hold it started holds the machine on.
-        await EventuallyAsync(() => File.Exists(watched) && File.ReadAllText(watched).StartsWith("started ", StringComparison.Ordinal), token);
+        // The agent has answered and ended; the hold it started holds the machine on. Waited for as a whole line: the
+        // keepAwake writes the file while this reads it, and a read caught part way saw it held, or half written.
+        string? started = null;
 
-        var holder = int.Parse(File.ReadAllText(watched)["started ".Length..].Trim(), CultureInfo.InvariantCulture);
+        await EventuallyAsync(
+            () => (started = Written(watched)) is { } text && text.StartsWith("started ", StringComparison.Ordinal) && text.EndsWith('\n'),
+            token);
+
+        var holder = int.Parse(started!["started ".Length..].Trim(), CultureInfo.InvariantCulture);
         Assert.NotEqual(Environment.ProcessId, holder);
 
         await Task.Delay(TimeSpan.FromSeconds(1), token);
@@ -973,6 +978,22 @@ public sealed partial class CliEndToEndTests
             catch (ArgumentException)
             {
                 return false;
+            }
+        }
+
+        // What another process has written to the file so far, read as its writer allows; nothing where it is not there
+        // yet, or is held as it is written.
+        static string? Written(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (IOException)
+            {
+                return null;
             }
         }
     }
