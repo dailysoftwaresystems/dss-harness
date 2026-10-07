@@ -439,6 +439,39 @@ public sealed class LegExecutorTests
     }
 
     /// <summary>
+    /// A leg poisoned by an exception says how much memory this process held as it gave the leg up, and how much of that
+    /// was its managed heap: an OutOfMemoryException reads the same for one object too large to make as for a machine with
+    /// nothing left, and only what the process held tells the two apart. A leg whose own work reached no verdict, which is
+    /// no exception, says nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task ALegPoisonedByAnException_SaysHowMuchMemoryThisProcessHeld()
+    {
+        var factory = new HarnessFactory();
+        var ledger = new LegLedger(factory.Output, "test");
+
+        var execution = await Executor(factory).RunAsync(
+            new LegExecutionRequest
+            {
+                Legs = [Leg("flooded"), Leg("silent")],
+                RunLeg = (leg, _) => leg.Name == "flooded"
+                    ? throw new OutOfMemoryException("Insufficient memory to continue the execution of the program.")
+                    : Task.FromResult<LegEntry?>(null),
+            },
+            ledger,
+            TestContext.Current.CancellationToken);
+
+        var flooded = execution.Entries.Single(entry => entry.Leg == "flooded");
+
+        Assert.Equal(LegVerdict.Poisoned, flooded.Verdict);
+        Assert.Matches(
+            @"^OutOfMemoryException: Insufficient memory to continue the execution of the program\. "
+            + @"\(this process held [0-9.]+ (bytes|KiB|MiB|GiB|TiB) as it gave the leg up, [0-9.]+ (bytes|KiB|MiB|GiB|TiB) of it its managed heap\)$",
+            flooded.Detail);
+        Assert.DoesNotContain("this process held", execution.Entries.Single(entry => entry.Leg == "silent").Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A program that will not start once a leg is running is not the harness breaking: recorded as
     /// poisoned, a macOS host's missing cmake read as exit 70, and the whole run with it. Nor is it a
     /// skip. The survey turned away, before anything started, every leg whose host lacked a program it

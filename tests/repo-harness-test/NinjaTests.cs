@@ -22,6 +22,7 @@ public sealed class NinjaTests
     [InlineData(2, false, "[3/9] Building CXX object a.o\r\nninja: build stopped: interrupted by user.\r\n", "build exited 2: ninja says it was interrupted before it finished")]
     [InlineData(1, false, "FAILED: a.o \nmain.cpp:1: error: expected ';'\nninja: build stopped: subcommand failed.\n", null)]
     [InlineData(1, false, "\u001b[31mFAILED: \u001b[0ma.o\r\n", null)]
+    [InlineData(1, false, "[1/9] Building CXX object a.o\rFAILED: a.o\r\n", null)]
     [InlineData(1, false, "ninja: error: loading 'build.ninja': The system cannot find the file specified.", null)]
     [InlineData(1, false, "ninja: fatal: ReadFile: Access is denied.", null)]
     [InlineData(1, false, "ninja: build stopped: cannot make progress due to previous errors.", null)]
@@ -61,7 +62,7 @@ public sealed class NinjaTests
         ClockStepped: false,
         Timings: [],
         LogFile: "build.log",
-        Output: output);
+        Output: PhaseOutput.Of(output));
 
     /// <summary>That <paramref name="stopped"/> is no verdict where <paramref name="detail"/> is none, and otherwise stopped with a detail it begins.</summary>
     private static void AssertStopped(string? detail, ReachedVerdict? stopped)
@@ -134,5 +135,24 @@ public sealed class NinjaTests
                 ],
                 "/usr/bin/samu",
                 manifest));
+    }
+
+    /// <summary>
+    /// What ninja said is read from the build's log a line at a time, and no further than the line that decides: a build's
+    /// output can be larger than any text the harness could hold, and the line naming a failed step settles it.
+    /// </summary>
+    [Fact]
+    public void Stopped_ReadsNoFurtherThanTheLineThatDecides()
+    {
+        var failed = Phase(1, stalled: false, "unused") with
+        {
+            Output = new PhaseOutputTests.ReadUpTo(
+                line => line.StartsWith("FAILED: ", StringComparison.Ordinal),
+                "[1/9] Building CXX object a.o",
+                "FAILED: a.o",
+                "main.cpp:1: error: expected ';'"),
+        };
+
+        Assert.Null(Ninja.Stopped(failed, program: null));
     }
 }

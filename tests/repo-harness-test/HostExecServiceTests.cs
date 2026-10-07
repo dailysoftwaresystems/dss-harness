@@ -114,6 +114,9 @@ public sealed class HostExecServiceTests
         Assert.Single(command.StandardInput, character => character == '\n');
         Assert.EndsWith("\n", command.StandardInput, StringComparison.Ordinal);
 
+        // Both streams are shown as they come, and are as long as what the command prints: only their end is kept.
+        Assert.Equal((StreamKept.Tail, StreamKept.Tail), (command.OutputKept, command.ErrorKept));
+
         // The arguments, a space included, never reach a shell: they are inside the request.
         var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions);
         Assert.NotNull(request);

@@ -42,6 +42,25 @@ public sealed class HostCommandRunnerTests
         Assert.Equal(TimeSpan.FromSeconds(5), request.Timeout);
     }
 
+    /// <summary>
+    /// How much of each stream a command keeps reaches the process that carries it, to whichever host: a command relaying
+    /// what a host prints line by line keeps only its end, there as here.
+    /// </summary>
+    [Fact]
+    public void HowMuchOfEachStreamIsKept_ReachesTheProcessOnEveryKindOfHost()
+    {
+        foreach (var connection in new[] { new HostConnection { Host = HostId.Local }, new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" }, Ssh() })
+        {
+            var relaying = HostCommandRunner.BuildRequest(connection, ListSdks with { ErrorKept = StreamKept.Tail });
+            var answering = HostCommandRunner.BuildRequest(connection, ListSdks with { OutputKept = StreamKept.Tail });
+            var asked = HostCommandRunner.BuildRequest(connection, ListSdks);
+
+            Assert.Equal((StreamKept.Whole, StreamKept.Tail), (relaying.OutputKept, relaying.ErrorKept));
+            Assert.Equal((StreamKept.Tail, StreamKept.Whole), (answering.OutputKept, answering.ErrorKept));
+            Assert.Equal((StreamKept.Whole, StreamKept.Whole), (asked.OutputKept, asked.ErrorKept));
+        }
+    }
+
     [Fact]
     public void Wsl_StartsTheProgramWithoutAShell_InTheHomeDirectory()
     {

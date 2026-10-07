@@ -26,11 +26,15 @@ internal static class TestChild
         return mode switch
         {
             "echo-args" => EchoArguments(standardOutput, arguments),
+            "echo-command-line" => EchoCommandLine(standardOutput, arguments),
             "echo-crlf" => EchoLinesEndedWithCrlf(standardOutput, arguments),
             "echo-stdin" => EchoStandardInput(standardOutput),
             "read-line-then-watch" => ReadLineThenWatch(standardOutput, arguments),
             "sleep" => Sleep(arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
+            "flood" => Flood(standardOutput, arguments),
+            "flood-error" => Flood(standardError, arguments),
+            "print-file" => PrintFile(standardOutput, arguments),
             "spawn-grandchild" => SpawnGrandchild(arguments),
             "print-env" => PrintEnvironment(standardOutput, arguments),
             "write-file" => WriteFile(arguments),
@@ -75,7 +79,6 @@ internal static class TestChild
         return 0;
     }
 
-    /// <summary>Writes each argument on its own line between brackets, so an empty one is visible.</summary>
     /// <summary>Writes each argument as a line of its own ended with CRLF, as a Windows program writes one.</summary>
     private static int EchoLinesEndedWithCrlf(TextWriter output, string[] arguments)
     {
@@ -87,6 +90,7 @@ internal static class TestChild
         return 0;
     }
 
+    /// <summary>Writes each argument on its own line between brackets, so an empty one is visible.</summary>
     private static int EchoArguments(TextWriter output, string[] arguments)
     {
         foreach (var argument in arguments)
@@ -94,6 +98,16 @@ internal static class TestChild
             output.Write("[" + argument + "]\n");
         }
 
+        return 0;
+    }
+
+    /// <summary>
+    /// Writes the arguments on one line, each between brackets and a space after the one before: what a
+    /// witness, read a line at a time, needs to see that two arguments came side by side.
+    /// </summary>
+    private static int EchoCommandLine(TextWriter output, string[] arguments)
+    {
+        output.Write(string.Join(' ', arguments.Select(argument => "[" + argument + "]")) + "\n");
         return 0;
     }
 
@@ -191,6 +205,64 @@ internal static class TestChild
         output.Write("second\n");
         return 0;
     }
+
+    /// <summary>
+    /// Writes <c>arguments[0]</c> lines of <c>arguments[1]</c> characters each, each <see cref="FloodLine"/>, then - where
+    /// <c>arguments[2]</c> is given - one line of that many characters, <see cref="GiantLine"/>, with no line feed after it:
+    /// what a child that floods its output writes, as fast as its pipe takes it. A test can then say what every line should
+    /// be without holding any of them.
+    /// </summary>
+    private static int Flood(TextWriter output, string[] arguments)
+    {
+        var count = long.Parse(arguments[0], CultureInfo.InvariantCulture);
+        var length = int.Parse(arguments[1], CultureInfo.InvariantCulture);
+        var giant = arguments.Length > 2 ? long.Parse(arguments[2], CultureInfo.InvariantCulture) : 0;
+
+        // Written a megabyte at a time: the writer flushes every write, and a write per line would measure this
+        // process's system calls rather than the reader's.
+        var chunk = new StringBuilder(FloodChunk + length + 1);
+
+        for (var index = 0L; index < count; index++)
+        {
+            chunk.Append(FloodLine(index, length)).Append('\n');
+
+            if (chunk.Length >= FloodChunk)
+            {
+                output.Write(chunk);
+                chunk.Clear();
+            }
+        }
+
+        output.Write(chunk);
+
+        for (var written = 0L; written < giant; written += FloodChunk)
+        {
+            output.Write(GiantLine((int)Math.Min(FloodChunk, giant - written)));
+        }
+
+        return 0;
+    }
+
+    /// <summary>Writes the text of the file <c>arguments[0]</c> names, as it is: output longer than a command line can carry.</summary>
+    private static int PrintFile(TextWriter output, string[] arguments)
+    {
+        output.Write(File.ReadAllText(arguments[0], Utf8NoBom));
+        return 0;
+    }
+
+    /// <summary>How many characters <see cref="Flood"/> writes at a time.</summary>
+    private const int FloodChunk = 1024 * 1024;
+
+    /// <summary>Line <paramref name="index"/> of a flood: its number, then as many dots as make it <paramref name="length"/> long.</summary>
+    internal static string FloodLine(long index, int length)
+    {
+        var number = index.ToString("D12", CultureInfo.InvariantCulture);
+
+        return number + new string('.', Math.Max(0, length - number.Length));
+    }
+
+    /// <summary><paramref name="length"/> characters of the one line a flood ends with, which never ends.</summary>
+    internal static string GiantLine(int length) => new('g', length);
 
     /// <summary>Starts a sleeping grandchild, records its process id, then sleeps as well.</summary>
     private static int SpawnGrandchild(string[] arguments)

@@ -11,7 +11,7 @@ public sealed class LegGuardsTests
     private static readonly PhaseResult Passed = new(
         "leg", "step", ExitCode: 0, Stalled: false, StallSeconds: 0, Witnessed: null,
         Duration: TimeSpan.Zero, ClockDrift: TimeSpan.Zero, ClockStepped: false,
-        Timings: [], LogFile: "log", Output: string.Empty);
+        Timings: [], LogFile: "log", Output: PhaseOutput.Empty);
 
     /// <summary>
     /// A set that is empty because nothing the build reads is tracked is not a set nobody could

@@ -148,6 +148,10 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
                     Arguments = [HostAgentProtocol.CommandName],
                     StandardInput = JsonSerializer.Serialize(requestFor(nonce), HostAgentProtocol.JsonOptions) + "\n",
                     Timeout = Budget,
+
+                    // Read line by line as it comes, for the hold's refusal; only its end is kept, for the
+                    // message that says the hold never finished.
+                    ErrorKept = StreamKept.Tail,
                     OnErrorLine = line =>
                     {
                         if (lines.Error(line) && FailureLine.TryRead(line, HostAgentProtocol.CommandName, out var refusal))

@@ -155,6 +155,20 @@ public sealed record HostCommand
 
     /// <summary>Receives each line the program writes to standard error, as it arrives.</summary>
     public Action<string>? OnErrorLine { get; init; }
+
+    /// <summary>
+    /// How much of standard output the result keeps: all of it, unless the caller keeps what it needs of each line
+    /// <see cref="OnOutputLine"/> receives; see <see cref="ProcessRequest.OutputKept"/>.
+    /// </summary>
+    /// <remarks>
+    /// What a host relays is as long as what its command prints, and a leg that runs there under --verbose prints every
+    /// line its steps do: kept whole here too, two gigabytes of one step's output would end this machine's run as they
+    /// ended the host's.
+    /// </remarks>
+    public StreamKept OutputKept { get; init; }
+
+    /// <summary>How much of standard error the result keeps, as <see cref="OutputKept"/> says of standard output.</summary>
+    public StreamKept ErrorKept { get; init; }
 }
 
 /// <summary>
@@ -412,6 +426,8 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
             Timeout = command.Timeout,
             OnOutputLine = command.OnOutputLine,
             OnErrorLine = command.OnErrorLine,
+            OutputKept = command.OutputKept,
+            ErrorKept = command.ErrorKept,
         };
     }
 

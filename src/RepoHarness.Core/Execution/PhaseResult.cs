@@ -37,15 +37,19 @@ public sealed record PhaseTiming(string Pattern, string Text, string Value);
 /// spanned a clock step or a host sleep. Its durations are suspect, and so is every file
 /// modification time it stamped, which is what an incremental build would otherwise trust.
 /// </param>
-/// <param name="Timings">Every match of the phase's timing patterns, in the order they appeared.</param>
+/// <param name="Timings">
+/// The matches of the phase's timing patterns, pattern by pattern, each in the order they appeared: up to
+/// <see cref="PhaseRunner.MostTimings"/> of each.
+/// </param>
 /// <param name="LogFile">Where the whole of the child's output was written, for a reader or a regex.</param>
 /// <param name="Output">
-/// The child's own output, both streams, with any secret the run declared already masked. Held
-/// apart from the log file, which also carries the header the harness wrote: a header that echoes
-/// the command line contains the success pattern whenever the command does.
-/// Masked here rather than by each reader, because this is the copy that outlives the child — it
-/// reaches the ledger's detail, an expected exception's message and the verdict — and a redaction
-/// every reader has to remember is one a new reader will not.
+/// The child's own lines, both streams in the order they came, with any secret the run declared already
+/// masked: read back from <see cref="LogFile"/> whenever they are asked for, and never held. Only the
+/// child's own: the log also carries the header the harness wrote, and a header that echoes the command
+/// line contains the success pattern whenever the command does. Masked as each line was kept rather than
+/// by each reader, because what reads this outlives the child — it reaches the ledger's detail, an expected
+/// exception's message and the verdict — and a redaction every reader has to remember is one a new reader
+/// will not.
 /// </param>
 public sealed record PhaseResult(
     string Leg,
@@ -59,7 +63,7 @@ public sealed record PhaseResult(
     bool ClockStepped,
     IReadOnlyList<PhaseTiming> Timings,
     string LogFile,
-    string Output)
+    PhaseOutput Output)
 {
     /// <summary>
     /// Whether the phase passed: it ran to completion, reported success, and where a pattern was
@@ -73,8 +77,8 @@ public sealed record PhaseResult(
 
     /// <summary>
     /// The last <see cref="TailLines"/> lines the child printed, on either stream, in the order they came,
-    /// with the run's secrets masked as in <see cref="Output"/> - which holds one stream after the other,
-    /// and so ends with whichever came second rather than with what came last.
+    /// with the run's secrets masked as in <see cref="Output"/>: kept as the phase ran, in a ring of that many,
+    /// so that what a reader is shown first needs no read of the log.
     /// </summary>
     public IReadOnlyList<string> LastLines { get; init; } = [];
 
@@ -95,11 +99,6 @@ public sealed record PhaseResult(
 
         return phases.LastOrDefault(phase => !phase.Passed)?.Tail ?? [];
     }
-
-    /// <summary>The last <see cref="TailLines"/> lines of <paramref name="text"/>, however they end, and no empty one after the last.</summary>
-    /// <param name="text">What was printed.</param>
-    internal static IReadOnlyList<string> LastLinesOf(string text)
-        => text.Length == 0 ? [] : [.. text.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n').TakeLast(TailLines)];
 
     /// <summary>
     /// What this phase declared it would produce and did not, or empty when it produced everything

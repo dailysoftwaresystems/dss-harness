@@ -238,5 +238,5 @@ public sealed class ActionArtifactsTests
     private static PhaseResult Finished() => new(
         "leg", "pack", ExitCode: 0, Stalled: false, StallSeconds: 0, Witnessed: null,
         Duration: TimeSpan.Zero, ClockDrift: TimeSpan.Zero, ClockStepped: false,
-        Timings: [], LogFile: "log", Output: string.Empty);
+        Timings: [], LogFile: "log", Output: PhaseOutput.Empty);
 }

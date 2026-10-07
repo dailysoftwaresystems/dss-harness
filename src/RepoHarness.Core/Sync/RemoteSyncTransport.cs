@@ -2,6 +2,7 @@ using System.Text.Json;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Sync;
@@ -345,6 +346,11 @@ public sealed class RemoteSyncTransport(
                     Arguments = [HostAgentProtocol.CommandName],
                     StandardInput = request + "\n",
                     HoldStandardInputOpen = true,
+
+                    // The answer arrives on standard output as one line, which can be a whole file's
+                    // content and is read whole; standard error is shown line by line as it comes, and
+                    // only its end is kept, for the message that says how the operation ended.
+                    ErrorKept = StreamKept.Tail,
                     OnOutputLine = line =>
                     {
                         if (lines.Output(line))

@@ -78,6 +78,27 @@ public sealed record ProcessRequest
     /// <summary>Invoked for each stderr line as it arrives, in addition to capture.</summary>
     public Action<string>? OnErrorLine { get; init; }
 
+    /// <summary>
+    /// How much of stdout <see cref="ProcessResult.StandardOutput"/> keeps: all of it unless the caller, taking its lines
+    /// through <see cref="OnOutputLine"/>, keeps what it needs of them itself.
+    /// </summary>
+    public StreamKept OutputKept { get; init; }
+
+    /// <summary>How much of stderr <see cref="ProcessResult.StandardError"/> keeps, as <see cref="OutputKept"/> says of stdout.</summary>
+    public StreamKept ErrorKept { get; init; }
+
+    /// <summary>
+    /// Where a line of a stream kept as a <see cref="StreamKept.Tail"/> is cut once it has run to
+    /// <see cref="ProcessRunner.LongestLine"/> characters, given those characters, or <see langword="null"/> to cut it after all
+    /// of them. What is left is the start of the next piece.
+    /// </summary>
+    /// <remarks>
+    /// For a caller that reads each piece as a line of its own and needs something whole in one: a phase that masks the
+    /// secrets it carries in each line it keeps cuts where none of them is parted, since a secret cut in two is masked in
+    /// neither piece.
+    /// </remarks>
+    public Func<string, int>? CutLine { get; init; }
+
     /// <summary>Wall clock budget, or <see langword="null"/> for no limit.</summary>
     public TimeSpan? Timeout { get; init; }
 }
