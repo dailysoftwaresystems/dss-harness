@@ -14,6 +14,7 @@ namespace RepoHarness.Core.Build;
 /// <param name="MakeProgram">The program that builds it, such as the ninja the build ran, or null.</param>
 /// <param name="CCompilerArguments">The words recorded after the C compiler, or null when none were.</param>
 /// <param name="CxxCompilerArguments">The words recorded after the C++ compiler, or null when none were.</param>
+/// <param name="Generator">The generator it was configured with, such as <c>Ninja</c>, or null.</param>
 public sealed record BuildDirectoryRecord(
     string? HomeDirectory,
     string? CCompiler,
@@ -21,7 +22,8 @@ public sealed record BuildDirectoryRecord(
     string? BuildType,
     string? MakeProgram = null,
     string? CCompilerArguments = null,
-    string? CxxCompilerArguments = null);
+    string? CxxCompilerArguments = null,
+    string? Generator = null);
 
 /// <summary>
 /// Refuses a build directory that was configured for something other than this leg.
@@ -61,6 +63,7 @@ public sealed class BuildDirectoryGuard(IFileSystem fileSystem, IHostPlatform pl
         string? makeProgram = null;
         string? cArguments = null;
         string? cxxArguments = null;
+        string? generator = null;
 
         foreach (var line in _fileSystem.ReadAllText(cache).Split('\n'))
         {
@@ -76,9 +79,10 @@ public sealed class BuildDirectoryGuard(IFileSystem fileSystem, IHostPlatform pl
             // /usr/bin/ccache with ' gcc' here.
             cArguments ??= ValueOf(text, "CMAKE_C_COMPILER_ARG1");
             cxxArguments ??= ValueOf(text, "CMAKE_CXX_COMPILER_ARG1");
+            generator ??= ValueOf(text, "CMAKE_GENERATOR");
         }
 
-        return new BuildDirectoryRecord(home, cCompiler, cxxCompiler, buildType, makeProgram, cArguments, cxxArguments);
+        return new BuildDirectoryRecord(home, cCompiler, cxxCompiler, buildType, makeProgram, cArguments, cxxArguments, generator);
     }
 
     /// <summary>

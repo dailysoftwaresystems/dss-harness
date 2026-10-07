@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using RepoHarness.Core.Platform;
@@ -35,6 +37,9 @@ public static partial class HostProbes
 
     /// <summary>Longest excerpt of a program's output a message quotes.</summary>
     private const int ExcerptLength = 300;
+
+    /// <summary>How many labels stuck to the front of an address with a colon are set aside, at most.</summary>
+    private const int MostLabels = 2;
 
     /// <summary>
     /// Whether the host ran a command at all. A program that ran and failed exits non-zero; any
@@ -234,6 +239,21 @@ public static partial class HostProbes
     public static string CouldNotReach(string said) => $"the host could not be reached: ssh said {said}";
 
     /// <summary>
+    /// That <paramref name="through"/>'s host could not be reached, with the end of what ssh said on standard error over
+    /// <paramref name="result"/> quoted, as <see cref="Excerpt"/> quotes it - the host named as the configuration
+    /// declares it, never by an address its name resolved to here (see <see cref="AsConfigured"/>).
+    /// </summary>
+    /// <param name="result">What ssh did, having failed itself.</param>
+    /// <param name="through">The connection it failed over.</param>
+    public static string CouldNotReach(ProcessResult result, HostConnection through)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(through);
+
+        return CouldNotReach(Excerpt(AsConfigured(result.StandardError, through)));
+    }
+
+    /// <summary>
     /// The line in which ssh said it never connected to the host - the name did not resolve, or nothing
     /// took the connection at the address - or <see langword="null"/> where it said no such thing.
     /// </summary>
@@ -321,36 +341,170 @@ public static partial class HostProbes
     }
 
     /// <summary>
-    /// <paramref name="said"/> with the address a pin gave ssh written as the configuration declares the host,
-    /// which is what the reader named and what everything else about the host is said in terms of.
+    /// <paramref name="said"/> with every address this machine resolved the host's name to written as the
+    /// configuration declares the host, which is what the reader named and what everything else about the host
+    /// is said in terms of.
     /// </summary>
-    /// <param name="said">What ssh printed.</param>
+    /// <param name="said">What ssh, or a program on the host, printed.</param>
     /// <param name="through">The connection it printed for, or <see langword="null"/> where there is none.</param>
     /// <remarks>
-    /// A pinned connection hands ssh the address this machine resolved the declared name to, so ssh names that
-    /// address when it fails - "Connection to 198.51.100.7 port 22 timed out" - and the harness relays its words
-    /// as they are. An address this machine worked out is not the reader's to publish: it reaches a leg's reason,
-    /// the text and the JSON, and whatever keeps them. Only the pinned address is rewritten, and only into what
-    /// the configuration itself declares, so nothing else ssh said is touched; where the two are the same, or
-    /// there is no pin, the words are already the reader's own.
+    /// <para>
+    /// A pinned connection hands ssh the address this machine resolved the declared name to, and one never pinned,
+    /// or whose pin was dropped, lets ssh look the name up itself. Either way ssh names the address it dialled
+    /// when it fails - "Connection to 198.51.100.7 port 22 timed out", "harness@198.51.100.7: Permission denied
+    /// (publickey)." - and the harness relays its words as they are. An address this machine worked out is not
+    /// the reader's to publish: it reaches a leg's reason, the text and the JSON, and whatever keeps them.
+    /// </para>
+    /// <para>
+    /// Measured: ssh does not always spell an address as this machine does. On Linux, a link-local address
+    /// dialled as <c>fe80::1%2</c> is named <c>fe80::1%eth0</c>, its scope by the interface's name. So an IPv6
+    /// address is matched as the address it is, whatever its scope or spelling; an IPv4 one only as it is always
+    /// spelt, since '192.0.522' parses as 192.0.2.10 and is a version, not an address. Only these addresses are
+    /// rewritten, and only into what the configuration itself declares, so nothing else ssh said is touched.
+    /// </para>
+    /// <para>
+    /// The addresses are those the connection has learnt, which it learns again, afresh, before every call that lets
+    /// ssh look the name up itself: see <see cref="ResolvedAddresses"/>. What the host's own programs print is
+    /// rewritten too - on either stream, in its leg's reason and last lines, and in what it found about itself -
+    /// since ssh's words arrive among them on standard error, and two copies of one line must not differ in what
+    /// they name.
+    /// </para>
     /// </remarks>
     public static string AsConfigured(string said, HostConnection? through)
     {
         ArgumentNullException.ThrowIfNull(said);
 
-        if (through is not { Pin.Address: { Length: > 0 } pinned, Address: { Length: > 0 } declared }
-            || string.Equals(pinned, declared, StringComparison.OrdinalIgnoreCase))
+        if (through is not { Address: { Length: > 0 } declared } || Resolved(through) is not { Count: > 0 } resolved)
         {
             return said;
         }
 
-        // Only where the address stands as a whole word. An unbounded replacement of '10.0.0.5' rewrites the
-        // '10.0.0.50' a command itself printed, handing the reader an address that never existed, and does
-        // the same to an IPv6 pin inside a longer one. This runs over every line a host writes, not only
-        // over ssh's, so a line that merely contains the address as part of something else is left alone.
+        // ssh's debug line puts the port straight after the address it dialled, an IPv6 one unbracketed, which no
+        // word of its own can tell from another address: "Authenticating to 2001:db8::7:22 as 'harness'". Its shape
+        // says where the port starts.
+        said = SshAuthenticatingTo().Replace(
+            said,
+            match => Address(match.Groups["address"].Value) is { } address && resolved.Contains(address)
+                ? $"Authenticating to {declared}:{match.Groups["port"].Value} as '"
+                : match.Value);
+
+        // Only where an address stands as a word, once what is set aside around it is (see Spelt): a label or two before
+        // it, and a colon, a full stop or a port after it. An unbounded replacement of '10.0.0.5' rewrites the '10.0.0.50'
+        // a command itself printed, handing the reader an address that never existed, and does the same to an IPv6
+        // address inside a longer one. This runs over every line a host writes, not only over ssh's, so a line that
+        // merely contains the address as part of something else is left alone.
         return AddressLike().Replace(
             said,
-            match => string.Equals(match.Value, pinned, StringComparison.OrdinalIgnoreCase) ? declared : match.Value);
+            match => Spelt(match.Value) is ({ } address, var start, var length) && resolved.Contains(address)
+                ? match.Value[..start] + declared + match.Value[(start + length)..]
+                : match.Value);
+    }
+
+    /// <summary>
+    /// Every address <paramref name="through"/>'s host name has resolved to here, each as the address it is: its pin's
+    /// among them, since a pin is made from what the name resolved to.
+    /// </summary>
+    private static List<IPAddress> Resolved(HostConnection through)
+        => [.. (through.Resolved?.All ?? []).Select(Address).OfType<IPAddress>()];
+
+    /// <summary>
+    /// The address <paramref name="token"/> spells, as the address it is, with where in the token it starts and how
+    /// much of it it takes; <see langword="null"/> where it spells none. What follows an address is set aside: the
+    /// colon ssh puts after a refused login's host, a full stop, and a port, as ssh writes one after an IPv4 or a
+    /// scoped address - "192.0.2.10:22", "fe80::1%12:22". So is a label stuck to its front with a colon, where the
+    /// word is no address from its start - "addr:192.0.2.10", as ifconfig prints one.
+    /// </summary>
+    private static (IPAddress Address, int Start, int Length)? Spelt(string token)
+    {
+        // A label or two at most, as a choice: ifconfig prints one, and a word of a thousand colons is passed over in a
+        // few looks rather than a thousand.
+        for (int start = 0, labels = 0; labels <= MostLabels; labels++)
+        {
+            var word = token[start..];
+
+            foreach (var length in Lengths(word))
+            {
+                if (Address(word[..length]) is { } address)
+                {
+                    return (address, start, length);
+                }
+            }
+
+            if (word.IndexOf(':') is not (var colon and > 0))
+            {
+                return null;
+            }
+
+            start += colon + 1;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// How long an address <paramref name="token"/> begins with may be, longest first: a few lengths, whatever the
+    /// token's own, so that a word of any length a host prints is read in one pass.
+    /// </summary>
+    private static IEnumerable<int> Lengths(string token)
+    {
+        var scope = token.IndexOf('%');
+
+        if (scope >= 0)
+        {
+            // A scope is an interface's name or number: it holds no colon, it ends in no full stop, and one that is
+            // empty is none.
+            var end = token.IndexOf(':', scope);
+            var scoped = (end < 0 ? token : token[..end]).TrimEnd('.');
+
+            yield return scoped.Length > scope + 1 ? scoped.Length : scope;
+            yield break;
+        }
+
+        var core = token.TrimEnd(':', '.');
+
+        // An IPv6 address can itself end in '::', so as many as two of the colons after it may be its own.
+        for (var length = Math.Min(token.Length, core.Length + 2); length >= core.Length && length > 0; length--)
+        {
+            yield return length;
+        }
+
+        // An IPv4 address with its port. An IPv6 one cannot be told from a port without the brackets ssh puts round
+        // it, which leave the address a word of its own; before its first colon is never one.
+        if (core.IndexOf(':') is var colon and > 0)
+        {
+            yield return colon;
+        }
+    }
+
+    /// <summary>
+    /// The address <paramref name="text"/> spells, as the address it is - an IPv6 one with its scope set aside,
+    /// and an IPv4 one mapped into IPv6 as that IPv4 one - or <see langword="null"/> where it spells none as
+    /// programs print one.
+    /// </summary>
+    private static IPAddress? Address(string text)
+    {
+        // Most of what a host prints holds neither, and is passed over without being parsed.
+        if (!text.Contains('.') && !text.Contains(':'))
+        {
+            return null;
+        }
+
+        var scope = text.IndexOf('%');
+        var bare = scope < 0 ? text : text[..scope];
+
+        if (!IPAddress.TryParse(bare, out var address))
+        {
+            return null;
+        }
+
+        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            return address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+        }
+
+        // An IPv4 address has no scope, and is taken only as it is always spelt: '192.0.522' parses as 192.0.2.10,
+        // and is a version.
+        return scope < 0 && string.Equals(bare, address.ToString(), StringComparison.Ordinal) ? address : null;
     }
 
     /// <summary>
@@ -372,6 +526,10 @@ public static partial class HostProbes
     /// <summary>One run of the characters a host name or an address is spelt from, which nothing else adjoins.</summary>
     [GeneratedRegex(@"[0-9A-Za-z.:%_-]+", RegexOptions.CultureInvariant)]
     private static partial Regex AddressLike();
+
+    /// <summary>ssh's debug line naming the address it authenticates to, with the port straight after it.</summary>
+    [GeneratedRegex(@"Authenticating to (?<address>[0-9A-Za-z.:%_-]+):(?<port>[0-9]+) as '", RegexOptions.CultureInvariant)]
+    private static partial Regex SshAuthenticatingTo();
 
     [GeneratedRegex(@"^(?:ssh(?:\.exe)?: (?:Could not resolve hostname |connect to host \S+ port \S+: )|banner exchange: Connection to UNKNOWN port -1: )", RegexOptions.CultureInvariant)]
     private static partial Regex SshNeverConnected();

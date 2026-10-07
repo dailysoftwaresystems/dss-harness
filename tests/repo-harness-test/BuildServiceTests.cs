@@ -564,6 +564,74 @@ public sealed class BuildServiceTests
     }
 
     /// <summary>
+    /// A CMake build under ninja that exits without ninja saying why - killed part way - is stopped, naming its exit
+    /// code, which says nothing about the code. It is failed where ninja named a failed step, or where samurai, the
+    /// program the cache records CMake running for ninja, said one failed under its own name; and so is a build under
+    /// another generator, whose build tool cannot be read for it, and a configure that fails, which CMake ran rather than
+    /// ninja, however silently.
+    /// </summary>
+    [Theory]
+    [InlineData("Ninja", null, CMakeAdapter.BuildPhase, "", LegVerdict.Stopped, "build exited 1 without ninja saying why")]
+    [InlineData("Ninja Multi-Config", null, CMakeAdapter.BuildPhase, "[2/9] Building CXX object obj/app.o\n", LegVerdict.Stopped, "build exited 1 without ninja saying why")]
+    [InlineData("Ninja", null, CMakeAdapter.BuildPhase, "FAILED: obj/app.o\nninja: build stopped: subcommand failed.\n", LegVerdict.Failed, "build exited 1")]
+    [InlineData("Ninja", "/usr/bin/samu", CMakeAdapter.BuildPhase, "samu: job failed with status 1: c++ -c app.cpp\nsamu: subcommand failed\n", LegVerdict.Failed, "build exited 1")]
+    [InlineData("Ninja", "/usr/bin/samu", CMakeAdapter.BuildPhase, "[2/9] c++ -c app.cpp\n", LegVerdict.Stopped, "build exited 1 without samu saying why")]
+    [InlineData("Unix Makefiles", null, CMakeAdapter.BuildPhase, "", LegVerdict.Failed, "build exited 1")]
+    [InlineData("Ninja", null, CMakeAdapter.ConfigurePhase, "", LegVerdict.Failed, "configure exited 1")]
+    public async Task ABuildNinjaDidNotEndItself_IsStopped_NotFailed(string generator, string? program, string failing, string output, LegVerdict verdict, string detail)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (factory, request) = await TrackedTreeAsync(temp, token);
+        var buildDirectory = request.Variant.DirectoryUnder(temp.Path);
+
+        var building = Service(
+            factory,
+            exitCode: 0,
+            phases: new ScriptedPhases(
+                configuring: () => File.WriteAllText(
+                    Path.Combine(buildDirectory, BuildDirectoryGuard.CMakeCacheFileName),
+                    $"CMAKE_GENERATOR:INTERNAL={generator}\nCMAKE_GENERATOR_INSTANCE:INTERNAL=\n"
+                    + (program is null ? string.Empty : $"CMAKE_MAKE_PROGRAM:FILEPATH={program}\n")),
+                buildExitCode: failing == CMakeAdapter.BuildPhase ? 1 : 0,
+                buildOutput: output,
+                configureExitCode: failing == CMakeAdapter.ConfigurePhase ? 1 : 0));
+
+        var built = await building.BuildAsync(Config(), request, token);
+
+        Assert.Equal((verdict, true), (built.Verdict.Verdict, built.Verdict.Detail.StartsWith(detail, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// Only a CMake build is read for what ninja said: a dotnet build that exits 1 without a word is failed, though a
+    /// CMake cache in the directory it builds in names ninja.
+    /// </summary>
+    [Fact]
+    public async Task ABuildOfAnotherKind_IsFailed_ThoughACMakeCacheWhereItBuildsNamesNinja()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var (_, factory) = await TrackedWithFactoryAsync(temp, token);
+        var request = Request(temp, [App]);
+        var buildDirectory = request.Variant.DirectoryUnder(temp.Path);
+
+        // A dotnet build has no configure phase: its one phase, which is not cmake --build, is the one these phases call
+        // configuring.
+        var building = Service(
+            factory,
+            exitCode: 0,
+            phases: new ScriptedPhases(
+                configuring: () => File.WriteAllText(
+                    Path.Combine(buildDirectory, BuildDirectoryGuard.CMakeCacheFileName),
+                    "CMAKE_GENERATOR:INTERNAL=Ninja\n"),
+                configureExitCode: 1));
+
+        var built = await building.BuildAsync(Config(), request, token);
+
+        Assert.Equal((LegVerdict.Failed, true), (built.Verdict.Verdict, built.Verdict.Detail.StartsWith("build exited 1", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// A build stopped part way - by its caller's time limit, or anything else that ends it - reaches no
     /// verdict and leaves only what it compiled. The record written as it began is what the next
     /// build dates its changes from, so that build carries on from what the stopped one compiled,
@@ -2028,10 +2096,15 @@ public sealed class BuildServiceTests
     /// Every phase starts nothing. As configure starts, <paramref name="configuring"/> happens, and as
     /// the build starts, <paramref name="building"/> - an input rewritten, as an editor saving mid-build
     /// does; an object compiled; the clock stepped; the run stopped, as its caller's time limit stops one -
-    /// and each goes on only if the run still wants it, configure exiting 0 and the build
-    /// <paramref name="buildExitCode"/>.
+    /// and each goes on only if the run still wants it, configure exiting <paramref name="configureExitCode"/>
+    /// and the build <paramref name="buildExitCode"/>, having printed <paramref name="buildOutput"/>.
     /// </summary>
-    private sealed class ScriptedPhases(Action? configuring = null, Action? building = null, int buildExitCode = 0) : IProcessRunner
+    private sealed class ScriptedPhases(
+        Action? configuring = null,
+        Action? building = null,
+        int buildExitCode = 0,
+        string buildOutput = "",
+        int configureExitCode = 0) : IProcessRunner
     {
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
         {
@@ -2040,7 +2113,8 @@ public sealed class BuildServiceTests
             (build ? building : configuring)?.Invoke();
             cancellationToken.ThrowIfCancellationRequested();
 
-            return Task.FromResult(new ProcessResult(build ? buildExitCode : 0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+            return Task.FromResult(
+                new ProcessResult(build ? buildExitCode : configureExitCode, build ? buildOutput : string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
         }
 
         public string? FindExecutable(string command) => command;

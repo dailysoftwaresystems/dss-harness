@@ -720,7 +720,7 @@ public sealed class ToolProvisionService(
 
             return match.Success
                 ? (match.Groups.Count > 1 ? match.Groups[1].Value : match.Value, null)
-                : (null, $"the probe regex of '{tool.Name}' matched nothing in what it printed: {HostProbes.Excerpt(text)}");
+                : (null, $"the probe regex of '{tool.Name}' matched nothing in what it printed: {HostProbes.Excerpt(HostProbes.AsConfigured(text, connection))}");
         }
         catch (Exception ex) when (ex is ArgumentException or RegexMatchTimeoutException)
         {

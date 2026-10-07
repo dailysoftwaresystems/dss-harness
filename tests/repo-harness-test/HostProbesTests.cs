@@ -1,3 +1,4 @@
+using NSubstitute;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Processes;
 
@@ -196,6 +197,7 @@ public sealed class HostProbesTests
             Host = HostId.Ssh("mac"),
             Address = "mac.invalid",
             Pin = new SshPin(resolved, "mac.invalid"),
+            Resolved = Learnt(resolved),
         };
         var timedOut = HostResults.Failed(255, $"ssh: connect to host {resolved} port 22: Connection timed out\n");
 
@@ -224,32 +226,132 @@ public sealed class HostProbesTests
             Host = HostId.Ssh("mac"),
             Address = "mac.invalid",
             Pin = new SshPin("10.0.0.5", "mac.invalid"),
+            Resolved = Learnt("10.0.0.5"),
         };
 
         Assert.Equal(expected, HostProbes.AsConfigured(said, pinned));
     }
 
     /// <summary>
-    /// Nothing is rewritten where there is no pin, where the pin gave ssh the address the configuration
-    /// declares anyway, or where there is no connection at all: those words are already the reader's own.
+    /// Every address the host's name resolved to is written as the configuration declares the host, however ssh
+    /// spells it and wherever it puts it, the pinned one or another of them. Measured: a refused key is
+    /// "user@&lt;address&gt;: Permission denied", with ssh's colon after the address. Linux's ssh names a
+    /// link-local address dialled as <c>%2</c> by its interface, <c>%eth0</c>. A connection whose pin was
+    /// dropped lets ssh dial whichever address it chooses. ssh's debug lines put a port after the address, an
+    /// IPv6 one unbracketed where the line's shape says where the port starts. And ifconfig sticks a label to the
+    /// address's front. What surrounds the address stays as it was.
+    /// </summary>
+    [Theory]
+    [InlineData("harness@192.0.2.10: Permission denied (publickey).", "harness@mac.invalid: Permission denied (publickey).")]
+    [InlineData("harness@fe80::1c2b:3d4e:5f60:7182%12: Permission denied (publickey).", "harness@mac.invalid: Permission denied (publickey).")]
+    [InlineData("Connection to fe80::1c2b:3d4e:5f60:7182%eth0 port 22 timed out", "Connection to mac.invalid port 22 timed out")]
+    [InlineData("ssh: connect to host FE80:0:0:0:1C2B:3D4E:5F60:7182%12 port 22: Connection refused", "ssh: connect to host mac.invalid port 22: Connection refused")]
+    [InlineData("Connection to fe80::1c2b:3d4e:5f60:7182 port 22 timed out", "Connection to mac.invalid port 22 timed out")]
+    [InlineData("Connection reset by ::ffff:192.0.2.10 port 22", "Connection reset by mac.invalid port 22")]
+    [InlineData("the build reached 192.0.2.10.", "the build reached mac.invalid.")]
+    [InlineData("Connection to 192.0.2.10 port 22 timed out / Connection to 2001:db8::7 port 22 timed out", "Connection to mac.invalid port 22 timed out / Connection to mac.invalid port 22 timed out")]
+    [InlineData("listening on fe80::1c2b:3d4e:5f60:7182%eth0.", "listening on mac.invalid.")]
+    [InlineData("Connection to fe80::1c2b:3d4e:5f60:7182%eth0.100 port 22 timed out", "Connection to mac.invalid port 22 timed out")]
+    [InlineData("debug1: Authenticating to 192.0.2.10:22 as 'harness'", "debug1: Authenticating to mac.invalid:22 as 'harness'")]
+    [InlineData("debug1: Authenticating to fe80::1c2b:3d4e:5f60:7182%12:22 as 'harness'", "debug1: Authenticating to mac.invalid:22 as 'harness'")]
+    [InlineData("debug1: Connecting to mac.invalid [fe80::1c2b:3d4e:5f60:7182%12] port 22.", "debug1: Connecting to mac.invalid [mac.invalid] port 22.")]
+    [InlineData("a scope left empty: fe80::1c2b:3d4e:5f60:7182%", "a scope left empty: mac.invalid%")]
+    [InlineData("Connection to 2001:db8:: port 22 timed out", "Connection to mac.invalid port 22 timed out")]
+    [InlineData("harness@2001:db8::: Permission denied (publickey).", "harness@mac.invalid: Permission denied (publickey).")]
+    [InlineData("inet addr:192.0.2.10  Bcast:192.0.2.255  Mask:255.255.255.0", "inet addr:mac.invalid  Bcast:192.0.2.255  Mask:255.255.255.0")]
+    [InlineData("dead:192.0.2.10 and x:y:192.0.2.10", "dead:mac.invalid and x:y:mac.invalid")]
+    [InlineData("debug1: Authenticating to 2001:db8::7:22 as 'harness'", "debug1: Authenticating to mac.invalid:22 as 'harness'")]
+    [InlineData("listening on 192.0.2.10:8080 and fe80::1c2b:3d4e:5f60:7182%12:8080", "listening on mac.invalid:8080 and mac.invalid:8080")]
+    public void EveryAddressTheNameResolvedTo_IsRelayedAsTheConfigurationDeclaresTheHost_HoweverSshSpellsIt(string said, string expected)
+    {
+        var resolved = new HostConnection
+        {
+            Host = HostId.Ssh("mac"),
+            Address = "mac.invalid",
+            Pin = new SshPin("192.0.2.10", "mac.invalid"),
+            Resolved = Learnt("192.0.2.10", "fe80::1c2b:3d4e:5f60:7182%12", "2001:db8::7", "2001:db8::"),
+        };
+
+        Assert.Equal(expected, HostProbes.AsConfigured(said, resolved));
+    }
+
+    /// <summary>
+    /// What only looks like one of the addresses is left as it is - another address, one beginning with it, and a
+    /// version or a number that would parse as it: '192.0.522' and '3221225994' are both 192.0.2.10 to a parser - and so
+    /// is one of them standing where no word of its own sets it apart: behind three labels, or before a URL's escape.
+    /// </summary>
+    [Theory]
+    [InlineData("version 192.0.522 and 3221225994 bytes")]
+    [InlineData("at 0300.0.2.10")]
+    [InlineData("listening on fe80::1c2b:3d4e:5f60:7183%12 and ::1")]
+    [InlineData("connecting to 192.0.2.100, then 192.0.2.1:8080")]
+    [InlineData("std::fe80::1c2b and fe80::1c2b:3d4e:5f60:7182:9")]
+    [InlineData("fetched http://192.0.2.10%2Fpath")]
+    [InlineData("a neighbour at 2001:db8::7:22, and a card at 00:1a:2b:3c:4d:5e")]
+    [InlineData("three labels stacked: a:b:c:192.0.2.10")]
+    [InlineData("debug1: Authenticating to 2001:db8::8:22 as 'harness'")]
+    public void WhatOnlyLooksLikeAnAddressTheNameResolvedTo_IsLeftAlone(string said)
+    {
+        var resolved = new HostConnection
+        {
+            Host = HostId.Ssh("mac"),
+            Address = "mac.invalid",
+            Resolved = Learnt("192.0.2.10", "fe80::1c2b:3d4e:5f60:7182%12", "2001:db8::7"),
+        };
+
+        Assert.Equal(said, HostProbes.AsConfigured(said, resolved));
+    }
+
+    /// <summary>
+    /// A word a host prints is read in one pass however long it is: a line of a hundred thousand full stops, as a
+    /// test runner prints one for each test, or of a hundred thousand labels, is left as it is at once.
+    /// </summary>
+    [Fact(Timeout = 10_000)]
+    public async Task ALongWord_IsReadInOnePass()
+    {
+        var labels = string.Concat(Enumerable.Repeat("a:", 100_000));
+        var said = new string('.', 200_000) + " 192.0.2.10 " + new string(':', 200_000) + " " + new string('a', 200_000) + " " + labels;
+        var resolved = new HostConnection { Host = HostId.Ssh("mac"), Address = "mac.invalid", Resolved = Learnt("192.0.2.10") };
+
+        var relayed = await Task.Run(() => HostProbes.AsConfigured(said, resolved), TestContext.Current.CancellationToken);
+
+        Assert.Equal(new string('.', 200_000) + " mac.invalid " + new string(':', 200_000) + " " + new string('a', 200_000) + " " + labels, relayed);
+    }
+
+    /// <summary>
+    /// A connection that was never pinned still has the addresses its name resolved to written as declared: ssh,
+    /// looking the name up itself, names whichever it dialled.
     /// </summary>
     [Fact]
-    public void WithNoPinToRewrite_SshsWordsAreRelayedAsTheyAre()
+    public void AnUnpinnedConnection_StillHasTheAddressesItsNameResolvedToWrittenAsDeclared()
+    {
+        var unpinned = new HostConnection
+        {
+            Host = HostId.Ssh("mac"),
+            Address = "mac.invalid",
+            Resolved = Learnt("192.0.2.10", "fe80::1c2b:3d4e:5f60:7182%12"),
+        };
+
+        Assert.Equal(
+            "the host could not be reached: ssh said Connection timed out during banner exchange / Connection to mac.invalid port 22 timed out",
+            HostProbes.CouldNotReach(
+                HostResults.Failed(255, "Connection timed out during banner exchange\nConnection to fe80::1c2b:3d4e:5f60:7182%12 port 22 timed out\n"),
+                unpinned));
+    }
+
+    /// <summary>
+    /// Nothing is rewritten where the connection knows of no address its name resolved to - none was learnt, as for a
+    /// host reached through a jump host, or what was learnt is no address - or where there is no connection at all:
+    /// those words are already the reader's own.
+    /// </summary>
+    [Fact]
+    public void WhereNoAddressItsNameResolvedToIsKnown_SshsWordsAreRelayedAsTheyAre()
     {
         const string said = "ssh: connect to host mac.invalid port 22: Connection timed out";
 
         Assert.Equal(said, HostProbes.AsConfigured(said, null));
         Assert.Equal(said, HostProbes.AsConfigured(said, new HostConnection { Host = HostId.Ssh("mac"), Address = "mac.invalid" }));
-        Assert.Equal(
-            said,
-            HostProbes.AsConfigured(
-                said,
-                new HostConnection
-                {
-                    Host = HostId.Ssh("mac"),
-                    Address = "mac.invalid",
-                    Pin = new SshPin("mac.invalid", "mac.invalid"),
-                }));
+        Assert.Equal(said, HostProbes.AsConfigured(said, new HostConnection { Host = HostId.Ssh("mac"), Address = "mac.invalid", Resolved = Learnt("mac.invalid") }));
     }
 
     /// <summary>
@@ -266,4 +368,8 @@ public sealed class HostProbesTests
 
         Assert.Equal(expected, said);
     }
+
+    /// <summary>A connection to mac.invalid's addresses, learnt as <paramref name="addresses"/>; nothing here looks the name up again.</summary>
+    private static ResolvedAddresses Learnt(params string[] addresses)
+        => new(new AddressResolution("mac.invalid", Attempts: 1, addresses), Substitute.For<IHostAddressResolver>());
 }

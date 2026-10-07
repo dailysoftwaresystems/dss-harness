@@ -941,7 +941,21 @@ is not dependable on such a host.
   anything but the address changed, as a `Match` block keyed by the host would, is looked up here
   but not pinned. A pinned call that fails before any session - the address takes no connection,
   or shows a key the name is not known by - drops the pin for the rest of the connection and runs
-  again, with ssh looking the name up itself.
+  again, with ssh looking the name up itself. For a host whose name is looked up here, no reason,
+  relayed line or document names an address the name resolved to, since it is not the reader's to
+  publish: wherever ssh, or a program on the host, names one as a word - the pinned address timing out, a key refused as `user@<address>:
+  Permission denied`, another of the name's addresses dialled once the pin is dropped, an address
+  with its port after it in ssh's debug lines, one with a label stuck to its front as `ifconfig`
+  prints it - it is written as the address declared. An IPv6 address is matched as the address it
+  is, because ssh on Linux names a link-local one's scope by its interface (`%eth0` for the `%2` it
+  was given), and an IPv4 one only as it is always spelt, so a version such as `192.0.522` is never
+  taken for `192.0.2.10`. The addresses are shared by every copy of the connection, and the name is
+  looked up again, afresh, before every call that lets ssh look it up itself - one never pinned,
+  though not one through a `ProxyJump` or a `ProxyCommand`, which nothing here looks up, or once its
+  pin is dropped, since a machine that slept can wake with another lease - so whichever address ssh
+  dials is known before it is named, wherever this machine's own lookup returns it too. That holds for what the host's own programs print
+  as well - its relayed lines on both streams, its leg's reason and last lines, and what it found
+  about itself - so no two copies of a line differ in what they name.
 - **Hosts that sleep.** A personal Mac reached by its mDNS name falls back asleep between commands
   and answers again moments later; three quick lookups miss it, and a consumer saw a run skip it
   seconds after a check had reached it, three times in fifteen minutes. A host given
@@ -1037,11 +1051,12 @@ PowerShell there, which all read a leading `~` as the home.
   resolved. On a Windows host the home is matched with either separator and in any case, and
   the separator after it stays as written: `~\src\app`. PowerShell reads that; cmd.exe,
   OpenSSH's default shell there, reads no `~` at all.
-- **A program's own lines stay as it printed them**: a phase's last lines, in `logTail` and
-  beneath a ledger's table, the output a command relays, and what an emulator's witness
+- **A program's own lines keep the home as it printed it**: a phase's last lines, in `logTail`
+  and beneath a ledger's table, the output a command relays, and what an emulator's witness
   printed. A command typed on the host itself names its paths in full, as a command typed on any
   machine does. Under `host-exec`, a document other than a ledger - a listing, `legs --json` -
-  is written as the host prints it.
+  is written as the host prints it. An address the host's name resolved to is the one thing
+  rewritten in all of them, to the address declared (see "Names that resolve").
 - **A copy's path this machine builds is said as configured.** The sync line, a lock held on a
   host's copy and delete-worktree's lines name the copy from `repositoryPath` as the
   configuration writes it, so `"repositoryPath": "~/src/app"` keeps the account out of those
@@ -1177,12 +1192,25 @@ from the report.
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict | **yes** |
+| `stopped` | Something stopped its build from outside before it finished: ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build | no: incomplete |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
 "the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
 `contended` and `not-admitted` say nothing about the code at all: the first two call for
 letting the tree settle and running again, the third for waiting for the other run, and
 the fourth for waiting for the machine's other heavy legs, or freeing its memory or its disk.
+
+`failed` and `stopped` are deliberately distinct too. A CMake build under ninja that exits
+non-zero is `failed` where ninja said why - a step that failed, an error of its own, anything it
+says under its own name but a warning or the directory it works in - and `stopped` where it said
+nothing, or that it was interrupted: ninja says why whenever it ends a build itself, and one
+killed part way exits 1, as a failed build does, and says nothing more (measured on Windows, with
+`taskkill /F`). samurai, which CMake runs for a ninja generator where it is what is installed,
+names no failed step as ninja does, and says everything under the name it was started by - the
+file CMake's cache records - so that name is read as ninja's is. Running a failed build again
+repeats the failure; running a stopped one again finishes it. A build the harness itself stopped
+for hanging is `failed`, saying it hung, and so is a build under another build tool either way,
+since only ninja's lines are read for this.
 
 `refused-locked` and `log-held` are deliberately distinct, though both mean another run got
 there first. A lock is taken for the duration of the work and is released by the run that
@@ -1193,12 +1221,14 @@ reader who cannot tell which fired cannot pick either.
 
 When several apply, the more fundamental one is reported: `poisoned`, then
 `unmeasured`, `inputs-moved`, `contended`, `log-held`, `refused-locked`, `not-admitted`,
-`failed`, and `unwitnessed`. A leg whose inputs moved is not reported as failed even if its tests
-failed, because what failed was a tree that never existed.
+`failed`, and `unwitnessed`, with `stopped` before the skips, whose legs' work never began, and
+before `passed`, since it reached no verdict of its own. A leg whose inputs moved is not reported
+as failed even if its tests failed, because what failed was a tree that never existed.
 
 **A leg that reached no verdict is never counted among the legs that passed.** A skip is not a
-failure — a switched-off machine is normal — but it is not a pass either, and a run carrying one
-exits `21` (`Incomplete`) rather than `0`, naming the legs that did not report. The verdict table
+failure — a switched-off machine is normal — and nor is a stopped build, but neither is a pass,
+and a run carrying one exits `21` (`Incomplete`) rather than `0`, naming the legs that did not
+report: those that did no work, and those stopped before finishing. The verdict table
 already ranks a skip above a pass so that such a run summarises as the warning; the summary now
 reads that ranking instead of reporting the number of rows in the ledger as the number that
 passed. A gate comparing two runs reads exactly this line, and "8 leg(s) passed" for eight legs
@@ -1809,6 +1839,14 @@ while their sources are being replaced. A lock is released only by the run that 
 - A lock, or a log path, that cannot be given up once its work is done is a warning naming it,
   and the work's verdict stands. The entry names a process that has ended, and is reclaimed as
   a dead holder's is.
+- A run killed, or stopped with its machine, before it finished writes no verdict and gives up
+  nothing, and nothing would ever claim its log path again, every run having its own. So a run,
+  once it owns its own path, releases every path beside it that a run on this machine holds
+  whose process has ended, and says each was abandoned - its run id, process and start, and
+  where its records are - most likely killed, or stopped with its machine, unless that run
+  warned as it ended that it could not give its path up. A holder recorded on another machine
+  is left as it is, unsaid; one in a record this build cannot read - a newer build's, or one its
+  machine stopped while writing it - or cannot reach is left as it is too, and said.
 
 ### Where a run's records live
 
@@ -1828,7 +1866,11 @@ by the next `git add -A` and made `delete-worktree` refuse over the harness's ow
 carries them, as none carries any of the harness's own state; deleting a worktree deletes its runs
 with it; and a run is resumed from the tree it was started in. A caller never works the directory out:
 `build`, `test` and `run` name it on every exit that created one, as `logs: <directory>` and as
-`runDirectory` in `--json`. A leg another host ran was run there under a run of its own, and its
+`runDirectory` in `--json`. Each names its run from its first line, `run <id>`, and as `runId` in
+`--json`, on every exit: the run is begun before anything can refuse it, so a run refused before
+it had a directory - a leg nobody declared, a selection no host could take - is named too. It
+keeps no records, and its id is all there is to cite it by. A command line the parser itself
+refuses never started, and names none. A leg another host ran was run there under a run of its own, and its
 line names that host's directory, as `logs of <leg> on <host>: <directory>` and as the leg's own
 `runDirectory`, with the host's home written as `~` (see "A host's home is `~`").
 
@@ -2300,7 +2342,13 @@ An expected exception may carry `runChecks`, and until every one passes it excus
 ## Reporting
 
 Progress is one line per leg transition, not a stream of child process output.
-Child output goes to a per-leg log file and is echoed only under `--verbose`.
+Child output goes to a per-leg log file and is echoed only under `--verbose`. A leg another host
+runs has its lines relayed from that host as they come; the host leaves the lines its dispatcher
+says for itself - that the legs are starting, where each starts, and each one's verdict - since
+said on both, each read twice. So the dispatcher keeps, rather than relays, the line a host's
+command ends on where it ended badly, with what follows it: it says how the leg ended itself, by
+the leg's line, or in the refusal it raises from what the host said, and a host's summary of its
+one leg would otherwise read as the run's own.
 
 Every run ends with a per-leg ledger:
 
@@ -2382,7 +2430,8 @@ command contracts, because each calls for a different remedy:
 | 6 | `log-held` | Find out which run still owns this leg's logs |
 | 7 | `not-admitted` | Wait for the heavy legs its line names, free memory or room on the filesystem it names, or raise the machine's limits |
 
-`failed` reports 20, `refused-locked` 13 and `poisoned` 70. When legs disagree, the
+`failed` reports 20, `refused-locked` 13 and `poisoned` 70; `stopped`, `skipped-unavailable`
+and `skipped-tool-missing`, where nothing failed, 21 (`Incomplete`). When legs disagree, the
 more fundamental verdict decides the code, in the order given under *Verdict vocabulary*.
 Six outcomes therefore carry six codes — refused before starting, the tree moved under the
 run, another run in the build directory, another run holding the logs, a machine with no room

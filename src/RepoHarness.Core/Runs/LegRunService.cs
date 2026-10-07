@@ -107,16 +107,22 @@ public sealed class LegRunService(
     /// Runs <paramref name="work"/> on every selected leg and reports the ledger.
     /// </summary>
     /// <param name="commandName">The command reporting, which prefixes every line it writes.</param>
+    /// <param name="runId">
+    /// The run, begun and said by the command that asks for it before anything could refuse it, which every record and
+    /// the ledger name.
+    /// </param>
     /// <param name="request">What the command was asked to do.</param>
     /// <param name="work">What one leg does once its tree is ready.</param>
     /// <param name="cancellationToken">Stops the run.</param>
     public async Task<CommandOutcome> RunAsync(
         string commandName,
+        RunId runId,
         LegRunRequest request,
         Func<LegWork, CancellationToken, Task<LegEntry>> work,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
+        ArgumentNullException.ThrowIfNull(runId);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(work);
 
@@ -137,13 +143,12 @@ public sealed class LegRunService(
         {
             var nothing = LegRunPlan.NothingRuns(skipped);
 
-            // Before any run exists: there is no directory to name.
-            return Stopped(request, nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? [], runDirectory: null);
+            // Before the run has a directory: there is none to name.
+            return Stopped(request, runId, nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? [], runDirectory: null);
         }
 
-        var runId = RunId.New();
         var runDirectory = context.Layout.RunDirectory(runId.Value);
-        var ledger = new LegLedger(_output, commandName);
+        var ledger = new LegLedger(_output, commandName, dispatched: request.Here is not null);
 
         IgnoreRunRecords(context.Layout);
 
@@ -163,6 +168,7 @@ public sealed class LegRunService(
 
             return Stopped(
                 request,
+                runId,
                 LegExit.LogHeld,
                 held,
                 [.. skipped, .. placed.Select(leg => leg.Entry(LegVerdict.LogHeld, held))],
@@ -180,7 +186,10 @@ public sealed class LegRunService(
 
         try
         {
-            _output.Info(commandName, $"run {runId.Value}, {placed.Count} leg(s)");
+            // A run on this machine that ended holding its own directory - most likely killed, or stopped with its
+            // machine - may have written no verdict, and nothing would ever claim that directory again: said here, once,
+            // and let go. Inside this try, so that whatever happens in it, this run's own directory is still given up.
+            _logOwnership.ReleaseAbandoned(runDirectory);
 
             // Left out entirely where nothing is remote, or where the run acts on what each host already holds
             // (--use-staged), rather than supplied and made to do nothing: the executor reports a sync transition per
@@ -224,6 +233,7 @@ public sealed class LegRunService(
 
                 return Stopped(
                     request,
+                    runId,
                     ex.ExitCode,
                     ex.Message,
                     ledger.Entries,
@@ -232,7 +242,7 @@ public sealed class LegRunService(
                     runDirectory);
             }
 
-            return Report(commandName, context, ledger, execution, runDirectory, placed, request.Json);
+            return Report(commandName, context, ledger, execution, runId, runDirectory, placed, request.Json);
         }
         finally
         {
@@ -382,6 +392,7 @@ public sealed class LegRunService(
     /// line by then.
     /// </summary>
     /// <param name="request">What the command was asked to do.</param>
+    /// <param name="runId">The run, which its document names whatever ended it.</param>
     /// <param name="exitCode">What the process exits with.</param>
     /// <param name="message">The line it ends on.</param>
     /// <param name="entries">The legs' lines so far.</param>
@@ -398,6 +409,7 @@ public sealed class LegRunService(
     /// </remarks>
     private CommandOutcome Stopped(
         LegRunRequest request,
+        RunId runId,
         int exitCode,
         string message,
         IReadOnlyList<LegEntry> entries,
@@ -405,7 +417,7 @@ public sealed class LegRunService(
         IReadOnlyList<string> details,
         string? runDirectory)
         => request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory, _output.Shown)] }
+            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory, _output.Shown, runId)] }
             : CommandOutcome.Failed(exitCode, message, details);
 
     /// <summary>
@@ -685,6 +697,7 @@ public sealed class LegRunService(
         HarnessContext context,
         LegLedger ledger,
         LegExecution execution,
+        RunId runId,
         string runDirectory,
         IReadOnlyList<PlacedLeg> placed,
         bool json)
@@ -701,7 +714,7 @@ public sealed class LegRunService(
         {
             return new CommandOutcome(exitCode, message)
             {
-                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory, _output.Shown)],
+                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory, _output.Shown, runId)],
                 Quiet = true,
             };
         }

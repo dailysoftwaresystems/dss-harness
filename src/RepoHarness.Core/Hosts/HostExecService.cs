@@ -162,7 +162,8 @@ public sealed class HostExecService(
                 {
                     if (lines.Output(line))
                     {
-                        _output.Raw(line);
+                        // Under the name the configuration declares, as every line a host writes is shown.
+                        _output.Raw(HostProbes.AsConfigured(line, session.Connection));
                     }
                 },
                 OnErrorLine = line =>
@@ -172,8 +173,8 @@ public sealed class HostExecService(
                         return;
                     }
 
-                    // ssh writes here too, and a pinned connection has it name an address this machine
-                    // resolved rather than the one the configuration declares.
+                    // ssh writes here too, and names the address it dialled - one the host's name resolved
+                    // to - rather than the one the configuration declares.
                     _output.RawError(HostProbes.AsConfigured(line, session.Connection));
                 },
             },

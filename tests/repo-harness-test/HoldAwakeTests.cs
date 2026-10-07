@@ -320,6 +320,39 @@ public sealed class HoldAwakeTests
         Assert.Contains("ssh mac: could not be held awake until the next command: this host could not be held awake: the disk is full", error.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A hold a host refused is said under the name the configuration declares, never by an address the host's name
+    /// resolved to, as everything the host says is.
+    /// </summary>
+    [Fact]
+    public async Task AHoldAHostRefused_NamesTheHostAsDeclared_NeverByAnAddressItsNameResolvedTo()
+    {
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions)!;
+
+            command.OnErrorLine?.Invoke(FailureLine.For(HostAgentProtocol.CommandName, "this host could not be held awake: 192.0.2.10 is busy"));
+            command.OnErrorLine?.Invoke(HostAgentProtocol.CompletionLine(request.Nonce!, HarnessExit.HostUnavailable));
+            return HostResults.Ok(string.Empty);
+        });
+
+        var error = new StringWriter();
+        var registry = new HoldAwakeRegistry(hosts, new ConsoleHarnessOutput(new StringWriter(), error, verbose: false));
+        var mac = HostId.Ssh("mac");
+        var connection = new HostConnection
+        {
+            Host = mac,
+            Address = "mac.invalid",
+            Resolved = new ResolvedAddresses(new AddressResolution("mac.invalid", Attempts: 1, ["192.0.2.10"]), Substitute.For<IHostAddressResolver>()),
+        };
+
+        registry.Reached(Reached(mac, hold: 600) with { Session = new HostSession(connection, ".dotnet/tools/dssharness") });
+        await registry.LeaveHoldsAsync("test", TestContext.Current.CancellationToken);
+
+        Assert.Contains("ssh mac: could not be held awake until the next command: this host could not be held awake: mac.invalid is busy", error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("192.0.2.10", error.ToString(), StringComparison.Ordinal);
+    }
+
     private const string Nonce = "0123456789abcdef0123456789abcdef";
 
     private static HoldAwakeStore Store(TempDirectory temp)

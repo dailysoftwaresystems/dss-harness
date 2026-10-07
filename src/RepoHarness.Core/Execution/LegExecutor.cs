@@ -206,7 +206,8 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
         => leg.MachineKey.Length > 0 ? leg.MachineKey : "machine:unspecified";
 
     /// <summary>
-    /// Says what is about to run, and where, before any of it starts.
+    /// Says what is about to run, and where, before any of it starts - unless the machine that dispatched it here says
+    /// so itself (see <see cref="LegLedger.Announce"/>).
     /// </summary>
     /// <remarks>
     /// A parallel run's output is several legs' lines woven together, so the one thing a reader
@@ -224,9 +225,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             var (perMachine, total) => $"up to {perMachine.Value} at once per machine, {total.Value} in all",
         };
 
-        _output.Info(
-            ledger.CommandName,
-            $"starting {request.Legs.Count} leg(s) across {machineCount} machine(s), {caps}: {legs}");
+        ledger.Announce($"starting {request.Legs.Count} leg(s) across {machineCount} machine(s), {caps}: {legs}");
     }
 
     /// <summary>
@@ -317,7 +316,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             return null;
         }
 
-        ledger.Transition(leg.Name, $"starting on {(leg.Host.Length > 0 ? leg.Host : "this machine")}");
+        ledger.Starting(leg.Name, leg.Host.Length > 0 ? leg.Host : "this machine");
 
         try
         {

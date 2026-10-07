@@ -79,7 +79,7 @@ public sealed class SshWakeWindow(INameLookup lookup, TimeProvider clock, TimeSp
 
             if (await _lookup.LookupAsync(missed.Address, cancellationToken).ConfigureAwait(false) is { Count: > 0 } found)
             {
-                return new AddressResolution(missed.Address, Resolved: true, attempts, HostAddressResolver.Preferred(found));
+                return new AddressResolution(missed.Address, attempts, found);
             }
 
             await WaitAsync(started, window, cancellationToken).ConfigureAwait(false);

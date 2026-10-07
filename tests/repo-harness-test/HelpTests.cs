@@ -96,6 +96,59 @@ public sealed partial class HelpTests
         }
     }
 
+    /// <summary>The layout topic says each run is named however it ended, and one refused before it had a directory by its id alone.</summary>
+    [Fact]
+    public async Task LayoutTopic_SaysEachRunIsNamed_ARefusedOneByItsIdAlone()
+    {
+        var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Contains(
+            "Each names its run too, in its first line, 'run <id>', and as runId in --json, however it ended: a run refused "
+            + "before it had a directory keeps no records, and is cited by that id alone.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The verdicts topic says what becomes of a build stopped from outside, which is stopped rather than failed - but for
+    /// one the harness stopped for hanging, or under another build tool - and of a run killed before it finished, which
+    /// reaches no verdict and says nothing itself: the next run in its tree on that machine says it was abandoned, and
+    /// releases it. Each verdict a leg reaches without one of its own shows the code its run exits
+    /// with, and its remedy.
+    /// </summary>
+    [Fact]
+    public async Task VerdictsTopic_SaysAKilledRunIsReportedAbandoned_ByTheNextRun()
+    {
+        var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Contains(
+            "A leg that never ran proves nothing about the code, and nor does a build something stopped from outside before it "
+            + "finished, so counting either among the legs that passed reports evidence nobody gathered. A CMake build under "
+            + "ninja that fails with ninja saying nothing of why - which it says whenever it ends a build itself - or saying it "
+            + "was interrupted is stopped, not failed: run again, it finishes, where a failed one fails again. Read under the "
+            + "name it says it under, which for samurai, run by CMake for ninja where it is installed, is its file's. A build "
+            + "the harness stopped for hanging stays failed, saying it hung, and so does one under any other build tool, since "
+            + "only ninja's lines are read.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains($" {HarnessExit.Incomplete}  stopped                    Find out what stopped the build, then run again", result.StandardOutput, StringComparison.Ordinal);
+
+        // Each verdict a leg reaches without one of its own shows the code its run exits with, and a remedy.
+        Assert.All(
+            ["stopped", "skipped-unavailable", "skipped-tool-missing"],
+            verdict => Assert.Contains($"  {verdict,-22} not a failure      exit {HarnessExit.Incomplete}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.Contains($" {HarnessExit.Incomplete}  skipped-unavailable        Make what its line names available, then run again", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($" {HarnessExit.Incomplete}  skipped-tool-missing       Install the tool its line names, then run again", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "A run killed, or stopped with its machine, before it finished says nothing more: the next build, test or run in its "
+            + "tree on that machine to own its run directory says it was abandoned - its run id, process and start, and where its "
+            + "records are - and releases its claim on them.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ExitCodeTopic_DocumentsEverySharedExitCode()
     {
@@ -782,6 +835,29 @@ public sealed partial class HelpTests
         Assert.Contains("hosts.ssh.<name>.wakeWaitSeconds", text, StringComparison.Ordinal);
         Assert.Contains($"every {SshWakeWindow.DefaultPollDelay.TotalSeconds:0} seconds until that many seconds have passed", text, StringComparison.Ordinal);
         Assert.Contains("a key or a login the host refuses is never waited on", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The legs topic says that, for a host whose name is looked up here, no address its name resolved to is named,
+    /// wherever ssh names one - and where the name is looked up again, and how far that reaches.
+    /// </summary>
+    [Fact]
+    public async Task LegsTopic_SaysNoAddressAHostsNameResolvedToIsNamed()
+    {
+        var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Contains(
+            "For a host whose name is looked up here, no reason, relayed line or document names an address the name resolved "
+            + "to: wherever ssh, or a program there, names one as a word, it reads as the address declared.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The name is looked up again, afresh, before every call that lets ssh look it up itself - one never pinned, though "
+            + "not through a ProxyJump or a ProxyCommand, or once its pin is dropped - so an address it has moved to is withheld "
+            + "too, wherever this machine's own lookup finds it as well.",
+            text,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

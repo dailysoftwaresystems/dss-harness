@@ -44,13 +44,28 @@ public sealed class DnsNameLookup : INameLookup
 /// The name looked up: the HostName ssh's own configuration gives the host, or the address its item
 /// declares where ssh could not say.
 /// </param>
-/// <param name="Resolved">Whether it names a machine this one can reach.</param>
 /// <param name="Attempts">How many lookups it took, so a name that needs retrying is visible.</param>
-/// <param name="ResolvedTo">
-/// The address it resolved to - the literal itself, or an IPv4 one where the name resolved to any -
-/// which a pin gives ssh as its HostName; <see langword="null"/> where it resolved to none.
+/// <param name="Addresses">
+/// Every address it resolved to - the literal itself for one - and none where it resolved to none: any of them is one
+/// ssh may dial and name, and each is written as the address the configuration declares wherever it is named, as
+/// <see cref="HostProbes.AsConfigured"/> explains.
 /// </param>
-public sealed record AddressResolution(string Address, bool Resolved, int Attempts, string? ResolvedTo = null);
+public sealed record AddressResolution(string Address, int Attempts, IReadOnlyList<string> Addresses)
+{
+    /// <summary>Whether it names a machine this one can reach: it resolved to an address.</summary>
+    public bool Resolved => Addresses.Count > 0;
+
+    /// <summary>
+    /// The address a pin gives ssh as its HostName - the literal itself, or an IPv4 one where the name resolved to
+    /// any - or <see langword="null"/> where it resolved to none.
+    /// </summary>
+    public string? ResolvedTo => Resolved ? HostAddressResolver.Preferred(Addresses) : null;
+
+    /// <summary>A name that resolved to nothing in <paramref name="attempts"/> lookups.</summary>
+    /// <param name="address">The name looked up.</param>
+    /// <param name="attempts">How many lookups it took.</param>
+    public static AddressResolution Missed(string address, int attempts) => new(address, attempts, []);
+}
 
 /// <summary>
 /// Looks an ssh host's name up before ssh is started, retrying the lookup and keeping the answer for a
@@ -73,6 +88,19 @@ public interface IHostAddressResolver
     /// </param>
     /// <param name="cancellationToken">Stops the lookups.</param>
     Task<AddressResolution> ResolveAsync(string address, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves <paramref name="address"/> as <see cref="ResolveAsync"/> does, but past any answer kept from a moment
+    /// ago, keeping what it finds in that answer's place: where the address the name had may have moved since.
+    /// </summary>
+    /// <param name="address">The name to look up, as <see cref="ResolveAsync"/> takes it.</param>
+    /// <param name="cancellationToken">Stops the lookups.</param>
+    /// <remarks>
+    /// A name that resolves to nothing now leaves the answer kept as it was: a missed lookup is no news that the
+    /// machine moved, and kept as a miss it would refuse the host to every connection opened in the half minute it
+    /// is kept.
+    /// </remarks>
+    Task<AddressResolution> ResolveAgainAsync(string address, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IHostAddressResolver"/>
@@ -107,14 +135,20 @@ public sealed class HostAddressResolver(INameLookup lookup, TimeProvider clock, 
     /// </summary>
     public static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(30);
 
-    private readonly ConcurrentDictionary<string, (string? ResolvedTo, DateTimeOffset Until)> _answers =
+    private readonly ConcurrentDictionary<string, (IReadOnlyList<string> Found, DateTimeOffset Until)> _answers =
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly INameLookup _lookup = lookup;
     private readonly TimeProvider _clock = clock;
     private readonly TimeSpan _retryDelay = retryDelay;
 
-    public async Task<AddressResolution> ResolveAsync(string address, CancellationToken cancellationToken = default)
+    public Task<AddressResolution> ResolveAsync(string address, CancellationToken cancellationToken = default)
+        => ResolveAsync(address, afresh: false, cancellationToken);
+
+    public Task<AddressResolution> ResolveAgainAsync(string address, CancellationToken cancellationToken = default)
+        => ResolveAsync(address, afresh: true, cancellationToken);
+
+    private async Task<AddressResolution> ResolveAsync(string address, bool afresh, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(address);
 
@@ -122,12 +156,12 @@ public sealed class HostAddressResolver(INameLookup lookup, TimeProvider clock, 
         // with no resolver at all, which is exactly the machine an address was written out for.
         if (IPAddress.TryParse(address, out _))
         {
-            return new AddressResolution(address, Resolved: true, Attempts: 0, ResolvedTo: address);
+            return new AddressResolution(address, Attempts: 0, [address]);
         }
 
-        if (_answers.TryGetValue(address, out var cached) && cached.Until > _clock.GetUtcNow())
+        if (!afresh && _answers.TryGetValue(address, out var cached) && cached.Until > _clock.GetUtcNow())
         {
-            return new AddressResolution(address, cached.ResolvedTo is not null, Attempts: 0, cached.ResolvedTo);
+            return new AddressResolution(address, Attempts: 0, cached.Found);
         }
 
         for (var attempt = 1; attempt <= Attempts; attempt++)
@@ -139,17 +173,20 @@ public sealed class HostAddressResolver(INameLookup lookup, TimeProvider clock, 
 
             if (await _lookup.LookupAsync(address, cancellationToken).ConfigureAwait(false) is { Count: > 0 } found)
             {
-                var resolvedTo = Preferred(found);
-
-                _answers[address] = (resolvedTo, _clock.GetUtcNow() + CacheLifetime);
-                return new AddressResolution(address, Resolved: true, attempt, resolvedTo);
+                _answers[address] = (found, _clock.GetUtcNow() + CacheLifetime);
+                return new AddressResolution(address, attempt, found);
             }
         }
 
         // A miss is cached too, so that a command measuring several legs on one switched-off machine
-        // does not pay three lookups for each of them.
-        _answers[address] = (null, _clock.GetUtcNow() + CacheLifetime);
-        return new AddressResolution(address, Resolved: false, Attempts);
+        // does not pay three lookups for each of them; but not one a lookup made afresh finds, which
+        // leaves the answer kept as it was.
+        if (!afresh)
+        {
+            _answers[address] = ([], _clock.GetUtcNow() + CacheLifetime);
+        }
+
+        return AddressResolution.Missed(address, Attempts);
     }
 
     /// <summary>The one of <paramref name="addresses"/> a pin gives ssh: an IPv4 one where there is one.</summary>

@@ -848,12 +848,20 @@ public sealed partial class CliEndToEndTests
         var legs = root.GetProperty("legs").EnumerateArray().Select(leg => leg.GetProperty("leg").GetString()).ToList();
         Assert.Contains("native", legs);
         Assert.Contains("elsewhere", legs);
+
+        // The run is named as its records are kept: the line it starts with, and the directory it wrote.
+        var runId = root.GetProperty("runId").GetString()!;
+
+        Assert.Equal(runId, Path.GetFileName(root.GetProperty("runDirectory").GetString()));
+        Assert.StartsWith($"run: run {runId}", result.StandardError, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// Asked for data, a run is answered with data whatever ended it. A selection no host can take
     /// answered with text, which the machine that dispatched the leg read as a host whose answer
-    /// could not be read - where the host had said exactly why each leg could not run.
+    /// could not be read - where the host had said exactly why each leg could not run. The run is
+    /// named all the same, in its first line and as the document's runId, though it keeps no records:
+    /// that id is all there is to cite it by.
     /// </summary>
     [Fact]
     public async Task ARunNoHostCanTake_AnswersWithTheLedger_NamingEachLegsVerdict()
@@ -878,6 +886,39 @@ public sealed partial class CliEndToEndTests
         var leg = Assert.Single(root.GetProperty("legs").EnumerateArray());
         Assert.Equal("elsewhere", leg.GetProperty("leg").GetString());
         Assert.Equal("skipped-unavailable", leg.GetProperty("verdict").GetString());
+
+        var runId = root.GetProperty("runId").GetString()!;
+
+        Assert.Matches("^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$", runId);
+        Assert.StartsWith($"run: run {runId}", result.StandardError, StringComparison.Ordinal);
+        Assert.False(root.TryGetProperty("runDirectory", out _), "a run refused before it had a directory names none");
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", runId)));
+    }
+
+    /// <summary>
+    /// A run refused before any leg had a line - a leg nobody declared - is named too, in its first
+    /// line and as the document's runId, and keeps no records.
+    /// </summary>
+    [Fact]
+    public async Task ARunRefusedBeforeAnyLegHadALine_IsNamedAllTheSame()
+    {
+        using var temp = new TempDirectory();
+        await PrepareRunnerAsync(temp);
+
+        var result = await CliRunner.RunAsync(
+            ["run", "probe", "--legs", "nobody-declared-this", "--json", "-C", temp.Path],
+            TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(HarnessExit.Success, result.ExitCode);
+
+        using var document = JsonDocument.Parse(result.StandardOutput);
+        var root = document.RootElement;
+        var runId = root.GetProperty("runId").GetString()!;
+
+        Assert.Empty(root.GetProperty("legs").EnumerateArray());
+        Assert.StartsWith($"run: run {runId}", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("run: FAIL - ", result.StandardError, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", runId)));
     }
 
     /// <summary>
@@ -1156,6 +1197,33 @@ public sealed partial class CliEndToEndTests
         Assert.Equal(300, line.GetProperty("space").GetProperty("buildBytes").GetInt64());
         Assert.True(line.GetProperty("space").GetProperty("removed").GetBoolean());
         Assert.False(Directory.Exists(directory));
+    }
+
+    /// <summary>
+    /// clean, dispatched here by another machine, leaves that machine the lines it says for itself - that the legs are
+    /// starting, where each starts, and each one's verdict - since it relays every line said here: said here too, a
+    /// consumer saw each leg's line twice, and a start line for every leg beside the run's own. The leg's line still
+    /// reaches it, in the document.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Clean_DispatchedHere_LeavesTheDispatchingMachineTheLinesItSays(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        await PrepareRunnerAsync(temp);
+
+        var result = await CliRunner.RunAsync(
+            ["clean", "--legs", "native", "--json", RemoteLegRunner.HereOption, "local", .. dryRun ? new[] { CleanService.DryRunOption } : [], "-C", temp.Path],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+
+        using var document = JsonDocument.Parse(result.StandardOutput);
+
+        Assert.Equal("passed", Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("verdict").GetString());
+        Assert.DoesNotContain("clean: starting", result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("clean: native:", result.StandardError, StringComparison.Ordinal);
     }
 
     /// <summary>

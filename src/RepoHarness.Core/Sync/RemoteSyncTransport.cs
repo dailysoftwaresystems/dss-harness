@@ -359,8 +359,8 @@ public sealed class RemoteSyncTransport(
                             return;
                         }
 
-                        // ssh writes here too, and a pinned connection has it name an address this machine
-                        // resolved rather than the one the configuration declares.
+                        // ssh writes here too, and names the address it dialled - one the host's name resolved
+                        // to - rather than the one the configuration declares.
                         _output.RawError(HostProbes.AsConfigured(line, _session.Connection));
                     },
                 },
@@ -378,7 +378,7 @@ public sealed class RemoteSyncTransport(
         {
             // From the agent's own output on, and under the name the configuration declares, as every other
             // reason built here is: the whole capture holds whatever the host's login shell printed first,
-            // and a pinned connection has ssh name the address this machine resolved.
+            // and ssh names the address it dialled, one the host's name resolved to.
             throw new HarnessException(
                 exitCode,
                 $"{Host}: '{arguments[0]}' exited {exitCode}"

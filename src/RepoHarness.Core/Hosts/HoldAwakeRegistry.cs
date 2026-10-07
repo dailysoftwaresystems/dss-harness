@@ -152,7 +152,7 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
                     {
                         if (lines.Error(line) && FailureLine.TryRead(line, HostAgentProtocol.CommandName, out var refusal))
                         {
-                            said = refusal;
+                            said = HostProbes.AsConfigured(refusal, connection);
                         }
                     },
                 },

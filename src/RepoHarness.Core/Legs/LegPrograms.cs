@@ -232,7 +232,7 @@ public static class LegPrograms
 
         if (adapter is CMakeAdapter
             && config.Toolchains.TryGetValue(variant.Toolchain, out var toolchain)
-            && toolchain.Generator?.StartsWith("Ninja", StringComparison.OrdinalIgnoreCase) == true)
+            && Ninja.Generates(toolchain.Generator))
         {
             yield return (NinjaDependencyCheck.Program, ownPath);
         }

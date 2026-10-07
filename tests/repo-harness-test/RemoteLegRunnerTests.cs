@@ -222,6 +222,44 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// What a host's leg printed is carried under the name the configuration declares, never by an address the
+    /// host's name resolved to: the reason it gave, and the last lines its failed phase printed - the lines its
+    /// standard error carried here already say it so.
+    /// </summary>
+    [Theory]
+    [InlineData("skipped-unavailable", "ssh mac: no route to mac.invalid")]
+    [InlineData("failed", "no route to mac.invalid")]
+    public async Task WhatAHostsLegPrinted_NamesTheHostAsDeclared_NeverByAnAddressItsNameResolvedTo(string verdict, string detail)
+    {
+        var written = LedgerReport
+            .From(
+                [new LegEntry { Leg = "wsl-debug", Verdict = Verdicts.Parse(verdict)!.Value, Detail = "no route to 192.0.2.10", LogTail = ["connect 192.0.2.10: refused"] }],
+                durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var mac = HostId.Ssh("mac");
+        var connection = new HostConnection
+        {
+            Host = mac,
+            Address = "mac.invalid",
+            Resolved = new ResolvedAddresses(new AddressResolution("mac.invalid", Attempts: 1, ["192.0.2.10"]), NSubstitute.Substitute.For<IHostAddressResolver>()),
+        };
+        var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
+
+        var entry = await Runner(hosts).RunAsync("build", leg, [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(detail, entry.Detail);
+        Assert.Equal(["connect mac.invalid: refused"], entry.LogTail);
+    }
+
+    /// <summary>
     /// The project and test set a host's count belongs to travel with the count, read from the very
     /// document the host writes: the host ran what it had, and this machine compares the count with
     /// its siblings as it was counted there, never as its own configuration would name it now.
@@ -341,6 +379,56 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(fact.Holders, entry.Admission.Holders);
         Assert.Equal("the host gave no reading", entry.Admission.Unmeasured);
         Assert.Equal("/var/lib/dssharness/admission-x.json", entry.Admission.Record);
+    }
+
+    /// <summary>
+    /// A host whose leg failed ends its command on its own failure line, summing up its one leg: this machine says how
+    /// the leg ended itself, by the leg's line, so that line is never shown - shown, it was said twice, and read as this
+    /// run's closing line - while everything the host said before it is.
+    /// </summary>
+    [Fact]
+    public async Task AFailedLegsHostConclusion_IsLeftToThisMachine_AndNeverShown()
+    {
+        var harness = new HarnessFactory();
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke("build: wsl-debug: build: cmake --build");
+            command.OnErrorLine?.Invoke(FailureLine.For("build", "failed: 1 of 1 leg(s)"));
+            Answer(command, Ledger("failed", "build exited 1", 1, 1, null));
+
+            return HostResults.Finished(command, HarnessExit.CommandFailed);
+        });
+
+        var entry = await Runner(hosts, harness).RunAsync("build", Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Failed, "build exited 1"), (entry.Verdict, entry.Detail));
+        Assert.Contains("build: wsl-debug: build: cmake --build", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("failed: 1 of 1 leg(s)", harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A line shaped as a failure line that the command's own work printed - a run of this tool inside a test suite
+    /// prints one - is no conclusion of the host's where the command ended well, and is shown, with everything after
+    /// it, in the order it came.
+    /// </summary>
+    [Fact]
+    public async Task AFailureLineTheCommandsOwnWorkPrinted_IsShown_WhereTheCommandEndedWell()
+    {
+        var harness = new HarnessFactory();
+        var inner = FailureLine.For("build", "an inner run's own failure, printed by a step");
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(inner);
+            command.OnErrorLine?.Invoke("the step's output goes on");
+            Answer(command, Ledger("passed", string.Empty, 1, 1, null));
+
+            return HostResults.Finished(command, HarnessExit.Success);
+        });
+
+        var entry = await Runner(hosts, harness).RunAsync("build", Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Contains(inner + Environment.NewLine + "the step's output goes on", harness.StandardError.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -485,7 +573,8 @@ public sealed class RemoteLegRunnerTests
 
     /// <summary>
     /// A refusal runs over several lines - one for each program an action may not start - and the
-    /// whole of it travels, from the failure line to the end, rather than the first line alone.
+    /// whole of it travels, from the failure line to the end, rather than the first line alone; said by this machine's
+    /// refusal, none of it is shown as the host said it, while what the host said before it is.
     /// </summary>
     [Fact]
     public async Task AHostsRefusalOverSeveralLines_TravelsWhole()
@@ -503,7 +592,8 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.Refused);
         });
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
+        var harness = new HarnessFactory();
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts, harness).RunAsync(
             "run", Leg(), ["corpus"], TestContext.Current.CancellationToken));
 
         Assert.Equal(
@@ -511,11 +601,17 @@ public sealed class RemoteLegRunnerTests
             + Environment.NewLine + First
             + Environment.NewLine + Second,
             refusal.Message);
+
+        var shown = harness.StandardError.ToString();
+        Assert.Contains("run: corpus: resolving the action", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain("may not run", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain(First, shown, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// A failure line the command's own output carried - a run of this tool inside a test suite
-    /// prints one - is not the command's failure: the last one is, with what follows it.
+    /// prints one - is not the command's failure: the last one is, with what follows it. The earlier one is shown, with
+    /// what followed it, and the command's own is not.
     /// </summary>
     [Fact]
     public async Task TheLastFailureLine_IsTheCommandsOwn()
@@ -529,12 +625,20 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.Refused);
         });
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
+        var harness = new HarnessFactory();
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts, harness).RunAsync(
             "run", Leg(), ["corpus"], TestContext.Current.CancellationToken));
 
         Assert.Equal(
             "wsl Example-Linux refused 'run' for leg 'wsl-debug': git does not ignore this action's 'artifacts/'. Nothing has run.",
             refusal.Message);
+
+        var shown = harness.StandardError.ToString();
+        Assert.Contains(
+            FailureLine.For("run", "an inner run's own failure, printed by a step") + Environment.NewLine + "the step's output goes on",
+            shown,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Nothing has run.", shown, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -628,7 +732,11 @@ public sealed class RemoteLegRunnerTests
     }
 
     private static RemoteLegRunner Runner(ScriptedHostCommands hosts)
-        => new(hosts, new HarnessFactory().Output);
+        => Runner(hosts, new HarnessFactory());
+
+    /// <summary>A runner over <paramref name="hosts"/> whose lines <paramref name="harness"/> keeps.</summary>
+    private static RemoteLegRunner Runner(ScriptedHostCommands hosts, HarnessFactory harness)
+        => new(hosts, harness.Output);
 
     private static void Answer(HostCommand command, string ledger) => ScriptedHostCommands.Answer(command, ledger);
 

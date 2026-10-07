@@ -225,6 +225,26 @@ public sealed class LedgerReportTests
         Assert.False(legs[1].TryGetProperty("developerEnvironment", out _));
     }
 
+    /// <summary>
+    /// The document names its run where the command keeps runs, whatever ended it - a refused run that had no
+    /// directory included, whose id is all there is to cite it by - and names none where the command keeps none.
+    /// </summary>
+    [Fact]
+    public void TheDocument_NamesItsRun_WhereTheCommandKeepsRuns()
+    {
+        const string run = "20260101-000000-0a1b2c3d";
+        var report = LedgerReport.From([Entry("a", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty)], durationWarningFactor: 0);
+
+        using var ran = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], runDirectory: Path.Combine("runs", run), run: RunId.Parse(run)));
+        using var refused = JsonDocument.Parse(LedgerReport.Stopped(HarnessExit.Refused, "no selected leg can run", run: RunId.Parse(run)));
+        using var keepsNone = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
+
+        Assert.Equal(run, ran.RootElement.GetProperty("runId").GetString());
+        Assert.Equal(run, refused.RootElement.GetProperty("runId").GetString());
+        Assert.False(refused.RootElement.TryGetProperty("runDirectory", out _));
+        Assert.False(keepsNone.RootElement.TryGetProperty("runId", out _));
+    }
+
     /// <summary>The line said the moment a leg reaches its verdict names the developer environment too.</summary>
     [Fact]
     public void TheVerdictsOwnLine_NamesTheDeveloperEnvironment()
@@ -600,6 +620,8 @@ public sealed class LedgerReportTests
     [InlineData(LegVerdict.SkippedToolMissing, false, "", "1 of 2 leg(s) passed; 1 did no work: b")]
     [InlineData(LegVerdict.SkippedUnavailable, false, "", "1 of 2 leg(s) passed; 1 did no work: b")]
     [InlineData(LegVerdict.Passed, false, "c", "2 of 2 leg(s) passed; 1 did no work: c")]
+    [InlineData(LegVerdict.Stopped, false, "", "1 of 2 leg(s) passed; 1 stopped before finishing: b")]
+    [InlineData(LegVerdict.Stopped, false, "c", "1 of 2 leg(s) passed; 1 did no work: c; 1 stopped before finishing: b")]
     [InlineData(LegVerdict.Passed, true, "", "interrupted after 2 leg(s)")]
     [InlineData(LegVerdict.Passed, false, "", "2 leg(s) passed")]
     public void Summarize_SaysHowTheRunEnded_WhateverItsShape(
@@ -681,6 +703,34 @@ public sealed class LedgerReportTests
         Assert.Equal(HarnessExit.Incomplete, report.ExitCode);
         Assert.Equal(1, report.Reported);
         Assert.Equal("wsl-clang-asan", Assert.Single(report.WithoutVerdict).Leg);
+    }
+
+    /// <summary>
+    /// A leg whose build something stopped from outside reached no verdict either: nothing failed, so the run is not red,
+    /// but it is incomplete, and the document says so - the leg's verdict, not a failure, and the run not complete.
+    /// </summary>
+    [Fact]
+    public void ARunWhereABuildWasStopped_IsIncomplete_AndTheDocumentSaysSo()
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("win-msvc-release", LegVerdict.Passed, TimeSpan.FromSeconds(134), "412 tests"),
+            Entry("windows-x86_64-debug", LegVerdict.Stopped, TimeSpan.FromSeconds(139), "build exited 1 without ninja saying why"),
+        ],
+        durationWarningFactor: 0);
+
+        Assert.True(report.Passed, "nothing failed, so this is not a red run");
+        Assert.False(report.Complete);
+        Assert.Equal(HarnessExit.Incomplete, report.ExitCode);
+        Assert.Equal(1, report.Reported);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
+        var root = document.RootElement;
+        var stopped = root.GetProperty("legs").EnumerateArray().Single(leg => leg.GetProperty("leg").GetString() == "windows-x86_64-debug");
+
+        Assert.Equal(HarnessExit.Incomplete, root.GetProperty("exitCode").GetInt32());
+        Assert.False(root.GetProperty("complete").GetBoolean());
+        Assert.Equal(("stopped", false), (stopped.GetProperty("verdict").GetString(), stopped.GetProperty("failure").GetBoolean()));
     }
 
     [Fact]

@@ -41,6 +41,7 @@ public sealed class LegVerdictTests
         Assert.Equal("log-held", Verdicts.Display(LegVerdict.LogHeld));
         Assert.Equal("not-admitted", Verdicts.Display(LegVerdict.NotAdmitted));
         Assert.Equal("poisoned", Verdicts.Display(LegVerdict.Poisoned));
+        Assert.Equal("stopped", Verdicts.Display(LegVerdict.Stopped));
     }
 
     [Fact]
@@ -65,6 +66,13 @@ public sealed class LegVerdictTests
                 Verdicts.Rank(fundamentalFirst[index - 1]) < Verdicts.Rank(fundamentalFirst[index]),
                 $"{fundamentalFirst[index - 1]} must outrank {fundamentalFirst[index]}");
         }
+
+        // A stopped build follows every failure, and comes before the legs that did no work, whose work never began, and
+        // those that passed, since it reached no verdict of its own.
+        Assert.All(fundamentalFirst, verdict => Assert.True(Verdicts.Rank(verdict) < Verdicts.Rank(LegVerdict.Stopped), $"{verdict} must outrank stopped"));
+        Assert.All(
+            [LegVerdict.SkippedUnavailable, LegVerdict.SkippedToolMissing, LegVerdict.Passed, LegVerdict.SkippedNotSelected],
+            verdict => Assert.True(Verdicts.Rank(LegVerdict.Stopped) < Verdicts.Rank(verdict), $"stopped must outrank {verdict}"));
     }
 
     [Fact]
@@ -93,10 +101,35 @@ public sealed class LegVerdictTests
         Assert.Equal(LegExit.LogHeld, Verdicts.ExitCodeFor(LegVerdict.LogHeld));
         Assert.Equal(LegExit.NotAdmitted, Verdicts.ExitCodeFor(LegVerdict.NotAdmitted));
 
-        // A warning is not a failure: a switched-off machine is normal, and a command asked for
-        // that leg by name decides for itself what to do about it, as `legs` does.
-        Assert.Equal(HarnessExit.Success, Verdicts.ExitCodeFor(LegVerdict.SkippedUnavailable));
-        Assert.Equal(HarnessExit.Success, Verdicts.ExitCodeFor(LegVerdict.SkippedToolMissing));
+        // A warning is not a failure - a switched-off machine is normal - and nor is a stopped build,
+        // but a run whose worst verdict is one of them is incomplete, never a pass. A leg nobody asked
+        // for is an answer, not a gap.
+        Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor(LegVerdict.SkippedUnavailable));
+        Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor(LegVerdict.SkippedToolMissing));
+        Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor(LegVerdict.Stopped));
+        Assert.Equal(HarnessExit.Success, Verdicts.ExitCodeFor(LegVerdict.SkippedNotSelected));
+    }
+
+    /// <summary>
+    /// The worst verdict decides a run's exit code where something failed, and names it in the run's closing line either
+    /// way, so every failure outranks every verdict that is none, and every verdict a leg reaches without one of its own
+    /// outranks every one it reaches that is neither: otherwise a run where something failed would exit as a pass, or
+    /// close naming a pass when it is incomplete.
+    /// </summary>
+    [Fact]
+    public void EveryFailure_OutranksTheRest_AndEveryLegWithoutAVerdict_OutranksAPass()
+    {
+        var verdicts = Enum.GetValues<LegVerdict>();
+        var failures = verdicts.Where(Verdicts.IsFailure).ToList();
+        var reachedNone = verdicts.Where(Verdicts.ReachedNone).ToList();
+        var reached = verdicts.Where(verdict => !Verdicts.IsFailure(verdict) && !Verdicts.ReachedNone(verdict)).ToList();
+
+        Assert.All(failures, failure => Assert.All(
+            verdicts.Except(failures),
+            other => Assert.True(Verdicts.Rank(failure) < Verdicts.Rank(other), $"{failure} must outrank {other}")));
+        Assert.All(reachedNone, none => Assert.All(
+            reached,
+            other => Assert.True(Verdicts.Rank(none) < Verdicts.Rank(other), $"{none} must outrank {other}")));
     }
 
     [Fact]
@@ -134,10 +167,23 @@ public sealed class LegVerdictTests
         foreach (var verdict in new[]
                  {
                      LegVerdict.Passed, LegVerdict.SkippedNotSelected, LegVerdict.SkippedUnavailable, LegVerdict.SkippedToolMissing,
+                     LegVerdict.Stopped,
                  })
         {
             Assert.False(Verdicts.IsFailure(verdict), $"{verdict} does not count as a failure");
         }
+    }
+
+    /// <summary>
+    /// A leg reached no verdict of its own where it did no work or its build was stopped from outside; every other
+    /// verdict, a failure or a pass or a leg nobody asked for, is one.
+    /// </summary>
+    [Fact]
+    public void ReachedNone_IsTheSkipsAndAStoppedBuild()
+    {
+        LegVerdict[] none = [LegVerdict.SkippedUnavailable, LegVerdict.SkippedToolMissing, LegVerdict.Stopped];
+
+        Assert.All(Enum.GetValues<LegVerdict>(), verdict => Assert.Equal(none.Contains(verdict), Verdicts.ReachedNone(verdict)));
     }
 
     [Fact]

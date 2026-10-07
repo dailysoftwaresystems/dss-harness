@@ -84,7 +84,8 @@ public sealed class HostAddressResolverTests
     /// <summary>
     /// A name resolves to an IPv4 address where it has one, since a link-local IPv6 one reaches the machine
     /// only through the interface its scope names, and a literal to itself; one kept briefly keeps its
-    /// address, and a name that resolved to none has none.
+    /// address, and a name that resolved to none has none. Every address it resolved to is kept beside it,
+    /// as any of them is one ssh may dial and name.
     /// </summary>
     [Theory]
     [InlineData(new[] { "fe80::1%12", "192.0.2.10" }, "192.0.2.10")]
@@ -103,6 +104,38 @@ public sealed class HostAddressResolverTests
         Assert.Equal(resolvedTo, kept.ResolvedTo);
         Assert.Equal(0, kept.Attempts);
         Assert.Equal("198.51.100.7", literal.ResolvedTo);
+        Assert.Equal(addresses, first.Addresses);
+        Assert.Equal(addresses, kept.Addresses);
+        Assert.Equal(["198.51.100.7"], literal.Addresses);
+    }
+
+    /// <summary>
+    /// A name looked up afresh is looked up past the answer kept, and what it finds is kept in that answer's place;
+    /// a lookup afresh that finds nothing leaves the answer kept as it was, since a miss is no news that the
+    /// machine moved.
+    /// </summary>
+    [Fact]
+    public async Task ANameLookedUpAfresh_LooksPastTheAnswerKept_AndKeepsANewOneButNoMiss()
+    {
+        var lookup = new ScriptedLookup(call => call switch
+        {
+            1 => ["192.0.2.10"],
+            <= 4 => [],
+            _ => ["192.0.2.23"],
+        });
+        var resolver = Resolver(lookup);
+
+        await resolver.ResolveAsync(Name, TestContext.Current.CancellationToken);
+        var missed = await resolver.ResolveAgainAsync(Name, TestContext.Current.CancellationToken);
+        var keptAfterTheMiss = await resolver.ResolveAsync(Name, TestContext.Current.CancellationToken);
+        var moved = await resolver.ResolveAgainAsync(Name, TestContext.Current.CancellationToken);
+        var keptAfterTheMove = await resolver.ResolveAsync(Name, TestContext.Current.CancellationToken);
+
+        Assert.False(missed.Resolved);
+        Assert.Equal(["192.0.2.10"], keptAfterTheMiss.Addresses);
+        Assert.Equal(["192.0.2.23"], moved.Addresses);
+        Assert.Equal(["192.0.2.23"], keptAfterTheMove.Addresses);
+        Assert.Equal(5, lookup.Calls);
     }
 
     private static HostAddressResolver Resolver(INameLookup lookup)

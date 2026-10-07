@@ -239,6 +239,173 @@ public sealed class LogOwnershipTests
         Assert.True(second.Taken);
     }
 
+    /// <summary>
+    /// A run that died holding its own log path - killed, or stopped with its machine - wrote no verdict, and nothing
+    /// claims its path again, every run having its own. The next run beside it says it was abandoned - its run id, its
+    /// process, when it began and where its records are, or that they are gone - and releases its claim.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARunThatDiedHoldingItsLogPath_IsSaidAbandoned_AndReleased_ByTheNextRunBesideIt(bool recordsKept)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var ownership = new LogOwnership(factory.FileSystem, factory.Output, factory.Identity);
+        var dead = temp.Combine("runs", "20250101-120000-deadbeef");
+        var directory = temp.Combine("runs", "20250102-120000-0badf00d");
+        var runId = RunId.New();
+
+        Write(dead, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-deadbeef");
+
+        if (recordsKept)
+        {
+            Directory.CreateDirectory(dead);
+        }
+
+        await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
+        var abandoned = ownership.ReleaseAbandoned(directory);
+
+        Assert.Equal(["20250101-120000-deadbeef"], abandoned.Select(owner => owner.RunId));
+        Assert.False(File.Exists(LogOwnership.OwnerFile(dead)));
+        Assert.Equal(runId.Value, ownership.Owner(directory)!.RunId);
+
+        var said = factory.StandardError.ToString();
+        Assert.Contains(
+            $"An earlier run was abandoned: {Environment.MachineName} pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since ",
+            said,
+            StringComparison.Ordinal);
+        Assert.Contains(recordsKept ? $"never gave up its records at '{dead}' - most likely it was killed" : $"never gave up '{dead}', which is gone", said, StringComparison.Ordinal);
+        Assert.Contains("so its verdict may never have been reported. Its claim is released.", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only a claim this machine can judge is released beside a run: a live run's stands, as one recorded on another
+    /// machine does, unsaid, and one this build cannot read is left as it is and said, naming why, since nothing else
+    /// would ever say a run its machine left unreadable. None stops the run that found it.
+    /// </summary>
+    [Fact]
+    public async Task AClaimBesideARunThatMayStillStand_IsLeftAsItIs()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var ownership = new LogOwnership(factory.FileSystem, factory.Output, factory.Identity);
+        var live = temp.Combine("runs", "live");
+        var elsewhere = temp.Combine("runs", "elsewhere");
+        var unreadable = temp.Combine("runs", "unreadable");
+        var directory = temp.Combine("runs", "mine");
+        var runId = RunId.New();
+
+        Write(live, Environment.MachineName, Environment.ProcessId, ProcessStart(), "20250101-120000-11111111");
+        Write(elsewhere, "another-machine", int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-22222222");
+        Write(unreadable, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-33333333");
+
+        var file = LogOwnership.OwnerFile(unreadable);
+        await File.WriteAllTextAsync(
+            file,
+            (await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken)).Replace(
+                "\"runId\"",
+                "\"somethingNobodyDeclared\": 1, \"runId\"",
+                StringComparison.Ordinal),
+            TestContext.Current.CancellationToken);
+
+        await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(ownership.ReleaseAbandoned(directory));
+        Assert.All([live, elsewhere, unreadable, directory], path => Assert.True(File.Exists(LogOwnership.OwnerFile(path)), path));
+
+        var said = factory.StandardError.ToString() + factory.StandardOutput.ToString();
+        Assert.Contains(
+            $"logs: WARN - Whether the run that claimed '{unreadable}' was abandoned could not be judged, so its claim is left as it is: "
+            + $"The log owner file '{file}' could not be read: ",
+            said,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("An earlier run was abandoned", said, StringComparison.Ordinal);
+        Assert.DoesNotContain(live, said, StringComparison.Ordinal);
+        Assert.DoesNotContain(elsewhere, said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Each claim beside a run is judged on its own: one that cannot be read, sorting first, stops nothing after it, and an
+    /// abandoned run whose owner file cannot be removed is said all the same - naming the file and why - while the next
+    /// is released. This run's own claim stands throughout.
+    /// </summary>
+    [Fact]
+    public async Task OneClaimThatCannotBeJudgedOrRemoved_StopsNoOtherBesideIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var first = temp.Combine("runs", "a");
+        var stuck = temp.Combine("runs", "b");
+        var released = temp.Combine("runs", "c");
+        var directory = temp.Combine("runs", "mine");
+        var ownership = new LogOwnership(
+            new UndeletableFile(factory.FileSystem, LogOwnership.OwnerFile(stuck)),
+            factory.Output,
+            factory.Identity);
+        var runId = RunId.New();
+
+        Write(first, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-aaaaaaaa");
+        Write(stuck, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-bbbbbbbb");
+        Write(released, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-cccccccc");
+        await File.WriteAllTextAsync(LogOwnership.OwnerFile(first), "{ \"runId\": ", TestContext.Current.CancellationToken);
+
+        await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
+        var abandoned = ownership.ReleaseAbandoned(directory);
+
+        Assert.Equal(["20250101-120000-bbbbbbbb", "20250101-120000-cccccccc"], abandoned.Select(owner => owner.RunId));
+        Assert.True(File.Exists(LogOwnership.OwnerFile(first)));
+        Assert.True(File.Exists(LogOwnership.OwnerFile(stuck)));
+        Assert.False(File.Exists(LogOwnership.OwnerFile(released)));
+        Assert.Equal(runId.Value, ownership.Owner(directory)!.RunId);
+
+        var said = factory.StandardError.ToString();
+        Assert.Contains($"Whether the run that claimed '{first}' was abandoned could not be judged", said, StringComparison.Ordinal);
+        Assert.Contains(
+            $"run 20250101-120000-bbbbbbbb, since ",
+            said,
+            StringComparison.Ordinal);
+        Assert.Contains($"Its owner file '{LogOwnership.OwnerFile(stuck)}' could not be removed: Access to the path is denied.", said, StringComparison.Ordinal);
+        Assert.Contains($"never gave up '{released}', which is gone - most likely it was killed", said, StringComparison.Ordinal);
+        Assert.Contains("Its claim is released.", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A runs directory that cannot be listed - a share that dropped, or one this user may not read - is said, and stops
+    /// nothing: no run beside it is said abandoned or released, and this run keeps its own claim.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARunsDirectoryThatCannotBeListed_IsSaid_AndReleasesNothing(bool denied)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runs = temp.Combine("runs");
+        var ownership = new LogOwnership(
+            new UnlistableDirectory(
+                factory.FileSystem,
+                runs,
+                () => denied ? new UnauthorizedAccessException("Access is denied.") : new IOException("The network path was not found.")),
+            factory.Output,
+            factory.Identity);
+        var dead = Path.Combine(runs, "20250101-120000-deadbeef");
+        var directory = Path.Combine(runs, "20250102-120000-0badf00d");
+        var runId = RunId.New();
+
+        Write(dead, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-deadbeef");
+        await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(ownership.ReleaseAbandoned(directory));
+        Assert.True(File.Exists(LogOwnership.OwnerFile(dead)));
+        Assert.Equal(runId.Value, ownership.Owner(directory)!.RunId);
+        Assert.Contains(
+            $"logs: WARN - The runs beside '{directory}' could not be listed: {(denied ? "Access is denied" : "The network path was not found")}. "
+            + "Any of them that was abandoned is said, and released, by a later run.",
+            factory.StandardError.ToString(),
+            StringComparison.Ordinal);
+    }
+
     /// <summary>This process's own stamp, which is what makes an owner written with it a live one.</summary>
     private static string? ProcessStart() => new ProcessIdentity(new HostPlatform()).Current;
 
