@@ -1,0 +1,156 @@
+namespace RepoHarness.Core.Mutations;
+
+/// <summary>A mutation of one site: how many times its before-text occurs there, and the site's bytes with it replaced.</summary>
+/// <param name="Occurrences">How many times the before-text occurs, overlapping occurrences counted.</param>
+/// <param name="Edited">The site with the before-text replaced, where it occurs exactly once; otherwise <see langword="null"/>.</param>
+public sealed record SiteEditResult(int Occurrences, byte[]? Edited);
+
+/// <summary>
+/// A byte-exact replacement of one text in a site: the text must occur exactly once, and every other byte of the file
+/// stays as it was - never a file read whole as text and written back, which rewrites what the edit did not touch.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The texts a registry cites are read as their files hold them, less a UTF-8 byte order mark and one line ending at their
+/// end, which an editor adds to every file it saves. Where a site and a text end their lines differently - a checkout
+/// with CRLF endings and texts committed with LF ones, or the reverse - the text is given the site's endings, so one
+/// registry serves either checkout. A site whose own lines end both ways takes the text as it is.
+/// </para>
+/// <para>
+/// Occurrences overlap: <c>aa</c> occurs twice in <c>aaa</c>. Zero means the site moved under the arm, and two or more
+/// that the arm does not know which one it hits; either is the arm's declaration failing, never a guess.
+/// </para>
+/// </remarks>
+public static class SiteEdit
+{
+    private static readonly byte[] ByteOrderMark = [0xEF, 0xBB, 0xBF];
+
+    /// <summary>
+    /// The text a file a row cites holds, as an edit reads it: its bytes, less a UTF-8 byte order mark at its start and
+    /// one line ending - CRLF or LF - at its end.
+    /// </summary>
+    /// <param name="file">The file's bytes.</param>
+    public static byte[] Text(byte[] file)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+
+        var text = file.AsSpan();
+
+        if (text.StartsWith(ByteOrderMark))
+        {
+            text = text[ByteOrderMark.Length..];
+        }
+
+        if (text.EndsWith("\r\n"u8))
+        {
+            text = text[..^2];
+        }
+        else if (text.EndsWith("\n"u8))
+        {
+            text = text[..^1];
+        }
+
+        return text.ToArray();
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> with the line endings <paramref name="site"/> uses: CRLF where every line of the site ends
+    /// so, LF where none does, and as it is where the site ends its lines both ways or has a single line.
+    /// </summary>
+    /// <param name="text">A text, as <see cref="Text"/> reads it.</param>
+    /// <param name="site">The site's bytes.</param>
+    public static byte[] Adapted(byte[] text, byte[] site)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(site);
+
+        var feeds = site.AsSpan().Count((byte)'\n');
+        var returns = site.AsSpan().Count("\r\n"u8);
+        var lf = Lf(text);
+
+        return feeds == 0 ? text
+            : returns == feeds ? Crlf(lf)
+            : returns == 0 ? lf
+            : text;
+    }
+
+    /// <summary>How many times <paramref name="text"/> occurs in <paramref name="site"/>, overlapping occurrences counted.</summary>
+    /// <param name="site">The site's bytes.</param>
+    /// <param name="text">The text, as the site holds it.</param>
+    public static int Occurrences(ReadOnlySpan<byte> site, ReadOnlySpan<byte> text)
+    {
+        if (text.IsEmpty)
+        {
+            throw new ArgumentException("An empty text occurs everywhere, and is never mutated.", nameof(text));
+        }
+
+        var count = 0;
+
+        for (var at = site.IndexOf(text); at >= 0; count++)
+        {
+            var next = site[(at + 1)..].IndexOf(text);
+
+            at = next < 0 ? -1 : at + 1 + next;
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// <paramref name="site"/> with <paramref name="before"/> replaced by <paramref name="after"/>, both given the site's
+    /// line endings, where <paramref name="before"/> occurs exactly once; otherwise how many times it does.
+    /// </summary>
+    /// <param name="site">The site's bytes.</param>
+    /// <param name="before">The text replaced, as <see cref="Text"/> reads it.</param>
+    /// <param name="after">What replaces it, as <see cref="Text"/> reads it.</param>
+    public static SiteEditResult Apply(byte[] site, byte[] before, byte[] after)
+    {
+        ArgumentNullException.ThrowIfNull(site);
+
+        var needle = Adapted(before, site);
+        var count = Occurrences(site, needle);
+
+        if (count != 1)
+        {
+            return new SiteEditResult(count, null);
+        }
+
+        var at = site.AsSpan().IndexOf(needle);
+
+        return new SiteEditResult(1, [.. site.AsSpan(0, at), .. Adapted(after, site), .. site.AsSpan(at + needle.Length)]);
+    }
+
+    /// <summary><paramref name="text"/> with every CRLF made LF.</summary>
+    private static byte[] Lf(byte[] text)
+    {
+        var lf = new List<byte>(text.Length);
+
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (text[index] != '\r' || index + 1 >= text.Length || text[index + 1] != '\n')
+            {
+                lf.Add(text[index]);
+            }
+        }
+
+        return [.. lf];
+    }
+
+    /// <summary><paramref name="lf"/>, whose lines end LF alone, with every LF made CRLF.</summary>
+    private static byte[] Crlf(byte[] lf)
+    {
+        var crlf = new List<byte>(lf.Length + 16);
+
+        foreach (var value in lf)
+        {
+            if (value == '\n')
+            {
+                crlf.Add((byte)'\r');
+            }
+
+            crlf.Add(value);
+        }
+
+        return [.. crlf];
+    }
+}
