@@ -1,5 +1,7 @@
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Tests;
 
@@ -85,4 +87,52 @@ public sealed class NinjaTests
     [InlineData(null, false)]
     public void Generates_NamesNinjasGeneratorsAlone(string? generator, bool ninja)
         => Assert.Equal(ninja, Ninja.Generates(generator));
+
+    /// <summary>
+    /// The steps a build's lines say failed, each named by its first output as ninja canonicalizes it: ninja 1.12's
+    /// <c>FAILED:</c> line and 1.13's, which writes the step's exit code first, in colour or not, its lines ending either
+    /// way; each step once, in the order said; and nothing where nothing failed.
+    /// </summary>
+    [Theory]
+    [InlineData("[1/4] Building CXX object a.o\nFAILED: CMakeFiles/upstream.dir/src/support.cpp.obj \nninja: build stopped: subcommand failed.\n", new[] { "CMakeFiles/upstream.dir/src/support.cpp.obj" })]
+    [InlineData("FAILED: [code=2] CMakeFiles\\a.dir\\a.cpp.obj \r\n", new[] { "CMakeFiles/a.dir/a.cpp.obj" })]
+    [InlineData("\u001b[31mFAILED: \u001b[0ma.o \r\nFAILED: b.o \nFAILED: a.o \n", new[] { "a.o", "b.o" })]
+    [InlineData("[1/2] Building CXX object a.o\n[2/2] Linking CXX executable fx\n", new string[0])]
+    [InlineData("ninja: build stopped: interrupted by user.\n", new string[0])]
+    public void FailedOutputs_AreTheStepsTheBuildSaysFailed(string output, string[] expected)
+        => Assert.Equal(expected, Ninja.FailedOutputs(output.Split('\n'), program: null, manifest: null));
+
+    /// <summary>
+    /// With the manifest, a failed step's outputs are told apart however their paths are spelt: the first output of a
+    /// step whose paths hold spaces, which ninja does not escape, is the shortest start of what it wrote that names one;
+    /// and the command samurai says failed, under its own name or ninja's, is the step that runs it - its response file's
+    /// content after it or not - or, where no step runs it, the command as samurai said it.
+    /// </summary>
+    [Fact]
+    public void FailedOutputs_AreToldApartThroughTheManifest()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(
+            Path.Combine("build", NinjaDependencyCheck.ManifestFileName),
+            "rule cc\n  command = cc -c $in -o $out\n"
+            + "rule link\n  command = cc @$out.rsp -o $out\n  rspfile = $out.rsp\n  rspfile_content = $in\n"
+            + "build my$ dir/a.o | my$ dir/a.o.d: cc a.c\n"
+            + "build my: cc my.c\n"
+            + "build app: link my$ dir/a.o\n");
+        var manifest = NinjaManifest.Read(new PhysicalFileSystem(FilePermissionsFactory.Create()), temp.Combine("build"));
+
+        Assert.Equal(["my dir/a.o"], Ninja.FailedOutputs(["FAILED: my dir/a.o my dir/a.o.d "], program: null, manifest));
+        Assert.Equal(["my"], Ninja.FailedOutputs(["FAILED: my "], program: null, manifest));
+        Assert.Equal(
+            ["my dir/a.o", "app", "cc -c gone.c -o gone.o"],
+            Ninja.FailedOutputs(
+                [
+                    "samu: job failed with status 1: cc -c a.c -o \"my dir/a.o\"",
+                    "ninja: job failed with status 1: cc @app.rsp -o app",
+                    "samu: job failed with status 1: cc -c gone.c -o gone.o",
+                    "samu: subcommand failed",
+                ],
+                "/usr/bin/samu",
+                manifest));
+    }
 }

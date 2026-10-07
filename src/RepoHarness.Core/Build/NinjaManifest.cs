@@ -110,6 +110,67 @@ public sealed class NinjaManifest
         return _edges.GetValueOrDefault(Normalize(output));
     }
 
+    /// <summary>Every path a build line produces, as ninja canonicalizes it, the implicit outputs too.</summary>
+    public IReadOnlyCollection<string> Outputs => _edges.Keys;
+
+    /// <summary>
+    /// The build lines that build <paramref name="outputs"/>, and every build line building what they read, however far
+    /// back - what a change reaching any of them can rebuild on the way to those outputs - each once, in the order first
+    /// reached. What a line is only ordered after is not followed: it never rebuilds the line, as <see cref="NinjaEdge.Inputs"/>
+    /// says.
+    /// </summary>
+    /// <param name="outputs">The outputs, each relative to the build directory, a target's phony name among them.</param>
+    public IReadOnlyList<NinjaEdge> Closure(IEnumerable<string> outputs)
+    {
+        ArgumentNullException.ThrowIfNull(outputs);
+
+        var seen = new HashSet<NinjaEdge>(ReferenceEqualityComparer.Instance);
+        var closure = new List<NinjaEdge>();
+        var pending = new Stack<string>(outputs.Reverse());
+
+        while (pending.TryPop(out var output))
+        {
+            if (EdgeFor(output) is not { } edge || !seen.Add(edge))
+            {
+                continue;
+            }
+
+            closure.Add(edge);
+
+            for (var index = edge.Inputs.Count - 1; index >= 0; index--)
+            {
+                pending.Push(edge.Inputs[index]);
+            }
+        }
+
+        return closure;
+    }
+
+    /// <summary>
+    /// The file <paramref name="target"/> builds: the first output of the build line that builds it, reached through each
+    /// phony line standing for exactly one other path - as CMake names a target by its own name and builds its file
+    /// elsewhere, <c>build fixture: phony bin/fixture.exe</c>. <see langword="null"/> where no build line produces it, or a
+    /// phony line stands for several paths, or for one nothing builds.
+    /// </summary>
+    /// <param name="target">The target, as <c>--target</c> names it, or a path relative to the build directory.</param>
+    public string? ArtifactOf(string target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        var edge = EdgeFor(target);
+
+        // Bounded, so phony lines naming each other - which ninja refuses as a cycle - lead nowhere.
+        for (var hops = 0; edge is { Rule: PhonyRule } && hops <= _edges.Count; hops++)
+        {
+            edge = edge.Inputs.Count == 1 ? EdgeFor(edge.Inputs[0]) : null;
+        }
+
+        return edge is { Rule: not PhonyRule, Outputs.Count: > 0 } ? edge.Outputs[0] : null;
+    }
+
+    /// <summary>The rule ninja builds nothing by: a line under it only stands for what it reads.</summary>
+    public const string PhonyRule = "phony";
+
     /// <summary>
     /// A path as ninja canonicalizes it: one kind of separator - <c>ninja -t deps</c> spells with
     /// forward slashes what the manifest holds with backslashes - and no <c>.</c> component, doubled
