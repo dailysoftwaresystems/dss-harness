@@ -217,7 +217,7 @@ internal static class RunCommand
                     (work, token) => RunLegAsync(runners, builds, runnerName, inputs, manualSteps, workload, work, token),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonOption));
+        }, JsonOption, beginsRun: true));
 
         return command;
     }

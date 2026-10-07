@@ -115,7 +115,7 @@ internal static class TestCommand
                     (work, token) => RunLegAsync(builds, tests, context.Get<CMakeToolchainReader>(), work, filter, excludes, labels, skipBuild, token),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonOption));
+        }, JsonOption, beginsRun: true));
 
         return command;
     }

@@ -225,6 +225,26 @@ public sealed class LedgerReportTests
         Assert.False(legs[1].TryGetProperty("developerEnvironment", out _));
     }
 
+    /// <summary>
+    /// The document names its run where the command keeps runs, whatever ended it - a refused run that had no
+    /// directory included, whose id is all there is to cite it by - and names none where the command keeps none.
+    /// </summary>
+    [Fact]
+    public void TheDocument_NamesItsRun_WhereTheCommandKeepsRuns()
+    {
+        const string run = "20260101-000000-0a1b2c3d";
+        var report = LedgerReport.From([Entry("a", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty)], durationWarningFactor: 0);
+
+        using var ran = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], runDirectory: Path.Combine("runs", run), runId: run));
+        using var refused = JsonDocument.Parse(LedgerReport.Stopped(HarnessExit.Refused, "no selected leg can run", runId: run));
+        using var keepsNone = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
+
+        Assert.Equal(run, ran.RootElement.GetProperty("runId").GetString());
+        Assert.Equal(run, refused.RootElement.GetProperty("runId").GetString());
+        Assert.False(refused.RootElement.TryGetProperty("runDirectory", out _));
+        Assert.False(keepsNone.RootElement.TryGetProperty("runId", out _));
+    }
+
     /// <summary>The line said the moment a leg reaches its verdict names the developer environment too.</summary>
     [Fact]
     public void TheVerdictsOwnLine_NamesTheDeveloperEnvironment()

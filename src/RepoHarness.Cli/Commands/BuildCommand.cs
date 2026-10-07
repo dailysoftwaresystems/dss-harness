@@ -77,7 +77,7 @@ internal static class BuildCommand
                     (work, token) => BuildLegAsync(builds, work, token),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonOption));
+        }, JsonOption, beginsRun: true));
 
         return command;
     }

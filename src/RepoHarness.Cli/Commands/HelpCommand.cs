@@ -1713,8 +1713,11 @@ internal static class HelpCommand
         builder.AppendLine("exception: they belong to the tree that ran it, so a run started inside a worktree");
         builder.AppendLine("writes them there, and build, test and run name the directory in their output and");
         builder.AppendLine("as runDirectory in --json. A leg a host ran names that host's own directory, its home");
-        builder.AppendLine($"written as ~ (see '{ToolPackage.Command} help legs'). Action files are tracked, so a");
-        builder.AppendLine("worktree has its own and a runner acts on the tree it was asked about.");
+        builder.AppendLine($"written as ~ (see '{ToolPackage.Command} help legs'). Each names its run too, in its");
+        builder.AppendLine("first line, 'run <id>', and as runId in --json, however it ended: a run refused");
+        builder.AppendLine("before it had a directory keeps no records, and is cited by that id alone. Action");
+        builder.AppendLine("files are tracked, so a worktree has its own and a runner acts on the tree it was");
+        builder.AppendLine("asked about.");
 
         return builder.ToString();
     }

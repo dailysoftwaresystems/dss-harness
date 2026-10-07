@@ -241,7 +241,7 @@ public sealed class LedgerReport
     /// fail" are separate questions, and folding them into one boolean made a run where all eight
     /// legs ran and two failed report as incomplete — which reads as a run that did not finish,
     /// when it finished and found bugs. Interruption is not visible from the rows at all, so the
-    /// caller that can see it supplies it to <see cref="ExitCodeGiven"/> and <see cref="ToJson(bool, IReadOnlyList{string}, string, Func{string, string})"/>.
+    /// caller that can see it supplies it to <see cref="ExitCodeGiven"/> and <see cref="ToJson(bool, IReadOnlyList{string}, string, Func{string, string}, string)"/>.
     /// </remarks>
     public bool Complete => WithoutVerdict.Count == 0;
 
@@ -442,8 +442,12 @@ public sealed class LedgerReport
     /// How the document's reader is told a path or a line of the harness's own, as
     /// <see cref="IHarnessOutput.Shown"/> tells it; <see langword="null"/> to write each as it is.
     /// </param>
-    public string ToJson(bool cancelled, IReadOnlyList<string> unfinished, string? runDirectory = null, Func<string, string>? shown = null)
-        => Json(ExitCodeGiven(cancelled, unfinished), Summarize(cancelled, unfinished), cancelled, unfinished, stopped: false, runDirectory, shown ?? AsWritten);
+    /// <param name="runId">
+    /// The run this is, for a command that keeps runs, which a caller can cite it by whatever ended it;
+    /// <see langword="null"/> for a command that keeps none.
+    /// </param>
+    public string ToJson(bool cancelled, IReadOnlyList<string> unfinished, string? runDirectory = null, Func<string, string>? shown = null, string? runId = null)
+        => Json(ExitCodeGiven(cancelled, unfinished), Summarize(cancelled, unfinished), cancelled, unfinished, stopped: false, runId, runDirectory, shown ?? AsWritten);
 
     /// <summary>
     /// The ledger as data for a run something other than its legs ended - a refusal of the whole run,
@@ -460,6 +464,10 @@ public sealed class LedgerReport
     /// How the document's reader is told a path or a line of the harness's own, as
     /// <see cref="IHarnessOutput.Shown"/> tells it; <see langword="null"/> to write each as it is.
     /// </param>
+    /// <param name="runId">
+    /// The run this is, for a command that keeps runs, which a caller can cite it by whatever ended it;
+    /// <see langword="null"/> for a command that keeps none.
+    /// </param>
     /// <remarks>
     /// Whatever ended the run, a reader who asked for data is answered with data: the machine that
     /// dispatched a leg reads a host's standard output as this document, and text there - a table, a
@@ -468,11 +476,11 @@ public sealed class LedgerReport
     /// the run itself: it neither passed nor completed, and reached no verdict of its own. An
     /// interruption is said as one, from the code it ends with, so a script never reads it as red.
     /// </remarks>
-    public string ToJson(int exitCode, string stoppedBecause, string? runDirectory = null, Func<string, string>? shown = null)
+    public string ToJson(int exitCode, string stoppedBecause, string? runDirectory = null, Func<string, string>? shown = null, string? runId = null)
     {
         ArgumentNullException.ThrowIfNull(stoppedBecause);
 
-        return Json(exitCode, stoppedBecause, cancelled: exitCode == HarnessExit.Cancelled, [], stopped: true, runDirectory, shown ?? AsWritten);
+        return Json(exitCode, stoppedBecause, cancelled: exitCode == HarnessExit.Cancelled, [], stopped: true, runId, runDirectory, shown ?? AsWritten);
     }
 
     /// <summary>
@@ -486,8 +494,12 @@ public sealed class LedgerReport
     /// How the document's reader is told a path or a line of the harness's own, as
     /// <see cref="IHarnessOutput.Shown"/> tells it; <see langword="null"/> to write each as it is.
     /// </param>
-    public static string Stopped(int exitCode, string stoppedBecause, Func<string, string>? shown = null)
-        => From([], new HarnessDefaults().DurationWarningFactor).ToJson(exitCode, stoppedBecause, shown: shown);
+    /// <param name="runId">
+    /// The run this is, for a command that keeps runs, which a caller can cite it by whatever ended it;
+    /// <see langword="null"/> for a command that keeps none.
+    /// </param>
+    public static string Stopped(int exitCode, string stoppedBecause, Func<string, string>? shown = null, string? runId = null)
+        => From([], new HarnessDefaults().DurationWarningFactor).ToJson(exitCode, stoppedBecause, shown: shown, runId: runId);
 
     /// <summary>The document, with every path and every line of the harness's own told as <paramref name="show"/> tells it.</summary>
     /// <remarks>
@@ -497,7 +509,7 @@ public sealed class LedgerReport
     /// last lines a phase printed are that program's own lines, beneath the table as here, and stay as it
     /// printed them.
     /// </remarks>
-    private string Json(int exitCode, string summary, bool cancelled, IReadOnlyList<string> unfinished, bool stopped, string? runDirectory, Func<string, string> show) => JsonSerializer.Serialize(
+    private string Json(int exitCode, string summary, bool cancelled, IReadOnlyList<string> unfinished, bool stopped, string? runId, string? runDirectory, Func<string, string> show) => JsonSerializer.Serialize(
         new
         {
             Verdict = stopped ? null : Verdicts.Display(Verdict),
@@ -506,6 +518,10 @@ public sealed class LedgerReport
             // The line the command ends on, beside the code it exits with, so a script reading the
             // document has what a reader of the terminal has.
             Summary = show(summary),
+
+            // Which run this is, as the text form's first line says, whatever ended it: a run refused
+            // before it had a directory keeps no records, and is cited by this alone.
+            RunId = runId,
 
             // Where the records are, as the text form's 'logs:' line says: a caller is told rather
             // than left to work out which tree a run wrote into.

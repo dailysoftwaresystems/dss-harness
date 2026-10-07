@@ -1622,6 +1622,15 @@ public sealed class LegRunServiceTests
         Legs = { ["native"] = HostDoubles.Leg(harness.Platform.PlatformKey, harness.Platform.Processor) },
     };
 
+    /// <summary>A command's run, begun as the command that asks for a leg run begins it.</summary>
+    private static CommandRun Begun()
+    {
+        var run = new CommandRun();
+
+        run.Begin();
+        return run;
+    }
+
     /// <summary>The run directory an outcome names, read the way its caller reads it.</summary>
     private static string RunDirectoryOf(CommandOutcome outcome, bool json)
     {
@@ -1747,7 +1756,8 @@ public sealed class LegRunServiceTests
             harness.FileSystem,
             harness.FilePermissions,
             harness.Platform,
-            harness.Output);
+            harness.Output,
+            Begun());
 
         return await service.RunAsync(
             "test",

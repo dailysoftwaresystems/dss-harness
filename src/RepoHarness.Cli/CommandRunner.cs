@@ -7,6 +7,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Runs;
 
 namespace RepoHarness.Cli;
 
@@ -60,10 +61,16 @@ internal static class CommandRunner
     /// nobody declared, a configuration that does not load, a runner nobody declared. A script
     /// reading standard output has one document to read whatever happened.
     /// </param>
+    /// <param name="beginsRun">
+    /// Whether the command keeps runs - build, test and run - whose run it then begins before anything can refuse
+    /// it, and names from its first line and in its ledger on every exit: a run refused before any leg ran keeps no
+    /// records, and its id is then all there is to cite it by.
+    /// </param>
     internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
         string commandName,
         Func<CommandContext, CancellationToken, Task<CommandOutcome>> body,
-        Option<bool>? ledger = null)
+        Option<bool>? ledger = null,
+        bool beginsRun = false)
     {
         return async (parseResult, cancellationToken) =>
         {
@@ -77,11 +84,18 @@ internal static class CommandRunner
             // the legs are surveyed: a line written before then would sit in front of it.
             using var document = answersWithLedger ? output.DataOnly() : null;
 
+            var run = beginsRun ? services.GetRequiredService<CommandRun>().Begin() : null;
+
+            if (run is not null)
+            {
+                output.Info(commandName, $"run {run.Value}");
+            }
+
             try
             {
                 if (!TryResolveDirectory(parseResult, services, out var directory, out var problem))
                 {
-                    return Stop(output, commandName, HarnessExit.UsageError, problem, answersWithLedger);
+                    return Stop(output, commandName, HarnessExit.UsageError, problem, answersWithLedger, run);
                 }
 
                 var context = new CommandContext(services, parseResult, directory);
@@ -92,7 +106,7 @@ internal static class CommandRunner
             }
             catch (Exception ex)
             {
-                return Fail(output, commandName, ex, answersWithLedger);
+                return Fail(output, commandName, ex, answersWithLedger, run);
             }
             finally
             {
@@ -112,11 +126,12 @@ internal static class CommandRunner
     /// <param name="commandName">The command, which prefixes its failure line.</param>
     /// <param name="exception">What ended it.</param>
     /// <param name="ledger">Whether the command was asked for its ledger as data, which it then answers with.</param>
-    internal static int Fail(IHarnessOutput output, string commandName, Exception exception, bool ledger = false)
+    /// <param name="run">The run the command had begun, which its ledger names; <see langword="null"/> where it began none.</param>
+    internal static int Fail(IHarnessOutput output, string commandName, Exception exception, bool ledger = false, RunId? run = null)
     {
         var (exitCode, message, defect) = Meaning(exception);
 
-        Stop(output, commandName, exitCode, message, ledger);
+        Stop(output, commandName, exitCode, message, ledger, run);
 
         // A defect's stack trace is there under --verbose, where someone is actually diagnosing it. It is the
         // harness's own report, which repeats the message its failure line said, so it is told as that line is.
@@ -162,11 +177,11 @@ internal static class CommandRunner
     /// Ends a command that did not succeed: with its ledger first, as the whole of standard output,
     /// when it was asked for one, and then the line that says why.
     /// </summary>
-    private static int Stop(IHarnessOutput output, string commandName, int exitCode, string message, bool ledger)
+    private static int Stop(IHarnessOutput output, string commandName, int exitCode, string message, bool ledger, RunId? run = null)
     {
         if (ledger)
         {
-            output.Data(LedgerReport.Stopped(exitCode, message, output.Shown));
+            output.Data(LedgerReport.Stopped(exitCode, message, output.Shown, run?.Value));
         }
 
         output.Fail(commandName, message);

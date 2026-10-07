@@ -96,6 +96,20 @@ public sealed partial class HelpTests
         }
     }
 
+    /// <summary>The layout topic says each run is named however it ended, and one refused before it had a directory by its id alone.</summary>
+    [Fact]
+    public async Task LayoutTopic_SaysEachRunIsNamed_ARefusedOneByItsIdAlone()
+    {
+        var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Contains(
+            "Each names its run too, in its first line, 'run <id>', and as runId in --json, however it ended: a run refused "
+            + "before it had a directory keeps no records, and is cited by that id alone.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// The verdicts topic says what becomes of a build stopped from outside, which is stopped rather than failed, and of a
     /// run killed before it finished, which reaches no verdict and says nothing itself: the next run in its tree says it

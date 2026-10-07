@@ -1845,7 +1845,11 @@ by the next `git add -A` and made `delete-worktree` refuse over the harness's ow
 carries them, as none carries any of the harness's own state; deleting a worktree deletes its runs
 with it; and a run is resumed from the tree it was started in. A caller never works the directory out:
 `build`, `test` and `run` name it on every exit that created one, as `logs: <directory>` and as
-`runDirectory` in `--json`. A leg another host ran was run there under a run of its own, and its
+`runDirectory` in `--json`. Each names its run from its first line, `run <id>`, and as `runId` in
+`--json`, on every exit: the run is begun before anything can refuse it, so a run refused before
+it had a directory - a leg nobody declared, a selection no host could take - is named too. It
+keeps no records, and its id is all there is to cite it by. A command line the parser itself
+refuses never started, and names none. A leg another host ran was run there under a run of its own, and its
 line names that host's directory, as `logs of <leg> on <host>: <directory>` and as the leg's own
 `runDirectory`, with the host's home written as `~` (see "A host's home is `~`").
 
