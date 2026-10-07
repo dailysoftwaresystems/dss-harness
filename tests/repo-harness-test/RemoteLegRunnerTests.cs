@@ -609,6 +609,42 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// What a host's command prints is relayed as it comes, and only its end is kept, while its ledger arrives whole. A
+    /// failure line followed by more lines than any failure runs to was printed by the command's own work: what was held
+    /// with it is shown then, in order, everything after it as it comes, and none of it is taken for how the command ended
+    /// - holding it all would hold the rest of what the run prints.
+    /// </summary>
+    [Fact]
+    public async Task AFailureLineFollowedByMoreThanAnyFailureRunsTo_IsShownAsItComes_AndIsNoConclusion()
+    {
+        var harness = new HarnessFactory();
+        var inner = FailureLine.For("run", "an inner run's own failure, printed by a step");
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(inner);
+
+            for (var line = 0; line < RemoteLegRunner.MostHeldLines + 50; line++)
+            {
+                command.OnErrorLine?.Invoke($"step output {line}");
+            }
+
+            return HostResults.Finished(command, HarnessExit.Refused);
+        });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts, harness).RunAsync(
+            "run", Leg(), ["corpus"], TestContext.Current.CancellationToken));
+
+        Assert.EndsWith($"it exited {HarnessExit.Refused} and said nothing more", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            string.Join(Environment.NewLine, [inner, .. Enumerable.Range(0, RemoteLegRunner.MostHeldLines + 50).Select(line => $"step output {line}")]),
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
+
+        var (_, command) = Assert.Single(hosts.Calls);
+        Assert.Equal((StreamKept.Whole, StreamKept.Tail), (command.OutputKept, command.ErrorKept));
+    }
+
+    /// <summary>
     /// A failure line the command's own output carried - a run of this tool inside a test suite
     /// prints one - is not the command's failure: the last one is, with what follows it. The earlier one is shown, with
     /// what followed it, and the command's own is not.

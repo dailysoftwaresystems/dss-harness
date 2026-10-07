@@ -17,6 +17,21 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     private const int ReadBufferSize = 4096;
 
     /// <summary>
+    /// How many characters of a stream kept as a <see cref="StreamKept.Tail"/> are kept: its end, which is where a program
+    /// says what went wrong, and plenty for any message that quotes it.
+    /// </summary>
+    public const int TailLength = 64 * 1024;
+
+    /// <summary>
+    /// The most characters a line of a stream kept as a <see cref="StreamKept.Tail"/> is handed on in; a longer one arrives in
+    /// pieces of at most this many, each a line of its own. As long as the longest command line Windows starts, longer than
+    /// any line a compiler, a test runner or a linker prints, and short enough that a child writing gigabytes without a line
+    /// feed is never held whole - and that each piece is an object the runtime collects as soon as it is dropped, rather than
+    /// one of the large ones it collects only with everything else.
+    /// </summary>
+    public const int LongestLine = 32 * 1024;
+
+    /// <summary>
     /// How child output is decoded, and child input encoded, on every platform. Left unset,
     /// Windows decodes redirected output with the console code page while Linux and macOS use
     /// UTF-8, so a path such as <c>C:\Users\João</c> printed by git, which always writes UTF-8,
@@ -134,8 +149,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // Both streams are read from the moment the process starts: a child that fills a
         // pipe nobody is reading blocks forever.
-        var standardOutput = CaptureAsync(process.StandardOutput, request.OnOutputLine);
-        var standardError = CaptureAsync(process.StandardError, request.OnErrorLine);
+        var standardOutput = CaptureAsync(process.StandardOutput, request.OnOutputLine, request.OutputKept, request.CutLine);
+        var standardError = CaptureAsync(process.StandardError, request.OnErrorLine, request.ErrorKept, request.CutLine);
 
         // Written while both output streams are being read, so a child that answers as it reads
         // can never block this on a full output pipe, nor this block it on a full input pipe.
@@ -401,51 +416,44 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     internal static string WithWindowsExtension(string name) => Path.HasExtension(name) ? name : name + ".exe";
 
     /// <summary>
-    /// Reads one stream to its end, keeping the text exactly as the child wrote it, and hands
-    /// each complete line to <paramref name="onLine"/> as soon as it arrives.
+    /// Reads one stream to its end, keeping the text exactly as the child wrote it - all of it, or its end where
+    /// <paramref name="kept"/> says so - and hands each complete line to <paramref name="onLine"/> as soon as it arrives.
     /// </summary>
     /// <remarks>
     /// Text rebuilt from lines loses what separated them. git's NUL-separated output would
     /// gain a line break git never wrote, and every line ending would become the host's own,
     /// so one command would capture different text on Windows than on Linux.
+    /// <para>
+    /// A stream kept whole is held whole, and its lines are handed on whole: the caller asked for it as text. One kept as a
+    /// tail is the caller's to keep line by line, and held nowhere else: a test that started an interactive interpreter with
+    /// no console printed two gigabytes of the same traceback, ctest printed all of it, and the harness that had kept every
+    /// character - in four copies - died out of memory with 34 GB of it free, because no string holds more than about a
+    /// billion characters. So only its last <see cref="TailLength"/> characters are kept, and a line of it is handed on in
+    /// pieces of at most <see cref="LongestLine"/>, since a line that never ends would otherwise be held whole until it did.
+    /// </para>
     /// </remarks>
-    private static async Task<string> CaptureAsync(StreamReader reader, Action<string>? onLine)
+    private static async Task<string> CaptureAsync(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut)
     {
-        var captured = new StringBuilder();
-        var line = new StringBuilder();
+        var tail = kept == StreamKept.Tail;
+        var whole = tail ? null : new StringBuilder();
+        var end = tail ? new StreamTail(TailLength) : null;
+        var lines = onLine is null ? null : new LineSplitter(onLine, tail ? LongestLine : null, tail ? cut : null);
         var buffer = new char[ReadBufferSize];
         int read;
 
         while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
         {
-            captured.Append(buffer, 0, read);
+            var arrived = buffer.AsSpan(0, read);
 
-            if (onLine is null)
-            {
-                continue;
-            }
-
-            for (var index = 0; index < read; index++)
-            {
-                if (buffer[index] == '\n')
-                {
-                    onLine(WithoutCarriageReturn(line));
-                    line.Clear();
-                }
-                else
-                {
-                    line.Append(buffer[index]);
-                }
-            }
+            whole?.Append(arrived);
+            end?.Add(arrived);
+            lines?.Add(arrived);
         }
 
         // A last line with no line break after it is still a line.
-        if (onLine is not null && line.Length > 0)
-        {
-            onLine(WithoutCarriageReturn(line));
-        }
+        lines?.End();
 
-        return captured.ToString();
+        return whole?.ToString() ?? end!.ToString();
     }
 
     /// <summary>
@@ -484,11 +492,6 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             // Closing flushes, and the pipe can already be gone because the child exited.
         }
     }
-
-    private static string WithoutCarriageReturn(StringBuilder line)
-        => line.Length > 0 && line[^1] == '\r'
-            ? line.ToString(0, line.Length - 1)
-            : line.ToString();
 
     private static void KillTree(Process process)
     {

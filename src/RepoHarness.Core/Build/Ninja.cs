@@ -68,7 +68,9 @@ internal static class Ninja
         string[] names = string.IsNullOrEmpty(file) ? [OwnName] : [OwnName, file];
         var interrupted = false;
 
-        foreach (var line in Colour.Replace(phase.Output, string.Empty).ReplaceLineEndings("\n").Split('\n'))
+        // Read from the log a line at a time, each divided however it divides itself, and no further than the line that
+        // decides: a build's output can be larger than any text the harness could hold.
+        foreach (var line in phase.Output.Lines().SelectMany(line => Colour.Replace(line, string.Empty).ReplaceLineEndings("\n").Split('\n')))
         {
             if (line.StartsWith(FailedStep, StringComparison.Ordinal))
             {

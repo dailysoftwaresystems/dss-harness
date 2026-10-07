@@ -91,6 +91,97 @@ public sealed class ProcessRunnerTests
         Assert.Equal(["problem"], errorLines);
     }
 
+    /// <summary>
+    /// A stream kept as a tail is kept as its last characters and no more, however much the child prints, while every line
+    /// of it still reaches the caller as it comes; one kept whole - what git's answers and a probe's need - is kept whole.
+    /// Each stream is kept as asked for it: standard error a tail beside standard output whole, as a relay of a host's
+    /// command keeps them.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_KeepsOnlyTheEndOfAStreamKeptAsATail_WhileEveryLineArrives()
+    {
+        const int Count = 1000;
+        const int Length = 200;
+
+        var printed = string.Concat(Enumerable.Range(0, Count).Select(index => TestChild.FloodLine(index, Length) + "\n"));
+        var arrived = new List<string>();
+
+        var tail = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", $"{Count}", $"{Length}") with
+            {
+                OnOutputLine = arrived.Add,
+                OutputKept = StreamKept.Tail,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(printed.Length > ProcessRunner.TailLength, "the child printed no more than the end that is kept");
+        Assert.Equal(printed[^ProcessRunner.TailLength..], tail.StandardOutput);
+        Assert.Equal(Enumerable.Range(0, Count).Select(index => TestChild.FloodLine(index, Length)), arrived);
+
+        var whole = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", $"{Count}", $"{Length}") with { OnOutputLine = _ => { } },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(printed, whole.StandardOutput);
+
+        var errorArrived = new List<string>();
+
+        var errorTail = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood-error", $"{Count}", $"{Length}") with
+            {
+                OnErrorLine = errorArrived.Add,
+                ErrorKept = StreamKept.Tail,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(printed[^ProcessRunner.TailLength..], errorTail.StandardError);
+        Assert.Equal(Enumerable.Range(0, Count).Select(index => TestChild.FloodLine(index, Length)), errorArrived);
+    }
+
+    /// <summary>
+    /// A line that never ends, on a stream kept as a tail, arrives in pieces of at most the longest line handed on - cut
+    /// where the caller says, where it says - each as soon as it is complete; on a stream kept whole it arrives whole, as
+    /// an answer written on one line has to.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_HandsOnALineThatNeverEnds_InPieces_OnAStreamKeptAsATail()
+    {
+        const int Giant = 100_000;
+        var pieces = new List<string>();
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with { OnOutputLine = pieces.Add, OutputKept = StreamKept.Tail },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [ProcessRunner.LongestLine, ProcessRunner.LongestLine, ProcessRunner.LongestLine, Giant - (3 * ProcessRunner.LongestLine)],
+            pieces.Select(piece => piece.Length));
+        Assert.Equal(TestChild.GiantLine(Giant), string.Concat(pieces));
+        Assert.Equal(TestChild.GiantLine(ProcessRunner.TailLength), result.StandardOutput);
+
+        var cutShort = new List<string>();
+
+        await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with
+            {
+                OnOutputLine = cutShort.Add,
+                OutputKept = StreamKept.Tail,
+                CutLine = full => full.Length - 100,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.All(cutShort.SkipLast(1), piece => Assert.Equal(ProcessRunner.LongestLine - 100, piece.Length));
+        Assert.Equal(TestChild.GiantLine(Giant), string.Concat(cutShort));
+
+        var whole = new List<string>();
+
+        await CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", "0", "200", $"{Giant}") with { OnOutputLine = whole.Add },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([TestChild.GiantLine(Giant)], whole);
+    }
+
     [Fact]
     public async Task RunAsync_StopsAProcessThatExceedsItsBudget()
     {

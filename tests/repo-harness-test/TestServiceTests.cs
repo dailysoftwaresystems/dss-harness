@@ -414,9 +414,28 @@ public sealed class TestServiceTests
     {
         var pattern = TestService.CompileCountPattern(@"Ran (\d+) cases");
 
-        Assert.Equal(17, TestService.CountFrom(pattern, "Ran 17 cases\n"));
-        Assert.Null(TestService.CountFrom(pattern, "nothing to count"));
-        Assert.Null(TestService.CountFrom(null, "Ran 17 cases"));
+        Assert.Equal(17, TestService.CountFrom(pattern, PhaseOutput.Of("Ran 17 cases\n")));
+        Assert.Null(TestService.CountFrom(pattern, PhaseOutput.Of("nothing to count")));
+        Assert.Null(TestService.CountFrom(null, PhaseOutput.Of("Ran 17 cases")));
+    }
+
+    /// <summary>
+    /// A count pattern is matched against each line as the log keeps it, as every pattern read from a phase's output is:
+    /// the first line it matches says the count, whatever ended it, and nothing after it is read; and a pattern that only
+    /// matches across a line break counts nothing.
+    /// </summary>
+    [Fact]
+    public void ACountPattern_IsMatchedAgainstEachLine_AndTheFirstItMatchesSaysTheCount()
+    {
+        var pattern = TestService.CompileCountPattern(@"^(?<total>\d+) tests? ran$");
+
+        Assert.Equal(12, TestService.CountFrom(pattern, PhaseOutput.Of("setting up\r\n12 tests ran\r\n3 tests ran\r\n")));
+        Assert.Equal(
+            12,
+            TestService.CountFrom(
+                pattern,
+                new PhaseOutputTests.ReadUpTo(line => line.EndsWith(" ran", StringComparison.Ordinal), "setting up", "12 tests ran", "3 tests ran")));
+        Assert.Null(TestService.CountFrom(TestService.CompileCountPattern(@"ran\n(\d+)"), PhaseOutput.Of("ran\n12\n")));
     }
 
     /// <summary>

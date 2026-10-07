@@ -1,4 +1,6 @@
+using System.Text.Json.Serialization;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 
 namespace RepoHarness.Core.Runners;
 
@@ -16,16 +18,17 @@ namespace RepoHarness.Core.Runners;
 /// <param name="ResultCode">The code reported. Never negative: no process returns one.</param>
 /// <param name="Message">What is reported, already phrased for a reader.</param>
 /// <param name="Output">
-/// What the run's steps printed, when it was captured. Carried beside <paramref name="Message"/>
-/// for the reason <see cref="RunFailure"/> carries both: a run's own summary sentence and what its
-/// steps said are different evidence, and a check looking for a line a step prints — a count, a
-/// marker, a measured figure — would otherwise be matching against a sentence that never contains
-/// it. Not part of <see cref="SameExceptionAs"/>: an excusal is defined by the four fields an
-/// entry declares, and output is not one of them.
+/// What the run's steps printed, when it was captured: read from their logs a line at a time, never
+/// held. Carried beside <paramref name="Message"/> for the reason <see cref="RunFailure"/> carries
+/// both: a run's own summary sentence and what its steps said are different evidence, and a check
+/// looking for a line a step prints — a count, a marker, a measured figure — would otherwise be
+/// matching against a sentence that never contains it. Not part of <see cref="SameExceptionAs"/>: an
+/// excusal is defined by the four fields an entry declares, and output is not one of them. Nor is it
+/// part of a record kept of a step: what a step printed is in its log.
 /// </param>
-public sealed record RunOutcome(bool Success, bool Warning, int ResultCode, string Message, string? Output = null)
+public sealed record RunOutcome(bool Success, bool Warning, int ResultCode, string Message, [property: JsonIgnore] PhaseOutput? Output = null)
 {
-    /// <summary>Everything a check's expected message is matched against.</summary>
+    /// <summary>Everything a check's expected message is matched against: the message, then each line the steps printed.</summary>
     /// <remarks>
     /// Mirrors <see cref="RunFailure.Texts"/>, so a check reads the same way whether it is
     /// confirming a failure or witnessing a run that passed.
@@ -36,9 +39,9 @@ public sealed record RunOutcome(bool Success, bool Warning, int ResultCode, stri
         {
             yield return Message;
 
-            if (!string.IsNullOrEmpty(Output))
+            foreach (var line in Output?.Lines() ?? [])
             {
-                yield return Output;
+                yield return line;
             }
         }
     }
@@ -46,7 +49,7 @@ public sealed record RunOutcome(bool Success, bool Warning, int ResultCode, stri
     /// <summary>A plain success.</summary>
     /// <param name="message">What to report.</param>
     /// <param name="output">What the run's steps printed, when it was captured.</param>
-    public static RunOutcome Ok(string message, string? output = null) => new(true, false, 0, message, output);
+    public static RunOutcome Ok(string message, PhaseOutput? output = null) => new(true, false, 0, message, output);
 
     /// <summary>A plain failure.</summary>
     /// <param name="resultCode">The code the run reported.</param>
@@ -90,10 +93,13 @@ public sealed record RunOutcome(bool Success, bool Warning, int ResultCode, stri
 /// </remarks>
 /// <param name="ExceptionType">The exception's type name, as the run reported it.</param>
 /// <param name="Message">The exception's message, when one was reported.</param>
-/// <param name="Output">The failing unit's output, when it was captured.</param>
-public sealed record RunFailure(string ExceptionType, string? Message = null, string? Output = null)
+/// <param name="Output">The failing unit's output, when it was captured: read from its log a line at a time, never held.</param>
+public sealed record RunFailure(string ExceptionType, string? Message = null, PhaseOutput? Output = null)
 {
-    /// <summary>Everything an entry's messages are matched against.</summary>
+    /// <summary>
+    /// Everything an entry's messages are matched against: the message, then each line the unit printed, as every
+    /// pattern read from a phase's output is matched against each line as its log keeps it.
+    /// </summary>
     public IEnumerable<string> Texts
     {
         get
@@ -103,9 +109,9 @@ public sealed record RunFailure(string ExceptionType, string? Message = null, st
                 yield return Message;
             }
 
-            if (Output is not null)
+            foreach (var line in Output?.Lines() ?? [])
             {
-                yield return Output;
+                yield return line;
             }
         }
     }

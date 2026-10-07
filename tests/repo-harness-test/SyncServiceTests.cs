@@ -7,6 +7,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
@@ -1966,6 +1967,11 @@ public sealed class SyncServiceTests
 
         Assert.Equal(HarnessExit.HostUnavailable, refusal.ExitCode);
         Assert.Contains("did not answer with what", refusal.Message, StringComparison.Ordinal);
+
+        // The answer is one line, which can be a whole file's content, and is read whole; what the host says on standard
+        // error is shown as it comes, and only its end is kept.
+        var (_, command) = Assert.Single(commands.Calls);
+        Assert.Equal((StreamKept.Whole, StreamKept.Tail), (command.OutputKept, command.ErrorKept));
     }
 
     /// <summary>

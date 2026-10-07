@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using RepoHarness.Core.Execution;
 
 namespace RepoHarness.Core.Testing;
 
@@ -124,8 +125,8 @@ internal static class Ctest
     /// where tests ran.
     /// </summary>
     /// <param name="runner">The test runner an invocation starts, by name or path.</param>
-    /// <param name="output">What it printed.</param>
-    public static bool FoundNone(string runner, string output)
+    /// <param name="output">What it printed, read a line at a time: a suite's output can be larger than any text the harness could hold.</param>
+    public static bool FoundNone(string runner, PhaseOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
 
@@ -134,9 +135,19 @@ internal static class Ctest
             return false;
         }
 
-        var lines = output.ReplaceLineEndings("\n").Split('\n').Select(line => line.Trim()).ToList();
+        var none = false;
 
-        return lines.Any(line => line is NoTestsLine or NoConfigurationLine) && !lines.Any(Summary.IsMatch);
+        foreach (var line in output.Lines().SelectMany(line => line.ReplaceLineEndings("\n").Split('\n')).Select(line => line.Trim()))
+        {
+            if (Summary.IsMatch(line))
+            {
+                return false;
+            }
+
+            none |= line is NoTestsLine or NoConfigurationLine;
+        }
+
+        return none;
     }
 
     /// <summary>

@@ -274,8 +274,8 @@ public sealed partial class HelpTests
         foreach (var text in new[]
         {
             "successPattern: <regular expression> what its last run line must print, besides exiting 0",
-            "matched with ^ and $ at each line - whether a line ends in CRLF or LF, as its log keeps it - against that "
-                + "line's standard output and standard error read together, after secrets are redacted.",
+            "matched against what that line printed on standard output and standard error, a line of output at a time - "
+                + "^ and $ its start and end, whether it ends in CRLF or LF, as its log keeps it - after secrets are redacted.",
         })
         {
             Assert.Contains(text, words, StringComparison.Ordinal);

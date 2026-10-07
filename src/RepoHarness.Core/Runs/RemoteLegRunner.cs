@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Runs;
@@ -34,6 +35,14 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// to itself the host is 'local', and 'local' in the configuration the two share is this machine.
     /// </remarks>
     public const string HereOption = "--here";
+
+    /// <summary>
+    /// The most lines a host's failure line is held with, until its command has said whether it ended there. A failure is
+    /// the last thing a command says, and no failure of this tool's runs to this many lines; one followed by more was
+    /// printed by the command's own work - a run of this tool inside a test suite prints one - and holding everything after
+    /// it would hold the rest of what the run prints, which under --verbose is every line of every step.
+    /// </summary>
+    public const int MostHeldLines = 200;
 
     private static readonly JsonSerializerOptions LedgerOptions = new()
     {
@@ -108,6 +117,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                     StandardInput = request + "\n",
                     HoldStandardInputOpen = true,
 
+                    // What the host's command prints is relayed line by line, under --verbose every line of
+                    // every step, and the end of it is all the result keeps; its ledger arrives whole, a
+                    // line at a time, and is kept below.
+                    ErrorKept = StreamKept.Tail,
+
                     // Kept rather than echoed: the host writes its ledger to standard output, and
                     // this end reports one ledger for the whole run rather than one per machine.
                     OnOutputLine = line =>
@@ -148,6 +162,14 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                         {
                             failure.Add(line);
                             held.Add(line);
+
+                            // Past what any conclusion runs to, it is known to be none: shown after all, in
+                            // order, and what follows is shown as it comes.
+                            if (held.Count > MostHeldLines)
+                            {
+                                Show(held);
+                                failure.Clear();
+                            }
                         }
                         else
                         {

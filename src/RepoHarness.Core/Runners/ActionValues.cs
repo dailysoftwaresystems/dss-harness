@@ -22,8 +22,12 @@ namespace RepoHarness.Core.Runners;
 /// <see cref="ToString"/> is overridden for the same reason. A record's generated one prints every
 /// member, so this is a class, and its text says how many values there are and never what they are.
 /// </para>
+/// <para>
+/// It is the mask a step's lines are kept through, too: its <see cref="Cut(string)"/> says where a line
+/// too long to keep whole can be cut without parting a secret, by the same values it masks.
+/// </para>
 /// </remarks>
-public sealed class ActionValues
+public sealed class ActionValues : ILineMask
 {
     /// <summary>What a redacted secret is replaced with.</summary>
     public const string Mask = "***";
@@ -113,6 +117,48 @@ public sealed class ActionValues
         }
 
         return redacted;
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A step that prints a line longer than a line is kept whole in - megabytes of a document on one line - has it kept in
+    /// pieces, each masked alone, and a secret cut in two would reach the log, and the terminal of whoever watches with
+    /// --verbose, as two halves neither of which is the secret. So the cut is made before the last characters of
+    /// <paramref name="text"/> that could still be the start of a secret - as many as the longest secret, less one - and
+    /// then moved back to the start of every secret <paramref name="text"/> holds that would still span it, until none does.
+    /// Zero only where a secret is as long as the text itself, or secrets overlap all the way back to its start: a line is
+    /// then cut where it must be, and only a secret that long can be parted.
+    /// </remarks>
+    public int Cut(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        if (_secretTexts.Count == 0)
+        {
+            return text.Length;
+        }
+
+        // Longest first, as the secrets are ordered for masking.
+        var cut = text.Length - (_secretTexts[0].Length - 1);
+
+        for (var moved = true; moved && cut > 0;)
+        {
+            moved = false;
+
+            foreach (var secret in _secretTexts)
+            {
+                // Only a secret beginning less than its own length before the cut can span it.
+                var spanning = text.IndexOf(secret, Math.Max(0, cut - secret.Length + 1), StringComparison.Ordinal);
+
+                if (spanning >= 0 && spanning < cut)
+                {
+                    cut = spanning;
+                    moved = true;
+                }
+            }
+        }
+
+        return Math.Max(cut, 0);
     }
 
     /// <summary>Every element of <paramref name="arguments"/>, redacted.</summary>

@@ -1557,7 +1557,7 @@ public sealed partial class CliEndToEndTests
                         {
                             Runner = TestHost.DotnetExecutable,
                             Args = ["exec", TestHost.AssemblyPath],
-                            Env = new Dictionary<string, string>(StringComparer.Ordinal) { [TestHost.ChildModeVariable] = "echo-args" },
+                            Env = new Dictionary<string, string>(StringComparer.Ordinal) { [TestHost.ChildModeVariable] = "echo-command-line" },
                             LabelArg = labelArg,
                             SuccessPattern = @"\[-L\]\s+\[unit\]",
                         },
@@ -1609,7 +1609,7 @@ public sealed partial class CliEndToEndTests
                         {
                             Runner = TestHost.DotnetExecutable,
                             Args = ["exec", TestHost.AssemblyPath],
-                            Env = new Dictionary<string, string>(StringComparer.Ordinal) { [TestHost.ChildModeVariable] = "echo-args" },
+                            Env = new Dictionary<string, string>(StringComparer.Ordinal) { [TestHost.ChildModeVariable] = "echo-command-line" },
                             ExcludeArg = "-LE",
                             RemoteExcludes = ["git-state"],
                             SuccessPattern = @"\[-LE\]\s+\[git-state\]",

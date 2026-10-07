@@ -2113,6 +2113,12 @@ public sealed class BuildServiceTests
             (build ? building : configuring)?.Invoke();
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Each line as it would arrive, which is the only way a phase reads what was printed.
+            foreach (var line in build && buildOutput.Length > 0 ? buildOutput.TrimEnd('\n').Split('\n') : [])
+            {
+                request.OnOutputLine?.Invoke(line.TrimEnd('\r'));
+            }
+
             return Task.FromResult(
                 new ProcessResult(build ? buildExitCode : configureExitCode, build ? buildOutput : string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
         }

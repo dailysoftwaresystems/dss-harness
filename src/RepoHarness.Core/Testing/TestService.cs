@@ -510,10 +510,13 @@ public sealed class TestService(
     /// it does not, and the whole match otherwise. Legs of the same project and test set are compared
     /// by this number, and one reporting a different count is marked on its line: a platform that
     /// quietly skips a group of tests passes on less evidence than its siblings and looks exactly as green.
+    /// The pattern is matched against each line as the log keeps it, as every pattern read from a
+    /// phase's output is, and the first line it matches says the count: read from the log a line at a
+    /// time, since a suite's output can be larger than any text the harness could hold.
     /// </remarks>
     /// <param name="countPattern">The compiled pattern, or null when the invocation declares none.</param>
     /// <param name="output">The runner's own output, never anything the harness wrote.</param>
-    public static int? CountFrom(Regex? countPattern, string output)
+    public static int? CountFrom(Regex? countPattern, PhaseOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
 
@@ -524,9 +527,9 @@ public sealed class TestService(
 
         try
         {
-            var match = countPattern.Match(output);
+            var match = output.Lines().Select(line => countPattern.Match(line)).FirstOrDefault(found => found.Success);
 
-            if (!match.Success)
+            if (match is null)
             {
                 return null;
             }

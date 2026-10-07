@@ -833,6 +833,47 @@ public sealed class RunnerRunServiceTests
         Assert.DoesNotContain("<unset>", log, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A failing step's output is read from its log, a line at a time, for the exception it names and for what an expected
+    /// exception recognises: found on the last of thousands of lines, and never held as text.
+    /// </summary>
+    [Fact]
+    public async Task AFailingStepsOutput_IsReadFromItsLog_ForWhatAnExpectedExceptionRecognises()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var printed = temp.WriteFile(
+            "printed.txt",
+            string.Concat(Enumerable.Range(0, 20_000).Select(line => $"case {line} ok\n")) + "Unhandled: System.IO.IOException: fopen: resource busy\n");
+
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("measure", "print-file", [printed], successPattern: "all cases passed")],
+            ExpectedExceptions =
+            [
+                new ExpectedException
+                {
+                    ExceptionType = "IOException",
+                    Messages = ["^Unhandled: .*resource busy$"],
+                    Success = true,
+                    Warning = true,
+                    ResultCode = 0,
+                    Message = "a known confound",
+                    EarnedOn = "lin-gcc-release",
+                    EarnedAt = "2026-09-16",
+                    Mechanism = "the fixture server refuses the seventh connection of a session",
+                    Anchor = "D-TEST-RUNNER-GATE",
+                },
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.ExpectedException);
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal("a known confound", result.Outcome.Message);
+    }
+
     [Fact]
     public async Task AnExpectedExceptionWhoseCheckIsNotConfirmed_LeavesTheFailureGenuine()
     {
@@ -1185,8 +1226,21 @@ public sealed class RunnerRunServiceTests
     [Fact]
     public void AFailureThatNamedNoException_CarriesANameAnEntryCanDeclare()
     {
-        Assert.Equal(RunnerRunService.StepFailureType, RunnerRunService.FailureTypeIn("ctest exited 7"));
-        Assert.Equal("System.IO.IOException", RunnerRunService.FailureTypeIn("Unhandled: System.IO.IOException: gone"));
+        Assert.Equal(RunnerRunService.StepFailureType, RunnerRunService.FailureTypeIn(PhaseOutput.Of("ctest exited 7")));
+        Assert.Equal("System.IO.IOException", RunnerRunService.FailureTypeIn(PhaseOutput.Of("Unhandled: System.IO.IOException: gone")));
+        Assert.Equal(
+            "TimeoutException",
+            RunnerRunService.FailureTypeIn(PhaseOutput.Of("running\r\ncase 4 failed: TimeoutException after 30s\nthen an IOException\n")));
+
+        // Read no further than the first line naming one: a step's output can be larger than any text the harness could hold.
+        Assert.Equal(
+            "TimeoutException",
+            RunnerRunService.FailureTypeIn(
+                new PhaseOutputTests.ReadUpTo(
+                    line => line.Contains("TimeoutException", StringComparison.Ordinal),
+                    "running",
+                    "case 4 failed: TimeoutException after 30s",
+                    "then an IOException")));
     }
 
     /// <summary>
@@ -1217,7 +1271,11 @@ public sealed class RunnerRunServiceTests
 
         Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
         Assert.NotNull(result.Outcome.Output);
-        Assert.Contains(result.Outcome.Output!, result.Outcome.Texts);
+
+        var printed = result.Outcome.Output!.Lines().ToList();
+
+        Assert.NotEmpty(printed);
+        Assert.Equal([result.Outcome.Message, .. printed], result.Outcome.Texts);
     }
 
     /// <summary>

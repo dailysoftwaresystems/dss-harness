@@ -1191,7 +1191,7 @@ from the report.
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
-| `poisoned` | The harness could not produce a verdict | **yes** |
+| `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up | **yes** |
 | `stopped` | Something stopped its build from outside before it finished: ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build | no: incomplete |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
@@ -1258,7 +1258,9 @@ starting and across how many machines; each leg announces the steps it is about 
 step as it starts and finishes; and a child's own output under `--verbose` is tagged
 `<leg>/<phase>:`. Output is written a whole line at a time under one lock, so lines from legs
 running at once never interleave within a line. The log files keep each line as the child wrote it:
-the tag is for the terminal, so nothing that reads a log has to know about it.
+the tag is for the terminal, so nothing that reads a log has to know about it. Only a line longer
+than 32,768 characters is kept otherwise, in pieces of at most that many, each a line of its own,
+since no line is held whole on its way there (see Reporting).
 
 Within a leg the order is fixed:
 
@@ -2309,7 +2311,9 @@ sibling directory whose name merely starts the same way is outside, not inside.
 A runner may declare failures it is allowed to produce, each with the outcome to report instead
 of an unexplained one. An entry has two halves that must not be confused: what it **matches** —
 an exception type and a list of messages, each plain text or a regular expression, any one
-matching being a match — and the **outcome** the match produces.
+matching being a match — and the **outcome** the match produces. A message is matched against
+what the failure said and against each line the failing step printed, a line at a time as its
+log keeps it, so one written across two lines matches nothing.
 
 **An entry must show its work.** Every entry carries when it was earned, where, the mechanism
 measured, and the anchor holding the evidence, and the file is refused without them. The lint
@@ -2329,7 +2333,9 @@ An expected exception may carry `runChecks`, and until every one passes it excus
 
 - Each check invokes **another** predefined runner by name and compares its outcome with what the
   check expects. A field left out is not a requirement. `sameException` requires the same success,
-  warning, result code and message as the entry it gates.
+  warning, result code and message as the entry it gates. An expected message is looked for in
+  what the run said and in each line its passing steps printed, a line at a time, read from
+  their logs.
 - The runner a check names is never the one carrying it, and a runner reached that way may carry
   no checks of its own, so a check is one level deep and cannot recurse.
 - **Unconfirmed, the failure stays genuine.** That is the whole point of the gate.
@@ -2348,7 +2354,27 @@ says for itself - that the legs are starting, where each starts, and each one's 
 said on both, each read twice. So the dispatcher keeps, rather than relays, the line a host's
 command ends on where it ended badly, with what follows it: it says how the leg ended itself, by
 the leg's line, or in the refusal it raises from what the host said, and a host's summary of its
-one leg would otherwise read as the run's own.
+one leg would otherwise read as the run's own. Such a line is kept with at most 200 lines after
+it: a command's failure is the last thing it says and never runs that long, so a line shaped as
+one with more after it was printed by the command's own work, and is shown, with what followed
+it, as it comes.
+
+**A child's output lives in its log, and nothing else holds it whole.** A consumer's test
+started an interpreter with no script to run, which printed the same traceback over and over;
+ctest printed all two gigabytes of it, and the harness, which kept every character of a phase's
+output in memory, more than once, ended the leg `poisoned` by an `OutOfMemoryException` with 34 GB
+of the machine free: no string holds more than about a billion characters. So each line is read
+once, as it arrives, for what the phase establishes - whether its success pattern matched, its
+timing marks, its last 50 lines, kept in a ring of that many - and written to the log; whatever
+reads more of the output reads it back from the log, a line at a time: ninja's last word on a
+build, the count a `countPattern` reads, ctest's word that it found no tests, the exception a
+failing step printed, the message a run check expects. Of a stream read a line at a time, the
+process runner keeps only the last 65,536 characters, for the messages that quote it, and a
+line longer than 32,768 characters - a child writing gigabytes with no line feed - is kept in
+pieces of at most that many, each a line of the log, cut where no secret the run masks is
+parted; what is read whole, as git's answers are, is kept whole. The same holds on a machine
+that dispatched a leg to a host, whose `--verbose` relays every line the host's steps print: the
+dispatcher keeps the end of what it relayed, and the ledger the host answers with.
 
 Every run ends with a per-leg ledger:
 
@@ -2450,7 +2476,15 @@ command that exited 0 having run no tests at all. An emulator's witness applies 
 rule to the emulator itself. A pattern is matched against each line as the log keeps it,
 whatever ended the line: a Windows program ends its lines with CRLF, and a `$` that matched
 before the line feed left the carriage return between the text and the end, so a pattern that
-passed on Linux and macOS never matched on a Windows leg.
+passed on Linux and macOS never matched on a Windows leg. It is matched against one line at a
+time, as each arrives, so one reaching across a line break - `\s+` between what two lines
+print - matches nothing, and a line longer than 32,768 characters is matched in the pieces its
+log keeps it in. A timing pattern is read the same way, and keeps its first 10,000 marks in a
+phase, saying so where there were more: a child printing a mark on every line of a flood would
+otherwise have the flood held again, as marks. A pattern that cannot be evaluated against a
+line in five seconds is not evidence either way: a witness that cannot is refused, naming the
+pattern, once its command has ended, and a timing pattern that cannot leaves the phase
+unmeasured by it, saying so.
 
 ## Timeouts
 

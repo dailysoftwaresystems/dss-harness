@@ -1,4 +1,5 @@
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
@@ -204,7 +205,27 @@ public sealed class RunCheckGateTests
 
         var result = await ConfirmAsync(
             entry,
-            _ => RunOutcome.Ok("2 step(s) passed", "measuring\nsteps=41\ndone"));
+            _ => RunOutcome.Ok("2 step(s) passed", PhaseOutput.Of("measuring\nsteps=41\ndone")));
+
+        Assert.True(result.Confirmed);
+    }
+
+    /// <summary>
+    /// A message is looked for in what the steps printed a line at a time, and no further than the line that carries it:
+    /// what a run's steps print together can be larger than any text the harness could hold.
+    /// </summary>
+    [Fact]
+    public async Task ConfirmAsync_LooksForAMessage_ALineAtATime_NoFurtherThanTheLineThatCarriesIt()
+    {
+        var entry = ExpectedExceptionMatcherTests.Entry(
+            messages: ["busy"],
+            runChecks: [Check("probe", new RunCheckExpectation { Message = "steps=" })]);
+
+        var result = await ConfirmAsync(
+            entry,
+            _ => RunOutcome.Ok(
+                "2 step(s) passed",
+                new PhaseOutputTests.ReadUpTo(line => line.Contains("steps=", StringComparison.Ordinal), "measuring", "steps=41", "done")));
 
         Assert.True(result.Confirmed);
     }
@@ -230,7 +251,7 @@ public sealed class RunCheckGateTests
 
         var result = await ConfirmAsync(
             entry,
-            _ => RunOutcome.Ok("2 step(s) passed", "measuring\ndone"));
+            _ => RunOutcome.Ok("2 step(s) passed", PhaseOutput.Of("measuring\ndone")));
 
         Assert.False(result.Confirmed);
         Assert.Contains("no step printed it", Assert.Single(result.Reasons), StringComparison.Ordinal);

@@ -1,3 +1,4 @@
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -378,7 +379,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
         {
             // The harness could not produce a verdict, which is what poisoned means. Recorded
             // rather than rethrown, so one broken leg does not take the other legs' results with it.
-            entry = Entry(leg, ReachedVerdict.Of(LegVerdict.Poisoned, $"{ex.GetType().Name}: {ex.Message}"));
+            entry = Entry(leg, ReachedVerdict.Of(LegVerdict.Poisoned, $"{ex.GetType().Name}: {ex.Message}{Held()}"));
         }
         finally
         {
@@ -415,6 +416,20 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             return running;
         }
     }
+
+    /// <summary>
+    /// How much memory this process held as a leg's exception reached here, said after the exception's own words: the
+    /// memory the system has given it, and how much of that is its managed heap.
+    /// </summary>
+    /// <remarks>
+    /// Said of every leg poisoned by an exception, because the exception's words alone send the reader the wrong way. A
+    /// consumer's leg ended "OutOfMemoryException: Insufficient memory to continue the execution of the program." with 34 GB
+    /// of the machine free: the runtime raises it for one object too large to make - a string past a billion characters - as
+    /// readily as for a machine with nothing left, and only what the process held tells the two apart.
+    /// </remarks>
+    private static string Held()
+        => $" (this process held {DiskSpace.Size(Environment.WorkingSet)} as it gave the leg up, "
+            + $"{DiskSpace.Size(GC.GetTotalMemory(forceFullCollection: false))} of it its managed heap)";
 
     /// <summary>The line a leg gets when the executor, rather than the leg's own work, decided its verdict.</summary>
     private static LegEntry Entry(LegPlan leg, ReachedVerdict reached)

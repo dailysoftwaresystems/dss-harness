@@ -172,14 +172,14 @@ public sealed class RunCheckGate(IHarnessOutput output)
             failures.Add($"expected result code {expectedCode} but reported {outcome.ResultCode}");
         }
 
-        // Matched against what the run said and what its steps printed, because an author asking
-        // for a marker a step emits means the run reported it, not that the harness's own summary
-        // sentence happened to contain it. The documented example expects exactly that.
+        // Matched against what the run said and what its steps printed, a line at a time, because an
+        // author asking for a marker a step emits means the run reported it, not that the harness's own
+        // summary sentence happened to contain it. The documented example expects exactly that.
         if (check.Expects.Message is { } expectedMessage
             && !outcome.Texts.Any(text => text.Contains(expectedMessage, StringComparison.Ordinal)))
         {
             failures.Add($"expected a message containing '{expectedMessage}' but reported "
-                + $"'{outcome.Message}'{(outcome.Output is { Length: > 0 } ? ", and no step printed it" : string.Empty)}");
+                + $"'{outcome.Message}'{(outcome.Output?.Lines().Any() == true ? ", and no step printed it" : string.Empty)}");
         }
 
         failures.AddRange(StepFailures(check, window, steps));

@@ -245,6 +245,169 @@ public sealed class PhaseRunnerTests
         Assert.All(result.Timings, timing => Assert.Equal("took ([0-9.]+)s", timing.Pattern));
     }
 
+    /// <summary>
+    /// The success pattern is matched against each line as it arrives, on either stream, and so never against two lines at
+    /// once: a pattern that only matches across a line break witnesses nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheSuccessPattern_IsMatchedAgainstEachLine_OnEitherStream_NeverAcrossTwo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var lines = new ScriptedLines(("compiling", false), ("all 12 checks passed", true), ("done", false));
+
+        var onError = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("a.log")) with { SuccessPattern = "^all [0-9]+ checks passed$" },
+            TestContext.Current.CancellationToken);
+
+        var across = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("b.log")) with { SuccessPattern = "compiling\nall" },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(onError.Witnessed);
+        Assert.False(across.Witnessed);
+        Assert.Equal(LegVerdict.Unwitnessed, across.Verdict().Verdict);
+    }
+
+    /// <summary>
+    /// A success pattern that cannot be evaluated in time against a line is never read as one that did not match: what it
+    /// could not decide is raised once the child has ended, with every line of it kept in the log and the exit line after.
+    /// </summary>
+    [Fact]
+    public async Task ASuccessPatternThatCannotBeEvaluatedInTime_IsRaisedOnceTheChildHasEnded()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var log = temp.Combine("slow.log");
+        var lines = new ScriptedLines((new string('a', 40) + "!", false), ("after it", false));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", log) with { SuccessPattern = "^(a+)+$" },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("took longer than 5s against a line of this phase's output", refusal.Message, StringComparison.Ordinal);
+        Assert.True(lines.Finished, "the child was not left to end");
+
+        var kept = await File.ReadAllLinesAsync(log, TestContext.Current.CancellationToken);
+
+        Assert.Equal("after it", kept[^2]);
+        Assert.StartsWith("# exit 0 after ", kept[^1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Timing marks are read from each line as it arrives, pattern by pattern; of a pattern that matches a flood, only the
+    /// first are kept, and that is said, since a report holding the first marks and none after reads as a phase that
+    /// stopped reporting them.
+    /// </summary>
+    [Fact]
+    public async Task TimingPatterns_AreReadFromEachLine_AndKeepOnlyTheFirstMarksOfAFlood_SayingSo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var flood = Enumerable.Range(0, PhaseRunner.MostTimings + 5).Select(index => ($"case {index} took {index}ms", false));
+        var lines = new ScriptedLines([("link took 7s", true), .. flood, ("link took 9s", true)]);
+
+        var result = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("time.log")) with { TimingPatterns = ["took ([0-9]+)ms", "link took ([0-9]+)s"] },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(PhaseRunner.MostTimings + 2, result.Timings.Count);
+        Assert.Equal(Enumerable.Range(0, PhaseRunner.MostTimings).Select(index => $"{index}"), result.Timings.Take(PhaseRunner.MostTimings).Select(timing => timing.Value));
+        Assert.Equal(["7", "9"], result.Timings.Skip(PhaseRunner.MostTimings).Select(timing => timing.Value));
+        Assert.Contains(
+            $"the timing pattern 'took ([0-9]+)ms' matched this phase's output {PhaseRunner.MostTimings + 5} times; only the first {PhaseRunner.MostTimings} were kept",
+            factory.StandardError.ToString(),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("link took", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A timing pattern that cannot be read in time against a line leaves the phase unmeasured by it - none of its marks,
+    /// not even those read before - and says so, while every other pattern keeps its marks and the phase its verdict.
+    /// </summary>
+    [Fact]
+    public async Task ATimingPatternThatCannotBeReadInTime_LeavesThePhaseUnmeasuredByIt_AndSaysSo()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var lines = new ScriptedLines(("compile took 3s", false), (new string('a', 40) + "!", false), ("link took 9s", false));
+
+        var result = await new PhaseRunner(lines, factory.FileSystem, factory.Output).RunAsync(
+            Child("exit", temp.Combine("time.log")) with { TimingPatterns = ["^(a+)+$|compile took ([0-9]+)s", "link took ([0-9]+)s"] },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["9"], result.Timings.Select(timing => timing.Value));
+        Assert.Contains(
+            "the timing pattern '^(a+)+$|compile took ([0-9]+)s' could not be matched against this phase's output in time; no timing was taken from it",
+            factory.StandardError.ToString(),
+            StringComparison.Ordinal);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    /// <summary>
+    /// A line longer than a line is kept in, carrying a secret where the line is cut, has that secret masked all the same:
+    /// cut where the mask says no secret is parted, every piece is masked whole, in the log, in what the phase read and in
+    /// its output read back.
+    /// </summary>
+    [Fact]
+    public async Task ASecretInALineTooLongToKeepWhole_IsMaskedWhereverTheLineIsCut()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory(verbose: true);
+        const string Secret = "s3cr3t-T0KEN-value";
+
+        // The secret spans the first place the line would be cut, were it cut where it is full.
+        var line = new string('x', ProcessRunner.LongestLine - 5) + Secret + new string('y', ProcessRunner.LongestLine) + Secret + "z";
+        var file = temp.WriteFile("long.txt", "before\n" + line + "\nafter\n");
+        var values = new Core.Runners.ActionValues(
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["TOKEN"] = Secret });
+
+        var result = await Runner(factory).RunAsync(
+            Child("print-file", temp.Combine("long.log"), file) with { Mask = values, SuccessPattern = "after" },
+            TestContext.Current.CancellationToken);
+
+        var log = await File.ReadAllTextAsync(temp.Combine("long.log"), TestContext.Current.CancellationToken);
+        var read = result.Output.Lines().ToList();
+
+        Assert.DoesNotContain(Secret, log, StringComparison.Ordinal);
+        Assert.DoesNotContain(Secret, factory.StandardOutput.ToString() + factory.StandardError, StringComparison.Ordinal);
+        Assert.Equal(values.Redact(line), string.Concat(read.Skip(1).SkipLast(1)));
+        Assert.Equal(["before", "after"], [read[0], read[^1]]);
+        Assert.All(read, piece => Assert.True(piece.Length <= ProcessRunner.LongestLine, $"a piece of {piece.Length} characters"));
+        Assert.True(result.Witnessed);
+    }
+
+    /// <summary>
+    /// A line its mask makes longer than a line is kept in is read as the phase runs in the pieces its log is read back in:
+    /// what the phase read of its output and what a later reader of it finds are the same lines.
+    /// </summary>
+    [Fact]
+    public async Task ALineItsMaskLengthensPastALine_IsReadAsItsLogIsReadBack()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        const string Secret = "ab";
+
+        // Every two characters masked as three: a line exactly as long as a line is kept in comes out half as long again.
+        var line = string.Concat(Enumerable.Repeat(Secret, ProcessRunner.LongestLine / 2));
+        var file = temp.WriteFile("short.txt", line + "\n");
+        var values = new Core.Runners.ActionValues(
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["TOKEN"] = Secret });
+
+        var result = await Runner(factory).RunAsync(
+            Child("print-file", temp.Combine("short.log"), file) with { Mask = values },
+            TestContext.Current.CancellationToken);
+
+        var read = result.Output.Lines().ToList();
+
+        Assert.Equal(values.Redact(line), string.Concat(read));
+        Assert.Equal(2, read.Count);
+        Assert.Equal(read, result.LastLines);
+    }
+
     [Fact]
     public async Task ChildOutput_GoesToTheLog_AndToTheConsoleOnlyWhenVerbose()
     {
@@ -345,6 +508,34 @@ public sealed class PhaseRunnerTests
             Environment = request.Environment,
             LogFile = logFile,
         };
+    }
+
+    /// <summary>
+    /// A runner that prints <paramref name="lines"/>, each on standard error where it says so and standard output otherwise,
+    /// and exits 0 having kept none of them, as the real runner keeps no more than a stream's end of what its caller reads.
+    /// </summary>
+    private sealed class ScriptedLines(params (string Line, bool Error)[] lines) : IProcessRunner
+    {
+        /// <summary>Whether every line was printed and the child ended.</summary>
+        public bool Finished { get; private set; }
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            request.OnStarted?.Invoke();
+
+            foreach (var (line, error) in lines)
+            {
+                (error ? request.OnErrorLine : request.OnOutputLine)?.Invoke(line);
+            }
+
+            Finished = true;
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5), TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
     }
 
     /// <summary>
