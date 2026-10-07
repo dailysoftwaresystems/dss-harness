@@ -997,6 +997,71 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// A configuration naming no mutations takes the defaults - two workers, a mutated run bound at ten times the
+    /// unmutated one, no registry - and one that names them is read as written.
+    /// </summary>
+    [Fact]
+    public void MutationSettings_DefaultToTwoWorkers_AndATenfoldBound()
+    {
+        var defaults = new HarnessConfig().Mutations;
+        var named = LoadValid("""
+            {
+              "mutations": {
+                "registry": "tests/mutations/arms.registry",
+                "textDirectory": ".harness-config/runner/actions/sweep/texts",
+                "workers": 3,
+                "reportArgs": ["--reporters=junit", "--out={report}"],
+                "runTimeFactor": 4.5
+              }
+            }
+            """).Mutations;
+
+        Assert.Equal((null, null, MutationSettings.DefaultWorkers, null, MutationSettings.DefaultRunTimeFactor), (defaults.Registry, defaults.TextDirectory, defaults.Workers, defaults.ReportArgs, defaults.RunTimeFactor));
+        Assert.Equal((2, 10.0), (MutationSettings.DefaultWorkers, MutationSettings.DefaultRunTimeFactor));
+        Assert.Equal(("tests/mutations/arms.registry", ".harness-config/runner/actions/sweep/texts", 3, 4.5), (named.Registry, named.TextDirectory, named.Workers, named.RunTimeFactor));
+        Assert.Equal(["--reporters=junit", "--out={report}"], named.ReportArgs);
+    }
+
+    /// <summary>
+    /// What check-mutations could not use is refused when the file is read: a registry or text directory outside the
+    /// tree, spelt two ways, or inside the harness's own directory, which sync never carries to another host but for its
+    /// runner actions; fewer than one worker; report arguments naming anything in braces but {report}, or never naming
+    /// it; and a bound on a mutated run at or below the unmutated run's own duration.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "mutations": { "registry": "../arms.registry" } }""", "mutations.registry entry '../arms.registry' must be a relative path inside the tree")]
+    [InlineData("""{ "mutations": { "textDirectory": "/texts" } }""", "mutations.textDirectory entry '/texts' must be a relative path inside the tree")]
+    [InlineData("""{ "mutations": { "registry": "tests/./arms.registry" } }""", "mutations.registry names 'tests/./arms.registry', which holds a '.' segment")]
+    [InlineData("""{ "mutations": { "registry": ".harness-config/arms.registry" } }""", "mutations.registry names '.harness-config/arms.registry', inside the harness's own directory, which sync never carries")]
+    [InlineData("""{ "mutations": { "textDirectory": ".harness-config/runner/actions/sweep/build" } }""", "mutations.textDirectory names '.harness-config/runner/actions/sweep/build', inside the harness's own directory")]
+    [InlineData("""{ "mutations": { "workers": 0 } }""", "mutations.workers must be at least 1, found 0")]
+    [InlineData("""{ "mutations": { "reportArgs": ["--out={reprot}"] } }""", "mutations.reportArgs names '{reprot}', which nothing fills in: it can hold only {report}.")]
+    [InlineData("""{ "mutations": { "reportArgs": ["--gtest_output=xml"] } }""", "mutations.reportArgs never names {report}, so a test binary would write its report where no arm reads it")]
+    [InlineData("""{ "mutations": { "runTimeFactor": 1 } }""", "mutations.runTimeFactor must be above 1, found 1")]
+    [InlineData("""{ "mutations": { "runTimeFactor": 0.5 } }""", "mutations.runTimeFactor must be above 1, found 0.5")]
+    public void Load_RejectsMutationSettingsThatCannotWork(string json, string expected)
+    {
+        var exception = LoadInvalid(json);
+
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A registry under a runner action's directory is carried by sync like the action, and so is accepted, as are report
+    /// arguments given empty, which name none, as left out does.
+    /// </summary>
+    [Fact]
+    public void Load_AcceptsARegistryUnderAnActionsDirectory_AndNoReportArgument()
+    {
+        var config = LoadValid("""
+            { "mutations": { "registry": ".harness-config/runner/actions/sweep/arms.registry", "reportArgs": [] } }
+            """);
+
+        Assert.Equal(".harness-config/runner/actions/sweep/arms.registry", config.Mutations.Registry);
+        Assert.True(config.Mutations.ReportArgs is null or { Count: 0 }, "report arguments given empty were read as some");
+    }
+
+    /// <summary>
     /// Every way a runner's action can be spelled wrong, refused when the file is read rather than
     /// when a runner is finally invoked. The rule needs no file system, so it belongs here: a
     /// configuration <c>legs</c> calls valid is one <c>run</c> can act on, and the promise that

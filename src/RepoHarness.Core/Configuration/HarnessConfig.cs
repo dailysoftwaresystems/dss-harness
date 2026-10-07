@@ -106,6 +106,12 @@ public sealed class HarnessConfig
     public AnchorSettings Anchors { get; init; } = new();
 
     /// <summary>
+    /// Mutation testing: the arms registry <c>check-mutations</c> drives, its texts, the worker copies a leg sweeps
+    /// with, and how a test binary writes the report each arm is judged by.
+    /// </summary>
+    public MutationSettings Mutations { get; init; } = new();
+
+    /// <summary>
     /// The directories under <c>.harness-config/sshItems</c> holding each ssh host's connection data,
     /// named here rather than described here: an address, a user and a key are not the repository's
     /// business, and the tracked configuration must never carry them.

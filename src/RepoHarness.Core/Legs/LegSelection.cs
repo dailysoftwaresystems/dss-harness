@@ -19,11 +19,17 @@ public sealed record LegSelection(IReadOnlyList<SelectedLeg> Legs, bool Named)
     /// set's name selects its legs. <c>--legs</c> left out, passed as <see langword="null"/>, selects every
     /// declared leg.
     /// </summary>
+    /// <param name="config">The configuration declaring the legs and leg sets.</param>
+    /// <param name="values">What was given, or <see langword="null"/> where nothing was.</param>
+    /// <param name="given">
+    /// What gave the names, as a refusal says it: <c>--legs</c>, or another place that names legs in its syntax, such
+    /// as a mutation arm's S row.
+    /// </param>
     /// <exception cref="HarnessException">
     /// A name is neither a leg nor a leg set, or <c>--legs</c> was given no name at all. Raised before any
     /// host is measured, so a typo never costs a connection attempt, let alone a run.
     /// </exception>
-    public static LegSelection Resolve(HarnessConfig config, IReadOnlyList<string>? values)
+    public static LegSelection Resolve(HarnessConfig config, IReadOnlyList<string>? values, string given = "--legs")
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -42,7 +48,7 @@ public sealed record LegSelection(IReadOnlyList<SelectedLeg> Legs, bool Named)
         {
             throw new HarnessException(
                 HarnessExit.UsageError,
-                "--legs was given no leg or leg set name; leave it out to select every leg");
+                $"{given} was given no leg or leg set name; leave it out to select every leg");
         }
 
         var unknown = names
@@ -56,7 +62,7 @@ public sealed record LegSelection(IReadOnlyList<SelectedLeg> Legs, bool Named)
 
             throw new HarnessException(
                 HarnessExit.UsageError,
-                $"--legs names {string.Join(", ", unknown.Select(name => $"'{name}'"))}, which is neither a leg nor a leg set; {declared}");
+                $"{given} names {string.Join(", ", unknown.Select(name => $"'{name}'"))}, which is neither a leg nor a leg set; {declared}");
         }
 
         var selected = new List<SelectedLeg>();

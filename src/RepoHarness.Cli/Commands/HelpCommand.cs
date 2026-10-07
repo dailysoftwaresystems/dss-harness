@@ -8,6 +8,7 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
@@ -49,6 +50,7 @@ internal static class HelpCommand
         new("tools", [], "What install-missing-tools installs, and where", RenderTools),
         new("runners", ["runner", "actions"], "Predefined runners, action files and excused failures", RenderRunners),
         new("verdicts", ["verdict"], "What each leg verdict means, and what to do about it", RenderVerdicts),
+        new("mutations", ["mutation", "check-mutations", "arms"], "Mutation testing: the arms registry and what each arm must do", RenderMutations),
         new("ci", ["check-ci-legs"], "How check-ci-legs finds a workflow's legs and budgets", RenderCi),
     ];
 
@@ -699,7 +701,8 @@ internal static class HelpCommand
         builder.AppendLine("declaration did not hold, survived where its mutation built and ran and no case");
         builder.AppendLine("failed, and unattributed where its run failed and nothing ties that to a case. An");
         builder.AppendLine("arm that was due and never driven - its sweep cancelled, no worker left to run it,");
-        builder.AppendLine("or the unmutated run of its test binary not passing - is stopped, saying why.");
+        builder.AppendLine("or the unmutated run of its test binary not passing - is stopped, saying why");
+        builder.AppendLine("('help mutations').");
         builder.AppendLine();
         builder.AppendLine("When several apply the more fundamental one is reported, in the order above.");
         builder.AppendLine("A leg whose inputs moved is not reported as failed even when its tests failed,");
@@ -738,6 +741,128 @@ internal static class HelpCommand
         return builder.ToString();
     }
 
+
+    private static string RenderMutations()
+    {
+        var builder = new StringBuilder();
+
+        builder.AppendLine("Mutation testing");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "check-mutations proves a repository's tests can fail. For each selected leg and each arm its registry "
+            + "declares, it mutates exactly the text the arm names, in a worker copy of the leg's tree and never in the tree "
+            + "itself; builds the arm's target; proves every object that depends on the site was rebuilt; runs the arm's test "
+            + "binary whole; judges what failed against what the arm declares, as an exact set; and puts the site back, "
+            + "checked by its hash. A BUILD-RED arm's mutation must instead stop the build at an object that depends on its "
+            + "site, and its paired positive control must build.");
+        builder.AppendLine();
+        builder.AppendLine("  \"mutations\": {");
+        builder.AppendLine("    \"registry\": \"tests/mutations/arms.registry\",");
+        builder.AppendLine("    \"textDirectory\": \"tests/mutations/texts\",");
+        builder.AppendLine($"    \"reportArgs\": [\"--gtest_output=xml:{{{MutationReport.Placeholder}}}\"]");
+        builder.AppendLine("  }");
+        builder.AppendLine();
+        AppendKeys(builder, ConfigKeys.Of<MutationSettings>());
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"workers is {MutationSettings.DefaultWorkers} and runTimeFactor {MutationSettings.DefaultRunTimeFactor.ToString(CultureInfo.InvariantCulture)} "
+            + "where left out. The registry and textDirectory are relative to the repository root, and carried by sync like "
+            + "the rest of the tree: one inside the harness's own directory, which sync never carries but for its runner "
+            + $"actions, is refused. reportArgs makes a test binary write a JUnit XML report to {{{MutationReport.Placeholder}}}, "
+            + "a new file for every run: [\"--reporter\", \"JUnit::out={report}\"] for Catch2, [\"--reporters=junit\", "
+            + "\"--out={report}\"] for doctest, [\"--logger=JUNIT,all,{report}\"] for Boost.Test. It is required where an arm runs "
+            + "its binary, and only {report} may stand in braces.");
+        builder.AppendLine();
+        builder.AppendLine("The registry");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The repository's own file: one row to a line, its fields separated by '|' and trimmed, a line whose first "
+            + "character that is not blank is '#' a comment, nothing escaped, and the last field taking the rest of the line, "
+            + "so a why may hold a '|'.");
+        builder.AppendLine();
+        builder.AppendLine("  A | arm | site | before | after | red kind | target | runner | cases | diag | why");
+        builder.AppendLine("  C | arm | case | why                          a case the mutation must redden");
+        builder.AppendLine("  G | arm | case | why                          a neighbour that must run and stay green");
+        builder.AppendLine("  B | arm | control before | control after | why");
+        builder.AppendLine("                                                a BUILD-RED arm's paired control");
+        builder.AppendLine("  M | arm | site | before | after | why         another site, mutated, put back and");
+        builder.AppendLine("                                                checked with the arm's own");
+        builder.AppendLine("  S | arm | legs | why                          the legs it runs on, named as --legs");
+        builder.AppendLine("                                                names them; without one, every leg");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"site is the file mutated. before, after, diag and a control's texts name files holding the text, so a mutation "
+            + "may span lines: each read as its file holds it, less one line ending at its end, and where the site ends its "
+            + "lines otherwise, given the site's line endings, so one registry serves a checkout with either. red kind is "
+            + $"{MutationRegistryParser.TestRed} or {MutationRegistryParser.BuildRed}, declared and never inferred. target is the "
+            + "build target the mutation is built as, and runner the test target whose binary runs, found through the build's "
+            + "own manifest; cases is how many cases it runs, skipped ones included. A case is named as its report names it, "
+            + "classname.name: Suite.Case for GoogleTest. A BUILD-RED arm runs nothing: its runner is "
+            + $"'{MutationRegistryParser.NoRunner}', its cases 0 and its diag {MutationRegistryParser.PairedControlToken}, and "
+            + "it has exactly one B row and no C, G or M row. A TEST-RED arm has at least one C row and no B row.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"The whole registry is read before any host is touched, and every problem is listed with its line ({HarnessExit.ConfigInvalid}): "
+            + "a row of no kind it reads; an arm id outside [A-Za-z0-9_-], or one another reads as ignoring case; a path outside "
+            + "[A-Za-z0-9_./-], absolute, climbing out with '..', ending in '/', or with an empty or '.' segment; a target or "
+            + "runner outside [A-Za-z0-9_.+-]; a row naming an arm no A row above it declares; a case both red and green, or "
+            + "declared twice; an M row mutating a file its arm already mutates; an S row naming neither a leg nor a leg set; "
+            + "a text no row cites in textDirectory, a mutation nobody drives; and a cited text that is not there, or a "
+            + "before-text that is empty, which would match everywhere. Rows R, X, I, F and T are refused, each naming what "
+            + "took its place: the leg's own tree, project and variant (R); sync's exclusions (X); the variant's configure "
+            + "(I); the dependency sources the leg's own build fetched, read from its CMake cache (F); and ninja's records of "
+            + "every object that depends on a site (T).");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"--arms names the arms to drive, as --legs names legs, and an unknown one is refused ({HarnessExit.UsageError}). "
+            + "On each leg the arms its S row does not name, and those --arms does not, are skipped-not-selected; an arm "
+            + "selected and named by no selected leg's S row is named in the run's closing line.");
+        builder.AppendLine();
+        builder.AppendLine("Verdicts");
+        builder.AppendLine();
+        builder.AppendLine("Each arm reaches one, and a leg's is the worst of its own and its arms':");
+        builder.AppendLine();
+        builder.AppendLine("  passed        the arm held as declared");
+        builder.AppendLine("  failed        its build failed upstream of every object that depends on its site");
+        builder.AppendLine("  violated      its declaration did not hold: its before-text not in its site exactly");
+        builder.AppendLine("                once, its target depending on no site, other cases red than its C rows,");
+        builder.AppendLine("                another number of cases run, a G row's case not run, its diagnostic not");
+        builder.AppendLine("                said, a TEST-RED mutation that does not compile, or a BUILD-RED one");
+        builder.AppendLine("                that does, or whose control does not");
+        builder.AppendLine("  survived      the mutation built and ran, and no case failed");
+        builder.AppendLine("  unattributed  the run failed and nothing ties that to a case: no report, an unreadable");
+        builder.AppendLine("                one, a failing exit whose report names no failing case, or a run past");
+        builder.AppendLine("                its bound, stopped as hung");
+        builder.AppendLine("  unwitnessed   the build passed and an object that depends on a site was not rebuilt");
+        builder.AppendLine("  stopped       never driven: the sweep was cancelled, no worker was left to run it, or");
+        builder.AppendLine("                the unmutated run of its binary did not pass");
+        builder.AppendLine("  poisoned      a site could not be put back as it was");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A repository moving its sweep from a mutation harness of its own, which exited with the codes on the left, "
+            + "reads these instead:");
+        builder.AppendLine();
+        builder.AppendLine($"  0  as declared                                {HarnessExit.Success,3}  passed");
+        builder.AppendLine($"  1  a violation, a missing diagnostic included {LegExit.Violated,3}  violated");
+        builder.AppendLine($"  5  nothing reddened                           {LegExit.Survived,3}  survived");
+        builder.AppendLine($"  6  a red no case name could be read for       {LegExit.Unattributed,3}  unattributed");
+        builder.AppendLine($"  7  a build that passed missed a declared unit {LegExit.Unwitnessed,3}  unwitnessed");
+        builder.AppendLine($"  8  the build failed upstream of the unit      {HarnessExit.CommandFailed,3}  failed");
+        builder.AppendLine($"  4  the harness broke                          {HarnessExit.InternalError,3}  poisoned");
+        builder.AppendLine($"  4  an arm not driven                               stopped: the run exits {HarnessExit.Incomplete}");
+        builder.AppendLine("                                                      unless something failed");
+        builder.AppendLine($"  2  usage, or the registry not valid           {HarnessExit.UsageError,3}  usage, or {HarnessExit.ConfigInvalid} not valid");
+        builder.AppendLine($"     a live owner                               {HarnessExit.Refused,3}  refused-locked");
+
+        return builder.ToString();
+    }
 
     private static string RenderAdmission()
     {
@@ -1813,6 +1938,8 @@ internal static class HelpCommand
         builder.AppendLine("  contention     tools that, running against a leg's build directory, void its result");
         builder.AppendLine("  worktrees      naming, path budget and path limit");
         builder.AppendLine("  anchors        the pending and done anchor registries, and how new ids are spelled");
+        builder.AppendLine("  mutations      the mutation arms registry, its texts, the workers a leg sweeps");
+        builder.AppendLine("                 with and its test binaries' report ('help mutations')");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");

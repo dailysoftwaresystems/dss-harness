@@ -168,9 +168,64 @@ public sealed partial class HelpTests
             verdict => Assert.Contains($"  {verdict,-22} counts as failure ", result.StandardOutput, StringComparison.Ordinal));
         Assert.Contains(
             "An arm that was due and never driven - its sweep cancelled, no worker left to run it, or the unmutated run of "
-            + "its test binary not passing - is stopped, saying why.",
+            + "its test binary not passing - is stopped, saying why ('help mutations').",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The mutations topic, under each of its names, lists every key the section takes, read from the code with the
+    /// defaults the code gives, every row the registry reads, and the codes a sweep moving from a mutation harness of a
+    /// repository's own reads in place of that harness's - each verdict's code read from the verdict table.
+    /// </summary>
+    [Theory]
+    [InlineData("mutations")]
+    [InlineData("check-mutations")]
+    [InlineData("arms")]
+    public async Task TheMutationsTopic_NamesEveryKey_EveryRow_AndTheCodesItMapsOnto(string topic)
+    {
+        var result = await CliRunner.RunAsync(["help", topic], TestContext.Current.CancellationToken);
+        var keys = ConfigKeys.Of<MutationSettings>();
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Equal(["registry", "textDirectory", "workers", "reportArgs", "runTimeFactor"], keys.Select(key => key.Name));
+        Assert.All(keys, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.Contains(
+            string.Create(CultureInfo.InvariantCulture, $"workers is {MutationSettings.DefaultWorkers} and runTimeFactor {MutationSettings.DefaultRunTimeFactor} where left out."),
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+
+        foreach (var row in new[]
+        {
+            "  A | arm | site | before | after | red kind | target | runner | cases | diag | why",
+            "  C | arm | case | why ",
+            "  G | arm | case | why ",
+            "  B | arm | control before | control after | why",
+            "  M | arm | site | before | after | why ",
+            "  S | arm | legs | why ",
+        })
+        {
+            Assert.Contains(row, result.StandardOutput, StringComparison.Ordinal);
+        }
+
+        foreach (var (theirs, verdict) in new[]
+        {
+            ("0  as declared", LegVerdict.Passed),
+            ("1  a violation, a missing diagnostic included", LegVerdict.Violated),
+            ("5  nothing reddened", LegVerdict.Survived),
+            ("6  a red no case name could be read for", LegVerdict.Unattributed),
+            ("7  a build that passed missed a declared unit", LegVerdict.Unwitnessed),
+            ("8  the build failed upstream of the unit", LegVerdict.Failed),
+            ("4  the harness broke", LegVerdict.Poisoned),
+        })
+        {
+            Assert.Matches(
+                $@"(?m)^  {Regex.Escape(theirs)} +{Verdicts.ExitCodeFor(verdict)}  {Regex.Escape(Verdicts.Display(verdict))}\r?$",
+                result.StandardOutput);
+        }
+
+        Assert.Contains($"4  an arm not driven                               stopped: the run exits {HarnessExit.Incomplete}", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"a live owner                               {HarnessExit.Refused,3}  refused-locked", result.StandardOutput, StringComparison.Ordinal);
     }
 
     [Fact]
