@@ -1016,6 +1016,17 @@ Both ends must be the same build, so before anything runs on a host:
 - The version and the SHA-256 of the tool's assembly are both compared. A build from source
   reports the same version as the published package, while the assembly installed from one
   package is the same bytes on every operating system.
+- An install or update is said with whether the host then answered as this build - the
+  DssHarness it now runs read back, not the installer's word - and what stopped the host
+  answering after one is said as coming after it: `updated DssHarness 0.6.8 to 0.6.9, then the
+  host could not be reached: ssh said Connection timed out during banner exchange`. Said alone,
+  an update beside a warning for every leg on that host that DssHarness there did not answer left
+  a consumer unable to tell which version the host ran.
+- A host that takes the connection and never says it is an ssh server within the connect
+  timeout - asleep behind whatever took the connection, or still waking - could not be reached,
+  as one whose name did not resolve could not: ssh's "Connection timed out during banner
+  exchange" means no session began, so nothing ran there, and a host's `wakeWaitSeconds` waits
+  it out as a connection opens, as it waits out a name that did not resolve.
 
 `host-exec` returns the exit code of the command it ran on the host, unchanged, and 15 when
 nothing could run there: the host is unreachable, has no SDK, could not be brought to this

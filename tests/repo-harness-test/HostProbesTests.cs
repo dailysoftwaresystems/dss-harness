@@ -133,10 +133,12 @@ public sealed class HostProbesTests
 
     /// <summary>
     /// ssh's own words for never having connected, as each client measured says them - a name that did not
-    /// resolve, an address where nothing answered, one that refused - read out of whatever else it printed.
-    /// What it fails over after the host answered is not among them: there the host was reached.
+    /// resolve, an address where nothing answered, one that refused, one where what took the connection never
+    /// said it was an ssh server - read out of whatever else it printed. What it fails over after the host
+    /// answered is not among them: there the host was reached.
     /// </summary>
     [Theory]
+    [InlineData("Connection timed out during banner exchange\r\nConnection to 192.0.2.10 port 22 timed out\r\n", "Connection timed out during banner exchange")]
     [InlineData("ssh: Could not resolve hostname mac.local: No such host is known. \r\n", "ssh: Could not resolve hostname mac.local: No such host is known.")]
     [InlineData("ssh: Could not resolve hostname nosuchhost.invalid: Name or service not known\n", "ssh: Could not resolve hostname nosuchhost.invalid: Name or service not known")]
     [InlineData("ssh: connect to host 192.0.2.10 port 22: Connection timed out\n", "ssh: connect to host 192.0.2.10 port 22: Connection timed out")]

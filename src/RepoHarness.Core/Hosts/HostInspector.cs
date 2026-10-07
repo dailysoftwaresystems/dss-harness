@@ -358,15 +358,14 @@ public sealed class HostInspector(
         // runs there; the kind of shell alone cannot say, since PowerShell runs on both.
         var windowsHost = listed.Any(sdk => sdk.OnWindows);
 
-        var (reason, action) = await BringToThisBuildAsync(found.Host, connection, windowsHost, root, cancellationToken).ConfigureAwait(false);
+        var (reason, brought) = await BringToThisBuildAsync(found.Host, connection, windowsHost, root, cancellationToken).ConfigureAwait(false);
 
         if (reason is not null)
         {
             return found with { Reason = reason };
         }
 
-        return await AskAsync(found with { Actions = action is null ? found.Actions : [.. found.Actions, action] }, connection, windowsHost, questions, root, cancellationToken)
-            .ConfigureAwait(false);
+        return await AskAsync(found, brought, connection, windowsHost, questions, root, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -447,14 +446,37 @@ public sealed class HostInspector(
             cancellationToken);
 
     /// <summary>Asks DssHarness on the host which build it is and what the host is, and checks the build is this machine's.</summary>
+    /// <param name="found">What is known of the host so far.</param>
+    /// <param name="brought">
+    /// What bringing DssHarness there to this machine's build took - installing it, or updating it - or
+    /// <see langword="null"/> where it took nothing.
+    /// </param>
+    /// <param name="connection">The connection to the host.</param>
+    /// <param name="windowsHost">Whether the host runs Windows.</param>
+    /// <param name="questions">What the host is asked about itself.</param>
+    /// <param name="root">This machine's build.</param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <remarks>
+    /// An install or an update that ran is said with whether the host then answered as the build it was brought
+    /// to - the one reading of the version it runs that is not the installer's word - and what stopped the host
+    /// answering after it is said as coming after it. Measured: an update said alone, beside every leg on that
+    /// host warned that DssHarness there did not answer, left a reader unable to tell which version it runs.
+    /// </remarks>
     private async Task<HostReport> AskAsync(
         HostReport found,
+        string? brought,
         HostConnection connection,
         bool windowsHost,
         HostQuestions questions,
         ToolIdentity root,
         CancellationToken cancellationToken)
     {
+        // Until the host answers as this build, an install or update there is one it has not answered as since.
+        var unread = brought is null ? found : found with { Actions = [.. found.Actions, $"{brought}, and it has not answered as {root.Version} since"] };
+
+        // Why the host cannot take legs, after whatever bringing it to this build took.
+        HostReport Stopped(HostReport report, string why) => report with { Reason = brought is null ? why : $"{brought}, then {why}" };
+
         var emulators = questions.Emulators;
 
         // Global tools are installed under the home directory, which is where programs start on every
@@ -503,14 +525,14 @@ public sealed class HostInspector(
 
         if (!answer.Succeeded)
         {
-            return found with { Reason = HostProbes.Failure($"{ToolPackage.Id} did not answer from {shownTool}, where global tools are installed", answer, connection) };
+            return Stopped(unread, HostProbes.Failure($"{ToolPackage.Id} did not answer from {shownTool}, where global tools are installed", answer, connection));
         }
 
         var start = answer.StandardOutput.IndexOf('{', StringComparison.Ordinal);
 
         if (start < 0)
         {
-            return found with { Reason = $"{ToolPackage.Id} at {shownTool} answered with no document: {HostProbes.Excerpt(HostProbes.AsConfigured(answer.StandardOutput, connection))}" };
+            return Stopped(unread, $"{ToolPackage.Id} at {shownTool} answered with no document: {HostProbes.Excerpt(HostProbes.AsConfigured(answer.StandardOutput, connection))}");
         }
 
         var document = answer.StandardOutput[start..];
@@ -519,23 +541,25 @@ public sealed class HostInspector(
         // shape is still reported as the build it is, with the remedy for that.
         if (!TryReadIdentity(document, out var version, out var assemblySha256, out var problem))
         {
-            return found with { Reason = $"{ToolPackage.Id} at {shownTool} answered in a form this build cannot read: {problem}" };
+            return Stopped(unread, $"{ToolPackage.Id} at {shownTool} answered in a form this build cannot read: {problem}");
         }
 
         if (!string.Equals(version, root.Version, StringComparison.Ordinal))
         {
-            return found with { Reason = $"{ToolPackage.Id} there reports {version}, and {root.Version} was expected" };
+            return Stopped(unread, $"{ToolPackage.Id} there reports {version}, and {root.Version} was expected");
         }
 
         if (!string.Equals(assemblySha256, root.AssemblySha256, StringComparison.OrdinalIgnoreCase))
         {
-            return found with
-            {
-                Reason = $"{ToolPackage.Id} {version} there is a different build from this machine's although the versions match, "
+            return Stopped(
+                unread,
+                $"{ToolPackage.Id} {version} there is a different build from this machine's although the versions match, "
                     + "so one of the two is not the package published on nuget.org; on the machine that has a local build, run "
-                    + $"dotnet tool uninstall --global {ToolPackage.Id}, then dotnet tool install --global {ToolPackage.Id} --version {version}",
-            };
+                    + $"dotnet tool uninstall --global {ToolPackage.Id}, then dotnet tool install --global {ToolPackage.Id} --version {version}");
         }
+
+        // It answered as this build: whatever bringing it here took, took.
+        var read = brought is null ? found : found with { Actions = [.. found.Actions, $"{brought}, and it answers as {root.Version}"] };
 
         HostAgentInfo? info;
 
@@ -545,12 +569,12 @@ public sealed class HostInspector(
         }
         catch (JsonException ex)
         {
-            return found with { Reason = $"{ToolPackage.Id} at {shownTool} answered in a form this build cannot read: {ex.Message}" };
+            return Stopped(read, $"{ToolPackage.Id} at {shownTool} answered in a form this build cannot read: {ex.Message}");
         }
 
         return info is null
-            ? found with { Reason = $"{ToolPackage.Id} at {shownTool} answered with an empty document" }
-            : Answered(found, info with
+            ? Stopped(read, $"{ToolPackage.Id} at {shownTool} answered with an empty document")
+            : Answered(read, info with
             {
                 // What the host found is said under the name the configuration declares, as everything the host
                 // says is: an emulator's witness, a developer environment, a program or a disk can print the host's

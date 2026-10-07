@@ -205,6 +205,7 @@ public sealed class HostInspectorTests
     [Theory]
     [InlineData(255, "ssh: Could not resolve hostname host.invalid: No such host is known.", "the host could not be reached: ssh said ssh: Could not resolve hostname host.invalid: No such host is known.")]
     [InlineData(255, "banner exchange: Connection to UNKNOWN port -1: Connection refused", "the host could not be reached: ssh said banner exchange: Connection to UNKNOWN port -1: Connection refused")]
+    [InlineData(255, "Connection timed out during banner exchange", "the host could not be reached: ssh said Connection timed out during banner exchange")]
     [InlineData(255, "Connection to host.invalid closed by remote host.", "DssHarness did not answer from")]
     [InlineData(1, "Segmentation fault", "DssHarness did not answer from")]
     public async Task AHostSshNeverConnectedTo_IsSaidAsThat_AndNotAsDssHarnessNotAnswering(int exitCode, string said, string reason)
@@ -422,7 +423,7 @@ public sealed class HostInspectorTests
         var report = await fixture.InspectAsync(HostId.Wsl(Distro));
 
         Assert.True(report.Available, report.Reason);
-        Assert.Equal(["installed DssHarness 1.2.0"], report.Actions);
+        Assert.Equal(["installed DssHarness 1.2.0, and it answers as 1.2.0"], report.Actions);
         Assert.Equal(
             ["tool", "install", "--global", "DssHarness", "--version", "1.2.0", "--source", "https://api.nuget.org/v3/index.json"],
             fixture.Commands.Single("tool", "install").Arguments);
@@ -459,7 +460,7 @@ public sealed class HostInspectorTests
         var report = await fixture.InspectAsync(HostId.Wsl(Distro));
 
         Assert.True(report.Available, report.Reason);
-        Assert.Equal(["updated DssHarness 1.1.9 to 1.2.0"], report.Actions);
+        Assert.Equal(["updated DssHarness 1.1.9 to 1.2.0, and it answers as 1.2.0"], report.Actions);
 
         // nuget.org is named as the only source, so no feed configured on the host can supply another
         // package under the same name.
@@ -513,7 +514,31 @@ public sealed class HostInspectorTests
 
         Assert.True(report.Available, report.Reason);
         Assert.True(ended);
-        Assert.Equal(["updated DssHarness 1.1.9 to 1.2.0"], report.Actions);
+        Assert.Equal(["updated DssHarness 1.1.9 to 1.2.0, and it answers as 1.2.0"], report.Actions);
+    }
+
+    /// <summary>
+    /// An update is said with whether the host then answered as the build it was updated to, and what stopped
+    /// it answering is said as coming after the update: a host that stopped answering, and one whose DssHarness
+    /// still answers as the version before. Measured: an update said alone, beside every leg on that host warned
+    /// that DssHarness there did not answer, left a reader unable to tell which version it runs.
+    /// </summary>
+    [Theory]
+    [InlineData("stopped", "the host could not be reached: ssh said Connection timed out during banner exchange")]
+    [InlineData("behind", "DssHarness there reports 1.1.9, and 1.2.0 was expected")]
+    public async Task AnUpdate_SaysWhetherTheHostThenAnsweredAsThatBuild_AndWhatStoppedItAfter(string after, string why)
+    {
+        using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(installed: "1.1.9", agent: _ => after == "stopped"
+            ? HostResults.Failed(255, "Connection timed out during banner exchange\r\nConnection to host.invalid port 22 timed out\r\n")
+            : HostResults.Ok(JsonSerializer.Serialize(
+                new HostAgentInfo { Version = "1.1.9", AssemblySha256 = "oldhash", Os = "linux", Processor = "x86_64" },
+                HostAgentProtocol.JsonOptions))));
+
+        var report = await fixture.InspectAsync(HostId.Ssh(SshName));
+
+        Assert.False(report.Available);
+        Assert.Equal(["updated DssHarness 1.1.9 to 1.2.0, and it has not answered as 1.2.0 since"], report.Actions);
+        Assert.Equal($"updated DssHarness 1.1.9 to 1.2.0, then {why}", report.Reason);
     }
 
     [Fact]
@@ -713,14 +738,17 @@ public sealed class HostInspectorTests
     }
 
     /// <summary>
-    /// A host whose name answers but whose connections go untaken for the whole window is refused naming the
-    /// window, and, asked for again in the same command, refused at once rather than connected to again.
+    /// A host whose name answers but whose connections go untaken for the whole window - or are taken by
+    /// something that never says it is an ssh server, as a sleeping host's are - is refused naming the window,
+    /// and, asked for again in the same command, refused at once rather than connected to again.
     /// </summary>
-    [Fact]
-    public async Task AHostWhoseConnectionsGoUntakenForTheWindow_IsRefusedNamingIt_AndIsNotTriedAgain()
+    [Theory]
+    [InlineData("ssh: connect to host host.invalid port 2222: Connection refused\n")]
+    [InlineData("Connection timed out during banner exchange\nConnection to host.invalid port 2222 timed out\n")]
+    public async Task AHostWhoseConnectionsGoUntakenForTheWindow_IsRefusedNamingIt_AndIsNotTriedAgain(string said)
     {
         using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(), wakeWaitSeconds: 1, wakePoll: TimeSpan.FromMilliseconds(100));
-        fixture.Commands.ShellProbe = HostResults.Failed(HostProbes.SshFailed, "ssh: connect to host host.invalid port 2222: Connection refused\n");
+        fixture.Commands.ShellProbe = HostResults.Failed(HostProbes.SshFailed, said);
 
         var report = await fixture.InspectAsync(HostId.Ssh(SshName));
         var probes = fixture.Commands.ShellProbes.Count;

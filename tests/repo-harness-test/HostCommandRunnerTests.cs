@@ -181,6 +181,7 @@ public sealed class HostCommandRunnerTests
     [Theory]
     [InlineData("ssh: connect to host 192.0.2.10 port 2222: Connection timed out\n", true)]
     [InlineData("banner exchange: Connection to UNKNOWN port -1: Connection refused\r\n", true)]
+    [InlineData("Connection timed out during banner exchange\r\nConnection to 192.0.2.10 port 2222 timed out\r\n", true)]
     [InlineData("Host key for [host.invalid]:2222 has changed and you have requested strict checking.\nHost key verification failed.\n", true)]
     [InlineData("Connection to host.invalid closed by remote host.\n", false)]
     [InlineData("harness@host.invalid: Permission denied (publickey).\n", false)]

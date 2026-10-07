@@ -1120,7 +1120,10 @@ internal static class HelpCommand
         builder.AppendLine("a host that is behind is installed or updated to this version, never downgraded,");
         builder.AppendLine($"and a host that is ahead stops everything ({HarnessExit.Refused}) until this machine is updated. The");
         builder.AppendLine("version and a hash of the tool's own assembly are both compared, because a build");
-        builder.AppendLine("from source reports the same version as the published package.");
+        builder.AppendLine("from source reports the same version as the published package. An install or update");
+        builder.AppendLine("is said with whether the host then answered as this build ('updated DssHarness A to B,");
+        builder.AppendLine("and it answers as B'), and what stopped it answering after one is said as coming after");
+        builder.AppendLine("it ('updated DssHarness A to B, then the host could not be reached: ...').");
         builder.AppendLine();
         builder.AppendLine("The DssHarness on a host is reached through a hidden host-agent command, with the");
         builder.AppendLine("request on standard input, held open while the host works: interrupting host-exec");
