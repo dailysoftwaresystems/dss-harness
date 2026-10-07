@@ -1,6 +1,7 @@
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
@@ -194,6 +195,82 @@ public sealed class RemoteLegRunnerTests
         var entry = await Runner(hosts).RunAsync("run", Leg(), [], TestContext.Current.CancellationToken);
 
         Assert.Equal([Kept], entry.KeptOutputs);
+    }
+
+    /// <summary>
+    /// Each arm a host's sweep was asked about travels on its leg's line as the host judged it, read from the very
+    /// document the host writes: what its run measured beside what it declares, and its records as the host names
+    /// them, which stay on that host - its detail naming the host as declared, never by an address its name resolved
+    /// to, and a verdict this build does not know read as poisoned rather than as any it does.
+    /// </summary>
+    [Fact]
+    public async Task EachArmAHostsSweepJudged_IsCarriedOnItsLegsLine()
+    {
+        var written = LedgerReport
+            .From(
+                [
+                    new LegEntry
+                    {
+                        Leg = "wsl-debug",
+                        Verdict = LegVerdict.Survived,
+                        Arms =
+                        [
+                            new ArmEntry
+                            {
+                                Arm = "charge-bound",
+                                Verdict = LegVerdict.Survived,
+                                Detail = "ran 3 case(s) beside 192.0.2.10, and none failed",
+                                Duration = TimeSpan.FromSeconds(12.5),
+                                Worker = 2,
+                                Cases = 3,
+                                DeclaredCases = 3,
+                                Reds = [],
+                                DeclaredReds = ["Fixture.Charge"],
+                                Records = "/home/dev/repo/.harness-config/runs/r1/wsl-debug/arms/charge-bound",
+                            },
+                            new ArmEntry { Arm = "floor", Verdict = LegVerdict.Passed, Detail = "a verdict of a later build", DeclaredCases = 3, DeclaredReds = ["Fixture.Floor"] },
+                        ],
+                    },
+                ],
+                durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: [])
+            .Replace("\"verdict\": \"passed\"", "\"verdict\": \"exploded\"", StringComparison.Ordinal);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var mac = HostId.Ssh("mac");
+        var connection = new HostConnection
+        {
+            Host = mac,
+            Address = "mac.invalid",
+            Resolved = new ResolvedAddresses(new AddressResolution("mac.invalid", Attempts: 1, ["192.0.2.10"]), NSubstitute.Substitute.For<IHostAddressResolver>()),
+        };
+        var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
+
+        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, leg, [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(["charge-bound", "floor"], entry.Arms.Select(arm => arm.Arm));
+
+        var charge = entry.Arms[0];
+
+        Assert.Equal((LegVerdict.Survived, "ran 3 case(s) beside mac.invalid, and none failed"), (charge.Verdict, charge.Detail));
+        Assert.Equal(TimeSpan.FromSeconds(12.5), charge.Duration);
+        Assert.Equal((2, 3, 3), (charge.Worker, charge.Cases, charge.DeclaredCases));
+        Assert.NotNull(charge.Reds);
+        Assert.Empty(charge.Reds);
+        Assert.Equal(["Fixture.Charge"], charge.DeclaredReds);
+        Assert.Equal("/home/dev/repo/.harness-config/runs/r1/wsl-debug/arms/charge-bound", charge.Records);
+
+        var floor = entry.Arms[1];
+
+        Assert.Equal(LegVerdict.Poisoned, floor.Verdict);
+        Assert.Equal((null, null, null, null), (floor.Worker, floor.Cases, floor.Reds, floor.Records));
+        Assert.Equal(["Fixture.Floor"], floor.DeclaredReds);
     }
 
     /// <summary>

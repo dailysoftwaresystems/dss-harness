@@ -328,6 +328,22 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
             // Relative to the tree, which is the same path in this machine's tree: what sync --pull takes.
             KeptOutputs = [.. entry.KeptOutputs ?? []],
+
+            // Each arm the host's sweep was asked about, as it judged it there: its records stay on that host, named as
+            // the host names them, and its detail named by the host this machine knows, as the leg's is.
+            Arms = [.. (entry.Arms ?? []).Select(arm => new ArmEntry
+            {
+                Arm = arm.Arm ?? string.Empty,
+                Verdict = Verdicts.Parse(arm.Verdict) ?? LegVerdict.Poisoned,
+                Detail = HostProbes.AsConfigured(arm.Detail ?? string.Empty, connection),
+                Duration = TimeSpan.FromSeconds(arm.DurationSeconds),
+                Worker = arm.Worker,
+                Cases = arm.Cases,
+                DeclaredCases = arm.DeclaredCases,
+                Reds = arm.Reds,
+                DeclaredReds = [.. arm.DeclaredReds ?? []],
+                Records = arm.Records,
+            })],
         };
     }
 
@@ -357,5 +373,19 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<string>? RanSteps = null,
         BuildSpace? Space = null,
         IReadOnlyList<string>? KeptOutputs = null,
-        AdmissionFact? Admission = null);
+        AdmissionFact? Admission = null,
+        IReadOnlyList<RemoteLedgerArm>? Arms = null);
+
+    /// <summary>One arm's line of a host's sweep, beneath its leg's.</summary>
+    private sealed record RemoteLedgerArm(
+        string? Arm,
+        string? Verdict,
+        string? Detail,
+        double DurationSeconds,
+        int? Worker,
+        int? Cases,
+        int DeclaredCases,
+        IReadOnlyList<string>? Reds,
+        IReadOnlyList<string>? DeclaredReds,
+        string? Records);
 }

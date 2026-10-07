@@ -812,8 +812,9 @@ internal static class HelpCommand
             + "[A-Za-z0-9_./-], absolute, climbing out with '..', ending in '/', or with an empty or '.' segment; a target or "
             + "runner outside [A-Za-z0-9_.+-]; a row naming an arm no A row above it declares; a case both red and green, or "
             + "declared twice; an M row mutating a file its arm already mutates; an S row naming neither a leg nor a leg set; "
-            + "a text no row cites in textDirectory, a mutation nobody drives; and a cited text that is not there, or a "
-            + "before-text that is empty, which would match everywhere. Rows R, X, I, F and T are refused, each naming what "
+            + "a text no row cites in textDirectory, a mutation nobody drives; a cited text that is not there; and a "
+            + "before-text, a control's before-text or a diagnostic holding nothing, which would match everywhere, or be said "
+            + "by every run. Rows R, X, I, F and T are refused, each naming what "
             + "took its place: the leg's own tree, project and variant (R); sync's exclusions (X); the variant's configure "
             + "(I); the dependency sources the leg's own build fetched, read from its CMake cache (F); and ninja's records of "
             + "every object that depends on a site (T).");
@@ -822,7 +823,7 @@ internal static class HelpCommand
             builder,
             $"--arms names the arms to drive, as --legs names legs, and an unknown one is refused ({HarnessExit.UsageError}). "
             + "On each leg the arms its S row does not name, and those --arms does not, are skipped-not-selected; an arm "
-            + "selected and named by no selected leg's S row is named in the run's closing line.");
+            + "selected and named by no selected leg's S row is named in a warning before the sweep starts.");
         builder.AppendLine();
         builder.AppendLine("Verdicts");
         builder.AppendLine();
@@ -838,7 +839,7 @@ internal static class HelpCommand
         builder.AppendLine("  survived      the mutation built and ran, and no case failed");
         builder.AppendLine("  unattributed  the run failed and nothing ties that to a case: no report, an unreadable");
         builder.AppendLine("                one, a failing exit whose report names no failing case, or a run past");
-        builder.AppendLine("                its bound, stopped as hung");
+        builder.AppendLine("                its bound, or silent for defaults.stallSeconds, stopped as hung");
         builder.AppendLine("  unwitnessed   the build passed and an object that depends on a site was not rebuilt");
         builder.AppendLine("  stopped       never driven: the sweep was cancelled, no worker was left to run it, or");
         builder.AppendLine("                the unmutated run of its binary did not pass");
@@ -1893,13 +1894,13 @@ internal static class HelpCommand
         builder.AppendLine(".harness-config through git but never the ignored part, so connection data and the");
         builder.AppendLine("run lock resolve back to the originating checkout. A run's records are the");
         builder.AppendLine("exception: they belong to the tree that ran it, so a run started inside a worktree");
-        builder.AppendLine("writes them there, and build, test and run name the directory in their output and");
-        builder.AppendLine("as runDirectory in --json. A leg a host ran names that host's own directory, its home");
-        builder.AppendLine($"written as ~ (see '{ToolPackage.Command} help legs'). Each names its run too, in its");
-        builder.AppendLine("first line, 'run <id>', and as runId in --json, however it ended: a run refused");
-        builder.AppendLine("before it had a directory keeps no records, and is cited by that id alone. Action");
-        builder.AppendLine("files are tracked, so a worktree has its own and a runner acts on the tree it was");
-        builder.AppendLine("asked about.");
+        builder.AppendLine("writes them there, and build, test, run and check-mutations name the directory in");
+        builder.AppendLine("their output and as runDirectory in --json. A leg a host ran names that host's own");
+        builder.AppendLine($"directory, its home written as ~ (see '{ToolPackage.Command} help legs'). Each names its run");
+        builder.AppendLine("too, in its first line, 'run <id>', and as runId in --json, however it ended: a run");
+        builder.AppendLine("refused before it had a directory keeps no records, and is cited by that id alone.");
+        builder.AppendLine("Action files are tracked, so a worktree has its own and a runner acts on the tree it");
+        builder.AppendLine("was asked about.");
 
         return builder.ToString();
     }

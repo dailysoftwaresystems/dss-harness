@@ -93,8 +93,8 @@ public sealed record LegWork(
 /// run, taking the locks, syncing each tree once, running the legs together, and reporting a ledger.
 /// </summary>
 /// <remarks>
-/// One implementation for <c>build</c>, <c>test</c> and <c>run</c>, so the isolation rules cannot
-/// hold for one command and not another. Each command supplies only what a leg actually does.
+/// One implementation for <c>build</c>, <c>test</c>, <c>run</c> and <c>check-mutations</c>, so the isolation
+/// rules cannot hold for one command and not another. Each command supplies only what a leg actually does.
 /// </remarks>
 public sealed class LegRunService(
     IHarnessContextLoader contextLoader,

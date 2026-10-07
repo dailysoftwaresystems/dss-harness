@@ -186,6 +186,50 @@ public sealed class MutationWorkersTests
     }
 
     /// <summary>
+    /// A project configured with cache variables beneath its own is given each it sets itself as it sets it - its spelling
+    /// and its value, whatever case one given beneath is in - and each other given, and is in every other way the project
+    /// it was: each of its settings carried over, whatever settings a project gains.
+    /// </summary>
+    [Fact]
+    public void CacheVarsBeneathAProjectsOwn_AreOutrankedByItsOwn_AndItIsOtherwiseTheProject()
+    {
+        var project = new ProjectConfig
+        {
+            Name = "app",
+            Type = "cmake",
+            Path = "native",
+            Targets = ["all_tests"],
+            BuildOutputs = [BuildOutput.Everywhere("bin/app")],
+            Env = { ["CC"] = "gcc" },
+            CacheVars = { ["FetchContent_Source_Dir_Json"] = "/mine/json", ["FOO"] = "1" },
+            DefaultToolchain = { ["linux"] = "gcc" },
+            RebuildableFormats = [".cpp"],
+            Test = new TestConfig(),
+        };
+
+        var beneath = project.WithCacheVarsBeneath(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["FETCHCONTENT_SOURCE_DIR_JSON"] = "/build/_deps/json-src",
+            ["FETCHCONTENT_SOURCE_DIR_GOOGLETEST"] = "/build/_deps/googletest-src",
+        });
+
+        Assert.Equal(
+            [
+                ("FETCHCONTENT_SOURCE_DIR_GOOGLETEST", "/build/_deps/googletest-src"),
+                ("FetchContent_Source_Dir_Json", "/mine/json"),
+                ("FOO", "1"),
+            ],
+            beneath.CacheVars.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).Select(pair => (pair.Key, pair.Value)));
+        Assert.Equal("1", beneath.CacheVars["foo"]);
+        Assert.Equal([("FetchContent_Source_Dir_Json", "/mine/json"), ("FOO", "1")], project.CacheVars.Select(pair => (pair.Key, pair.Value)));
+
+        foreach (var property in typeof(ProjectConfig).GetProperties().Where(property => property.Name is not nameof(ProjectConfig.CacheVars)))
+        {
+            Assert.Same(property.GetValue(project), property.GetValue(beneath));
+        }
+    }
+
+    /// <summary>
     /// What a build of a leg's variant is expected to come to - by which a leg's build is placed and a sweep's workers are
     /// counted alike: its declared buildSpaceGiB, else what its own last build recorded, else the main checkout's copy's.
     /// </summary>

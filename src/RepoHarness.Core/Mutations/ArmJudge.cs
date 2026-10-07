@@ -15,6 +15,12 @@ public sealed record ArmPreflight
     public IReadOnlyList<string> MissingSites { get; init; } = [];
 
     /// <summary>
+    /// What is wrong with each text the arm cites that cannot be used as the worker's copy holds it, as a line says it:
+    /// one the copy does not hold as a file, or a before-text holding nothing, which occurs everywhere.
+    /// </summary>
+    public IReadOnlyList<string> TextProblems { get; init; } = [];
+
+    /// <summary>
     /// How many times each before-text occurs: the arm's own and each M row's in its site, and a BUILD-RED arm's paired
     /// control's in its pristine site.
     /// </summary>
@@ -39,11 +45,17 @@ public sealed record ArmBuild(ReachedVerdict Verdict, IReadOnlyList<string> Fail
 /// <summary>One whole run of an arm's test binary.</summary>
 public sealed record ArmRun
 {
-    /// <summary>What the binary exited with, or <see langword="null"/> where it was stopped at its bound.</summary>
+    /// <summary>What the binary exited with, or <see langword="null"/> where it was stopped: at its bound, or as hung.</summary>
     public int? ExitCode { get; init; }
 
     /// <summary>Whether it ran past its bound, and was stopped.</summary>
     public bool StoppedAtBound { get; init; }
+
+    /// <summary>
+    /// How long it went without printing a line before it was stopped as hung, at <c>defaults.stallSeconds</c>, as every
+    /// phase is; <see langword="null"/> where it was not.
+    /// </summary>
+    public int? StalledAfterSeconds { get; init; }
 
     /// <summary>The bound the run had: <c>mutations.runTimeFactor</c> times the unmutated run, never less than it and a minute.</summary>
     public TimeSpan Bound { get; init; }
@@ -94,9 +106,10 @@ public enum ArmStep
 /// </summary>
 /// <remarks>
 /// <para>
-/// Pre-flight, before anything is built: a site the copy does not hold; a before-text that does not occur exactly once
-/// - the arm's, an M row's, or a paired control's in the pristine site; a target the leg's build does not build, or a
-/// runner building no program; and no object the target builds depending on a site - each <c>violated</c>.
+/// Pre-flight, before anything is built: a site the copy does not hold; a text it cites that the copy does not hold, or a
+/// before-text holding nothing; a before-text that does not occur exactly once - the arm's, an M row's, or a paired
+/// control's in the pristine site; a target the leg's build does not build, or a runner building no program; and no
+/// object the arm's build builds depending on a site - each <c>violated</c>.
 /// </para>
 /// <para>
 /// The mutated build: <c>stopped</c> where it was stopped, and the verdict of a guard of the build where one reached
@@ -108,7 +121,8 @@ public enum ArmStep
 /// object was not rebuilt, and <c>passed</c> otherwise.
 /// </para>
 /// <para>
-/// A TEST-RED arm's run: past its bound, <c>unattributed</c>; no report, or one that cannot be read, <c>unattributed</c>;
+/// A TEST-RED arm's run: past its bound, or stopped as hung for printing nothing, <c>unattributed</c>; no report, or one
+/// that cannot be read, <c>unattributed</c>;
 /// a failing exit whose report names no failing case, <c>unattributed</c>; another number of cases run than declared,
 /// <c>violated</c>; no case red, <c>survived</c>; the red cases not exactly the C rows', <c>violated</c>; a G row's
 /// case not run, <c>violated</c>; its diagnostic not said, <c>violated</c>; and otherwise <c>passed</c>.
@@ -199,6 +213,11 @@ public static class ArmJudge
             return ReachedVerdict.Of(LegVerdict.Violated, $"site '{missing}' is not a file in the worker's copy of the tree");
         }
 
+        if (preflight.TextProblems.FirstOrDefault() is { } text)
+        {
+            return ReachedVerdict.Of(LegVerdict.Violated, text);
+        }
+
         if (preflight.Counts.FirstOrDefault(count => count.Count != 1) is { } miscounted)
         {
             return ReachedVerdict.Of(
@@ -219,8 +238,30 @@ public static class ArmJudge
         return preflight.Dependents.Count == 0
             ? ReachedVerdict.Of(
                 LegVerdict.Violated,
-                $"no object target '{arm.Target}' builds depends on {string.Join(", ", arm.Sites.Select(site => $"'{site.Site}'"))}")
+                $"no object {Built(arm)} builds depends on {string.Join(", ", arm.Sites.Select(site => $"'{site.Site}'"))}")
             : null;
+    }
+
+    /// <summary>
+    /// What an arm's build builds, as a line names it: its target, and a TEST-RED arm's runner where that is another
+    /// target, which the build makes too so the binary run is the mutated tree's.
+    /// </summary>
+    private static string Built(MutationArm arm)
+        => Builds(arm).Count == 1 ? $"target '{arm.Target}'" : $"target '{arm.Target}' or runner '{arm.Runner}'";
+
+    /// <summary>
+    /// The targets an arm's build builds: its own, and a TEST-RED arm's runner where that is another target - a test
+    /// binary that links what the target builds is linked again only where the build is asked for it, and one left as an
+    /// earlier build linked it would run without the mutation.
+    /// </summary>
+    /// <param name="arm">The arm.</param>
+    public static IReadOnlyList<string> Builds(MutationArm arm)
+    {
+        ArgumentNullException.ThrowIfNull(arm);
+
+        return arm.Kind == RedKind.TestRed && !string.Equals(arm.Runner, arm.Target, StringComparison.Ordinal)
+            ? [arm.Target, arm.Runner]
+            : [arm.Target];
     }
 
     /// <summary>
@@ -266,6 +307,11 @@ public static class ArmJudge
                 LegVerdict.Unattributed,
                 $"ran past {run.Factor.ToString(System.Globalization.CultureInfo.InvariantCulture)}x the unmutated run, "
                 + $"{LedgerReport.FormatDuration(run.Bound)}, and was stopped");
+        }
+
+        if (run.StalledAfterSeconds is { } quiet)
+        {
+            return ReachedVerdict.Of(LegVerdict.Unattributed, $"printed nothing for {quiet}s, and was stopped as hung");
         }
 
         if (run.Report is not { } report)

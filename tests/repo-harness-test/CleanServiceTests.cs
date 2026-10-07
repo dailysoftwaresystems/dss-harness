@@ -1,10 +1,13 @@
+using System.Globalization;
 using System.Text.Json;
 using NSubstitute;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
@@ -273,6 +276,199 @@ public sealed class CleanServiceTests
         transports.DidNotReceiveWithAnyArgs().For(default!);
     }
 
+    /// <summary>
+    /// The mutation workers a leg's sweeps keep beside its tree are removed with its build directory, each named, and
+    /// what they held counted; a claim a dead sweep left on one is released, and said, with it. Another variant's workers,
+    /// and what an earlier removal of them left aside, are not this leg's to remove - its own aside is.
+    /// </summary>
+    [Fact]
+    public async Task ALegsMutationWorkers_AreRemovedWithItsBuildDirectory()
+    {
+        using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var first = workers.Made(variant, 1, 1000);
+        var second = workers.Made(variant, 2, 24);
+        var others = workers.Made(variant with { Sanitizer = "asan" }, 1, 10);
+        var aside = workers.Aside(variant, 3, 100);
+        var othersAside = workers.Aside(variant with { Sanitizer = "asan" }, 2, 100);
+
+        File.WriteAllText(
+            first + MutationWorkers.ClaimSuffix,
+            "{ \"machine\": \"" + Environment.MachineName + "\", \"processId\": " + (int.MaxValue - 1).ToString(CultureInfo.InvariantCulture)
+            + ", \"processStamp\": \"gone\", \"runId\": \"20250101-120000-deadbeef\", \"takenUtc\": \"2025-01-01T12:00:00Z\" }");
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config);
+
+        Assert.False(File.Exists(first + MutationWorkers.ClaimSuffix), "a dead sweep's claim goes with the worker it claimed");
+        Assert.Contains("An earlier run was abandoned", harness.StandardError.ToString(), StringComparison.Ordinal);
+        var detail = leg.GetProperty("detail").GetString()!;
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.EndsWith(
+            $"; removed 2 mutation worker(s), {DiskSpace.Size(Workers.Holding(1000) + Workers.Holding(24) + 100)} with what an earlier removal of them left aside: '{first}', '{second}'",
+            detail,
+            StringComparison.Ordinal);
+        Assert.False(Directory.Exists(first));
+        Assert.False(Directory.Exists(second));
+        Assert.False(Directory.Exists(Workers.AsideOf(first)), "a worker moved aside is removed there");
+        Assert.False(Directory.Exists(Workers.AsideOf(second)), "a worker moved aside is removed there");
+        Assert.False(Directory.Exists(aside));
+        Assert.True(Directory.Exists(others));
+        Assert.True(Directory.Exists(othersAside));
+    }
+
+    /// <summary>A dry run says what each worker holds, and what an earlier removal left aside, and removes none of it.</summary>
+    [Fact]
+    public async Task ADryRun_SaysWhatEachWorkerHolds_AndRemovesNothing()
+    {
+        using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var made = workers.Made(variant, 1, 2048);
+        var somebodys = workers.Unmarked(variant, 2);
+        var aside = workers.Aside(variant, 3, 100);
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config, dryRun: true);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.EndsWith(
+            $"; 2 mutation worker(s): {DiskSpace.Size(Workers.Holding(2048))} in '{made}', {DiskSpace.Size(4)} in '{somebodys}', which a clean leaves: "
+            + $"nothing there says the harness made it, so it is yours to remove, {DiskSpace.Size(100)} a removal that did not finish left aside",
+            leg.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+        Assert.True(Directory.Exists(made));
+        Assert.True(Directory.Exists(aside));
+    }
+
+    /// <summary>
+    /// A sweep of the leg holding its lock keeps every worker from a clean, which says so; a worker a live sweep still
+    /// claims is kept and named, the others removed; a directory under a worker's name that no sync made is said and
+    /// left. A clean that kept a worker for a sweep is refused-locked, as one that kept the build directory is.
+    /// </summary>
+    [Fact]
+    public async Task WorkersASweepHolds_AreKept_AndOnesNobodyMadeAreLeft()
+    {
+        using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var free = workers.Made(variant, 1, 10);
+        var claimed = workers.Made(variant, 2, 10);
+        var somebodys = workers.Unmarked(variant, 3);
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var sweep = RunId.New();
+
+        await using (await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            MutationWorkers.SweepLock(HostId.Local, temp.Path, variant, sweep, MutationService.CommandName),
+            TestContext.Current.CancellationToken))
+        {
+            var (_, locked) = await CleanAsync(temp, harness, config, runLock: runLock);
+
+            Assert.Equal("refused-locked", locked.GetProperty("verdict").GetString());
+            Assert.Contains($"its mutation workers were left, as a sweep of the leg holds them: ", locked.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.Contains(sweep.Value, locked.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.True(Directory.Exists(free));
+        }
+
+        var claim = RunId.New();
+
+        new DirectoryClaims(harness.FileSystem, harness.Output, harness.Identity, MutationWorkers.Claims(MutationService.CommandName)).Claim(claimed, claim, force: false);
+
+        var (_, leg) = await CleanAsync(temp, harness, config, runLock: runLock);
+        var detail = leg.GetProperty("detail").GetString()!;
+
+        Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
+        Assert.Contains($"removed 1 mutation worker(s), {DiskSpace.Size(Workers.Holding(10))}: '{free}'", detail, StringComparison.Ordinal);
+        Assert.Contains($"worker 2, '{claimed}', is claimed by a sweep still running: ", detail, StringComparison.Ordinal);
+        Assert.Contains(claim.Value, detail, StringComparison.Ordinal);
+        Assert.Contains($"'{somebodys}' is named as worker 3, and was left: nothing there says the harness made it, so it is yours to remove", detail, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(free));
+        Assert.True(Directory.Exists(claimed));
+        Assert.True(Directory.Exists(somebodys));
+    }
+
+    /// <summary>The variant the one leg of <paramref name="config"/> builds on this machine.</summary>
+    private static VariantKey Variant(HarnessFactory harness, HarnessConfig config)
+        => VariantKey.For(config, config.Legs.Single().Value, harness.Platform.PlatformKey);
+
+    /// <summary>
+    /// Mutation workers beside a test's tree - outside its directory, as a worker is beside its tree - removed once the
+    /// test is done, with whatever a removal left aside.
+    /// </summary>
+    private sealed class Workers(TempDirectory temp) : IDisposable
+    {
+        /// <summary>The marker a sync leaves in a copy it made.</summary>
+        private const string Marker = """{"CreatedUtc":"2026-10-07T12:00:00Z","CreatedBy":"builder","Adopted":false,"Completed":true}""";
+
+        private readonly List<string> _made = [];
+
+        /// <summary>What a worker made holding <paramref name="bytes"/> in its build comes to, its marker with it.</summary>
+        public static long Holding(long bytes) => bytes + Marker.Length;
+
+        /// <summary>Worker <paramref name="number"/> of <paramref name="variant"/>, as a sync makes one, its build holding <paramref name="bytes"/>.</summary>
+        public string Made(VariantKey variant, int number, int bytes)
+        {
+            var worker = Track(MutationWorkers.PathOf(temp.Path, variant, number));
+
+            Write(Path.Combine(worker, HarnessLayout.DirectoryName, HarnessLayout.SyncedCopyMarkerName), Marker);
+            Write(Path.Combine(variant.DirectoryUnder(worker), "a.o"), new string('o', bytes));
+
+            return worker;
+        }
+
+        /// <summary>A directory under worker <paramref name="number"/>'s name that no sync made, holding four bytes.</summary>
+        public string Unmarked(VariantKey variant, int number)
+        {
+            var worker = Track(MutationWorkers.PathOf(temp.Path, variant, number));
+
+            Write(Path.Combine(worker, "notes.txt"), "mine");
+
+            return worker;
+        }
+
+        /// <summary>Where a removal moves <paramref name="worker"/> aside before it removes it.</summary>
+        public static string AsideOf(string worker) => Path.Combine(Path.GetDirectoryName(worker)!, "." + Path.GetFileName(worker) + ".removing");
+
+        /// <summary>What an earlier removal of worker <paramref name="number"/> left aside, holding <paramref name="bytes"/>.</summary>
+        public string Aside(VariantKey variant, int number, int bytes)
+        {
+            var aside = Track(AsideOf(MutationWorkers.PathOf(temp.Path, variant, number)));
+
+            Write(Path.Combine(aside, "left.o"), new string('l', bytes));
+
+            return aside;
+        }
+
+        public void Dispose()
+        {
+            foreach (var path in _made)
+            {
+                SyncKit.DeleteIfPresent(path);
+                SyncKit.DeleteIfPresent(AsideOf(path));
+                File.Delete(path + MutationWorkers.ClaimSuffix);
+            }
+        }
+
+        private string Track(string path)
+        {
+            _made.Add(path);
+            return path;
+        }
+
+        private static void Write(string path, string text)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
+    }
+
     private static HarnessConfig OneLocalLeg(HarnessFactory harness) => new()
     {
         BuildConfigs = { ["debug"] = new BuildConfiguration() },
@@ -402,6 +598,9 @@ public sealed class CleanServiceTests
             transports,
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
             new LegExecutor(harness.Platform, harness.Output),
+            SyncKit.Service(harness, loader),
+            SyncKit.Transport(harness),
+            harness.Identity,
             harness.FileSystem,
             harness.Platform,
             harness.Output);

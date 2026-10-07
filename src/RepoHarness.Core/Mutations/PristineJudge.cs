@@ -18,8 +18,8 @@ public sealed record PristineOutcome(ReachedVerdict? Leg, string? Stops, TimeSpa
 /// </summary>
 /// <remarks>
 /// A control that did not pass decides the leg's own verdict - its build's, <c>failed</c> where cases reddened unmutated,
-/// <c>unattributed</c> where it failed and nothing ties that to a case - and stops every arm of the binary: a mutation
-/// whose cases were red before it is proof of nothing.
+/// <c>unattributed</c> where it failed or hung and nothing ties that to a case - and stops every arm of the binary: a
+/// mutation whose cases were red before it is proof of nothing.
 /// </remarks>
 public static class PristineJudge
 {
@@ -54,6 +54,13 @@ public static class PristineJudge
         }
 
         ArgumentNullException.ThrowIfNull(run);
+
+        if (run.StalledAfterSeconds is { } quiet)
+        {
+            return Stopped(
+                ReachedVerdict.Of(LegVerdict.Unattributed, $"the unmutated {runner} printed nothing for {quiet}s, and was stopped as hung"),
+                $"the unmutated {runner} hangs, so no run of a mutation of it can be told from a hang the mutation caused");
+        }
 
         if (run.Report is not { } report)
         {

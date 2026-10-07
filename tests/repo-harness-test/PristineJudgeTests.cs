@@ -54,6 +54,21 @@ public sealed class PristineJudgeTests
             (crashed.Leg, crashed.Stops));
     }
 
+    /// <summary>
+    /// An unmutated run stopped as hung - silent for <c>defaults.stallSeconds</c> - is unattributed, whatever report it
+    /// left, and stops the binary's arms: no hang of a mutated run could be told from the binary's own.
+    /// </summary>
+    [Fact]
+    public void AnUnmutatedRunStoppedAsHung_IsUnattributed_AndStopsTheBinarysArms()
+    {
+        var hung = PristineJudge.Judge("fixture_tests", Built, Ran(0, string.Empty, string.Empty) with { ExitCode = null, StalledAfterSeconds = 120 }, TimeSpan.FromMinutes(2), 10);
+
+        Assert.Equal(
+            (ReachedVerdict.Of(LegVerdict.Unattributed, "the unmutated fixture_tests printed nothing for 120s, and was stopped as hung"),
+                "the unmutated fixture_tests hangs, so no run of a mutation of it can be told from a hang the mutation caused"),
+            (hung.Leg, hung.Stops));
+    }
+
     /// <summary>An unmutated run that passed decides nothing, stops nothing, and bounds the binary's mutated runs.</summary>
     [Fact]
     public void AnUnmutatedRunThatPassed_BoundsTheMutatedRuns()

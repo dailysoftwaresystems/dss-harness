@@ -35,7 +35,7 @@ public static class HostAgentProtocol
     /// and its own version. With the number left as it was, the same host refuses the request over
     /// whichever field it happens not to know, which says nothing about why.
     /// </remarks>
-    public const int Version = 5;
+    public const int Version = 6;
 
     /// <summary>
     /// How requests and answers are written. Dictionaries and lists are read with the converters

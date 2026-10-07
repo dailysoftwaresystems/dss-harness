@@ -195,18 +195,46 @@ public sealed class ProjectConfig : VariantOverlay
             throw new ArgumentException("A build retargeted builds some target: one with none builds the project's default.", nameof(targets));
         }
 
-        return new ProjectConfig
-        {
-            Name = Name,
-            Type = Type,
-            Path = Path,
-            Env = Env,
-            CacheVars = CacheVars,
-            DefaultToolchain = DefaultToolchain,
-            RebuildableFormats = RebuildableFormats,
-            Test = Test,
-            Targets = [.. targets],
-            BuildOutputs = [.. outputs.Select(BuildOutput.Everywhere)],
-        };
+        return Copy([.. targets], [.. outputs.Select(BuildOutput.Everywhere)], CacheVars);
     }
+
+    /// <summary>
+    /// This project configured with <paramref name="cacheVars"/> beneath its own cache variables - each it sets itself
+    /// outranks one given here, its spelling with its value - and in every other way the project it is.
+    /// </summary>
+    /// <param name="cacheVars">What its configure is given where it sets nothing of its own.</param>
+    /// <remarks>
+    /// What a mutation worker configures with: the dependency sources the leg's own build fetched, so every worker builds
+    /// the very sources the leg does, and a worker the network cannot reach still configures. Names compare ignoring
+    /// case, as every name in the file does, so the project's own spelling is the one its configure is given.
+    /// </remarks>
+    public ProjectConfig WithCacheVarsBeneath(IReadOnlyDictionary<string, string> cacheVars)
+    {
+        ArgumentNullException.ThrowIfNull(cacheVars);
+
+        var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, value) in cacheVars.Concat(CacheVars))
+        {
+            merged.Remove(name);
+            merged[name] = value;
+        }
+
+        return Copy(Targets, BuildOutputs, merged);
+    }
+
+    /// <summary>This project with <paramref name="targets"/>, <paramref name="outputs"/> and <paramref name="cacheVars"/>, and every other setting its own.</summary>
+    private ProjectConfig Copy(List<string>? targets, List<BuildOutput> outputs, Dictionary<string, string> cacheVars) => new()
+    {
+        Name = Name,
+        Type = Type,
+        Path = Path,
+        Env = Env,
+        CacheVars = cacheVars,
+        DefaultToolchain = DefaultToolchain,
+        RebuildableFormats = RebuildableFormats,
+        Test = Test,
+        Targets = targets,
+        BuildOutputs = outputs,
+    };
 }

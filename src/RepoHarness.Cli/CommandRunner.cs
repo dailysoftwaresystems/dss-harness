@@ -68,8 +68,8 @@ internal static class CommandRunner
         => Wrap(commandName, (context, _, cancellationToken) => body(context, cancellationToken), ledger, beginsRun: false);
 
     /// <summary>
-    /// Wraps the body of a command that keeps runs - build, test and run - into an action the parser can invoke,
-    /// beginning its run before anything can refuse it, and handing the body that run.
+    /// Wraps the body of a command that keeps runs - build, test, run and check-mutations - into an action the parser
+    /// can invoke, beginning its run before anything can refuse it, and handing the body that run.
     /// </summary>
     /// <param name="commandName">The command, which prefixes every line it writes.</param>
     /// <param name="body">What the command does, given the run it began.</param>

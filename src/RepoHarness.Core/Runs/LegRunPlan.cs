@@ -110,13 +110,25 @@ public sealed record PlacedLeg(
     /// </remarks>
     /// <exception cref="HarnessException">The leg builds nothing; see <see cref="BuildableProject"/>.</exception>
     public BuildRequest BuildRequestFor(HarnessConfig config, string runDirectory, bool time = false)
+        => BuildRequestFor(config, runDirectory, BuildableProject(), time);
+
+    /// <summary>
+    /// A build of <paramref name="project"/> as this leg builds, with what its host declares for it: its variant, its
+    /// cores, its host's programs and environment.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="runDirectory">Where this run's logs go.</param>
+    /// <param name="project">The project built: the leg's own, as a sweep's workers build it, or another one built the leg's way.</param>
+    /// <param name="time">Whether to report the profile timing.</param>
+    public BuildRequest BuildRequestFor(HarnessConfig config, string runDirectory, ProjectConfig project, bool time = false)
     {
         ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(project);
 
         return new BuildRequest(
             Name,
             TreeRoot,
-            BuildableProject(),
+            project,
             Variant,
             Host.Os ?? string.Empty,
             CoreCounts.Resolve(null, HostSettings.BuildCores, config.Defaults.BuildCores).Value,

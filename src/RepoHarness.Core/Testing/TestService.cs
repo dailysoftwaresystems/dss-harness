@@ -331,7 +331,7 @@ public sealed class TestService(
                     LogFile = logFile,
                     AppendToPath = request.ProgramDirectories,
                     WorkingDirectory = working,
-                    Environment = PhaseEnvironment.Layered(request.HostEnvironment, command.Environment),
+                    Environment = TestInvocationResolver.EnvironmentFor(request.HostEnvironment, command.Environment),
                     SuccessPattern = invocation.SuccessPattern,
                     StallSeconds = config.Defaults.StallSeconds,
                     TimingPatterns = TimingPatterns(config, request),

@@ -158,8 +158,12 @@ public static class WorktreeReports
         _ => $"forgets it and leaves it in place, as {Origin(copy)}",
     };
 
-    /// <summary>What a copy's marker says of how it came to be.</summary>
-    private static string Origin(HostCopyFound copy) => copy.Origin switch
+    /// <summary>
+    /// What a copy's marker says of how it came to be: a host's copy of a worktree, as listed, or a mutation worker's,
+    /// as a clean or a sweep that leaves it says.
+    /// </summary>
+    /// <param name="copy">The copy, as a listing found it.</param>
+    internal static string Origin(HostCopyFound copy) => copy.Origin switch
     {
         CopyOrigin.Made => copy.CreatedBy is { } by ? $"made by {by} at {copy.CreatedUtc}" : "made by the harness",
         CopyOrigin.TakenOver => "the harness took over a directory that was there, which is yours to remove",

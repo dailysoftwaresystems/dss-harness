@@ -169,6 +169,12 @@ public sealed record LegEntry
     /// </summary>
     public IReadOnlyList<string> KeptOutputs { get; init; } = [];
 
+    /// <summary>
+    /// Each mutation arm the leg was asked about, in the registry's order, with the verdict it reached there: empty for
+    /// every command but <c>check-mutations</c>. The leg's own verdict is the worst of its own and these.
+    /// </summary>
+    public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
+
     /// <summary>What the harness spent outside the leg's own commands.</summary>
     public TimeSpan Overhead => Duration > CommandTime ? Duration - CommandTime : TimeSpan.Zero;
 }

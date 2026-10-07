@@ -3,11 +3,13 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Runs;
 
@@ -29,7 +31,8 @@ public sealed record CleanRequest(
 
 /// <summary>
 /// Removes each selected leg's build directory wherever the leg runs - this machine, a WSL distribution's
-/// copy, an ssh host's copy - or, asked for a dry run, says what each holds and the room left beside it.
+/// copy, an ssh host's copy - with the mutation workers its sweeps keep beside its tree, or, asked for a dry
+/// run, says what each holds and the room left beside it.
 /// </summary>
 /// <remarks>
 /// For a machine whose disk a build filled. Nothing else removes a build directory from a host's copy: a
@@ -40,6 +43,11 @@ public sealed record CleanRequest(
 /// no run can take the lock, then removed; one an earlier removal left aside is removed by the next. A host
 /// whose DssHarness is behind this machine's is still brought to this build first, as it is by every
 /// command that asks it anything, and that write needs room.
+/// <para>
+/// A leg's mutation workers are removed the same way, under the lock a sweep of the leg takes: a sweep running
+/// keeps every worker of the leg from it, and a worker a live sweep still claims is kept; one whose sweep died
+/// holding it is released first, and said. A directory under a worker's name that no sync made is said and left.
+/// </para>
 /// </remarks>
 public sealed class CleanService(
     IHarnessContextLoader contextLoader,
@@ -48,6 +56,9 @@ public sealed class CleanService(
     ISyncTransportFactory transports,
     RemoteLegRunner remoteLegs,
     LegExecutor legExecutor,
+    ISyncService syncService,
+    LocalSyncTransport localTransport,
+    IProcessIdentity identity,
     IFileSystem fileSystem,
     IHostPlatform platform,
     IHarnessOutput output)
@@ -73,6 +84,7 @@ public sealed class CleanService(
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
+    private readonly WorkerCopies _workers = new(syncService, localTransport, fileSystem, output, identity, CommandName);
 
     /// <summary>Removes, or measures, every selected leg's build directory, and reports the ledger.</summary>
     /// <param name="request">What the command was asked to do.</param>
@@ -154,7 +166,12 @@ public sealed class CleanService(
 
         if (!leg.Remote)
         {
-            return CleanHere(context.Layout, leg, building, request.DryRun) with { Duration = Stopwatch.GetElapsedTime(started) };
+            var here = CleanHere(context.Layout, leg, building, request.DryRun);
+            var workers = await CleanWorkersAsync(context.Layout, leg, request.DryRun, cancellationToken).ConfigureAwait(false);
+
+            return (workers is { } swept
+                ? here with { Verdict = Verdicts.Worst([here.Verdict, swept.Verdict]), Detail = $"{here.Detail}; {swept.Detail}" }
+                : here) with { Duration = Stopwatch.GetElapsedTime(started) };
         }
 
         // A run started on this machine that is building the leg there holds this machine's lock too, for as
@@ -256,6 +273,173 @@ public sealed class CleanService(
                 LegVerdict.Failed,
                 $"'{directory}' could not be {(dryRun ? "measured" : "removed")}: {ex.Message.TrimEnd('.')}{remains}");
         }
+    }
+
+    /// <summary>
+    /// Removes, or measures, the mutation workers a leg on this machine keeps beside its tree, under the lock a sweep of the
+    /// leg takes: what was done, or <see langword="null"/> where the leg keeps none.
+    /// </summary>
+    private async Task<ReachedVerdict?> CleanWorkersAsync(HarnessLayout layout, PlacedLeg leg, bool dryRun, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<WorkerCopy> workers;
+        IReadOnlyList<string> asides;
+
+        try
+        {
+            asides = WorkersAside(leg);
+            workers = await _workers.ListAsync(leg.HostTreeRoot, leg.Variant, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ReachedVerdict.Of(LegVerdict.Failed, $"its mutation workers could not be listed: {ex.Message.TrimEnd('.')}");
+        }
+
+        if (workers.Count == 0 && asides.Count == 0)
+        {
+            return null;
+        }
+
+        // A directory under a worker's name that no sync made is somebody's: said, and never removed.
+        var made = workers.Where(worker => worker.Made).ToList();
+        var left = workers
+            .Where(worker => !worker.Made)
+            .Select(worker => $"'{worker.Path}' is named as worker {worker.Number}, and was left: {WorktreeReports.Origin(worker.Found)}")
+            .ToList();
+
+        try
+        {
+            if (dryRun)
+            {
+                return ReachedVerdict.Of(LegVerdict.Passed, MeasuredWorkers(workers, asides));
+            }
+
+            // Removed first, and outside the lock: nothing sweeps in a worker an earlier removal moved aside.
+            var removed = 0L;
+
+            foreach (var aside in asides)
+            {
+                removed += _fileSystem.DirectorySize(aside);
+                _fileSystem.DeleteDirectory(aside);
+            }
+
+            foreach (var worker in made)
+            {
+                _workers.ReleaseAbandoned(worker.Path);
+            }
+
+            var moved = new List<WorkerCopy>();
+            var claimed = new List<string>();
+            var holder = _runLock.HeldBy(layout, MutationWorkers.SweepLock(leg, RunId.New(), CommandName), () =>
+            {
+                foreach (var worker in made)
+                {
+                    if (_workers.HeldBy(worker.Path) is { } live)
+                    {
+                        claimed.Add($"worker {worker.Number}, '{worker.Path}', is claimed by a sweep still running: {live}");
+                        continue;
+                    }
+
+                    _fileSystem.MoveDirectory(worker.Path, Aside(worker.Path));
+                    moved.Add(worker);
+                }
+            });
+
+            if (holder is not null)
+            {
+                return ReachedVerdict.Of(
+                    LegVerdict.RefusedLocked,
+                    $"its mutation workers were left, as a sweep of the leg holds them: {holder}"
+                    + (removed > 0 ? $" What an earlier removal of them had left aside was removed: {DiskSpace.Size(removed)}." : string.Empty));
+            }
+
+            foreach (var worker in moved)
+            {
+                removed += _fileSystem.DirectorySize(Aside(worker.Path));
+                _fileSystem.DeleteDirectory(Aside(worker.Path));
+            }
+
+            var said = new List<string>();
+
+            if (moved.Count > 0)
+            {
+                said.Add(
+                    $"removed {moved.Count} mutation worker(s), {DiskSpace.Size(removed)}"
+                    + (asides.Count > 0 ? " with what an earlier removal of them left aside" : string.Empty)
+                    + $": {string.Join(", ", moved.Select(worker => $"'{worker.Path}'"))}");
+            }
+            else if (asides.Count > 0)
+            {
+                said.Add($"removed what an earlier removal of its mutation workers left aside: {DiskSpace.Size(removed)}");
+            }
+
+            said.AddRange(claimed);
+            said.AddRange(left);
+
+            return ReachedVerdict.Of(claimed.Count > 0 ? LegVerdict.RefusedLocked : LegVerdict.Passed, string.Join("; ", said));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ReachedVerdict.Of(
+                LegVerdict.Failed,
+                $"its mutation workers could not be {(dryRun ? "measured" : "removed")}: {ex.Message.TrimEnd('.')}"
+                + (dryRun ? string.Empty : "; what is left of any moved aside is removed by the next clean of this leg"));
+        }
+    }
+
+    /// <summary>What a dry run says of the leg's workers: what each holds, and what an earlier removal left aside.</summary>
+    private string MeasuredWorkers(IReadOnlyList<WorkerCopy> workers, IReadOnlyList<string> asides)
+    {
+        var said = workers
+            .Select(worker => worker.Made
+                ? $"{DiskSpace.Size(worker.Bytes)} in '{worker.Path}'"
+                : $"{DiskSpace.Size(worker.Bytes)} in '{worker.Path}', which a clean leaves: {WorktreeReports.Origin(worker.Found)}")
+            .ToList();
+
+        if (asides.Count > 0)
+        {
+            said.Add($"{DiskSpace.Size(asides.Sum(_fileSystem.DirectorySize))} a removal that did not finish left aside");
+        }
+
+        return workers.Count > 0
+            ? $"{workers.Count} mutation worker(s): {string.Join(", ", said)}"
+            : $"no mutation worker, and {said.Single()}";
+    }
+
+    /// <summary>
+    /// What an earlier removal of the leg's workers left aside: each worker of the leg's variant, by its name with a dot
+    /// before it and <see cref="AsideSuffix"/> after, as <see cref="Aside"/> renamed it.
+    /// </summary>
+    private IReadOnlyList<string> WorkersAside(PlacedLeg leg)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(MutationWorkers.RootOf(leg.HostTreeRoot, leg.Variant)));
+        var parent = Path.GetDirectoryName(root);
+
+        if (parent is null || !_fileSystem.DirectoryExists(parent))
+        {
+            return [];
+        }
+
+        var prefix = "." + Path.GetFileName(root) + "-";
+
+        // A worker's number alone between the two, as a worker's name spells it: another variant's, whose name starts
+        // alike and goes on, is never this leg's to remove.
+        return
+        [
+            .. _fileSystem.EnumerateDirectories(parent).Where(aside =>
+                Path.GetFileName(Path.TrimEndingDirectorySeparator(aside)) is var name
+                && name.Length > prefix.Length + AsideSuffix.Length
+                && name.StartsWith(prefix, StringComparison.Ordinal)
+                && name.EndsWith(AsideSuffix, StringComparison.Ordinal)
+                && MutationWorkers.NumberOf(leg.Variant.DirectoryName + "-" + name[prefix.Length..^AsideSuffix.Length], leg.Variant) is not null),
+        ];
+    }
+
+    /// <summary>Where <paramref name="directory"/> is renamed to while it is removed: beside it, hidden, and named as no copy or build is.</summary>
+    private static string Aside(string directory)
+    {
+        var whole = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+
+        return Path.Combine(Path.GetDirectoryName(whole)!, "." + Path.GetFileName(whole) + AsideSuffix);
     }
 
     private static string Unmeasured(string? why) => $"the room on its filesystem could not be measured: {why}";

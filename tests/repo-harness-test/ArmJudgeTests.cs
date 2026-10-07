@@ -58,6 +58,9 @@ public sealed class ArmJudgeTests
         ["1 a missing site"] = (
             Ready with { MissingSites = ["src/fixture.cpp"] },
             "site 'src/fixture.cpp' is not a file in the worker's copy of the tree"),
+        ["1 a text the copy does not hold"] = (
+            Ready with { TextProblems = ["text 'texts/charge.after' is not a file in the worker's copy of the tree"] },
+            "text 'texts/charge.after' is not a file in the worker's copy of the tree"),
         ["2 a text not there"] = (
             Ready with { Counts = [new TextCount("texts/charge.before", "src/fixture.cpp", 1), new TextCount("texts/m.before", "src/budget.hpp", 0)] },
             "the text in 'texts/m.before' occurs 0 time(s) in 'src/budget.hpp', where it must occur exactly once"),
@@ -72,7 +75,7 @@ public sealed class ArmJudgeTests
             "runner 'fixture_tests' builds no program"),
         ["4 no object depending on the site"] = (
             Ready with { Dependents = [] },
-            "no object target 'fixture' builds depends on 'src/fixture.cpp'"),
+            "no object target 'fixture' or runner 'fixture_tests' builds depends on 'src/fixture.cpp'"),
     };
 
     /// <summary>Each row of a TEST-RED arm's run, by its row: the run, and the verdict it reaches saying what it found.</summary>
@@ -82,6 +85,10 @@ public sealed class ArmJudgeTests
             new ArmRun { StoppedAtBound = true, Bound = TimeSpan.FromSeconds(100), Factor = 10, ReportWritten = true, Report = Report(["Fixture.Charge"], ["Fixture.Depth", "Fixture.Other"]) },
             LegVerdict.Unattributed,
             "ran past 10x the unmutated run, 1m40s, and was stopped"),
+        ["11 silent until it was stopped as hung"] = (
+            new ArmRun { StalledAfterSeconds = 45, Bound = TimeSpan.FromSeconds(100), Factor = 10, ReportWritten = true, Report = Report(["Fixture.Charge"], ["Fixture.Depth", "Fixture.Other"]) },
+            LegVerdict.Unattributed,
+            "printed nothing for 45s, and was stopped as hung"),
         ["12 no report"] = (
             new ArmRun { ExitCode = -1073741819, DiagnosticSaid = true },
             LegVerdict.Unattributed,
@@ -146,27 +153,53 @@ public sealed class ArmJudgeTests
         Assert.Equal((LegVerdict.Violated, detail), (verdict?.Verdict, verdict?.Detail));
     }
 
-    /// <summary>The pre-flight's rows are read in order: a missing site before a miscount, before the target, before the dependents.</summary>
+    /// <summary>
+    /// The pre-flight's rows are read in order: a missing site before a text the copy cannot give, before a miscount,
+    /// before the target, before the dependents.
+    /// </summary>
     [Fact]
     public void ThePreflightsRows_AreReadInOrder()
     {
         var everything = new ArmPreflight
         {
             MissingSites = ["src/gone.cpp"],
+            TextProblems = ["the text in 'texts/charge.before' holds nothing, and a text holding nothing occurs everywhere"],
             Counts = [new TextCount("texts/charge.before", "src/fixture.cpp", 0)],
             TargetBuilt = false,
             RunnerProblem = "runner 'fixture_tests' builds no program",
         };
 
         Assert.StartsWith("site 'src/gone.cpp'", Detail(TestRed, everything), StringComparison.Ordinal);
-        Assert.StartsWith("the text in", Detail(TestRed, everything with { MissingSites = [] }), StringComparison.Ordinal);
-        Assert.StartsWith("target 'fixture'", Detail(TestRed, everything with { MissingSites = [], Counts = [] }), StringComparison.Ordinal);
-        Assert.StartsWith("runner", Detail(TestRed, everything with { MissingSites = [], Counts = [], TargetBuilt = true }), StringComparison.Ordinal);
+        Assert.EndsWith("holds nothing, and a text holding nothing occurs everywhere", Detail(TestRed, everything with { MissingSites = [] }), StringComparison.Ordinal);
+        Assert.EndsWith("where it must occur exactly once", Detail(TestRed, everything with { MissingSites = [], TextProblems = [] }), StringComparison.Ordinal);
+        Assert.StartsWith("target 'fixture'", Detail(TestRed, everything with { MissingSites = [], TextProblems = [], Counts = [] }), StringComparison.Ordinal);
+        Assert.StartsWith("runner", Detail(TestRed, everything with { MissingSites = [], TextProblems = [], Counts = [], TargetBuilt = true }), StringComparison.Ordinal);
         Assert.Equal(
-            "no object target 'fixture' builds depends on 'src/fixture.cpp', 'src/budget.hpp'",
+            "no object target 'fixture' or runner 'fixture_tests' builds depends on 'src/fixture.cpp', 'src/budget.hpp'",
             Detail(TestRed with { Coupled = [new MutationSite("src/budget.hpp", "texts/m.before", "texts/m.after", 4)] }, new ArmPreflight()));
 
         static string Detail(MutationArm arm, ArmPreflight preflight) => ArmJudge.Judge(arm, new ArmObservation(preflight))!.Detail;
+    }
+
+    /// <summary>
+    /// An arm's build builds its target, and a TEST-RED arm's runner where that is another target: a test binary linking
+    /// what the target builds is linked again only where a build asks for it, and one an earlier build left would run
+    /// without the mutation. Its pre-flight looks for objects depending on a site in what that build builds, and says so.
+    /// </summary>
+    [Fact]
+    public void AnArmsBuild_BuildsItsTarget_AndATestRedArmsRunnerBeside_WhichItsPreflightNames()
+    {
+        var runsItsTarget = TestRed with { Runner = TestRed.Target };
+
+        Assert.Equal(["fixture", "fixture_tests"], ArmJudge.Builds(TestRed));
+        Assert.Equal(["fixture"], ArmJudge.Builds(runsItsTarget));
+        Assert.Equal(["fixture"], ArmJudge.Builds(BuildRed));
+        Assert.Equal(
+            "no object target 'fixture' builds depends on 'src/fixture.cpp'",
+            ArmJudge.Judge(runsItsTarget, new ArmObservation(Ready with { Dependents = [] }))!.Detail);
+        Assert.Equal(
+            "no object target 'fixture' builds depends on 'src/budget.hpp'",
+            ArmJudge.Judge(BuildRed, new ArmObservation(Ready with { Counts = [], Dependents = [] }))!.Detail);
     }
 
     /// <summary>
@@ -301,7 +334,7 @@ public sealed class ArmJudgeTests
     }
 
     /// <summary>
-    /// The run's rows are read in order: a hang before the report it never wrote; a failing exit with no failing case
+    /// The run's rows are read in order: a hang - past its bound, or silent - before the report; a failing exit with no failing case
     /// before the count; a count that differs before no case red, so a run that skipped the guarded case never reads as
     /// one that survived; the red set before the neighbours, and the neighbours before the diagnostic.
     /// </summary>
@@ -309,6 +342,10 @@ public sealed class ArmJudgeTests
     public void TheRunsRows_AreReadInOrder()
     {
         Assert.StartsWith("ran past", Detail(new ArmRun { StoppedAtBound = true, Bound = TimeSpan.FromMinutes(2), Factor = 10 }), StringComparison.Ordinal);
+        Assert.StartsWith(
+            "printed nothing for 30s",
+            Detail(new ArmRun { StalledAfterSeconds = 30, ReportWritten = true, Report = Report([], ["Fixture.Depth"]) }),
+            StringComparison.Ordinal);
         Assert.StartsWith("exited 1, and", Detail(Ran(1, Report([], ["Fixture.Depth"]))), StringComparison.Ordinal);
         Assert.StartsWith("ran 1 case(s), and the arm declares", Detail(Ran(0, Report([], ["Fixture.Depth"]))), StringComparison.Ordinal);
         Assert.StartsWith(

@@ -683,6 +683,9 @@ public sealed class LedgerReportTests
 
     private static PhaseRecord Phase(string name, int seconds) => new(name, TimeSpan.FromSeconds(seconds), ClockStepped: false);
 
+    /// <summary>An arm's line: the verdict it reached on its leg, and why.</summary>
+    private static ArmEntry Arm(string arm, LegVerdict verdict, string detail) => new() { Arm = arm, Verdict = verdict, Detail = detail };
+
     /// <summary>
     /// A leg that did no work is not a leg that passed. The verdict table already ranks a skip
     /// above a pass so that a run carrying one summarises as the warning; the exit code has to
@@ -870,6 +873,147 @@ public sealed class LedgerReportTests
         var line = Assert.Single(rows, row => row.Contains("took 9s", StringComparison.Ordinal));
         Assert.Contains("wsl-clang-asan", line, StringComparison.Ordinal);
         Assert.Contains("build", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Each arm beneath a leg that reached anything but passed is shown below the table, under its leg - the arm, its
+    /// verdict and why - so a sweep of a hundred arms shows the ones to act on; an arm that passed, or that the sweep did
+    /// not select, is not, and a sweep whose arms all passed shows no block.
+    /// </summary>
+    [Fact]
+    public void EachArmThatDidNotPass_IsShownBelowTheTable_UnderItsLeg()
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("linux-gcc", LegVerdict.Survived, TimeSpan.FromSeconds(90), "3 arm(s): 1 survived, 1 passed, 1 skipped-not-selected") with
+            {
+                Arms =
+                [
+                    Arm("charge-bound", LegVerdict.Survived, "ran 3 case(s), and none failed"),
+                    Arm("depth-type", LegVerdict.Passed, "the mutation stops the build, and its paired control builds"),
+                    Arm("floor", LegVerdict.SkippedNotSelected, "--arms does not name it"),
+                ],
+            },
+            Entry("win-msvc", LegVerdict.Stopped, TimeSpan.FromSeconds(60), "1 arm(s): 1 stopped") with
+            {
+                Arms = [Arm("charge-bound", LegVerdict.Stopped, "the sweep was stopped before a worker drove it")],
+            },
+        ],
+        durationWarningFactor: 0);
+
+        var rows = report.Render().ToList();
+        var heading = rows.IndexOf("ARMS");
+
+        Assert.Equal(
+            [
+                string.Empty,
+                "ARMS",
+                "  LEG        ARM           VERDICT   DETAIL",
+                "  linux-gcc  charge-bound  survived  ran 3 case(s), and none failed",
+                "  win-msvc   charge-bound  stopped   the sweep was stopped before a worker drove it",
+            ],
+            rows.Skip(heading - 1).Take(5));
+        Assert.DoesNotContain(rows, line => line.Contains("depth-type", StringComparison.Ordinal) || line.Contains("floor", StringComparison.Ordinal));
+
+        var passed = LedgerReport.From(
+            [Entry("linux-gcc", LegVerdict.Passed, TimeSpan.FromSeconds(1), "2 arm(s)") with { Arms = [Arm("depth-type", LegVerdict.Passed, "built"), Arm("floor", LegVerdict.SkippedNotSelected, "not named")] }],
+            durationWarningFactor: 0);
+
+        Assert.DoesNotContain("ARMS", passed.Render());
+    }
+
+    /// <summary>
+    /// Each arm a leg was asked about is in the document beneath it, whatever it reached - one the sweep did not select
+    /// among them - with what its run measured beside what it declares, and where its records are, told as the reader is
+    /// told every path; what an arm no worker drove has none of is left out, and a leg asked about no arm has none.
+    /// </summary>
+    [Fact]
+    public void EachArmALegWasAskedAbout_IsInTheDocumentBeneathIt()
+    {
+        var home = HomeShorthand.For(["/home/alice"], PlatformNames.Linux);
+        var report = LedgerReport.From(
+        [
+            Entry("linux-gcc", LegVerdict.Survived, TimeSpan.FromSeconds(90), "2 arm(s): 1 survived, 1 skipped-not-selected") with
+            {
+                Arms =
+                [
+                    new ArmEntry
+                    {
+                        Arm = "charge-bound",
+                        Verdict = LegVerdict.Survived,
+                        Detail = "ran 3 case(s) in '/home/alice/repo', and none failed",
+                        Duration = TimeSpan.FromMilliseconds(12_345.6),
+                        Worker = 2,
+                        Cases = 3,
+                        DeclaredCases = 3,
+                        Reds = [],
+                        DeclaredReds = ["Fixture.Charge"],
+                        Records = "/home/alice/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound",
+                    },
+                    new ArmEntry { Arm = "floor", Verdict = LegVerdict.SkippedNotSelected, Detail = "--arms does not name it", DeclaredCases = 3, DeclaredReds = ["Fixture.Floor"] },
+                ],
+            },
+            Entry("win-msvc", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty),
+        ],
+        durationWarningFactor: 0);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], shown: home.Shown));
+        var legs = document.RootElement.GetProperty("legs").EnumerateArray().ToList();
+        var arms = legs[0].GetProperty("arms").EnumerateArray().ToList();
+        var charge = arms[0];
+        var floor = arms[1];
+
+        Assert.False(legs[1].TryGetProperty("arms", out _));
+        Assert.Equal(2, arms.Count);
+        Assert.Equal("charge-bound", charge.GetProperty("arm").GetString());
+        Assert.Equal("survived", charge.GetProperty("verdict").GetString());
+        Assert.True(charge.GetProperty("failure").GetBoolean());
+        Assert.Equal("ran 3 case(s) in '~/repo', and none failed", charge.GetProperty("detail").GetString());
+        Assert.Equal(12.346, charge.GetProperty("durationSeconds").GetDouble());
+        Assert.Equal(2, charge.GetProperty("worker").GetInt32());
+        Assert.Equal(3, charge.GetProperty("cases").GetInt32());
+        Assert.Equal(3, charge.GetProperty("declaredCases").GetInt32());
+        Assert.Empty(charge.GetProperty("reds").EnumerateArray());
+        Assert.Equal(["Fixture.Charge"], charge.GetProperty("declaredReds").EnumerateArray().Select(red => red.GetString()));
+        Assert.Equal("~/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound", charge.GetProperty("records").GetString());
+
+        Assert.Equal(("floor", "skipped-not-selected", false), (floor.GetProperty("arm").GetString(), floor.GetProperty("verdict").GetString(), floor.GetProperty("failure").GetBoolean()));
+        Assert.Equal(["Fixture.Floor"], floor.GetProperty("declaredReds").EnumerateArray().Select(red => red.GetString()));
+
+        foreach (var absent in new[] { "worker", "cases", "reds", "records" })
+        {
+            Assert.False(floor.TryGetProperty(absent, out _), $"an arm no worker drove has no {absent}");
+        }
+    }
+
+    /// <summary>The record an arm leaves among its records is its line in the very shape the document holds it, every path as written.</summary>
+    [Fact]
+    public void AnArmsRecord_IsItsLineAsTheDocumentHoldsIt()
+    {
+        var arm = new ArmEntry
+        {
+            Arm = "charge-bound",
+            Verdict = LegVerdict.Passed,
+            Detail = "ran 3 case(s), 1 red as declared, and said its diagnostic",
+            Duration = TimeSpan.FromSeconds(4),
+            Worker = 1,
+            Cases = 3,
+            DeclaredCases = 3,
+            Reds = ["Fixture.Charge"],
+            DeclaredReds = ["Fixture.Charge"],
+            Records = "/home/alice/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound",
+        };
+
+        using var record = JsonDocument.Parse(LedgerReport.ArmJson(arm));
+        using var ledger = JsonDocument.Parse(LedgerReport.From([Entry("linux-gcc", LegVerdict.Passed, TimeSpan.FromSeconds(4), "1 arm(s): 1 passed") with { Arms = [arm] }], durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []));
+
+        var beneath = ledger.RootElement.GetProperty("legs")[0].GetProperty("arms")[0];
+
+        Assert.True(
+            System.Text.Json.Nodes.JsonNode.DeepEquals(System.Text.Json.Nodes.JsonNode.Parse(beneath.GetRawText()), System.Text.Json.Nodes.JsonNode.Parse(record.RootElement.GetRawText())),
+            $"the record holds {record.RootElement.GetRawText()}, and the ledger {beneath.GetRawText()}");
+        Assert.Equal("/home/alice/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound", record.RootElement.GetProperty("records").GetString());
     }
 
     /// <summary>

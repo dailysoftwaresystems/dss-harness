@@ -10,6 +10,7 @@ using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.LineEndings;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
@@ -141,7 +142,7 @@ internal static class HarnessServices
         services.AddSingleton<LegsService>();
         services.AddSingleton<HostExecService>();
 
-        // Leg machinery. Shared by build, test and run, so the isolation rules cannot hold for one
+        // Leg machinery. Shared by build, test, run and check-mutations, so the isolation rules cannot hold for one
         // command and not another.
         services.AddSingleton<PhaseRunner>();
         services.AddSingleton<LegExecutor>();
@@ -178,7 +179,8 @@ internal static class HarnessServices
         // Sync. The local transport is registered as the interface because it is also what a host
         // runs on its own side, where `sync-serve` resolves exactly this one.
         services.AddSingleton<IManifestBuilder, ManifestBuilder>();
-        services.AddSingleton<ISyncTransport, LocalSyncTransport>();
+        services.AddSingleton<LocalSyncTransport>();
+        services.AddSingleton<ISyncTransport>(provider => provider.GetRequiredService<LocalSyncTransport>());
         services.AddSingleton<ISyncTransportFactory, SyncTransportFactory>();
         services.AddSingleton<ISyncService, SyncService>();
         services.AddSingleton<IHostCopyRemover, HostCopyRemover>();
@@ -194,6 +196,9 @@ internal static class HarnessServices
         services.AddSingleton<IPredefinedActionRunner, PredefinedActionRunner>();
         services.AddSingleton<IRunnerRunService, RunnerRunService>();
         services.AddSingleton<ITestService, TestService>();
+
+        // Mutation testing: a sweep of each leg's arms, in worker copies of its own, through the leg machinery above.
+        services.AddSingleton<MutationService>();
 
         // Guards that became commands.
         services.AddSingleton<IRootLitterService, RootLitterService>();
