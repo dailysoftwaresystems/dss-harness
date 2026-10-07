@@ -206,6 +206,82 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Releases every log directory beside <paramref name="logDirectory"/> that a run on this machine claimed and never
+    /// gave up, its process having ended first, and says each: such a run was killed, or stopped with its machine, before
+    /// it finished, and nothing else would ever say so - nothing claims its directory again, every run having its own.
+    /// </summary>
+    /// <param name="logDirectory">The directory this run writes its logs to, whose own claim is left alone.</param>
+    /// <returns>The runs found abandoned, in the order their owner files sort.</returns>
+    /// <remarks>
+    /// Only a claim this machine can judge is released: one recorded on another machine stands, as it does beside a run
+    /// claiming its own directory, and one this build cannot read - a newer build's, a run's still going among them - or
+    /// cannot reach in the window is left as it is, for a later run to look at again. Nothing here fails the run that
+    /// found them.
+    /// </remarks>
+    public IReadOnlyList<LogOwner> ReleaseAbandoned(string logDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
+
+        var own = OwnerFile(logDirectory);
+        var abandoned = new List<LogOwner>();
+
+        var files = _fileSystem.EnumerateFiles(Path.GetDirectoryName(own)!, recursive: false)
+            .Where(file => file.EndsWith(OwnerSuffix, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(Path.GetFullPath(file), own, StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.Ordinal);
+
+        foreach (var file in files)
+        {
+            try
+            {
+                if (MachineWideFile.Update(file, MachineWideFile.Window, afterwards => Abandoned(file, afterwards)) is { } owner)
+                {
+                    abandoned.Add(owner);
+                }
+            }
+            catch (HarnessException)
+            {
+                // Unreadable, or held past the window by another process: see the remarks.
+            }
+        }
+
+        return abandoned;
+    }
+
+    /// <summary>
+    /// The owner <paramref name="file"/> records, released and said once the file is let go, where it is a run on this
+    /// machine that has ended; <see langword="null"/>, and nothing done, otherwise.
+    /// </summary>
+    private LogOwner? Abandoned(string file, Action<Action> afterwards)
+    {
+        // A holder on another machine stands, since nothing here can ask that machine; one on this machine, this run
+        // among them, while its process runs.
+        if (Read(file) is not { } owner || _identity.Stands(owner.Machine, owner.ProcessId, owner.ProcessStamp))
+        {
+            return null;
+        }
+
+        var directory = file[..^OwnerSuffix.Length];
+        var records = _fileSystem.DirectoryExists(directory) ? $"its records at '{directory}'" : $"'{directory}', which is gone";
+        var holder = ProcessHolders.Describe(owner.Machine, owner.ProcessId, owner.RunId, owner.TakenUtc);
+        var abandoned = $"An earlier run was abandoned: {holder}, is no longer running, and never gave up {records} - "
+            + "it was killed, or stopped with its machine, before it finished - so its verdict may never have been reported.";
+
+        try
+        {
+            _fileSystem.DeleteFile(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            afterwards(() => _output.Warn(CommandName, $"{abandoned} Its owner file '{file}' could not be removed: {ex.Message}"));
+            return owner;
+        }
+
+        afterwards(() => _output.Warn(CommandName, $"{abandoned} Its claim is released."));
+        return owner;
+    }
+
     /// <summary>Does <paramref name="write"/>, and refuses, naming the owner file, when it could not be done.</summary>
     private static void Written(string file, Action write)
         => MachineWideFile.Written($"The log owner file '{file}'", "Until it can be, two runs could write one set of logs.", write);

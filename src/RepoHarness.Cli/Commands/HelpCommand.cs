@@ -653,7 +653,14 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine($"A run where nothing failed but some leg reached no verdict exits {HarnessExit.Incomplete}, not 0, and");
         builder.AppendLine("names the legs that did not report. A leg that never ran proves nothing about the");
-        builder.AppendLine("code, so counting it among the legs that passed reports evidence nobody gathered.");
+        builder.AppendLine("code, and nor does a build something stopped from outside before it finished, so");
+        builder.AppendLine("counting either among the legs that passed reports evidence nobody gathered. A");
+        builder.AppendLine("CMake build under ninja that fails with ninja saying nothing of why - which it says");
+        builder.AppendLine("whenever it ends a build itself - or saying it was interrupted is stopped, not");
+        builder.AppendLine("failed: run again, it finishes, where a failed one fails again.");
+        builder.AppendLine("A run killed, or stopped with its machine, before it finished says nothing more:");
+        builder.AppendLine("the next run in its tree on that machine says it was abandoned - its run id, process");
+        builder.AppendLine("and start, and where its records are - and releases its claim on them.");
         builder.AppendLine();
         builder.AppendLine("When several apply the more fundamental one is reported, in the order above.");
         builder.AppendLine("A leg whose inputs moved is not reported as failed even when its tests failed,");
@@ -680,6 +687,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {LegExit.NotAdmitted}  not-admitted               Wait for the heavy legs it names, free memory");
         builder.AppendLine("                                or room on the filesystem it names, or raise the");
         builder.AppendLine("                                machine's limits ('help admission')");
+        builder.AppendLine($" {HarnessExit.Incomplete}  stopped                    Find out what stopped the build, then run again");
 
         return builder.ToString();
     }

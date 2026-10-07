@@ -1177,12 +1177,21 @@ from the report.
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict | **yes** |
+| `stopped` | Something stopped its build from outside before it finished: it exited without its build tool saying why, as ninja says whenever it ends a build itself | no: incomplete |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
 "the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
 `contended` and `not-admitted` say nothing about the code at all: the first two call for
 letting the tree settle and running again, the third for waiting for the other run, and
 the fourth for waiting for the machine's other heavy legs, or freeing its memory or its disk.
+
+`failed` and `stopped` are deliberately distinct too. A CMake build under ninja that exits
+non-zero is `failed` where ninja said why - a step that failed, an error of its own - and
+`stopped` where it said nothing, or that it was interrupted: ninja says why whenever it ends a
+build itself, and one killed part way exits 1, as a failed build does, and says nothing more
+(measured on Windows, with `taskkill /F`). Running a failed build again repeats the failure;
+running a stopped one again finishes it. A build under another build tool is `failed` either
+way, since nothing it says tells the two apart.
 
 `refused-locked` and `log-held` are deliberately distinct, though both mean another run got
 there first. A lock is taken for the duration of the work and is released by the run that
@@ -1193,12 +1202,14 @@ reader who cannot tell which fired cannot pick either.
 
 When several apply, the more fundamental one is reported: `poisoned`, then
 `unmeasured`, `inputs-moved`, `contended`, `log-held`, `refused-locked`, `not-admitted`,
-`failed`, and `unwitnessed`. A leg whose inputs moved is not reported as failed even if its tests
-failed, because what failed was a tree that never existed.
+`failed`, and `unwitnessed`, with `stopped` before the skips and `passed`, since its leg's work
+began. A leg whose inputs moved is not reported as failed even if its tests failed, because what
+failed was a tree that never existed.
 
 **A leg that reached no verdict is never counted among the legs that passed.** A skip is not a
-failure — a switched-off machine is normal — but it is not a pass either, and a run carrying one
-exits `21` (`Incomplete`) rather than `0`, naming the legs that did not report. The verdict table
+failure — a switched-off machine is normal — and nor is a stopped build, but neither is a pass,
+and a run carrying one exits `21` (`Incomplete`) rather than `0`, naming the legs that did not
+report: those that did no work, and those stopped before finishing. The verdict table
 already ranks a skip above a pass so that such a run summarises as the warning; the summary now
 reads that ranking instead of reporting the number of rows in the ledger as the number that
 passed. A gate comparing two runs reads exactly this line, and "8 leg(s) passed" for eight legs
@@ -1809,6 +1820,12 @@ while their sources are being replaced. A lock is released only by the run that 
 - A lock, or a log path, that cannot be given up once its work is done is a warning naming it,
   and the work's verdict stands. The entry names a process that has ended, and is reclaimed as
   a dead holder's is.
+- A run killed, or stopped with its machine, before it finished writes no verdict and gives up
+  nothing, and nothing would ever claim its log path again, every run having its own. So a run,
+  once it owns its own path, releases every path beside it that a run on this machine holds
+  whose process has ended, and says each was abandoned - its run id, process and start, and
+  where its records are. A holder recorded on another machine, or in a record this build cannot
+  read, is left as it is.
 
 ### Where a run's records live
 
@@ -2382,7 +2399,8 @@ command contracts, because each calls for a different remedy:
 | 6 | `log-held` | Find out which run still owns this leg's logs |
 | 7 | `not-admitted` | Wait for the heavy legs its line names, free memory or room on the filesystem it names, or raise the machine's limits |
 
-`failed` reports 20, `refused-locked` 13 and `poisoned` 70. When legs disagree, the
+`failed` reports 20, `refused-locked` 13 and `poisoned` 70; `stopped`, where nothing failed,
+21 (`Incomplete`), as a run carrying a skip does. When legs disagree, the
 more fundamental verdict decides the code, in the order given under *Verdict vocabulary*.
 Six outcomes therefore carry six codes — refused before starting, the tree moved under the
 run, another run in the build directory, another run holding the logs, a machine with no room

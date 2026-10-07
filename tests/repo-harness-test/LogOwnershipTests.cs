@@ -239,6 +239,83 @@ public sealed class LogOwnershipTests
         Assert.True(second.Taken);
     }
 
+    /// <summary>
+    /// A run that died holding its own log path - killed, or stopped with its machine - wrote no verdict, and nothing
+    /// claims its path again, every run having its own. The next run beside it says it was abandoned - its run id, its
+    /// process, when it began and where its records are, or that they are gone - and releases its claim.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ARunThatDiedHoldingItsLogPath_IsSaidAbandoned_AndReleased_ByTheNextRunBesideIt(bool recordsKept)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var ownership = new LogOwnership(factory.FileSystem, factory.Output, factory.Identity);
+        var dead = temp.Combine("runs", "20250101-120000-deadbeef");
+        var directory = temp.Combine("runs", "20250102-120000-0badf00d");
+        var runId = RunId.New();
+
+        Write(dead, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-deadbeef");
+
+        if (recordsKept)
+        {
+            Directory.CreateDirectory(dead);
+        }
+
+        await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
+        var abandoned = ownership.ReleaseAbandoned(directory);
+
+        Assert.Equal(["20250101-120000-deadbeef"], abandoned.Select(owner => owner.RunId));
+        Assert.False(File.Exists(LogOwnership.OwnerFile(dead)));
+        Assert.Equal(runId.Value, ownership.Owner(directory)!.RunId);
+
+        var said = factory.StandardError.ToString();
+        Assert.Contains(
+            $"An earlier run was abandoned: {Environment.MachineName} pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since ",
+            said,
+            StringComparison.Ordinal);
+        Assert.Contains(recordsKept ? $"never gave up its records at '{dead}' - it was killed" : $"never gave up '{dead}', which is gone", said, StringComparison.Ordinal);
+        Assert.Contains("so its verdict may never have been reported. Its claim is released.", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Only a claim this machine can judge is released beside a run: a live run's stands, as one recorded on another
+    /// machine does, and one this build cannot read is left for the run claiming its path to refuse. None of them is
+    /// said, and none stops the run that found it.
+    /// </summary>
+    [Fact]
+    public async Task AClaimBesideARunThatMayStillStand_IsLeftAsItIs()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var ownership = new LogOwnership(factory.FileSystem, factory.Output, factory.Identity);
+        var live = temp.Combine("runs", "live");
+        var elsewhere = temp.Combine("runs", "elsewhere");
+        var unreadable = temp.Combine("runs", "unreadable");
+        var directory = temp.Combine("runs", "mine");
+        var runId = RunId.New();
+
+        Write(live, Environment.MachineName, Environment.ProcessId, ProcessStart(), "20250101-120000-11111111");
+        Write(elsewhere, "another-machine", int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-22222222");
+        Write(unreadable, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-33333333");
+
+        var file = LogOwnership.OwnerFile(unreadable);
+        await File.WriteAllTextAsync(
+            file,
+            (await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken)).Replace(
+                "\"runId\"",
+                "\"somethingNobodyDeclared\": 1, \"runId\"",
+                StringComparison.Ordinal),
+            TestContext.Current.CancellationToken);
+
+        await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(ownership.ReleaseAbandoned(directory));
+        Assert.All([live, elsewhere, unreadable, directory], path => Assert.True(File.Exists(LogOwnership.OwnerFile(path)), path));
+        Assert.DoesNotContain("abandoned", factory.StandardError.ToString() + factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
     /// <summary>This process's own stamp, which is what makes an owner written with it a live one.</summary>
     private static string? ProcessStart() => new ProcessIdentity(new HostPlatform()).Current;
 

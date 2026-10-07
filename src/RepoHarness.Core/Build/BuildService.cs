@@ -281,7 +281,14 @@ public sealed class BuildService(
 
             if (!result.Passed)
             {
-                return await FinishAsync(result.Verdict(), null).ConfigureAwait(false);
+                // A build ninja did not end itself was stopped from outside, which says nothing about the code.
+                var stopped = adapter is CMakeAdapter
+                    && string.Equals(phase.Phase, CMakeAdapter.BuildPhase, StringComparison.Ordinal)
+                    && Ninja.Generates(_buildDirectoryGuard.Read(buildDirectory)?.Generator)
+                        ? Ninja.Stopped(result)
+                        : null;
+
+                return await FinishAsync(stopped ?? result.Verdict(), null).ConfigureAwait(false);
             }
         }
 

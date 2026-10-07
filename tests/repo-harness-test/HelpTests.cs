@@ -96,6 +96,33 @@ public sealed partial class HelpTests
         }
     }
 
+    /// <summary>
+    /// The verdicts topic says what becomes of a build stopped from outside, which is stopped rather than failed, and of a
+    /// run killed before it finished, which reaches no verdict and says nothing itself: the next run in its tree says it
+    /// was abandoned, and releases it.
+    /// </summary>
+    [Fact]
+    public async Task VerdictsTopic_SaysAKilledRunIsReportedAbandoned_ByTheNextRun()
+    {
+        var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Contains(
+            "A leg that never ran proves nothing about the code, and nor does a build something stopped from outside before it "
+            + "finished, so counting either among the legs that passed reports evidence nobody gathered. A CMake build under "
+            + "ninja that fails with ninja saying nothing of why - which it says whenever it ends a build itself - or saying it "
+            + "was interrupted is stopped, not failed: run again, it finishes, where a failed one fails again.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains($" {HarnessExit.Incomplete}  stopped                    Find out what stopped the build, then run again", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "A run killed, or stopped with its machine, before it finished says nothing more: the next run in its tree on that "
+            + "machine says it was abandoned - its run id, process and start, and where its records are - and releases its "
+            + "claim on them.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ExitCodeTopic_DocumentsEverySharedExitCode()
     {

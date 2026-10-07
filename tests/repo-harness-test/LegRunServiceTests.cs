@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -639,6 +640,35 @@ public sealed class LegRunServiceTests
         {
             Assert.DoesNotContain(outcome.Details ?? [], line => line.StartsWith("logs:", StringComparison.Ordinal));
         }
+    }
+
+    /// <summary>
+    /// A run says, once it owns its own directory, each earlier run in its tree on this machine that ended holding one -
+    /// killed, or stopped with its machine, so it wrote no verdict - and releases it: nothing else would ever claim that
+    /// directory again. The run's own verdict is untouched.
+    /// </summary>
+    [Fact]
+    public async Task ARun_SaysAndReleases_AnEarlierRunThatEndedHoldingItsDirectory()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var dead = temp.Combine(".harness-config", "runs", "20250101-120000-deadbeef");
+
+        Directory.CreateDirectory(dead);
+        File.WriteAllText(
+            LogOwnership.OwnerFile(dead),
+            "{ \"machine\": \"" + Environment.MachineName + "\", \"processId\": " + (int.MaxValue - 1).ToString(CultureInfo.InvariantCulture)
+            + ", \"processStamp\": \"a-process-that-has-gone\", \"runId\": \"20250101-120000-deadbeef\", \"takenUtc\": \"2025-01-01T12:00:00+00:00\" }");
+
+        var outcome = await OutcomeAsync(
+            temp, harness, OneLeg(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.False(File.Exists(LogOwnership.OwnerFile(dead)));
+        Assert.Contains(
+            $"logs: WARN - An earlier run was abandoned: {Environment.MachineName} pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since 2025-01-01 12:00:00Z",
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
     }
 
     /// <summary>

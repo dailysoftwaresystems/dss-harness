@@ -600,6 +600,8 @@ public sealed class LedgerReportTests
     [InlineData(LegVerdict.SkippedToolMissing, false, "", "1 of 2 leg(s) passed; 1 did no work: b")]
     [InlineData(LegVerdict.SkippedUnavailable, false, "", "1 of 2 leg(s) passed; 1 did no work: b")]
     [InlineData(LegVerdict.Passed, false, "c", "2 of 2 leg(s) passed; 1 did no work: c")]
+    [InlineData(LegVerdict.Stopped, false, "", "1 of 2 leg(s) passed; 1 stopped before finishing: b")]
+    [InlineData(LegVerdict.Stopped, false, "c", "1 of 2 leg(s) passed; 1 did no work: c; 1 stopped before finishing: b")]
     [InlineData(LegVerdict.Passed, true, "", "interrupted after 2 leg(s)")]
     [InlineData(LegVerdict.Passed, false, "", "2 leg(s) passed")]
     public void Summarize_SaysHowTheRunEnded_WhateverItsShape(
@@ -681,6 +683,34 @@ public sealed class LedgerReportTests
         Assert.Equal(HarnessExit.Incomplete, report.ExitCode);
         Assert.Equal(1, report.Reported);
         Assert.Equal("wsl-clang-asan", Assert.Single(report.WithoutVerdict).Leg);
+    }
+
+    /// <summary>
+    /// A leg whose build something stopped from outside reached no verdict either: nothing failed, so the run is not red,
+    /// but it is incomplete, and the document says so - the leg's verdict, not a failure, and the run not complete.
+    /// </summary>
+    [Fact]
+    public void ARunWhereABuildWasStopped_IsIncomplete_AndTheDocumentSaysSo()
+    {
+        var report = LedgerReport.From(
+        [
+            Entry("win-msvc-release", LegVerdict.Passed, TimeSpan.FromSeconds(134), "412 tests"),
+            Entry("windows-x86_64-debug", LegVerdict.Stopped, TimeSpan.FromSeconds(139), "build exited 1 without ninja saying why"),
+        ],
+        durationWarningFactor: 0);
+
+        Assert.True(report.Passed, "nothing failed, so this is not a red run");
+        Assert.False(report.Complete);
+        Assert.Equal(HarnessExit.Incomplete, report.ExitCode);
+        Assert.Equal(1, report.Reported);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
+        var root = document.RootElement;
+        var stopped = root.GetProperty("legs").EnumerateArray().Single(leg => leg.GetProperty("leg").GetString() == "windows-x86_64-debug");
+
+        Assert.Equal(HarnessExit.Incomplete, root.GetProperty("exitCode").GetInt32());
+        Assert.False(root.GetProperty("complete").GetBoolean());
+        Assert.Equal(("stopped", false), (stopped.GetProperty("verdict").GetString(), stopped.GetProperty("failure").GetBoolean()));
     }
 
     [Fact]

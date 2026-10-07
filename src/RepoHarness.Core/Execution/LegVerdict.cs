@@ -78,6 +78,14 @@ public enum LegVerdict
     /// "your code is broken" and "the harness broke" call for different responses.
     /// </summary>
     Poisoned,
+
+    /// <summary>
+    /// Something stopped its build from outside before it finished - killed it, or interrupted it - which its build
+    /// tool says whenever it stops a build itself, and did not. Says nothing about the code: distinct from
+    /// <see cref="Failed"/>, which running again repeats, where running again finishes this one. Not a failure, and
+    /// not a pass: a run whose legs include one, and nothing failed, is incomplete.
+    /// </summary>
+    Stopped,
 }
 
 /// <summary>Everything the report and the exit code need to know about one verdict.</summary>
@@ -150,10 +158,14 @@ public static class Verdicts
         [LegVerdict.NotAdmitted] = new(LegVerdict.NotAdmitted, "not-admitted", true, 6, LegExit.NotAdmitted),
         [LegVerdict.Failed] = new(LegVerdict.Failed, "failed", true, 7, HarnessExit.CommandFailed),
         [LegVerdict.Unwitnessed] = new(LegVerdict.Unwitnessed, "unwitnessed", true, 8, LegExit.Unwitnessed),
-        [LegVerdict.SkippedUnavailable] = new(LegVerdict.SkippedUnavailable, "skipped-unavailable", false, 9, HarnessExit.Success),
-        [LegVerdict.SkippedToolMissing] = new(LegVerdict.SkippedToolMissing, "skipped-tool-missing", false, 10, HarnessExit.Success),
-        [LegVerdict.Passed] = new(LegVerdict.Passed, "passed", false, 11, HarnessExit.Success),
-        [LegVerdict.SkippedNotSelected] = new(LegVerdict.SkippedNotSelected, "skipped-not-selected", false, 12, HarnessExit.Success),
+
+        // Above the skips, since its leg's work was begun and stopped, where theirs never began; and the code a run
+        // whose worst verdict it is exits with, as a run carrying a skip does.
+        [LegVerdict.Stopped] = new(LegVerdict.Stopped, "stopped", false, 9, HarnessExit.Incomplete),
+        [LegVerdict.SkippedUnavailable] = new(LegVerdict.SkippedUnavailable, "skipped-unavailable", false, 10, HarnessExit.Success),
+        [LegVerdict.SkippedToolMissing] = new(LegVerdict.SkippedToolMissing, "skipped-tool-missing", false, 11, HarnessExit.Success),
+        [LegVerdict.Passed] = new(LegVerdict.Passed, "passed", false, 12, HarnessExit.Success),
+        [LegVerdict.SkippedNotSelected] = new(LegVerdict.SkippedNotSelected, "skipped-not-selected", false, 13, HarnessExit.Success),
     };
 
     /// <summary>Every verdict, most fundamental first.</summary>
@@ -196,6 +208,13 @@ public static class Verdicts
     public static bool IsSkip(LegVerdict verdict) => verdict
         is LegVerdict.SkippedUnavailable
         or LegVerdict.SkippedToolMissing;
+
+    /// <summary>
+    /// Whether the leg reached no verdict of its own: it did no work (<see cref="IsSkip"/>), or something stopped its
+    /// work from outside before it finished. A run whose legs include one, and nothing failed, is incomplete.
+    /// </summary>
+    /// <param name="verdict">The verdict.</param>
+    public static bool ReachedNone(LegVerdict verdict) => IsSkip(verdict) || verdict == LegVerdict.Stopped;
 
     /// <summary>How fundamental the verdict is; the smaller number decides when legs disagree.</summary>
     /// <param name="verdict">The verdict.</param>

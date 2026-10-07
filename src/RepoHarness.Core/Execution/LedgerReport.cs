@@ -199,28 +199,34 @@ public sealed class LedgerReport
             return $"{Lines.Count} leg(s) passed";
         }
 
-        // A leg that did no work is not a leg that passed. Nothing failed, so this is not a red
-        // run; but an unqualified success would put "OK - 8 leg(s) passed" in front of a reader
-        // when none of those eight ran, which is the one thing a gate reads. The legs are named,
-        // because which of them went unreported is the first thing to ask.
-        var withoutWork = WithoutVerdict.Select(line => line.Leg).Concat(unfinished).ToList();
+        // A leg that did no work, or whose work was stopped, is not a leg that passed. Nothing failed, so this is not a
+        // red run; but an unqualified success would put "OK - 8 leg(s) passed" in front of a reader when none of those
+        // eight ran, which is the one thing a gate reads. The legs are named, because which of them went unreported is
+        // the first thing to ask, and the two kinds apart, because what to do differs.
+        var withoutWork = Lines.Where(line => Verdicts.IsSkip(line.Verdict)).Select(line => line.Leg).Concat(unfinished).ToList();
+        var stopped = Lines.Where(line => line.Verdict == LegVerdict.Stopped).Select(line => line.Leg).ToList();
 
-        return $"{Reported} of {Lines.Count} leg(s) passed; "
-            + $"{withoutWork.Count} did no work: {string.Join(", ", withoutWork)}";
+        IEnumerable<string> unreported =
+        [
+            .. withoutWork.Count > 0 ? [$"{withoutWork.Count} did no work: {string.Join(", ", withoutWork)}"] : Array.Empty<string>(),
+            .. stopped.Count > 0 ? [$"{stopped.Count} stopped before finishing: {string.Join(", ", stopped)}"] : Array.Empty<string>(),
+        ];
+
+        return $"{Reported} of {Lines.Count} leg(s) passed; {string.Join("; ", unreported)}";
     }
 
     /// <summary>Whether every leg reached a verdict that is not a failure.</summary>
     public bool Passed => !Lines.Any(line => Verdicts.IsFailure(line.Verdict));
 
-    /// <summary>The legs that did no work, each with why, in the order they were recorded.</summary>
+    /// <summary>The legs that reached no verdict of their own, each with why, in the order they were recorded.</summary>
     /// <remarks>
-    /// A skip is not a failure — a switched-off machine is normal — but it is not a pass either,
-    /// and the difference is the whole of what a gate reads. Kept apart from
+    /// A skip is not a failure — a switched-off machine is normal — and nor is a leg whose build something stopped from
+    /// outside, but neither is a pass either, and the difference is the whole of what a gate reads. Kept apart from
     /// <see cref="Passed"/> rather than folded into it: a run where one leg passed and another was
     /// never reached is neither wholly green nor red, and saying so is the only honest summary.
     /// </remarks>
     public IReadOnlyList<LedgerLine> WithoutVerdict
-        => [.. Lines.Where(line => Verdicts.IsSkip(line.Verdict))];
+        => [.. Lines.Where(line => Verdicts.ReachedNone(line.Verdict))];
 
     /// <summary>How many legs actually reached a verdict of their own.</summary>
     public int Reported => Lines.Count - WithoutVerdict.Count;
