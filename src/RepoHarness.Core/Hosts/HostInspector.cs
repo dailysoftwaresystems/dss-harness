@@ -511,8 +511,18 @@ public sealed class HostInspector(
 
         // One line, held open until the host has answered: a budget that runs out stops ssh or wsl.exe here,
         // which ends the input there and stops any witness still running.
-        var answer = await RunAsync(connection, toolPath, [HostAgentProtocol.CommandName], budget, cancellationToken, request + "\n", holdOpen: true)
-            .ConfigureAwait(false);
+        ProcessResult answer;
+
+        try
+        {
+            answer = await RunAsync(connection, toolPath, [HostAgentProtocol.CommandName], budget, cancellationToken, request + "\n", holdOpen: true)
+                .ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (HostConnector.Unreached(ex) is { } unreached)
+        {
+            // Its transport stopped starting: said as coming after whatever bringing it here took, as any other stop is.
+            return Stopped(unread, unreached);
+        }
 
         // From the host's own marker on, on each stream, before any of this is quoted or read: a host that
         // never reached its agent wrote no marker, and then the whole of what it said is all there is to go

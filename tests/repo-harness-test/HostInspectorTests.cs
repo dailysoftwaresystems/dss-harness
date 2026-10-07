@@ -519,20 +519,25 @@ public sealed class HostInspectorTests
 
     /// <summary>
     /// An update is said with whether the host then answered as the build it was updated to, and what stopped
-    /// it answering is said as coming after the update: a host that stopped answering, and one whose DssHarness
-    /// still answers as the version before. Measured: an update said alone, beside every leg on that host warned
-    /// that DssHarness there did not answer, left a reader unable to tell which version it runs.
+    /// it answering is said as coming after the update: a host that stopped answering, one whose transport would
+    /// no longer start, and one whose DssHarness still answers as the version before. Measured: an update said
+    /// alone, beside every leg on that host warned that DssHarness there did not answer, left a reader unable to
+    /// tell which version it runs.
     /// </summary>
     [Theory]
     [InlineData("stopped", "the host could not be reached: ssh said Connection timed out during banner exchange")]
+    [InlineData("unstarted", "'ssh' could not be started: The file cannot be accessed by the system.")]
     [InlineData("behind", "DssHarness there reports 1.1.9, and 1.2.0 was expected")]
     public async Task AnUpdate_SaysWhetherTheHostThenAnsweredAsThatBuild_AndWhatStoppedItAfter(string after, string why)
     {
-        using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(installed: "1.1.9", agent: _ => after == "stopped"
-            ? HostResults.Failed(255, "Connection timed out during banner exchange\r\nConnection to host.invalid port 22 timed out\r\n")
-            : HostResults.Ok(JsonSerializer.Serialize(
+        using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(installed: "1.1.9", agent: _ => after switch
+        {
+            "stopped" => HostResults.Failed(255, "Connection timed out during banner exchange\r\nConnection to host.invalid port 22 timed out\r\n"),
+            "unstarted" => throw HostResults.TransportWouldNotStart(HostId.Ssh(SshName)),
+            _ => HostResults.Ok(JsonSerializer.Serialize(
                 new HostAgentInfo { Version = "1.1.9", AssemblySha256 = "oldhash", Os = "linux", Processor = "x86_64" },
-                HostAgentProtocol.JsonOptions))));
+                HostAgentProtocol.JsonOptions)),
+        }));
 
         var report = await fixture.InspectAsync(HostId.Ssh(SshName));
 
