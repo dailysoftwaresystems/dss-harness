@@ -144,6 +144,14 @@ public sealed class LegAdmission(
     Func<TimeSpan, CancellationToken, Task> wait,
     Func<TimeSpan, TimeSpan, TimeSpan> settle)
 {
+    /// <summary>
+    /// The longest a leg's wait goes without saying where it stands: said again, as it reads now, once this long has
+    /// passed since its last line. A wait that says nothing for long reads as a hang - measured, a leg's one line of a
+    /// 39-minute wait for the memory reached its reader with its admission, through a pipe that passed each line on only
+    /// once the next came.
+    /// </summary>
+    public static readonly TimeSpan SaidAgainEvery = TimeSpan.FromMinutes(5);
+
     private readonly HeavyLegSlots _slots = slots;
     private readonly IMemoryGauge _gauge = gauge;
     private readonly TimeProvider _clock = clock;
@@ -187,6 +195,9 @@ public sealed class LegAdmission(
         IReadOnlyList<SlotEntry>? roomSaid = null;
         var roomLost = false;
 
+        // When the wait last said where it stands: once SaidAgainEvery has passed since, it says so again, as it reads now.
+        var saidAt = started;
+
         try
         {
             IReadOnlyList<SlotEntry>? heldBy = null;
@@ -206,8 +217,12 @@ public sealed class LegAdmission(
                 {
                     if (heldBy is null || !heldBy.SequenceEqual(standing.Holders))
                     {
-                        request.Progress($"waits for {Slots(standing)}, {standing.Ahead} leg(s) ahead; held by {Holders(standing)}");
+                        Say($"waits for {Slots(standing)}, {standing.Ahead} leg(s) ahead; held by {Holders(standing)}");
                         heldBy = standing.Holders;
+                    }
+                    else if (Due())
+                    {
+                        Say($"still waits for {Slots(standing)}{After()}, {standing.Ahead} leg(s) ahead; held by {Holders(standing)}");
                     }
 
                     (waitingForMemory, settled) = (false, false);
@@ -256,8 +271,12 @@ public sealed class LegAdmission(
                     // would otherwise let the leg start the moment the count failed once - so it is read again next time.
                     if (!readingLost)
                     {
-                        request.Progress($"holds a heavy-leg slot, and could not read the memory in use again: {why}; it last read {last.Describe()}");
+                        Say($"holds a heavy-leg slot, and could not read the memory in use again: {why}; it last read {last.Describe()}");
                         readingLost = true;
+                    }
+                    else if (Due())
+                    {
+                        Say($"holds a heavy-leg slot, and still could not read the memory in use again{After()}: {why}; it last read {last.Describe()}");
                     }
 
                     if (Left(started, rule) <= TimeSpan.Zero)
@@ -302,7 +321,7 @@ public sealed class LegAdmission(
 
                     var settling = Waits.Shorter(_settle(rule.SettleLeast, rule.SettleMost), Left(started, rule));
 
-                    request.Progress($"memory {reading.Describe()}; another leg holds a slot, so it looks again in {Said(settling)}");
+                    Say($"memory {reading.Describe()}; another leg holds a slot, so it looks again in {Said(settling)}");
                     await _wait(settling, cancellationToken).ConfigureAwait(false);
                     settled = true;
                     continue;
@@ -312,8 +331,12 @@ public sealed class LegAdmission(
 
                 if (!waitingForMemory)
                 {
-                    request.Progress($"holds a heavy-leg slot, and waits for the memory {reading.Describe()} to fall below {Limit(rule)}");
+                    Say($"holds a heavy-leg slot, and waits for the memory {reading.Describe()} to fall below {Limit(rule)}");
                     waitingForMemory = true;
+                }
+                else if (Due())
+                {
+                    Say($"holds a heavy-leg slot, and still waits for the memory {reading.Describe()} to fall below {Limit(rule)}{After()}");
                 }
 
                 if (Left(started, rule) <= TimeSpan.Zero)
@@ -373,8 +396,12 @@ public sealed class LegAdmission(
 
                 if (!roomLost)
                 {
-                    request.Progress($"holds a heavy-leg slot, and could not read the room again: {claim.Unmeasured}; it last read {read}");
+                    Say($"holds a heavy-leg slot, and could not read the room again: {claim.Unmeasured}; it last read {read}");
                     roomLost = true;
+                }
+                else if (Due())
+                {
+                    Say($"holds a heavy-leg slot, and still could not read the room again{After()}: {claim.Unmeasured}; it last read {read}");
                 }
 
                 return Left(started, rule) > TimeSpan.Zero
@@ -396,8 +423,12 @@ public sealed class LegAdmission(
             // Said again whenever the legs claiming it change, as the legs holding the slots are.
             if (roomSaid is null || !roomSaid.SequenceEqual(claim.Claimants))
             {
-                request.Progress($"holds a heavy-leg slot, and waits for room: {claim.Describe(room)}");
+                Say($"holds a heavy-leg slot, and waits for room: {claim.Describe(room)}");
                 roomSaid = claim.Claimants;
+            }
+            else if (Due())
+            {
+                Say($"holds a heavy-leg slot, and still waits for room{After()}: {claim.Describe(room)}");
             }
 
             return Left(started, rule) > TimeSpan.Zero
@@ -413,6 +444,19 @@ public sealed class LegAdmission(
                     record: _slots.RoomLocation,
                     room: claim.Describe(room));
         }
+
+        // Says where the wait stands, and when it did.
+        void Say(string line)
+        {
+            request.Progress(line);
+            saidAt = _clock.GetTimestamp();
+        }
+
+        // Whether the wait has gone SaidAgainEvery without saying where it stands.
+        bool Due() => _clock.GetElapsedTime(saidAt) >= SaidAgainEvery;
+
+        // How long the leg has waited, of the time it may: what a line said again adds.
+        string After() => $", after {Waited(started)} of the {Said(rule.MaxWait)} it may wait";
     }
 
     /// <summary>

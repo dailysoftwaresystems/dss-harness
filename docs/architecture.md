@@ -1361,6 +1361,12 @@ only while it is fewer legs from the front than the fewest any leg up to it allo
 slots are always the front of the line, no leg runs beside more legs than its own configuration
 allows, and none passes a leg that asked before it.
 
+A waiting leg says where it stands as it starts each wait - who holds the slots, the memory in use, or
+the room and who claims it - again whenever the holders or the claimants change, and again, as it reads
+then and with how long it has waited of `maxWaitMinutes`, at least every 5 minutes: a consumer's leg
+waited 39 minutes for the memory with one line, which its reader's pipe - passing each line on only
+once the next came - delivered with the leg's admission, so the wait read as a hang.
+
 A leg holds its slot until its work ends - a runner's steps after its build, and a WSL leg's whole
 run there, included - and keeps its lock while it waits, so another run of its variant is
 `refused-locked` meanwhile, as it would be while the leg ran. A waiting leg counts against its
