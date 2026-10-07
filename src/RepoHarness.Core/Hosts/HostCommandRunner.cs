@@ -216,7 +216,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
         return connection.Host.Kind switch
         {
             HostKind.Local => await _processRunner.RunAsync(BuildRequest(connection, command), cancellationToken).ConfigureAwait(false),
-            HostKind.Ssh => await OverSshAsync(connection, () => BuildRequest(connection, command), cancellationToken).ConfigureAwait(false),
+            HostKind.Ssh => await OverSshAsync(connection, pin => BuildRequest(connection, command, pin), cancellationToken).ConfigureAwait(false),
             _ => await ThroughTransportAsync(connection.Host.ToString(), BuildRequest(connection, command), cancellationToken).ConfigureAwait(false),
         };
     }
@@ -232,37 +232,47 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
     /// slept and woke with another lease, one that answers at another of its addresses - and ssh itself tries
     /// every address a name has. What the pinned call printed is kept ahead of what the second one printed.
     /// </remarks>
-    private async Task<ProcessResult> OverSshAsync(HostConnection connection, Func<ProcessRequest> build, CancellationToken cancellationToken)
+    private async Task<ProcessResult> OverSshAsync(HostConnection connection, Func<SshPin?, ProcessRequest> build, CancellationToken cancellationToken)
     {
-        var pinned = connection.Pin is { Holds: true };
-        var result = await AttemptAsync(connection, build, cancellationToken).ConfigureAwait(false);
+        var (pin, result) = await AttemptAsync(connection, build, cancellationToken).ConfigureAwait(false);
 
-        if (!pinned || !HostProbes.FailedBeforeAnySession(result))
+        if (pin is null || !HostProbes.FailedBeforeAnySession(result))
         {
             return result;
         }
 
-        connection.Pin!.Drop();
+        pin.Drop();
 
-        var again = await AttemptAsync(connection, build, cancellationToken).ConfigureAwait(false);
+        var (_, again) = await AttemptAsync(connection, build, cancellationToken).ConfigureAwait(false);
 
         return again with { StandardError = result.StandardError + again.StandardError };
     }
 
     /// <summary>
-    /// Runs the ssh call <paramref name="build"/> makes once; where ssh is to look the host's name up itself - the
-    /// connection was never pinned, or its pin was dropped - the name is learnt afresh first, so that whichever
-    /// address ssh dials is known, and written as the address declared in every line it says, as it says it (see
+    /// Runs the ssh call <paramref name="build"/> makes once, and says the pin it went to, or <see langword="null"/>
+    /// where it let ssh look the host's name up itself - the connection was never pinned, or its pin was dropped - in
+    /// which case the name is learnt afresh first, so that whichever address ssh dials is known, wherever this machine's
+    /// own lookup returns it too, and written as the address declared in every line it says, as it says it (see
     /// <see cref="ResolvedAddresses"/>).
     /// </summary>
-    private async Task<ProcessResult> AttemptAsync(HostConnection connection, Func<ProcessRequest> build, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Whether the call is pinned is read once, and the call built from that reading: a copy of the connection running
+    /// beside this one can drop the pin they share at any moment, and a call that learnt nothing because the pin held,
+    /// then built once it was dropped, would let ssh dial an address nobody had learnt.
+    /// </remarks>
+    private async Task<(SshPin? Pin, ProcessResult Result)> AttemptAsync(
+        HostConnection connection,
+        Func<SshPin?, ProcessRequest> build,
+        CancellationToken cancellationToken)
     {
-        if (connection.Pin is not { Holds: true } && connection.Resolved is { } resolved)
+        var pin = connection.Pin is { Holds: true } holding ? holding : null;
+
+        if (pin is null && connection.Resolved is { } resolved)
         {
             await resolved.LearnAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        return await ThroughTransportAsync(connection.Host.ToString(), build(), cancellationToken).ConfigureAwait(false);
+        return (pin, await ThroughTransportAsync(connection.Host.ToString(), build(pin), cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>
@@ -302,7 +312,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
 
         return OverSshAsync(
             connection,
-            () => SshRequest(connection, RemoteCommandLine.ShellProbe) with { Timeout = timeout, StandardInput = string.Empty },
+            pin => SshRequest(connection, pin, RemoteCommandLine.ShellProbe) with { Timeout = timeout, StandardInput = string.Empty },
             cancellationToken);
     }
 
@@ -335,7 +345,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
         return new()
         {
             FileName = SshProgram,
-            Arguments = ["-G", .. SshOptions(connection), Destination(connection)],
+            Arguments = ["-G", .. SshOptions(connection, Holding(connection)), Destination(connection)],
             WorkingDirectory = connection.LocalDirectory,
         };
     }
@@ -359,6 +369,13 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
 
     /// <summary>The process that runs <paramref name="command"/> on the host <paramref name="connection"/> reaches.</summary>
     public static ProcessRequest BuildRequest(HostConnection connection, HostCommand command)
+        => BuildRequest(connection, command, Holding(connection));
+
+    /// <summary>
+    /// The process that runs <paramref name="command"/> on the host <paramref name="connection"/> reaches, going to
+    /// <paramref name="pin"/>'s address where there is one.
+    /// </summary>
+    private static ProcessRequest BuildRequest(HostConnection connection, HostCommand command, SshPin? pin)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(command);
@@ -385,7 +402,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
                 ],
                 Environment = WslEnvironment,
             },
-            _ => SshRequest(connection, RemoteCommandLine.Join([command.Program, .. command.Arguments], connection.Shell)),
+            _ => SshRequest(connection, pin, RemoteCommandLine.Join([command.Program, .. command.Arguments], connection.Shell)),
         };
 
         return request with
@@ -407,12 +424,12 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
     /// and pinned - as it does for anybody, and the destination is always the address declared, so a Host
     /// block written for it matches.
     /// </summary>
-    private static ProcessRequest SshRequest(HostConnection connection, string commandLine) => new()
+    private static ProcessRequest SshRequest(HostConnection connection, SshPin? pin, string commandLine) => new()
     {
         FileName = SshProgram,
         Arguments =
         [
-            .. SshOptions(connection),
+            .. SshOptions(connection, pin),
 
             // No terminal: standard input then carries its bytes unchanged, and nothing waits for a key.
             "-T",
@@ -426,8 +443,11 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
     private static string Destination(HostConnection connection)
         => $"{Declared(connection.User, nameof(HostConnection.User))}@{Declared(connection.Address, nameof(HostConnection.Address))}";
 
-    /// <summary>The options every ssh call over <paramref name="connection"/> is given, its pin's while it holds.</summary>
-    private static string[] SshOptions(HostConnection connection)
+    /// <summary>The pin <paramref name="connection"/>'s calls go to now, or <see langword="null"/> where it has none that holds.</summary>
+    private static SshPin? Holding(HostConnection connection) => connection.Pin is { Holds: true } pin ? pin : null;
+
+    /// <summary>The options every ssh call over <paramref name="connection"/> is given, and <paramref name="pin"/>'s where it goes to one.</summary>
+    private static string[] SshOptions(HostConnection connection, SshPin? pin)
         =>
         [
             "-i", Declared(connection.KeyFile, nameof(HostConnection.KeyFile)),
@@ -449,7 +469,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
 
             // Measured with OpenSSH for Windows 10.0p2 against a server whose key known_hosts held under a
             // name alone: reached by its address, ssh found no key; with the alias, it found it.
-            .. connection.Pin is { Holds: true } pin ? pin.Options() : [],
+            .. pin is null ? [] : pin.Options(),
             "-p", connection.Port.ToString(CultureInfo.InvariantCulture),
         ];
 

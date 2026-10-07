@@ -77,7 +77,7 @@ internal static class TestCommand
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        command.SetAction(CommandRunner.Wrap(Name, async (context, run, cancellationToken) =>
         {
             var arguments = context.ParseResult;
 
@@ -99,6 +99,7 @@ internal static class TestCommand
             return await context.Get<LegRunService>()
                 .RunAsync(
                     Name,
+                    run,
                     new LegRunRequest(
                         context.Directory,
                         legs,
@@ -115,7 +116,7 @@ internal static class TestCommand
                     (work, token) => RunLegAsync(builds, tests, context.Get<CMakeToolchainReader>(), work, filter, excludes, labels, skipBuild, token),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonOption, beginsRun: true));
+        }, JsonOption));
 
         return command;
     }

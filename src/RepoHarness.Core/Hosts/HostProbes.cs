@@ -239,9 +239,9 @@ public static partial class HostProbes
     public static string CouldNotReach(string said) => $"the host could not be reached: ssh said {said}";
 
     /// <summary>
-    /// That <paramref name="through"/>'s host could not be reached, with everything ssh said on standard error over
-    /// <paramref name="result"/> quoted - the host named as the configuration declares it, never by the address this
-    /// machine resolved it to (see <see cref="AsConfigured"/>).
+    /// That <paramref name="through"/>'s host could not be reached, with the end of what ssh said on standard error over
+    /// <paramref name="result"/> quoted, as <see cref="Excerpt"/> quotes it - the host named as the configuration
+    /// declares it, never by an address its name resolved to here (see <see cref="AsConfigured"/>).
     /// </summary>
     /// <param name="result">What ssh did, having failed itself.</param>
     /// <param name="through">The connection it failed over.</param>
@@ -388,8 +388,9 @@ public static partial class HostProbes
                 ? $"Authenticating to {declared}:{match.Groups["port"].Value} as '"
                 : match.Value);
 
-        // Only where an address stands as a word. An unbounded replacement of '10.0.0.5' rewrites the '10.0.0.50' a
-        // command itself printed, handing the reader an address that never existed, and does the same to an IPv6
+        // Only where an address stands as a word, once what is set aside around it is (see Spelt): a label or two before
+        // it, and a colon, a full stop or a port after it. An unbounded replacement of '10.0.0.5' rewrites the '10.0.0.50'
+        // a command itself printed, handing the reader an address that never existed, and does the same to an IPv6
         // address inside a longer one. This runs over every line a host writes, not only over ssh's, so a line that
         // merely contains the address as part of something else is left alone.
         return AddressLike().Replace(
@@ -399,18 +400,12 @@ public static partial class HostProbes
                 : match.Value);
     }
 
-    /// <summary>Every address <paramref name="through"/>'s host name has resolved to here, its pin's among them, each as the address it is.</summary>
+    /// <summary>
+    /// Every address <paramref name="through"/>'s host name has resolved to here, each as the address it is: its pin's
+    /// among them, since a pin is made from what the name resolved to.
+    /// </summary>
     private static List<IPAddress> Resolved(HostConnection through)
-    {
-        IEnumerable<string> addresses = through.Resolved?.All ?? [];
-
-        if (through.Pin is { } pin)
-        {
-            addresses = addresses.Append(pin.Address);
-        }
-
-        return [.. addresses.Select(Address).OfType<IPAddress>()];
-    }
+        => [.. (through.Resolved?.All ?? []).Select(Address).OfType<IPAddress>()];
 
     /// <summary>
     /// The address <paramref name="token"/> spells, as the address it is, with where in the token it starts and how
@@ -421,8 +416,8 @@ public static partial class HostProbes
     /// </summary>
     private static (IPAddress Address, int Start, int Length)? Spelt(string token)
     {
-        // A label or two at most: what a program prints never stacks more, and a word of a thousand colons is
-        // passed over in a few looks rather than a thousand.
+        // A label or two at most, as a choice: ifconfig prints one, and a word of a thousand colons is passed over in a
+        // few looks rather than a thousand.
         for (int start = 0, labels = 0; labels <= MostLabels; labels++)
         {
             var word = token[start..];

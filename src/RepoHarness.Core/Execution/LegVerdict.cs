@@ -80,8 +80,8 @@ public enum LegVerdict
     Poisoned,
 
     /// <summary>
-    /// Something stopped its build from outside before it finished: its build tool, which says why whenever it ends a
-    /// build itself, said nothing of why, or said it was interrupted. Says nothing about the code: distinct from
+    /// Something stopped its build from outside before it finished: ninja, which says why whenever it ends a build
+    /// itself, said nothing of why, or said it was interrupted. Says nothing about the code: distinct from
     /// <see cref="Failed"/>, which running again repeats, where running again finishes this one. Not a failure, and
     /// not a pass: a run whose legs include one, and nothing failed, is incomplete.
     /// </summary>
@@ -145,12 +145,13 @@ public static class Verdicts
 {
     private static readonly IReadOnlyDictionary<LegVerdict, VerdictInfo> Table = new Dictionary<LegVerdict, VerdictInfo>
     {
-        // Ranks 0-8 are the order docs/architecture.md gives for disagreeing legs, each a failure with
-        // an exit code of its own. The rest exist so that Worst is total, and none of them is a
-        // failure. A stopped build and the two skips reached no verdict of their own, so a run whose
-        // worst verdict is one of them is incomplete; a warning outranks a pass so that a run with an
-        // unavailable leg summarises as that warning rather than as an unqualified success, and a leg
-        // nobody asked for outranks nothing at all.
+        // Ranks 0-8 are the failures, in the order docs/architecture.md gives for disagreeing legs, each
+        // deciding the exit code of a run it is the worst verdict of; unmeasured shares inputs-moved's. Every
+        // failure outranks everything that is none, and every verdict a leg reaches without one of its own -
+        // a stopped build and the two skips, whose code is incomplete - outranks a pass, so the worst verdict
+        // of a run is a failure wherever one failed, and one of those wherever it is incomplete: a run with
+        // an unavailable leg summarises as that, never as an unqualified success. A leg nobody asked for
+        // outranks nothing at all.
         [LegVerdict.Poisoned] = new(LegVerdict.Poisoned, "poisoned", true, 0, HarnessExit.InternalError),
         [LegVerdict.Unmeasured] = new(LegVerdict.Unmeasured, "unmeasured", true, 1, LegExit.InputsMoved),
         [LegVerdict.InputsMoved] = new(LegVerdict.InputsMoved, "inputs-moved", true, 2, LegExit.InputsMoved),
@@ -213,7 +214,8 @@ public static class Verdicts
     /// <summary>
     /// Whether the leg reached no verdict of its own: it did no work (<see cref="IsSkip"/>), or something stopped its
     /// work from outside before it finished. A run whose legs include one, and nothing failed, is incomplete - read from
-    /// the code the table gives the verdict, so the run's exit code and its summary cannot disagree about which they are.
+    /// the code the table gives the verdict, and read alike by the run's exit code and by the legs its summary names, so
+    /// the two cannot disagree about which they are.
     /// </summary>
     /// <param name="verdict">The verdict.</param>
     public static bool ReachedNone(LegVerdict verdict) => Describe(verdict) is { IsFailure: false, ExitCode: HarnessExit.Incomplete };
@@ -271,10 +273,6 @@ public static class Verdicts
 
         return worst ?? LegVerdict.Passed;
     }
-
-    /// <summary>The exit code a run over <paramref name="verdicts"/> reports.</summary>
-    /// <param name="verdicts">Every selected leg's verdict.</param>
-    public static int ExitCodeFor(IEnumerable<LegVerdict> verdicts) => ExitCodeFor(Worst(verdicts));
 
     /// <summary>
     /// The verdict a refusal carrying <paramref name="exitCode"/> gives the leg it stopped. A leg

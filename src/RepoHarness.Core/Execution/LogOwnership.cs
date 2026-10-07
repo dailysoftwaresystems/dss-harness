@@ -208,16 +208,18 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
 
     /// <summary>
     /// Releases every log directory beside <paramref name="logDirectory"/> that a run on this machine claimed and never
-    /// gave up, its process having ended first, and says each: such a run was killed, or stopped with its machine, before
-    /// it finished, and nothing else would ever say so - nothing claims its directory again, every run having its own.
+    /// gave up, its process having ended first, and says each: such a run was most likely killed, or stopped with its
+    /// machine, before it finished, and nothing else would ever say so - nothing claims its directory again, every run
+    /// having its own.
     /// </summary>
     /// <param name="logDirectory">The directory this run writes its logs to, whose own claim is left alone.</param>
     /// <returns>The runs found abandoned, in the order their owner files sort.</returns>
     /// <remarks>
     /// Only a claim this machine can judge is released: one recorded on another machine stands, as it does beside a run
-    /// claiming its own directory, and one this build cannot read - a newer build's, a run's still going among them - or
-    /// cannot reach in the window is left as it is, for a later run to look at again. Nothing here fails the run that
-    /// found them: a directory that cannot be listed is said, and nothing in it is released.
+    /// claiming its own directory. One this build cannot read - a newer build's, a run's still going among them, or one
+    /// its machine stopped while it was being written - or cannot reach in the window is left as it is, and said: unsaid,
+    /// a run whose machine left its record unreadable would never be said, nor its record removed. No failure expected
+    /// here fails the run that found them: a directory that cannot be listed is said, and nothing in it is released.
     /// </remarks>
     public IReadOnlyList<LogOwner> ReleaseAbandoned(string logDirectory)
     {
@@ -255,6 +257,10 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
             catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
             {
                 // Unreadable, held past the window by another process, or its mutex could not be opened: see the remarks.
+                // Said once the file is let go, as everything said here is.
+                _output.Warn(
+                    CommandName,
+                    $"Whether the run that claimed '{file[..^OwnerSuffix.Length]}' was abandoned could not be judged, so its claim is left as it is: {ex.Message}");
             }
         }
 
@@ -278,7 +284,8 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
         var records = _fileSystem.DirectoryExists(directory) ? $"its records at '{directory}'" : $"'{directory}', which is gone";
         var holder = ProcessHolders.Describe(owner.Machine, owner.ProcessId, owner.RunId, owner.TakenUtc);
         var abandoned = $"An earlier run was abandoned: {holder}, is no longer running, and never gave up {records} - "
-            + "it was killed, or stopped with its machine, before it finished - so its verdict may never have been reported.";
+            + "most likely it was killed, or stopped with its machine, before it finished, unless it said as it ended that its "
+            + "claim could not be given up - so its verdict may never have been reported.";
 
         try
         {

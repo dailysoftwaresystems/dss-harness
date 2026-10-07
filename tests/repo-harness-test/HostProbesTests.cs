@@ -197,6 +197,7 @@ public sealed class HostProbesTests
             Host = HostId.Ssh("mac"),
             Address = "mac.invalid",
             Pin = new SshPin(resolved, "mac.invalid"),
+            Resolved = Learnt(resolved),
         };
         var timedOut = HostResults.Failed(255, $"ssh: connect to host {resolved} port 22: Connection timed out\n");
 
@@ -225,6 +226,7 @@ public sealed class HostProbesTests
             Host = HostId.Ssh("mac"),
             Address = "mac.invalid",
             Pin = new SshPin("10.0.0.5", "mac.invalid"),
+            Resolved = Learnt("10.0.0.5"),
         };
 
         Assert.Equal(expected, HostProbes.AsConfigured(said, pinned));
@@ -274,8 +276,9 @@ public sealed class HostProbesTests
     }
 
     /// <summary>
-    /// What only looks like one of the addresses is left as it is: another address, one beginning with it, and a
-    /// version or a number that would parse as it - '192.0.522' and '3221225994' are both 192.0.2.10 to a parser.
+    /// What only looks like one of the addresses is left as it is - another address, one beginning with it, and a
+    /// version or a number that would parse as it: '192.0.522' and '3221225994' are both 192.0.2.10 to a parser - and so
+    /// is one of them standing where no word of its own sets it apart: behind three labels, or before a URL's escape.
     /// </summary>
     [Theory]
     [InlineData("version 192.0.522 and 3221225994 bytes")]
@@ -337,27 +340,18 @@ public sealed class HostProbesTests
     }
 
     /// <summary>
-    /// Nothing is rewritten where the connection knows of no address its name resolved to, where the only one it
-    /// knows is the address the configuration declares anyway, or where there is no connection at all: those words
-    /// are already the reader's own.
+    /// Nothing is rewritten where the connection knows of no address its name resolved to - none was learnt, as for a
+    /// host reached through a jump host, or what was learnt is no address - or where there is no connection at all:
+    /// those words are already the reader's own.
     /// </summary>
     [Fact]
-    public void WithNoPinToRewrite_SshsWordsAreRelayedAsTheyAre()
+    public void WhereNoAddressItsNameResolvedToIsKnown_SshsWordsAreRelayedAsTheyAre()
     {
         const string said = "ssh: connect to host mac.invalid port 22: Connection timed out";
 
         Assert.Equal(said, HostProbes.AsConfigured(said, null));
         Assert.Equal(said, HostProbes.AsConfigured(said, new HostConnection { Host = HostId.Ssh("mac"), Address = "mac.invalid" }));
-        Assert.Equal(
-            said,
-            HostProbes.AsConfigured(
-                said,
-                new HostConnection
-                {
-                    Host = HostId.Ssh("mac"),
-                    Address = "mac.invalid",
-                    Pin = new SshPin("mac.invalid", "mac.invalid"),
-                }));
+        Assert.Equal(said, HostProbes.AsConfigured(said, new HostConnection { Host = HostId.Ssh("mac"), Address = "mac.invalid", Resolved = Learnt("mac.invalid") }));
     }
 
     /// <summary>
@@ -376,5 +370,6 @@ public sealed class HostProbesTests
     }
 
     /// <summary>A connection to mac.invalid's addresses, learnt as <paramref name="addresses"/>; nothing here looks the name up again.</summary>
-    private static ResolvedAddresses Learnt(params string[] addresses) => new("mac.invalid", addresses, Substitute.For<IHostAddressResolver>());
+    private static ResolvedAddresses Learnt(params string[] addresses)
+        => new(new AddressResolution("mac.invalid", Attempts: 1, addresses), Substitute.For<IHostAddressResolver>());
 }

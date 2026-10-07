@@ -140,7 +140,7 @@ public sealed class HostExecServiceTests
                 Session = new HostSession(
                     Reachable(host).Session!.Connection with
                     {
-                        Resolved = new ResolvedAddresses("host.invalid", ["192.0.2.10"], NSubstitute.Substitute.For<IHostAddressResolver>()),
+                        Resolved = new ResolvedAddresses(new AddressResolution("host.invalid", Attempts: 1, ["192.0.2.10"]), NSubstitute.Substitute.For<IHostAddressResolver>()),
                     },
                     ".dotnet/tools/dssharness"),
             },

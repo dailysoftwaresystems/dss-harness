@@ -565,17 +565,20 @@ public sealed class BuildServiceTests
 
     /// <summary>
     /// A CMake build under ninja that exits without ninja saying why - killed part way - is stopped, naming its exit
-    /// code, which says nothing about the code. It is failed where ninja named a failed step, and so is a build under
+    /// code, which says nothing about the code. It is failed where ninja named a failed step, or where samurai, the
+    /// program the cache records CMake running for ninja, said one failed under its own name; and so is a build under
     /// another generator, whose build tool cannot be read for it, and a configure that fails, which CMake ran rather than
     /// ninja, however silently.
     /// </summary>
     [Theory]
-    [InlineData("Ninja", CMakeAdapter.BuildPhase, "", LegVerdict.Stopped, "build exited 1 without ninja saying why")]
-    [InlineData("Ninja Multi-Config", CMakeAdapter.BuildPhase, "[2/9] Building CXX object obj/app.o\n", LegVerdict.Stopped, "build exited 1 without ninja saying why")]
-    [InlineData("Ninja", CMakeAdapter.BuildPhase, "FAILED: obj/app.o\nninja: build stopped: subcommand failed.\n", LegVerdict.Failed, "build exited 1")]
-    [InlineData("Unix Makefiles", CMakeAdapter.BuildPhase, "", LegVerdict.Failed, "build exited 1")]
-    [InlineData("Ninja", CMakeAdapter.ConfigurePhase, "", LegVerdict.Failed, "configure exited 1")]
-    public async Task ABuildNinjaDidNotEndItself_IsStopped_NotFailed(string generator, string failing, string output, LegVerdict verdict, string detail)
+    [InlineData("Ninja", null, CMakeAdapter.BuildPhase, "", LegVerdict.Stopped, "build exited 1 without ninja saying why")]
+    [InlineData("Ninja Multi-Config", null, CMakeAdapter.BuildPhase, "[2/9] Building CXX object obj/app.o\n", LegVerdict.Stopped, "build exited 1 without ninja saying why")]
+    [InlineData("Ninja", null, CMakeAdapter.BuildPhase, "FAILED: obj/app.o\nninja: build stopped: subcommand failed.\n", LegVerdict.Failed, "build exited 1")]
+    [InlineData("Ninja", "/usr/bin/samu", CMakeAdapter.BuildPhase, "samu: job failed with status 1: c++ -c app.cpp\nsamu: subcommand failed\n", LegVerdict.Failed, "build exited 1")]
+    [InlineData("Ninja", "/usr/bin/samu", CMakeAdapter.BuildPhase, "[2/9] c++ -c app.cpp\n", LegVerdict.Stopped, "build exited 1 without samu saying why")]
+    [InlineData("Unix Makefiles", null, CMakeAdapter.BuildPhase, "", LegVerdict.Failed, "build exited 1")]
+    [InlineData("Ninja", null, CMakeAdapter.ConfigurePhase, "", LegVerdict.Failed, "configure exited 1")]
+    public async Task ABuildNinjaDidNotEndItself_IsStopped_NotFailed(string generator, string? program, string failing, string output, LegVerdict verdict, string detail)
     {
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
@@ -588,7 +591,8 @@ public sealed class BuildServiceTests
             phases: new ScriptedPhases(
                 configuring: () => File.WriteAllText(
                     Path.Combine(buildDirectory, BuildDirectoryGuard.CMakeCacheFileName),
-                    $"CMAKE_GENERATOR:INTERNAL={generator}\nCMAKE_GENERATOR_INSTANCE:INTERNAL=\n"),
+                    $"CMAKE_GENERATOR:INTERNAL={generator}\nCMAKE_GENERATOR_INSTANCE:INTERNAL=\n"
+                    + (program is null ? string.Empty : $"CMAKE_MAKE_PROGRAM:FILEPATH={program}\n")),
                 buildExitCode: failing == CMakeAdapter.BuildPhase ? 1 : 0,
                 buildOutput: output,
                 configureExitCode: failing == CMakeAdapter.ConfigurePhase ? 1 : 0));
@@ -2092,8 +2096,8 @@ public sealed class BuildServiceTests
     /// Every phase starts nothing. As configure starts, <paramref name="configuring"/> happens, and as
     /// the build starts, <paramref name="building"/> - an input rewritten, as an editor saving mid-build
     /// does; an object compiled; the clock stepped; the run stopped, as its caller's time limit stops one -
-    /// and each goes on only if the run still wants it, configure exiting 0 and the build
-    /// <paramref name="buildExitCode"/>.
+    /// and each goes on only if the run still wants it, configure exiting <paramref name="configureExitCode"/>
+    /// and the build <paramref name="buildExitCode"/>, having printed <paramref name="buildOutput"/>.
     /// </summary>
     private sealed class ScriptedPhases(
         Action? configuring = null,

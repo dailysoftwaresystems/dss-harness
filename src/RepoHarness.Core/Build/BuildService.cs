@@ -281,11 +281,13 @@ public sealed class BuildService(
 
             if (!result.Passed)
             {
-                // A build ninja did not end itself was stopped from outside, which says nothing about the code.
+                // A build ninja did not end itself, or ended only because it was interrupted, was stopped from outside,
+                // which says nothing about the code.
                 var stopped = adapter is CMakeAdapter
                     && string.Equals(phase.Phase, CMakeAdapter.BuildPhase, StringComparison.Ordinal)
-                    && Ninja.Generates(_buildDirectoryGuard.Read(buildDirectory)?.Generator)
-                        ? Ninja.Stopped(result)
+                    && _buildDirectoryGuard.Read(buildDirectory) is { } configured
+                    && Ninja.Generates(configured.Generator)
+                        ? Ninja.Stopped(result, configured.MakeProgram)
                         : null;
 
                 return await FinishAsync(stopped ?? result.Verdict(), null).ConfigureAwait(false);

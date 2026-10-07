@@ -92,6 +92,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         var lines = new HostAgentLines(nonce);
         var failure = new List<string>();
 
+        // The lines failure was read from, as they would be shown, held until the host has finished: see below.
+        var held = new List<string>();
+
         // A transport that will not start leaves the host unavailable, raised as that by the runner
         // that starts it.
         var result = await _hostCommands.RunAsync(
@@ -126,28 +129,43 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                         // the one that reaches the leg's reason, the ledger and --json.
                         line = HostProbes.AsConfigured(line, session.Connection);
 
-                        // Kept as well as shown: a command that refuses before any leg has a
-                        // verdict leaves no entry, and its failure is then all it said about why -
-                        // from its failure line to the end, because a message runs over several
-                        // lines and git's own fix is on the last of them. The host's agent fails
-                        // in the same form under its own name, when it could not start the
-                        // command at all.
+                        // Kept, from the last failure line to the end: a command that refuses before any leg has a
+                        // verdict leaves no entry, and its failure is then all it said about why - from its failure
+                        // line on, because a message runs over several lines and git's own fix is on the last of them.
+                        // The host's agent fails in the same form under its own name, when it could not start the
+                        // command at all. Held rather than shown until it is known to be no conclusion of the host's:
+                        // a failure line followed by another, which the command's own work printed, or one before a
+                        // command that ended well, which ends without one.
                         if (FailureLine.TryRead(line, commandName, out var said)
                             || FailureLine.TryRead(line, HostAgentProtocol.CommandName, out said))
                         {
+                            Show(held);
                             failure.Clear();
                             failure.Add(said);
+                            held.Add(line);
                         }
                         else if (failure.Count > 0)
                         {
                             failure.Add(line);
+                            held.Add(line);
                         }
-
-                        _output.RawError(line);
+                        else
+                        {
+                            _output.RawError(line);
+                        }
                     },
                 },
                 cancellationToken)
             .ConfigureAwait(false);
+
+        // A command that ended badly ends on its failure line, with what follows it, and that is the host's conclusion:
+        // this machine says how the leg ended itself - by the leg's own line where the host's ledger has an entry for
+        // it, and otherwise in the refusal raised from what the host said - so it is never shown. Shown as well, it was
+        // said twice, and a host's summary of its one leg read as this run's. Anything else held is shown, late.
+        if (lines.Finished is null or HarnessExit.Success)
+        {
+            Show(held);
+        }
 
         if (lines.Finished is not { } finished)
         {
@@ -159,6 +177,17 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         }
 
         return Read(ledger.ToString(), leg, session.Connection, commandName, finished, failure.Count == 0 ? null : string.Join(Environment.NewLine, failure));
+    }
+
+    /// <summary>Shows each line <paramref name="held"/> holds, in order, and holds none after.</summary>
+    private void Show(List<string> held)
+    {
+        foreach (var line in held)
+        {
+            _output.RawError(line);
+        }
+
+        held.Clear();
     }
 
     /// <summary>Reads the one leg's entry out of the ledger the host wrote.</summary>
@@ -230,8 +259,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
         var verdict = Verdicts.Parse(entry.Verdict) ?? LegVerdict.Poisoned;
 
-        // What the host's own work printed is shown under the name the configuration declares, as every line the
-        // host writes is: the same lines reach the reader on its standard error too, and say it there.
+        // What the host's own work printed is shown under the name the configuration declares, as every line the host
+        // writes is: a phase's last lines reach the reader on its standard error too, under --verbose, and say it there.
         var detail = HostProbes.AsConfigured(entry.Detail ?? string.Empty, connection);
 
         return new LegEntry

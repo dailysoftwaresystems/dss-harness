@@ -343,7 +343,7 @@ public sealed class HoldAwakeTests
         {
             Host = mac,
             Address = "mac.invalid",
-            Resolved = new ResolvedAddresses("mac.invalid", ["192.0.2.10"], Substitute.For<IHostAddressResolver>()),
+            Resolved = new ResolvedAddresses(new AddressResolution("mac.invalid", Attempts: 1, ["192.0.2.10"]), Substitute.For<IHostAddressResolver>()),
         };
 
         registry.Reached(Reached(mac, hold: 600) with { Session = new HostSession(connection, ".dotnet/tools/dssharness") });

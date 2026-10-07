@@ -163,7 +163,6 @@ internal static class HarnessServices
         services.AddSingleton(provider => new LegAdmission(
             provider.GetRequiredService<HeavyLegSlots>(),
             provider.GetRequiredService<IMemoryGauge>()));
-        services.AddSingleton<CommandRun>();
         services.AddSingleton<LegRunService>();
         services.AddSingleton<CleanService>();
 

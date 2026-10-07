@@ -275,14 +275,14 @@ public sealed class LogOwnershipTests
             $"An earlier run was abandoned: {Environment.MachineName} pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since ",
             said,
             StringComparison.Ordinal);
-        Assert.Contains(recordsKept ? $"never gave up its records at '{dead}' - it was killed" : $"never gave up '{dead}', which is gone", said, StringComparison.Ordinal);
+        Assert.Contains(recordsKept ? $"never gave up its records at '{dead}' - most likely it was killed" : $"never gave up '{dead}', which is gone", said, StringComparison.Ordinal);
         Assert.Contains("so its verdict may never have been reported. Its claim is released.", said, StringComparison.Ordinal);
     }
 
     /// <summary>
     /// Only a claim this machine can judge is released beside a run: a live run's stands, as one recorded on another
-    /// machine does, and one this build cannot read is left for the run claiming its path to refuse. None of them is
-    /// said, and none stops the run that found it.
+    /// machine does, unsaid, and one this build cannot read is left as it is and said, naming why, since nothing else
+    /// would ever say a run its machine left unreadable. None stops the run that found it.
     /// </summary>
     [Fact]
     public async Task AClaimBesideARunThatMayStillStand_IsLeftAsItIs()
@@ -313,7 +313,61 @@ public sealed class LogOwnershipTests
 
         Assert.Empty(ownership.ReleaseAbandoned(directory));
         Assert.All([live, elsewhere, unreadable, directory], path => Assert.True(File.Exists(LogOwnership.OwnerFile(path)), path));
-        Assert.DoesNotContain("abandoned", factory.StandardError.ToString() + factory.StandardOutput.ToString(), StringComparison.Ordinal);
+
+        var said = factory.StandardError.ToString() + factory.StandardOutput.ToString();
+        Assert.Contains(
+            $"logs: WARN - Whether the run that claimed '{unreadable}' was abandoned could not be judged, so its claim is left as it is: "
+            + $"The log owner file '{file}' could not be read: ",
+            said,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("An earlier run was abandoned", said, StringComparison.Ordinal);
+        Assert.DoesNotContain(live, said, StringComparison.Ordinal);
+        Assert.DoesNotContain(elsewhere, said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Each claim beside a run is judged on its own: one that cannot be read, sorting first, stops nothing after it, and an
+    /// abandoned run whose owner file cannot be removed is said all the same - naming the file and why - while the next
+    /// is released. This run's own claim stands throughout.
+    /// </summary>
+    [Fact]
+    public async Task OneClaimThatCannotBeJudgedOrRemoved_StopsNoOtherBesideIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var first = temp.Combine("runs", "a");
+        var stuck = temp.Combine("runs", "b");
+        var released = temp.Combine("runs", "c");
+        var directory = temp.Combine("runs", "mine");
+        var ownership = new LogOwnership(
+            new UndeletableFile(factory.FileSystem, LogOwnership.OwnerFile(stuck)),
+            factory.Output,
+            factory.Identity);
+        var runId = RunId.New();
+
+        Write(first, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-aaaaaaaa");
+        Write(stuck, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-bbbbbbbb");
+        Write(released, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-cccccccc");
+        await File.WriteAllTextAsync(LogOwnership.OwnerFile(first), "{ \"runId\": ", TestContext.Current.CancellationToken);
+
+        await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
+        var abandoned = ownership.ReleaseAbandoned(directory);
+
+        Assert.Equal(["20250101-120000-bbbbbbbb", "20250101-120000-cccccccc"], abandoned.Select(owner => owner.RunId));
+        Assert.True(File.Exists(LogOwnership.OwnerFile(first)));
+        Assert.True(File.Exists(LogOwnership.OwnerFile(stuck)));
+        Assert.False(File.Exists(LogOwnership.OwnerFile(released)));
+        Assert.Equal(runId.Value, ownership.Owner(directory)!.RunId);
+
+        var said = factory.StandardError.ToString();
+        Assert.Contains($"Whether the run that claimed '{first}' was abandoned could not be judged", said, StringComparison.Ordinal);
+        Assert.Contains(
+            $"run 20250101-120000-bbbbbbbb, since ",
+            said,
+            StringComparison.Ordinal);
+        Assert.Contains($"Its owner file '{LogOwnership.OwnerFile(stuck)}' could not be removed: Access to the path is denied.", said, StringComparison.Ordinal);
+        Assert.Contains($"never gave up '{released}', which is gone - most likely it was killed", said, StringComparison.Ordinal);
+        Assert.Contains("Its claim is released.", said, StringComparison.Ordinal);
     }
 
     /// <summary>

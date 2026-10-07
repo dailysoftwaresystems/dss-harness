@@ -323,7 +323,7 @@ public sealed class HostConnector(
 
             connection = connection with
             {
-                Resolved = new ResolvedAddresses(resolution.Address, resolution.Addresses, _addresses),
+                Resolved = new ResolvedAddresses(resolution, _addresses),
                 Pin = seen is null ? null : await PinAsync(connection, seen, resolution, cancellationToken).ConfigureAwait(false),
             };
         }

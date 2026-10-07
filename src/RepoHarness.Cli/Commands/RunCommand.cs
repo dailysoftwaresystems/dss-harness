@@ -74,7 +74,7 @@ internal static class RunCommand
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
-        command.SetAction(CommandRunner.Wrap(Name, async (context, cancellationToken) =>
+        command.SetAction(CommandRunner.Wrap(Name, async (context, run, cancellationToken) =>
         {
             var arguments = context.ParseResult;
             var runnerName = arguments.GetRequiredValue(RunnerArgument);
@@ -202,6 +202,7 @@ internal static class RunCommand
             return await context.Get<LegRunService>()
                 .RunAsync(
                     Name,
+                    run,
                     new LegRunRequest(
                         context.Directory,
                         selected,
@@ -217,7 +218,7 @@ internal static class RunCommand
                     (work, token) => RunLegAsync(runners, builds, runnerName, inputs, manualSteps, workload, work, token),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonOption, beginsRun: true));
+        }, JsonOption));
 
         return command;
     }

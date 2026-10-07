@@ -206,7 +206,8 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
         => leg.MachineKey.Length > 0 ? leg.MachineKey : "machine:unspecified";
 
     /// <summary>
-    /// Says what is about to run, and where, before any of it starts.
+    /// Says what is about to run, and where, before any of it starts - unless the machine that dispatched it here says
+    /// so itself (see <see cref="LegLedger.Announce"/>).
     /// </summary>
     /// <remarks>
     /// A parallel run's output is several legs' lines woven together, so the one thing a reader

@@ -85,8 +85,7 @@ public sealed class LegRunService(
     IFileSystem fileSystem,
     IFilePermissions filePermissions,
     IHostPlatform platform,
-    IHarnessOutput output,
-    CommandRun commandRun)
+    IHarnessOutput output)
 {
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LegsService _legsService = legsService;
@@ -103,28 +102,29 @@ public sealed class LegRunService(
     private readonly IFilePermissions _filePermissions = filePermissions;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
-    private readonly CommandRun _commandRun = commandRun;
 
     /// <summary>
     /// Runs <paramref name="work"/> on every selected leg and reports the ledger.
     /// </summary>
     /// <param name="commandName">The command reporting, which prefixes every line it writes.</param>
+    /// <param name="runId">
+    /// The run, begun and said by the command that asks for it before anything could refuse it, which every record and
+    /// the ledger name.
+    /// </param>
     /// <param name="request">What the command was asked to do.</param>
     /// <param name="work">What one leg does once its tree is ready.</param>
     /// <param name="cancellationToken">Stops the run.</param>
     public async Task<CommandOutcome> RunAsync(
         string commandName,
+        RunId runId,
         LegRunRequest request,
         Func<LegWork, CancellationToken, Task<LegEntry>> work,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
+        ArgumentNullException.ThrowIfNull(runId);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(work);
-
-        // Begun, and said, by the command that asked for it, before anything could refuse it (see CommandRun).
-        var runId = _commandRun.Id
-            ?? throw new InvalidOperationException("A leg run is begun by the command that asks for it, before anything can refuse it.");
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
 
@@ -186,9 +186,9 @@ public sealed class LegRunService(
 
         try
         {
-            // A run on this machine that ended holding its own directory - killed, or stopped with its machine - wrote no
-            // verdict, and nothing would ever claim that directory again: said here, once, and let go. Inside this try,
-            // so that whatever happens in it, this run's own directory is still given up.
+            // A run on this machine that ended holding its own directory - most likely killed, or stopped with its
+            // machine - may have written no verdict, and nothing would ever claim that directory again: said here, once,
+            // and let go. Inside this try, so that whatever happens in it, this run's own directory is still given up.
             _logOwnership.ReleaseAbandoned(runDirectory);
 
             // Left out entirely where nothing is remote, or where the run acts on what each host already holds
@@ -417,7 +417,7 @@ public sealed class LegRunService(
         IReadOnlyList<string> details,
         string? runDirectory)
         => request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory, _output.Shown, runId.Value)] }
+            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory, _output.Shown, runId)] }
             : CommandOutcome.Failed(exitCode, message, details);
 
     /// <summary>
@@ -714,7 +714,7 @@ public sealed class LegRunService(
         {
             return new CommandOutcome(exitCode, message)
             {
-                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory, _output.Shown, runId.Value)],
+                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory, _output.Shown, runId)],
                 Quiet = true,
             };
         }

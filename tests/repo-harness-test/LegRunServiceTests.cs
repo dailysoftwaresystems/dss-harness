@@ -644,8 +644,8 @@ public sealed class LegRunServiceTests
 
     /// <summary>
     /// A run says, once it owns its own directory, each earlier run in its tree on this machine that ended holding one -
-    /// killed, or stopped with its machine, so it wrote no verdict - and releases it: nothing else would ever claim that
-    /// directory again. The run's own verdict is untouched.
+    /// most likely killed, or stopped with its machine, so it may have written no verdict - and releases it: nothing
+    /// else would ever claim that directory again. The run's own verdict is untouched.
     /// </summary>
     [Fact]
     public async Task ARun_SaysAndReleases_AnEarlierRunThatEndedHoldingItsDirectory()
@@ -1622,15 +1622,6 @@ public sealed class LegRunServiceTests
         Legs = { ["native"] = HostDoubles.Leg(harness.Platform.PlatformKey, harness.Platform.Processor) },
     };
 
-    /// <summary>A command's run, begun as the command that asks for a leg run begins it.</summary>
-    private static CommandRun Begun()
-    {
-        var run = new CommandRun();
-
-        run.Begin();
-        return run;
-    }
-
     /// <summary>The run directory an outcome names, read the way its caller reads it.</summary>
     private static string RunDirectoryOf(CommandOutcome outcome, bool json)
     {
@@ -1756,11 +1747,11 @@ public sealed class LegRunServiceTests
             harness.FileSystem,
             harness.FilePermissions,
             harness.Platform,
-            harness.Output,
-            Begun());
+            harness.Output);
 
         return await service.RunAsync(
             "test",
+            RunId.New(),
             request,
             (leg, _) =>
             {

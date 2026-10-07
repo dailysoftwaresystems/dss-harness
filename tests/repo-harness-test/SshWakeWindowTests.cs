@@ -147,7 +147,7 @@ public sealed class SshWakeWindowTests
         Assert.Null(window.RanOut(mac));
     }
 
-    private static AddressResolution Missed(string name) => new(name, Resolved: false, Attempts: HostAddressResolver.Attempts);
+    private static AddressResolution Missed(string name) => AddressResolution.Missed(name, HostAddressResolver.Attempts);
 
     private static ProcessResult Refused() => HostResults.Failed(HostProbes.SshFailed, "ssh: connect to host mac.local port 22: Connection refused\n");
 

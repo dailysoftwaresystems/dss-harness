@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Globalization;
 using System.Text;
 using RepoHarness.Core.Ci;
 using RepoHarness.Core.Anchors;
@@ -56,6 +57,25 @@ internal static class HelpCommand
         Description = $"Topic to explain: {string.Join(", ", Topics.Select(topic => topic.Name))}. Omit for an overview.",
         Arity = ArgumentArity.ZeroOrOne,
     };
+
+    /// <summary>What to do about each verdict that has a remedy worth saying, in the order help lists them, one line apiece.</summary>
+    private static readonly (LegVerdict[] Verdicts, string[] Remedy)[] Remedies =
+    [
+        ([LegVerdict.InputsMoved, LegVerdict.Unmeasured], ["Let the tree settle, then run again"]),
+        ([LegVerdict.Contended], ["Wait for the other run"]),
+        ([LegVerdict.Unwitnessed], ["Find out what actually ran"]),
+        ([LegVerdict.LogHeld], ["Find out which run still owns the logs"]),
+        (
+            [LegVerdict.NotAdmitted],
+            [
+                "Wait for the heavy legs it names, free memory",
+                "or room on the filesystem it names, or raise the",
+                "machine's limits ('help admission')",
+            ]),
+        ([LegVerdict.Stopped], ["Find out what stopped the build, then run again"]),
+        ([LegVerdict.SkippedUnavailable], ["Make what its line names available, then run again"]),
+        ([LegVerdict.SkippedToolMissing], ["Install the tool its line names, then run again"]),
+    ];
 
     internal static Command Create()
     {
@@ -657,10 +677,14 @@ internal static class HelpCommand
         builder.AppendLine("counting either among the legs that passed reports evidence nobody gathered. A");
         builder.AppendLine("CMake build under ninja that fails with ninja saying nothing of why - which it says");
         builder.AppendLine("whenever it ends a build itself - or saying it was interrupted is stopped, not");
-        builder.AppendLine("failed: run again, it finishes, where a failed one fails again.");
+        builder.AppendLine("failed: run again, it finishes, where a failed one fails again. Read under the name");
+        builder.AppendLine("it says it under, which for samurai, run by CMake for ninja where it is installed,");
+        builder.AppendLine("is its file's. A build the harness stopped for hanging stays failed, saying it hung,");
+        builder.AppendLine("and so does one under any other build tool, since only ninja's lines are read.");
         builder.AppendLine("A run killed, or stopped with its machine, before it finished says nothing more:");
-        builder.AppendLine("the next run in its tree on that machine says it was abandoned - its run id, process");
-        builder.AppendLine("and start, and where its records are - and releases its claim on them.");
+        builder.AppendLine("the next build, test or run in its tree on that machine to own its run directory");
+        builder.AppendLine("says it was abandoned - its run id, process and start, and where its records are -");
+        builder.AppendLine("and releases its claim on them.");
         builder.AppendLine();
         builder.AppendLine("When several apply the more fundamental one is reported, in the order above.");
         builder.AppendLine("A leg whose inputs moved is not reported as failed even when its tests failed,");
@@ -680,19 +704,25 @@ internal static class HelpCommand
         builder.AppendLine("  \"sharedState\": { \"ccache\": \"the per-user compiler cache\" }");
         builder.AppendLine();
         builder.AppendLine("Remedies");
-        builder.AppendLine($"  {LegExit.InputsMoved}  inputs-moved, unmeasured   Let the tree settle, then run again");
-        builder.AppendLine($"  {LegExit.Contended}  contended                  Wait for the other run");
-        builder.AppendLine($"  {LegExit.Unwitnessed}  unwitnessed                Find out what actually ran");
-        builder.AppendLine($"  {LegExit.LogHeld}  log-held                   Find out which run still owns the logs");
-        builder.AppendLine($"  {LegExit.NotAdmitted}  not-admitted               Wait for the heavy legs it names, free memory");
-        builder.AppendLine("                                or room on the filesystem it names, or raise the");
-        builder.AppendLine("                                machine's limits ('help admission')");
-        builder.AppendLine($" {HarnessExit.Incomplete}  stopped                    Find out what stopped the build, then run again");
-        builder.AppendLine($" {HarnessExit.Incomplete}  skipped-unavailable        Make what its line names available, then run again");
-        builder.AppendLine($" {HarnessExit.Incomplete}  skipped-tool-missing       Install the tool its line names, then run again");
+
+        // Each verdict's name and exit code read from the verdict table, as the list above them is, so neither can
+        // drift from what a run reports.
+        foreach (var (verdicts, remedy) in Remedies)
+        {
+            var code = verdicts.Select(Verdicts.ExitCodeFor).Distinct().Single();
+            var names = string.Join(", ", verdicts.Select(Verdicts.Display));
+
+            builder.AppendLine(string.Create(CultureInfo.InvariantCulture, $"{code,3}  {names,-27}{remedy[0]}"));
+
+            foreach (var more in remedy.Skip(1))
+            {
+                builder.AppendLine(new string(' ', 32) + more);
+            }
+        }
 
         return builder.ToString();
     }
+
 
     private static string RenderAdmission()
     {
@@ -1067,11 +1097,13 @@ internal static class HelpCommand
         builder.AppendLine("where ssh reaches the host through a ProxyJump or a ProxyCommand, which do their own");
         builder.AppendLine("lookup, or where the address would change anything else ssh does; and an address that");
         builder.AppendLine("stops taking the connection, or shows a key the name is not known by, is dropped, and");
-        builder.AppendLine("ssh looks the name up itself. No reason, relayed line or document names an address");
-        builder.AppendLine("the name resolved to: wherever ssh, or a program there, names one as a word, it reads");
-        builder.AppendLine("as the address declared. The name is looked up again, afresh, before every call that");
-        builder.AppendLine("lets ssh look it up itself - one never pinned, or once its pin is dropped - so an");
-        builder.AppendLine("address it has moved to is withheld too.");
+        builder.AppendLine("ssh looks the name up itself. For a host whose name is looked up here, no reason,");
+        builder.AppendLine("relayed line or document names an address the name resolved to: wherever ssh, or a");
+        builder.AppendLine("program there, names one as a word, it reads as the address declared. The name is");
+        builder.AppendLine("looked up again, afresh, before every call that lets ssh look it up itself - one");
+        builder.AppendLine("never pinned, though not through a ProxyJump or a ProxyCommand, or once its pin is");
+        builder.AppendLine("dropped - so an address it has moved to is withheld too, wherever this machine's own");
+        builder.AppendLine("lookup finds it as well.");
         builder.AppendLine();
         builder.AppendLine("A host that sleeps between commands can be given hosts.ssh.<name>.wakeWaitSeconds.");
         builder.AppendLine($"Its name is then looked up again, and a connection nothing took or that timed out");
@@ -1102,10 +1134,12 @@ internal static class HelpCommand
         builder.AppendLine("system - and in the paths its ledger holds, runDirectory and space among them, so");
         builder.AppendLine("this machine's 'logs of <leg> on <host>:' line names no account either. On a Windows");
         builder.AppendLine("host the separator after it stays the host's own, as in ~\\src\\app. A program's own");
-        builder.AppendLine("lines, a phase's last lines among them, stay as it printed them; a command typed on");
-        builder.AppendLine("the host names its paths in full; and under host-exec a document other than a");
-        builder.AppendLine("ledger is written as the host prints it. A copy's path this machine builds from");
-        builder.AppendLine("repositoryPath is said as that is written: '~/src/app' keeps the account out of it.");
+        builder.AppendLine("lines, a phase's last lines among them, keep the home as it printed it; a command");
+        builder.AppendLine("typed on the host names its paths in full; and under host-exec a document other than");
+        builder.AppendLine("a ledger is written as the host prints it - but for an address the host's name");
+        builder.AppendLine("resolved to, which reads as the address declared. A copy's path this machine builds");
+        builder.AppendLine("from repositoryPath is said as that is written: '~/src/app' keeps the account out of");
+        builder.AppendLine("it.");
         builder.AppendLine();
         builder.AppendLine("A host keeps a copy of each tree whose legs it runs: the main checkout's at its");
         builder.AppendLine($"repositoryPath, and each worktree's beside it, at <repositoryPath>{HostCopies.WorktreeSuffix}<name>,");

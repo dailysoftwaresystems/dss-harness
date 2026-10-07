@@ -272,6 +272,14 @@ public sealed class HostCommandRunnerTests
     }
 
     /// <summary>
+    /// The addresses a connection keeps are what its name resolved to, so a name that resolved to nothing - refused before
+    /// ssh starts - has none to keep, and is refused as a defect rather than kept as a connection that knows of none.
+    /// </summary>
+    [Fact]
+    public void ANameThatResolvedToNothing_HasNoAddressesToKeep()
+        => Assert.Throws<ArgumentException>(() => new ResolvedAddresses(AddressResolution.Missed("host.invalid", 3), Substitute.For<IHostAddressResolver>()));
+
+    /// <summary>
     /// A call over a pin that holds has nothing looked up: ssh dials the address pinned, which is known, whatever the
     /// call comes to - unless it failed before any session, and the pin was dropped.
     /// </summary>
@@ -302,7 +310,7 @@ public sealed class HostCommandRunnerTests
         var resolver = new HostAddressResolver(lookup, new ManualClock(), TimeSpan.Zero);
         var found = await resolver.ResolveAsync("host.invalid", TestContext.Current.CancellationToken);
 
-        return (lookup, new ResolvedAddresses("host.invalid", found.Addresses, resolver));
+        return (lookup, new ResolvedAddresses(found, resolver));
     }
 
     /// <summary>A name that resolves one way when first looked up and another way every time after.</summary>

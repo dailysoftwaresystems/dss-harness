@@ -235,8 +235,8 @@ public sealed class LedgerReportTests
         const string run = "20260101-000000-0a1b2c3d";
         var report = LedgerReport.From([Entry("a", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty)], durationWarningFactor: 0);
 
-        using var ran = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], runDirectory: Path.Combine("runs", run), runId: run));
-        using var refused = JsonDocument.Parse(LedgerReport.Stopped(HarnessExit.Refused, "no selected leg can run", runId: run));
+        using var ran = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: [], runDirectory: Path.Combine("runs", run), run: RunId.Parse(run)));
+        using var refused = JsonDocument.Parse(LedgerReport.Stopped(HarnessExit.Refused, "no selected leg can run", run: RunId.Parse(run)));
         using var keepsNone = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
 
         Assert.Equal(run, ran.RootElement.GetProperty("runId").GetString());

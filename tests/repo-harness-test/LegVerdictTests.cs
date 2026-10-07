@@ -67,8 +67,8 @@ public sealed class LegVerdictTests
                 $"{fundamentalFirst[index - 1]} must outrank {fundamentalFirst[index]}");
         }
 
-        // A stopped build follows every failure, and comes before the legs that did no work and those that passed: its
-        // work was begun, and stopped, where theirs never began.
+        // A stopped build follows every failure, and comes before the legs that did no work, whose work never began, and
+        // those that passed, since it reached no verdict of its own.
         Assert.All(fundamentalFirst, verdict => Assert.True(Verdicts.Rank(verdict) < Verdicts.Rank(LegVerdict.Stopped), $"{verdict} must outrank stopped"));
         Assert.All(
             [LegVerdict.SkippedUnavailable, LegVerdict.SkippedToolMissing, LegVerdict.Passed, LegVerdict.SkippedNotSelected],
@@ -108,7 +108,28 @@ public sealed class LegVerdictTests
         Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor(LegVerdict.SkippedToolMissing));
         Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor(LegVerdict.Stopped));
         Assert.Equal(HarnessExit.Success, Verdicts.ExitCodeFor(LegVerdict.SkippedNotSelected));
-        Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor([LegVerdict.Passed, LegVerdict.SkippedUnavailable]));
+    }
+
+    /// <summary>
+    /// The worst verdict decides a run's exit code where something failed, and names it in the run's closing line either
+    /// way, so every failure outranks every verdict that is none, and every verdict a leg reaches without one of its own
+    /// outranks every one it reaches that is neither: otherwise a run where something failed would exit as a pass, or
+    /// close naming a pass when it is incomplete.
+    /// </summary>
+    [Fact]
+    public void EveryFailure_OutranksTheRest_AndEveryLegWithoutAVerdict_OutranksAPass()
+    {
+        var verdicts = Enum.GetValues<LegVerdict>();
+        var failures = verdicts.Where(Verdicts.IsFailure).ToList();
+        var reachedNone = verdicts.Where(Verdicts.ReachedNone).ToList();
+        var reached = verdicts.Where(verdict => !Verdicts.IsFailure(verdict) && !Verdicts.ReachedNone(verdict)).ToList();
+
+        Assert.All(failures, failure => Assert.All(
+            verdicts.Except(failures),
+            other => Assert.True(Verdicts.Rank(failure) < Verdicts.Rank(other), $"{failure} must outrank {other}")));
+        Assert.All(reachedNone, none => Assert.All(
+            reached,
+            other => Assert.True(Verdicts.Rank(none) < Verdicts.Rank(other), $"{none} must outrank {other}")));
     }
 
     [Fact]

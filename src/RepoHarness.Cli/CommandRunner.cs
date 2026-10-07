@@ -61,16 +61,36 @@ internal static class CommandRunner
     /// nobody declared, a configuration that does not load, a runner nobody declared. A script
     /// reading standard output has one document to read whatever happened.
     /// </param>
-    /// <param name="beginsRun">
-    /// Whether the command keeps runs - build, test and run - whose run it then begins before anything can refuse
-    /// it, and names from its first line and in its ledger on every exit: a run refused before any leg ran keeps no
-    /// records, and its id is then all there is to cite it by.
-    /// </param>
     internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
         string commandName,
         Func<CommandContext, CancellationToken, Task<CommandOutcome>> body,
-        Option<bool>? ledger = null,
-        bool beginsRun = false)
+        Option<bool>? ledger = null)
+        => Wrap(commandName, (context, _, cancellationToken) => body(context, cancellationToken), ledger, beginsRun: false);
+
+    /// <summary>
+    /// Wraps the body of a command that keeps runs - build, test and run - into an action the parser can invoke,
+    /// beginning its run before anything can refuse it, and handing the body that run.
+    /// </summary>
+    /// <param name="commandName">The command, which prefixes every line it writes.</param>
+    /// <param name="body">What the command does, given the run it began.</param>
+    /// <param name="ledger">The command's <c>--json</c>, as <see cref="Wrap(string, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, Option{bool}?)"/> takes it.</param>
+    /// <remarks>
+    /// The run is named in the command's first line, and as <c>runId</c> in its <c>--json</c> ledger on every exit, and
+    /// is the one its records are kept under: a run refused before it had a directory keeps no records, and its id is
+    /// then all there is to cite it by.
+    /// </remarks>
+    internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
+        string commandName,
+        Func<CommandContext, RunId, CancellationToken, Task<CommandOutcome>> body,
+        Option<bool>? ledger = null)
+        => Wrap(commandName, (context, run, cancellationToken) => body(context, run!, cancellationToken), ledger, beginsRun: true);
+
+    /// <summary>Wraps a command body, given its run where it <paramref name="beginsRun"/>, into an action the parser can invoke.</summary>
+    private static Func<ParseResult, CancellationToken, Task<int>> Wrap(
+        string commandName,
+        Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
+        Option<bool>? ledger,
+        bool beginsRun)
     {
         return async (parseResult, cancellationToken) =>
         {
@@ -84,7 +104,7 @@ internal static class CommandRunner
             // the legs are surveyed: a line written before then would sit in front of it.
             using var document = answersWithLedger ? output.DataOnly() : null;
 
-            var run = beginsRun ? services.GetRequiredService<CommandRun>().Begin() : null;
+            var run = beginsRun ? RunId.New() : null;
 
             if (run is not null)
             {
@@ -99,7 +119,7 @@ internal static class CommandRunner
                 }
 
                 var context = new CommandContext(services, parseResult, directory);
-                var outcome = await body(context, cancellationToken).ConfigureAwait(false);
+                var outcome = await body(context, run, cancellationToken).ConfigureAwait(false);
 
                 Report(output, commandName, outcome);
                 return outcome.ExitCode;
@@ -181,7 +201,7 @@ internal static class CommandRunner
     {
         if (ledger)
         {
-            output.Data(LedgerReport.Stopped(exitCode, message, output.Shown, run?.Value));
+            output.Data(LedgerReport.Stopped(exitCode, message, output.Shown, run));
         }
 
         output.Fail(commandName, message);
