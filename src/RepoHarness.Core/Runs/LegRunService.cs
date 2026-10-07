@@ -171,10 +171,6 @@ public sealed class LegRunService(
                 runDirectory);
         }
 
-        // A run on this machine that ended holding its own directory - killed, or stopped with its machine - wrote no
-        // verdict, and nothing would ever claim that directory again: said here, once, and let go.
-        _logOwnership.ReleaseAbandoned(runDirectory);
-
         // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
         // another run holds is, and no end to the legs that do not.
         var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
@@ -185,6 +181,11 @@ public sealed class LegRunService(
         try
         {
             _output.Info(commandName, $"run {runId.Value}, {placed.Count} leg(s)");
+
+            // A run on this machine that ended holding its own directory - killed, or stopped with its machine - wrote no
+            // verdict, and nothing would ever claim that directory again: said here, once, and let go. Inside this try,
+            // so that whatever happens in it, this run's own directory is still given up.
+            _logOwnership.ReleaseAbandoned(runDirectory);
 
             // Left out entirely where nothing is remote, or where the run acts on what each host already holds
             // (--use-staged), rather than supplied and made to do nothing: the executor reports a sync transition per

@@ -101,13 +101,14 @@ public sealed class LegVerdictTests
         Assert.Equal(LegExit.LogHeld, Verdicts.ExitCodeFor(LegVerdict.LogHeld));
         Assert.Equal(LegExit.NotAdmitted, Verdicts.ExitCodeFor(LegVerdict.NotAdmitted));
 
-        // A warning is not a failure: a switched-off machine is normal, and a command asked for
-        // that leg by name decides for itself what to do about it, as `legs` does.
-        Assert.Equal(HarnessExit.Success, Verdicts.ExitCodeFor(LegVerdict.SkippedUnavailable));
-        Assert.Equal(HarnessExit.Success, Verdicts.ExitCodeFor(LegVerdict.SkippedToolMissing));
-
-        // A run whose worst verdict is a stopped build exits as an incomplete one does.
+        // A warning is not a failure - a switched-off machine is normal - and nor is a stopped build,
+        // but a run whose worst verdict is one of them is incomplete, never a pass. A leg nobody asked
+        // for is an answer, not a gap.
+        Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor(LegVerdict.SkippedUnavailable));
+        Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor(LegVerdict.SkippedToolMissing));
         Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor(LegVerdict.Stopped));
+        Assert.Equal(HarnessExit.Success, Verdicts.ExitCodeFor(LegVerdict.SkippedNotSelected));
+        Assert.Equal(HarnessExit.Incomplete, Verdicts.ExitCodeFor([LegVerdict.Passed, LegVerdict.SkippedUnavailable]));
     }
 
     [Fact]

@@ -688,6 +688,8 @@ internal static class HelpCommand
         builder.AppendLine("                                or room on the filesystem it names, or raise the");
         builder.AppendLine("                                machine's limits ('help admission')");
         builder.AppendLine($" {HarnessExit.Incomplete}  stopped                    Find out what stopped the build, then run again");
+        builder.AppendLine($" {HarnessExit.Incomplete}  skipped-unavailable        Make what its line names available, then run again");
+        builder.AppendLine($" {HarnessExit.Incomplete}  skipped-tool-missing       Install the tool its line names, then run again");
 
         return builder.ToString();
     }

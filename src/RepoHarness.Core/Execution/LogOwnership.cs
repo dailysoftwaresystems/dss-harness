@@ -217,19 +217,31 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
     /// Only a claim this machine can judge is released: one recorded on another machine stands, as it does beside a run
     /// claiming its own directory, and one this build cannot read - a newer build's, a run's still going among them - or
     /// cannot reach in the window is left as it is, for a later run to look at again. Nothing here fails the run that
-    /// found them.
+    /// found them: a directory that cannot be listed is said, and nothing in it is released.
     /// </remarks>
     public IReadOnlyList<LogOwner> ReleaseAbandoned(string logDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
 
         var own = OwnerFile(logDirectory);
-        var abandoned = new List<LogOwner>();
+        IReadOnlyList<string> files;
 
-        var files = _fileSystem.EnumerateFiles(Path.GetDirectoryName(own)!, recursive: false)
-            .Where(file => file.EndsWith(OwnerSuffix, StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(Path.GetFullPath(file), own, StringComparison.OrdinalIgnoreCase))
-            .Order(StringComparer.Ordinal);
+        try
+        {
+            files = [.. _fileSystem.EnumerateFiles(Path.GetDirectoryName(own)!, recursive: false)
+                .Where(file => file.EndsWith(OwnerSuffix, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(Path.GetFullPath(file), own, StringComparison.OrdinalIgnoreCase))
+                .Order(StringComparer.Ordinal)];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _output.Warn(
+                CommandName,
+                $"The runs beside '{logDirectory}' could not be listed: {ex.Message.TrimEnd('.')}. Any of them that was abandoned is said, and released, by a later run.");
+            return [];
+        }
+
+        var abandoned = new List<LogOwner>();
 
         foreach (var file in files)
         {
@@ -240,9 +252,9 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
                     abandoned.Add(owner);
                 }
             }
-            catch (HarnessException)
+            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
             {
-                // Unreadable, or held past the window by another process: see the remarks.
+                // Unreadable, held past the window by another process, or its mutex could not be opened: see the remarks.
             }
         }
 

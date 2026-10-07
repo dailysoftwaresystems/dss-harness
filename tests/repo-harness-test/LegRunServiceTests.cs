@@ -672,6 +672,51 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A run whose runs directory cannot be listed says so, and runs: nothing it decides depends on the runs beside its
+    /// own directory, which it still gives up at the end.
+    /// </summary>
+    [Fact]
+    public async Task ARun_WhoseRunsDirectoryCannotBeListed_SaysSo_AndRuns()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var runs = temp.Combine(".harness-config", "runs");
+        var logs = new LogOwnership(
+            new UnlistableDirectory(harness.FileSystem, runs, () => new IOException("The network path was not found.")),
+            harness.Output,
+            harness.Identity);
+
+        var outcome = await OutcomeAsync(
+            temp, harness, OneLeg(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy }, logs: logs);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Contains("logs: WARN - The runs beside '", harness.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(runs, "*" + LogOwnership.OwnerSuffix));
+    }
+
+    /// <summary>
+    /// Whatever goes wrong once a run owns its directory, the run gives it up: a failure nobody expected, while it looks
+    /// beside that directory for runs that were abandoned, leaves no claim behind for the next run to call abandoned.
+    /// </summary>
+    [Fact]
+    public async Task ARun_GivesUpItsDirectory_ThoughLookingBesideItFailedUnexpectedly()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var runs = temp.Combine(".harness-config", "runs");
+        var logs = new LogOwnership(
+            new UnlistableDirectory(harness.FileSystem, runs, () => new InvalidOperationException("a failure nobody expected")),
+            harness.Output,
+            harness.Identity);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => OutcomeAsync(
+                temp, harness, OneLeg(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy }, logs: logs));
+
+        Assert.Empty(Directory.GetFiles(runs, "*" + LogOwnership.OwnerSuffix));
+    }
+
+    /// <summary>
     /// A run makes the runs directory it writes into ignore itself, whatever the tree's own .gitignore
     /// says: a tree with no rule for it - a worktree of a branch that predates the harness - showed a
     /// run's records in git status, where the next 'git add -A' committed them.

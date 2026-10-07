@@ -316,6 +316,42 @@ public sealed class LogOwnershipTests
         Assert.DoesNotContain("abandoned", factory.StandardError.ToString() + factory.StandardOutput.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A runs directory that cannot be listed - a share that dropped, or one this user may not read - is said, and stops
+    /// nothing: no run beside it is said abandoned or released, and this run keeps its own claim.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARunsDirectoryThatCannotBeListed_IsSaid_AndReleasesNothing(bool denied)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runs = temp.Combine("runs");
+        var ownership = new LogOwnership(
+            new UnlistableDirectory(
+                factory.FileSystem,
+                runs,
+                () => denied ? new UnauthorizedAccessException("Access is denied.") : new IOException("The network path was not found.")),
+            factory.Output,
+            factory.Identity);
+        var dead = Path.Combine(runs, "20250101-120000-deadbeef");
+        var directory = Path.Combine(runs, "20250102-120000-0badf00d");
+        var runId = RunId.New();
+
+        Write(dead, Environment.MachineName, int.MaxValue - 1, "a-process-that-has-gone", "20250101-120000-deadbeef");
+        await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Empty(ownership.ReleaseAbandoned(directory));
+        Assert.True(File.Exists(LogOwnership.OwnerFile(dead)));
+        Assert.Equal(runId.Value, ownership.Owner(directory)!.RunId);
+        Assert.Contains(
+            $"logs: WARN - The runs beside '{directory}' could not be listed: {(denied ? "Access is denied" : "The network path was not found")}. "
+            + "Any of them that was abandoned is said, and released, by a later run.",
+            factory.StandardError.ToString(),
+            StringComparison.Ordinal);
+    }
+
     /// <summary>This process's own stamp, which is what makes an owner written with it a live one.</summary>
     private static string? ProcessStart() => new ProcessIdentity(new HostPlatform()).Current;
 

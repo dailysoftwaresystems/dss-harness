@@ -130,8 +130,9 @@ public sealed class LedgerReport
     /// <remarks>
     /// Computed here rather than at each caller so that the table, the JSON and the process agree.
     /// A run where nothing failed but a leg never reported is <see cref="HarnessExit.Incomplete"/>:
-    /// the worst verdict such a run reached is a skip, which maps to success on its own, and
-    /// reading that alone is how a leg nobody could reach came to print as a pass.
+    /// the worst verdict such a run reached is a skip or a stopped build, whose code that is. A skip
+    /// once mapped to success, and reading it alone is how a leg nobody could reach came to print as
+    /// a pass.
     /// </remarks>
     public int ExitCode => ExitCodeGiven(cancelled: false, unfinished: []);
 
@@ -147,10 +148,13 @@ public sealed class LedgerReport
     {
         ArgumentNullException.ThrowIfNull(unfinished);
 
+        // The worst verdict's own code decides: a failure's, or incomplete where a leg reached no verdict of its own. A
+        // leg still running when the run stopped has no row, and reached none either.
+        var worst = Verdicts.ExitCodeFor(Verdict);
+
         return cancelled ? HarnessExit.Cancelled
-            : !Passed ? Verdicts.ExitCodeFor(Verdict)
-            : Complete && unfinished.Count == 0 ? HarnessExit.Success
-            : HarnessExit.Incomplete;
+            : worst == HarnessExit.Success && unfinished.Count > 0 ? HarnessExit.Incomplete
+            : worst;
     }
 
     /// <summary>

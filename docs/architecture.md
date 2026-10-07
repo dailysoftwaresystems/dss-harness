@@ -1177,7 +1177,7 @@ from the report.
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict | **yes** |
-| `stopped` | Something stopped its build from outside before it finished: it exited without its build tool saying why, as ninja says whenever it ends a build itself | no: incomplete |
+| `stopped` | Something stopped its build from outside before it finished: its build tool, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build | no: incomplete |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
 "the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
@@ -2399,8 +2399,8 @@ command contracts, because each calls for a different remedy:
 | 6 | `log-held` | Find out which run still owns this leg's logs |
 | 7 | `not-admitted` | Wait for the heavy legs its line names, free memory or room on the filesystem it names, or raise the machine's limits |
 
-`failed` reports 20, `refused-locked` 13 and `poisoned` 70; `stopped`, where nothing failed,
-21 (`Incomplete`), as a run carrying a skip does. When legs disagree, the
+`failed` reports 20, `refused-locked` 13 and `poisoned` 70; `stopped`, `skipped-unavailable`
+and `skipped-tool-missing`, where nothing failed, 21 (`Incomplete`). When legs disagree, the
 more fundamental verdict decides the code, in the order given under *Verdict vocabulary*.
 Six outcomes therefore carry six codes — refused before starting, the tree moved under the
 run, another run in the build directory, another run holding the logs, a machine with no room

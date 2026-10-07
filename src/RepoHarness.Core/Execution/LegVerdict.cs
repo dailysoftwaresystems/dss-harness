@@ -80,8 +80,8 @@ public enum LegVerdict
     Poisoned,
 
     /// <summary>
-    /// Something stopped its build from outside before it finished - killed it, or interrupted it - which its build
-    /// tool says whenever it stops a build itself, and did not. Says nothing about the code: distinct from
+    /// Something stopped its build from outside before it finished: its build tool, which says why whenever it ends a
+    /// build itself, said nothing of why, or said it was interrupted. Says nothing about the code: distinct from
     /// <see cref="Failed"/>, which running again repeats, where running again finishes this one. Not a failure, and
     /// not a pass: a run whose legs include one, and nothing failed, is incomplete.
     /// </summary>
@@ -145,10 +145,12 @@ public static class Verdicts
 {
     private static readonly IReadOnlyDictionary<LegVerdict, VerdictInfo> Table = new Dictionary<LegVerdict, VerdictInfo>
     {
-        // Ranks 0-8 are the order docs/architecture.md gives for disagreeing legs. The rest exist
-        // only so that Worst is total, and none of them decides a non-zero exit code: a warning
-        // outranks a pass so that a run with an unavailable leg summarises as that warning rather
-        // than as an unqualified success, and a leg nobody asked for outranks nothing at all.
+        // Ranks 0-8 are the order docs/architecture.md gives for disagreeing legs, each a failure with
+        // an exit code of its own. The rest exist so that Worst is total, and none of them is a
+        // failure. A stopped build and the two skips reached no verdict of their own, so a run whose
+        // worst verdict is one of them is incomplete; a warning outranks a pass so that a run with an
+        // unavailable leg summarises as that warning rather than as an unqualified success, and a leg
+        // nobody asked for outranks nothing at all.
         [LegVerdict.Poisoned] = new(LegVerdict.Poisoned, "poisoned", true, 0, HarnessExit.InternalError),
         [LegVerdict.Unmeasured] = new(LegVerdict.Unmeasured, "unmeasured", true, 1, LegExit.InputsMoved),
         [LegVerdict.InputsMoved] = new(LegVerdict.InputsMoved, "inputs-moved", true, 2, LegExit.InputsMoved),
@@ -159,11 +161,10 @@ public static class Verdicts
         [LegVerdict.Failed] = new(LegVerdict.Failed, "failed", true, 7, HarnessExit.CommandFailed),
         [LegVerdict.Unwitnessed] = new(LegVerdict.Unwitnessed, "unwitnessed", true, 8, LegExit.Unwitnessed),
 
-        // Above the skips, since its leg's work was begun and stopped, where theirs never began; and the code a run
-        // whose worst verdict it is exits with, as a run carrying a skip does.
+        // Above the skips, since its leg's work was begun and stopped, where theirs never began.
         [LegVerdict.Stopped] = new(LegVerdict.Stopped, "stopped", false, 9, HarnessExit.Incomplete),
-        [LegVerdict.SkippedUnavailable] = new(LegVerdict.SkippedUnavailable, "skipped-unavailable", false, 10, HarnessExit.Success),
-        [LegVerdict.SkippedToolMissing] = new(LegVerdict.SkippedToolMissing, "skipped-tool-missing", false, 11, HarnessExit.Success),
+        [LegVerdict.SkippedUnavailable] = new(LegVerdict.SkippedUnavailable, "skipped-unavailable", false, 10, HarnessExit.Incomplete),
+        [LegVerdict.SkippedToolMissing] = new(LegVerdict.SkippedToolMissing, "skipped-tool-missing", false, 11, HarnessExit.Incomplete),
         [LegVerdict.Passed] = new(LegVerdict.Passed, "passed", false, 12, HarnessExit.Success),
         [LegVerdict.SkippedNotSelected] = new(LegVerdict.SkippedNotSelected, "skipped-not-selected", false, 13, HarnessExit.Success),
     };
@@ -211,10 +212,11 @@ public static class Verdicts
 
     /// <summary>
     /// Whether the leg reached no verdict of its own: it did no work (<see cref="IsSkip"/>), or something stopped its
-    /// work from outside before it finished. A run whose legs include one, and nothing failed, is incomplete.
+    /// work from outside before it finished. A run whose legs include one, and nothing failed, is incomplete - read from
+    /// the code the table gives the verdict, so the run's exit code and its summary cannot disagree about which they are.
     /// </summary>
     /// <param name="verdict">The verdict.</param>
-    public static bool ReachedNone(LegVerdict verdict) => IsSkip(verdict) || verdict == LegVerdict.Stopped;
+    public static bool ReachedNone(LegVerdict verdict) => Describe(verdict) is { IsFailure: false, ExitCode: HarnessExit.Incomplete };
 
     /// <summary>How fundamental the verdict is; the smaller number decides when legs disagree.</summary>
     /// <param name="verdict">The verdict.</param>
