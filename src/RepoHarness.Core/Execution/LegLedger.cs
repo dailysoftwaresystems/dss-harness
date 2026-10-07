@@ -182,12 +182,20 @@ public sealed record LegEntry
 /// running at once, interleaved build output says nothing about which leg is where. Legs run in
 /// parallel, so every method here is safe to call from any of them.
 /// </remarks>
-public sealed class LegLedger(IHarnessOutput output, string commandName)
+/// <param name="output">Where the lines go.</param>
+/// <param name="commandName">The command every line is reported under.</param>
+/// <param name="dispatched">
+/// Whether this run is a leg another machine dispatched here (<c>--here</c>). That machine says for itself that its
+/// legs are starting, where each starts and the verdict each reaches, and relays every line this one says: said here
+/// as well, each was said twice. What only this machine can say - each step, and what it waited for - is said still.
+/// </param>
+public sealed class LegLedger(IHarnessOutput output, string commandName, bool dispatched = false)
 {
     private readonly Lock _gate = new();
     private readonly List<LegEntry> _entries = [];
     private readonly IHarnessOutput _output = output;
     private readonly string _commandName = commandName;
+    private readonly bool _dispatched = dispatched;
 
     /// <summary>The command every line is reported under, so interleaved output stays attributable.</summary>
     public string CommandName => _commandName;
@@ -221,8 +229,37 @@ public sealed class LegLedger(IHarnessOutput output, string commandName)
     }
 
     /// <summary>
-    /// Records a leg's verdict. A leg is recorded exactly once; recording it twice is a defect,
-    /// because the second entry would give one leg two verdicts in a table that promises one.
+    /// Says what is about to run, and where, before any of it starts - unless the machine that dispatched it here says
+    /// so itself.
+    /// </summary>
+    /// <param name="message">What is starting, across which machines.</param>
+    public void Announce(string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
+        if (!_dispatched)
+        {
+            _output.Info(_commandName, message);
+        }
+    }
+
+    /// <summary>Says a leg is starting, and where - unless the machine that dispatched it here says so itself.</summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="where">Where it runs, as a reader names the host.</param>
+    public void Starting(string leg, string where)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(where);
+
+        if (!_dispatched)
+        {
+            Transition(leg, $"starting on {where}");
+        }
+    }
+
+    /// <summary>
+    /// Records a leg's verdict, and says it - unless the machine that dispatched it here says so itself. A leg is
+    /// recorded exactly once; recording it twice is a defect, because the second entry would give one leg two verdicts
+    /// in a table that promises one.
     /// </summary>
     /// <param name="entry">The leg's line.</param>
     /// <exception cref="InvalidOperationException">The leg was already recorded.</exception>
@@ -238,6 +275,12 @@ public sealed class LegLedger(IHarnessOutput output, string commandName)
             }
 
             _entries.Add(entry);
+        }
+
+        // The machine that dispatched the leg here says its verdict as it records it from this one's ledger.
+        if (_dispatched)
+        {
+            return;
         }
 
         var said = LedgerReport.Marked(entry.Detail, [], entry.Compilers, entry.DeveloperEnvironment, entry.Admission, testCountNote: null);

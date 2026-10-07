@@ -1159,6 +1159,33 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// clean, dispatched here by another machine, leaves that machine the lines it says for itself - that the legs are
+    /// starting, where each starts, and each one's verdict - since it relays every line said here: said here too, a
+    /// consumer saw each leg's line twice, and a start line for every leg beside the run's own. The leg's line still
+    /// reaches it, in the document.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Clean_DispatchedHere_LeavesTheDispatchingMachineTheLinesItSays(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        await PrepareRunnerAsync(temp);
+
+        var result = await CliRunner.RunAsync(
+            ["clean", "--legs", "native", "--json", RemoteLegRunner.HereOption, "local", .. dryRun ? new[] { CleanService.DryRunOption } : [], "-C", temp.Path],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+
+        using var document = JsonDocument.Parse(result.StandardOutput);
+
+        Assert.Equal("passed", Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("verdict").GetString());
+        Assert.DoesNotContain("clean: starting", result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("clean: native:", result.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// And a refusal of the whole run answers with the ledger too, carrying the refusal's own code
     /// and words - as its FAIL line does, on standard error, where a reader of the terminal sees it.
     /// </summary>

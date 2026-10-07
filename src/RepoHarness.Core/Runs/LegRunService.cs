@@ -143,7 +143,7 @@ public sealed class LegRunService(
 
         var runId = RunId.New();
         var runDirectory = context.Layout.RunDirectory(runId.Value);
-        var ledger = new LegLedger(_output, commandName);
+        var ledger = new LegLedger(_output, commandName, dispatched: request.Here is not null);
 
         IgnoreRunRecords(context.Layout);
 

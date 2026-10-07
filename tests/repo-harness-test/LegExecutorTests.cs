@@ -41,6 +41,42 @@ public sealed class LegExecutorTests
         Assert.Equal(3, ledger.Entries.Count);
     }
 
+    /// <summary>
+    /// A run another machine dispatched here leaves that machine what it says for itself - that the legs are starting,
+    /// where each starts, and each one's verdict - since it relays every line said here. What only this machine can say
+    /// about a leg is said still, and the leg is recorded all the same.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARunAnotherMachineDispatched_LeavesItTheLinesItSaysItself(bool dispatched)
+    {
+        var factory = new HarnessFactory();
+        var ledger = new LegLedger(factory.Output, "clean", dispatched);
+
+        await Executor(factory).RunAsync(
+            new LegExecutionRequest
+            {
+                Legs = [Leg("linux-arm64-debug")],
+                RunLeg = (leg, _) =>
+                {
+                    ledger.Transition(leg.Name, "removing its build directory");
+                    return Task.FromResult<LegEntry?>(Passed(leg));
+                },
+            },
+            ledger,
+            TestContext.Current.CancellationToken);
+
+        var said = factory.StandardOutput.ToString() + factory.StandardError.ToString();
+
+        Assert.Contains("clean: linux-arm64-debug: removing its build directory", said, StringComparison.Ordinal);
+        Assert.Equal(
+            [!dispatched, !dispatched, !dispatched],
+            new[] { "clean: starting 1 leg(s) across 1 machine(s)", "clean: linux-arm64-debug: starting on this machine", "clean: linux-arm64-debug: passed" }
+                .Select(line => said.Contains(line, StringComparison.Ordinal)));
+        Assert.Equal("linux-arm64-debug", Assert.Single(ledger.Entries).Leg);
+    }
+
     [Fact]
     public async Task MaxParallelLegs_CapsHowManyRunAtOnce()
     {

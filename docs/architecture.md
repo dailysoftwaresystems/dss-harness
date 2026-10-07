@@ -2317,7 +2317,10 @@ An expected exception may carry `runChecks`, and until every one passes it excus
 ## Reporting
 
 Progress is one line per leg transition, not a stream of child process output.
-Child output goes to a per-leg log file and is echoed only under `--verbose`.
+Child output goes to a per-leg log file and is echoed only under `--verbose`. A leg another host
+runs has its lines relayed from that host as they come; the host leaves the lines its dispatcher
+says for itself - that the legs are starting, where each starts, and each one's verdict - since
+said on both, each read twice.
 
 Every run ends with a per-leg ledger:
 

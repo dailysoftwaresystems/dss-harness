@@ -224,9 +224,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             var (perMachine, total) => $"up to {perMachine.Value} at once per machine, {total.Value} in all",
         };
 
-        _output.Info(
-            ledger.CommandName,
-            $"starting {request.Legs.Count} leg(s) across {machineCount} machine(s), {caps}: {legs}");
+        ledger.Announce($"starting {request.Legs.Count} leg(s) across {machineCount} machine(s), {caps}: {legs}");
     }
 
     /// <summary>
@@ -317,7 +315,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             return null;
         }
 
-        ledger.Transition(leg.Name, $"starting on {(leg.Host.Length > 0 ? leg.Host : "this machine")}");
+        ledger.Starting(leg.Name, leg.Host.Length > 0 ? leg.Host : "this machine");
 
         try
         {

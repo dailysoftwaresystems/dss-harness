@@ -672,6 +672,34 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A run another machine dispatched here leaves that machine the lines it says for itself - that the legs are
+    /// starting, where each starts, and each one's verdict - since it relays every line said here, and each was said
+    /// twice. A run typed here says them all.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARunDispatchedHere_LeavesTheDispatchingMachineTheLinesItSays(bool dispatched)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, Here: dispatched ? HostId.Local : null) { Workload = LegWorkload.Copy });
+
+        var said = harness.StandardOutput.ToString() + harness.StandardError.ToString();
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(
+            [!dispatched, !dispatched, !dispatched],
+            new[] { "test: starting 1 leg(s) across", "test: native: starting on", "test: native: passed" }.Select(line => said.Contains(line, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// A run whose runs directory cannot be listed says so, and runs: nothing it decides depends on the runs beside its
     /// own directory, which it still gives up at the end.
     /// </summary>

@@ -98,7 +98,7 @@ public sealed class CleanService(
             return Stopped(request, nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? []);
         }
 
-        var ledger = new LegLedger(_output, CommandName);
+        var ledger = new LegLedger(_output, CommandName, dispatched: request.Here is not null);
 
         foreach (var entry in skipped)
         {
