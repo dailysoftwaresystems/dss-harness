@@ -246,11 +246,7 @@ public static class LegRoom
 
         var main = paths.MainBuild == paths.Own ? null : Answered(host, paths.MainBuild);
 
-        var (expected, source) = leg.Leg.BuildSpaceGiB is { } declared
-            ? ((long?)(long)Math.Ceiling(declared * Gibibyte), string.Create(CultureInfo.InvariantCulture, $"as its buildSpaceGiB, {declared:0.###}, declares"))
-            : own.RecordedBytes is { } recorded
-                ? (recorded, "what its last build there came to")
-                : (main?.RecordedBytes, "what the main checkout's copy of the same variant came to there");
+        var (expected, source) = ExpectedBuildBytes(leg.Leg, own.RecordedBytes, main?.RecordedBytes);
 
         // What the directory holds counts against its need only where its build recorded it: one there that no
         // build of this version recorded holds an amount nothing measured, and is left to build as it always did.
@@ -259,6 +255,29 @@ public static class LegRoom
         return expected is { } bytes && present is { } held
             ? new Needed(Math.Max(0, bytes - held), own.Disk, source, paths.Own, own.Unmeasured ?? "no reason was given")
             : null;
+    }
+
+    /// <summary>
+    /// What a build of <paramref name="leg"/>'s variant is expected to come to, and what said so: its
+    /// <see cref="LegConfig.BuildSpaceGiB"/> where it declares one, else what its last build recorded its directory came
+    /// to, else what the main checkout's copy of the same variant came to; <see langword="null"/> where nothing says.
+    /// </summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="ownRecorded">What its own build directory's last build recorded, where one did.</param>
+    /// <param name="mainRecorded">What the main checkout's copy of the same variant recorded, where one did.</param>
+    /// <remarks>
+    /// The one reckoning of a build's size: a leg's own build is placed by it, and each worker of a sweep of the leg's
+    /// arms, which builds the same variant in a copy of its own, is counted by it.
+    /// </remarks>
+    public static (long? Bytes, string Source) ExpectedBuildBytes(LegConfig leg, long? ownRecorded, long? mainRecorded)
+    {
+        ArgumentNullException.ThrowIfNull(leg);
+
+        return leg.BuildSpaceGiB is { } declared
+            ? ((long)Math.Ceiling(declared * Gibibyte), string.Create(CultureInfo.InvariantCulture, $"as its buildSpaceGiB, {declared:0.###}, declares"))
+            : ownRecorded is { } recorded
+                ? (recorded, "what its last build there came to")
+                : (mainRecorded, "what the main checkout's copy of the same variant came to there");
     }
 
     /// <summary>What <paramref name="host"/> answered about the build directory at <paramref name="path"/>, as it was asked.</summary>

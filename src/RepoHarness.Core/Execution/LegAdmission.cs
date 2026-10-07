@@ -116,7 +116,16 @@ public sealed record AdmissionRequest(
     string Tree,
     string? Variant,
     Action<string> Progress,
-    RoomNeed? Room = null);
+    RoomNeed? Room = null)
+{
+    /// <summary>
+    /// Whether, where another leg holds a slot, the memory is read again after a settle before this one starts, so two
+    /// legs taking their slots together do not both start on one reading. A unit of a leg its machine already took once -
+    /// an arm of a sweep after the sweep's first - starts on one reading: the slots it would wait out are held by the
+    /// other units of its own sweep, which a settle for each would hold back 15 to 90 seconds an arm.
+    /// </summary>
+    public bool Settle { get; init; } = true;
+}
 
 /// <summary>
 /// Admits a heavy leg onto its machine before its work starts: first one of the machine's heavy-leg slots, in the order
@@ -285,8 +294,9 @@ public sealed class LegAdmission(
                     everBelow = true;
 
                     // Where another leg holds a slot, read again after a settle, and started only if still below: two legs
-                    // taking their slots together would otherwise both start on one reading.
-                    if (settled || rule.SettleMost <= TimeSpan.Zero || !standing.Holders.Any(holder => holder != place.Entry))
+                    // taking their slots together would otherwise both start on one reading. A unit asking not to settle
+                    // starts on this one.
+                    if (settled || !request.Settle || rule.SettleMost <= TimeSpan.Zero || !standing.Holders.Any(holder => holder != place.Entry))
                     {
                         if (TakeWithRoom(new AdmissionFact(true, Seconds(started), reading.Rounded, reading.Describe(), Record: _slots.Location), reading) is { } taken)
                         {

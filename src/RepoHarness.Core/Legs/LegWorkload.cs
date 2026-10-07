@@ -73,11 +73,21 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     public IReadOnlyList<string> HeavyOnlyOn { get; init; } = [];
 
     /// <summary>
-    /// Whether a leg of this workload is heavy: it builds or tests, or its runner says it is. A heavy leg takes one of
-    /// its machine's heavy-leg slots before its work starts, where that machine declares admission; a repository
-    /// guard that only reads the tree is light, and starts at once.
+    /// Whether the command admits each unit of a leg's work on its own, rather than the leg whole: a sweep of mutation
+    /// arms, each built and run in a worker of its own, asks its machine to take each arm as the arm starts. No slot is
+    /// held for such a leg, whose units each hold one while they run - but where its machine admits the leg whole: one
+    /// run in a WSL distribution, which cannot see the memory of the machine it runs on, is taken whole by the command
+    /// that sent it there, and its sweep runs one worker.
     /// </summary>
-    public bool Heavy => Build || Test || DeclaredHeavy;
+    public bool AdmitsEachUnit { get; init; }
+
+    /// <summary>
+    /// Whether a leg of this workload is heavy: it builds or tests, or its runner says it is - and the command does not
+    /// admit each unit of its work instead (<see cref="AdmitsEachUnit"/>). A heavy leg takes one of its machine's
+    /// heavy-leg slots before its work starts, where that machine declares admission; a repository guard that only reads
+    /// the tree is light, and starts at once.
+    /// </summary>
+    public bool Heavy => (Build || Test || DeclaredHeavy) && !AdmitsEachUnit;
 
     /// <summary>Building and testing: what a leg is for, and what <c>legs</c> answers for.</summary>
     public static LegWorkload BuildAndTest { get; } = new(Build: true, Test: true, []);

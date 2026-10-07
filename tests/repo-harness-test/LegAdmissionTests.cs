@@ -166,6 +166,34 @@ public sealed class LegAdmissionTests
         Assert.Equal(2, said.Count(line => line.Contains("another leg holds a slot, so it looks again in 20s", StringComparison.Ordinal)));
     }
 
+    /// <summary>
+    /// A unit asking not to settle - an arm of a sweep its machine already took once - starts on its first reading below
+    /// the limit, whoever holds a slot beside it: the slots it would wait out are its own sweep's. One above the limit
+    /// still waits for the memory, as any leg does.
+    /// </summary>
+    [Fact]
+    public async Task AUnitAskingNotToSettle_StartsOnItsFirstReadingBelowTheLimit()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "mine/first-arm"));
+
+        var gauge = new ScriptedGauge(79, 60);
+
+        using var admitted = await AdmissionKit.Admission(harness, record, gauge, clock, settle: TimeSpan.FromSeconds(20))
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 2, pollSeconds: 30), said) with { Settle = false }, TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(60, admitted.Fact.MemoryPercent);
+        Assert.Equal(2, gauge.Reads);
+        Assert.Equal(TimeSpan.FromSeconds(30), clock.Moved);
+        Assert.DoesNotContain(said, line => line.Contains("looks again in", StringComparison.Ordinal));
+    }
+
     /// <summary>A leg whose memory never falls below the limit is not taken, naming the reading and the limit.</summary>
     [Fact]
     public async Task ALegWhoseMemoryNeverFalls_IsNotTaken_NamingTheReadingAndTheLimit()

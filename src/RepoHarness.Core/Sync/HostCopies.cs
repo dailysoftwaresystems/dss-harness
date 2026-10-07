@@ -34,6 +34,12 @@ public static partial class HostCopies
     public const string WorktreeSuffix = ".worktree-";
 
     /// <summary>
+    /// What a mutation worker's copy adds to the tree it is a copy of, before the worker's name: a family of copies of
+    /// its own, beside the tree, which no worktree's copy is ever named into, nor any worker's posing as one.
+    /// </summary>
+    public const string MutationSuffix = ".mutation-";
+
+    /// <summary>
     /// Where <paramref name="host"/> keeps the copy of <paramref name="treeRoot"/>, by the repositoryPath
     /// <paramref name="config"/> declares for it.
     /// </summary>
@@ -81,12 +87,22 @@ public static partial class HostCopies
     /// <summary>The copy a worktree kept under <paramref name="name"/> has beside the main copy at <paramref name="repositoryPath"/>.</summary>
     /// <param name="repositoryPath">Where the host keeps the main checkout's copy.</param>
     /// <param name="name">The name the worktree's copies are kept under: see <see cref="NameOf"/>.</param>
-    public static string ForWorktree(string repositoryPath, string name)
+    public static string ForWorktree(string repositoryPath, string name) => InFamily(repositoryPath, WorktreeSuffix, name);
+
+    /// <summary>
+    /// The copy of the <paramref name="family"/> kept under <paramref name="name"/> beside <paramref name="root"/>:
+    /// <c>&lt;root&gt;&lt;family&gt;&lt;name&gt;</c>.
+    /// </summary>
+    /// <param name="root">What the copies are kept beside: the host's main copy, or the tree a worker copies.</param>
+    /// <param name="family">The family's suffix: <see cref="WorktreeSuffix"/> or <see cref="MutationSuffix"/>.</param>
+    /// <param name="name">The name the copy is kept under.</param>
+    public static string InFamily(string root, string family, string name)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        ArgumentException.ThrowIfNullOrWhiteSpace(family);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        return repositoryPath.TrimEnd('/', '\\') + WorktreeSuffix + name;
+        return root.TrimEnd('/', '\\') + family + name;
     }
 
     /// <summary>

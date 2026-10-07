@@ -310,12 +310,25 @@ public sealed class LocalSyncTransport(
     /// walked, and a marker that cannot be read is said as that copy's, rather than ending the listing.
     /// </remarks>
     public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+        => ListCopiesAsync(repositoryPath, HostCopies.WorktreeSuffix, cancellationToken);
 
-        var main = Path.TrimEndingDirectorySeparator(Home(repositoryPath));
+    /// <summary>
+    /// The copies of <paramref name="family"/> kept beside <paramref name="root"/> - each directory named
+    /// <c>&lt;root&gt;&lt;family&gt;&lt;name&gt;</c> - as <see cref="ListCopiesAsync(string, CancellationToken)"/> lists a
+    /// host's worktree copies, which are one such family: told by name, each weighed by its files, in the order of their
+    /// names. None where the directory they would be kept in is not there.
+    /// </summary>
+    /// <param name="root">What the copies are kept beside: the main copy, or the tree a mutation worker copies.</param>
+    /// <param name="family">The family's suffix: <see cref="HostCopies.WorktreeSuffix"/> or <see cref="HostCopies.MutationSuffix"/>.</param>
+    /// <param name="cancellationToken">Stops the listing between copies.</param>
+    public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string root, string family, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        ArgumentException.ThrowIfNullOrWhiteSpace(family);
+
+        var main = Path.TrimEndingDirectorySeparator(Home(root));
         var parent = Path.GetDirectoryName(main);
-        var prefix = Path.GetFileName(main) + HostCopies.WorktreeSuffix;
+        var prefix = Path.GetFileName(main) + family;
         var found = new List<HostCopyFound>();
 
         if (string.IsNullOrEmpty(parent) || !_fileSystem.DirectoryExists(parent))
@@ -332,7 +345,7 @@ public sealed class LocalSyncTransport(
             if (leaf.Length > prefix.Length && leaf.StartsWith(prefix, StringComparison.Ordinal))
             {
                 var name = leaf[prefix.Length..];
-                found.Add(Found(name, HostCopies.ForWorktree(repositoryPath, name), directory));
+                found.Add(Found(name, HostCopies.InFamily(root, family, name), directory));
             }
         }
 

@@ -173,4 +173,40 @@ public sealed class ProjectConfig : VariantOverlay
 
     /// <summary>How to run this project's tests, unless a leg overrides it.</summary>
     public TestConfig? Test { get; init; }
+
+    /// <summary>
+    /// This project building <paramref name="targets"/> alone, its build witnessed by <paramref name="outputs"/> - what
+    /// those targets make, relative to the build directory - and in every other way the project it is.
+    /// </summary>
+    /// <param name="targets">The targets to build.</param>
+    /// <param name="outputs">The files a build of them must leave, as the leg's own build manifest names them.</param>
+    /// <remarks>
+    /// What a mutation arm builds: its own target, in the leg's own project and variant. Its outputs are what those
+    /// targets make, never the project's own, which a build of one target need not touch: a build that made none of
+    /// them would read as one that passed by witnessing the files an earlier build left.
+    /// </remarks>
+    public ProjectConfig Retargeted(IReadOnlyList<string> targets, IReadOnlyList<string> outputs)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        ArgumentNullException.ThrowIfNull(outputs);
+
+        if (targets.Count == 0)
+        {
+            throw new ArgumentException("A build retargeted builds some target: one with none builds the project's default.", nameof(targets));
+        }
+
+        return new ProjectConfig
+        {
+            Name = Name,
+            Type = Type,
+            Path = Path,
+            Env = Env,
+            CacheVars = CacheVars,
+            DefaultToolchain = DefaultToolchain,
+            RebuildableFormats = RebuildableFormats,
+            Test = Test,
+            Targets = [.. targets],
+            BuildOutputs = [.. outputs.Select(BuildOutput.Everywhere)],
+        };
+    }
 }

@@ -957,6 +957,32 @@ public sealed class HostCopiesTests
     }
 
     /// <summary>
+    /// Mutation workers are a family of copies of their own beside the tree they copy: listed as that family, by the
+    /// names they are kept under, and never among the worktree copies - nor a worktree copy among them.
+    /// </summary>
+    [Fact]
+    public async Task MutationWorkers_AreAFamilyOfTheirOwn_ListedApartFromWorktreeCopies()
+    {
+        using var hosts = new TempDirectory();
+        var harness = new HarnessFactory();
+        var transport = Local(harness);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = hosts.Combine("src", "repo");
+
+        await transport.CreateRootAsync(HostCopies.InFamily(tree, HostCopies.MutationSuffix, "x86_64-gcc-debug-1"), CopyMark.Complete, cancellationToken);
+        await transport.CreateRootAsync(HostCopies.InFamily(tree, HostCopies.MutationSuffix, "x86_64-gcc-debug-2"), CopyMark.Complete, cancellationToken);
+        await transport.CreateRootAsync(HostCopies.ForWorktree(tree, "alpha"), CopyMark.Complete, cancellationToken);
+
+        var workers = await transport.ListCopiesAsync(tree, HostCopies.MutationSuffix, cancellationToken);
+        var worktrees = await transport.ListCopiesAsync(tree, cancellationToken);
+
+        Assert.Equal(["x86_64-gcc-debug-1", "x86_64-gcc-debug-2"], workers.Select(copy => copy.Name));
+        Assert.Equal([tree + ".mutation-x86_64-gcc-debug-1", tree + ".mutation-x86_64-gcc-debug-2"], workers.Select(copy => copy.Path));
+        Assert.All(workers, copy => Assert.Equal(CopyOrigin.Made, copy.Origin));
+        Assert.Equal(["alpha"], worktrees.Select(copy => copy.Name));
+    }
+
+    /// <summary>
     /// A listing is asked of the harness on the host by the main copy's path, from the home directory, which is there
     /// when the directory the copies are kept in is not; and one the host never answered is that host being
     /// unavailable, never read as a host keeping nothing.
