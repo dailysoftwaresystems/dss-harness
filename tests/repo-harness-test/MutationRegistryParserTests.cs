@@ -13,6 +13,22 @@ public sealed class MutationRegistryParserTests
     private const string BuildRedArm = "A | private-ctor | src/cost.hpp | texts/ctor.before | texts/ctor.after | BUILD-RED | fixture | - | 0 | PAIRED-CONTROL | only the mint builds one";
 
     /// <summary>
+    /// A registry's text is its lines however each ends - a line feed, a carriage return and a line feed, or a carriage
+    /// return alone - so a line number names the line an editor shows; the empty one after a last line ending is a
+    /// blank line, read as nothing.
+    /// </summary>
+    [Fact]
+    public void ARegistrysText_IsItsLines_HoweverEachEnds()
+    {
+        Assert.Equal(["# arms", TestRedArm, "C | charge | Fixture.Charge | reddens", ""], MutationRegistryParser.Lines($"# arms\r\n{TestRedArm}\rC | charge | Fixture.Charge | reddens\n"));
+
+        var reading = MutationRegistryParser.Parse(MutationRegistryParser.Lines($"# arms\r{TestRedArm}\r\nC | charge | Fixture.Charge | reddens\n"), null);
+
+        Assert.True(reading.Valid, string.Join("; ", reading.Problems));
+        Assert.Equal(2, Assert.Single(reading.Registry.Arms).Line);
+    }
+
+    /// <summary>
     /// Every row it reads, in one registry: comments and blank lines passed over, each field trimmed, a why holding a
     /// '|' or a '#' kept whole, since the last field takes the rest of the line, and each arm's rows gathered under it,
     /// in the order they are declared.

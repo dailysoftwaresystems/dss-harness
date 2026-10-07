@@ -82,6 +82,15 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     public bool AdmitsEachUnit { get; init; }
 
     /// <summary>
+    /// Whether what the command builds is the leg's own tree - its build directory, or the first worker beside it of a
+    /// sweep of its arms - whose room each host is asked about, and the leg placed by. A self-test of the sweep builds
+    /// instead the fixture this tool carries, a few megabytes kept among this tool's own data on whichever machine runs
+    /// the leg, which no host is asked about and no build of the leg says the size of: each of its workers is measured
+    /// as it is planned, on that machine.
+    /// </summary>
+    public bool BuildsTheLegsTree { get; init; } = true;
+
+    /// <summary>
     /// Whether a leg of this workload is heavy: it builds or tests, or its runner says it is - and the command does not
     /// admit each unit of its work instead (<see cref="AdmitsEachUnit"/>). A heavy leg takes one of its machine's
     /// heavy-leg slots before its work starts, where that machine declares admission; a repository guard that only reads

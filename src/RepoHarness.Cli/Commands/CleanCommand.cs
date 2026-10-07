@@ -28,7 +28,7 @@ internal static class CleanCommand
     {
         var command = new Command(
             Name,
-            "Remove each selected leg's build directory wherever the leg runs, writing nothing there first, so a full disk can be freed.");
+            "Remove each selected leg's build directory, and the mutation workers its sweeps keep beside its tree, wherever the leg runs, writing nothing there first, so a full disk can be freed.");
 
         command.Options.Add(LegsOption);
         command.Options.Add(DryRunOption);

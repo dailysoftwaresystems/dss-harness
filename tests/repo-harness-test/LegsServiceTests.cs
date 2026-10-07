@@ -620,6 +620,24 @@ public sealed class LegsServiceTests
         Assert.False(Assert.Single(building.Placements).Runnable);
     }
 
+    /// <summary>
+    /// A self-test of the sweep builds the fixture this tool carries, never the leg's tree: no host is asked about a build
+    /// directory of the leg's, and a leg whose own build would not fit is placed, with no room carried to its admission.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTest_IsPlacedByNoRoomABuildOfTheLegsTreeNeeds()
+    {
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },
+            rooms: (_, path) => Room(path, exists: false, recorded: null, free: 3));
+
+        var testing = await fixture.Service.CheckAsync(Root, null, MutationService.SelfTestWorkload, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Empty(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
+        Assert.True(Assert.Single(testing.Placements).Runnable, testing.Placements[0].Reason);
+        Assert.Null(testing.Placements[0].Need);
+    }
+
     /// <summary>What a host answers about a build directory: whether it is there, what it recorded, the room on '/'.</summary>
     private static BuildDirectoryRoom Room(string path, bool exists, long? recorded, long free)
         => new(path, exists, recorded, new DiskSpace(free << 30, 48L << 30, "/"), null);

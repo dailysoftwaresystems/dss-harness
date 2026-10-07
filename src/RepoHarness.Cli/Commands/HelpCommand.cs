@@ -50,7 +50,7 @@ internal static class HelpCommand
         new("tools", [], "What install-missing-tools installs, and where", RenderTools),
         new("runners", ["runner", "actions"], "Predefined runners, action files and excused failures", RenderRunners),
         new("verdicts", ["verdict"], "What each leg verdict means, and what to do about it", RenderVerdicts),
-        new("mutations", ["mutation", "check-mutations", "arms"], "Mutation testing: the arms registry and what each arm must do", RenderMutations),
+        new("mutations", ["mutation", "check-mutations", "arms", "self-test"], "Mutation testing: the registry, its workers, and the self-test", RenderMutations),
         new("ci", ["check-ci-legs"], "How check-ci-legs finds a workflow's legs and budgets", RenderCi),
     ];
 
@@ -823,7 +823,77 @@ internal static class HelpCommand
             builder,
             $"--arms names the arms to drive, as --legs names legs, and an unknown one is refused ({HarnessExit.UsageError}). "
             + "On each leg the arms its S row does not name, and those --arms does not, are skipped-not-selected; an arm "
-            + "selected and named by no selected leg's S row is named in a warning before the sweep starts.");
+            + "selected and named by no selected leg's S row is named in a warning before the sweep starts. Only a leg built "
+            + "by CMake with the Ninja generator can be swept: ninja's own records say which objects a mutation rebuilt.");
+        builder.AppendLine();
+        builder.AppendLine("Workers");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Each leg is swept in worker copies of its tree, kept beside it as <tree>.mutation-<variant>-<n>, numbered from "
+            + "1: as many as workers, never more than the leg has arms to drive, and one in a WSL distribution. Before every "
+            + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
+            + "killed sweep left mutated is put back - configured with the dependency sources the leg's own build fetched, "
+            + "read from its CMake cache, and built whole before it drives an arm. The tree itself is only ever read.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A sweep runs the workers whose copy and build fit the room left - a build of the variant coming to what the "
+            + "leg's own build, or the main checkout's, last recorded - and whose build stays within the path limit, "
+            + "reckoned as a worktree's is; where not even the first does, the leg is skipped-unavailable, saying why, and "
+            + "one that runs fewer says so. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it, and "
+            + "a claim whose sweep died is released and said. Workers an earlier sweep left beyond the count workers allows "
+            + "are removed before the sweep plans, so lowering it frees their room, and a directory under a worker's name "
+            + "that no sync made is said and left. clean removes a leg's workers with its build directory.");
+        builder.AppendLine();
+        builder.AppendLine("An arm's turn");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Each test binary's arms wait for its unmutated control, built and run once on the leg: one that does not pass "
+            + "- a red case, no report, a failing exit, a hang - decides the leg's own verdict and stops each of its arms. "
+            + "Its run bounds theirs: a mutated run may take runTimeFactor times as long, never less than it and a minute, "
+            + "and is stopped as unattributed past that. Each arm is admitted as a unit of its own where its machine "
+            + "declares admission ('help admission'), pre-flighted, mutated - its sites dated past the worker's last build "
+            + "- built with its runner beside its target, witnessed rebuilt from ninja's log, then run whole or paired with "
+            + "its control. Every site is put back and checked by its hash; a site that cannot be put back poisons the arm "
+            + "and retires its worker, and the other workers go on.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A sweep of a leg takes a lock of its own, keyed by its workers: it refuses another sweep of the leg's variant, "
+            + "refused-locked, and never holds off a build, test or sync of the leg. --force-lock takes it, and a worker "
+            + "another live sweep claims.");
+        builder.AppendLine();
+        builder.AppendLine("Records");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"Each arm's records are in <run>/<leg>/{MutationRecords.ArmsDirectory}/<arm>/: {MutationRecords.ArmRecordFileName}, its verdict as "
+            + "the ledger carries it, beside the logs of its build and its run, and of a paired control's build in "
+            + $"{MutationRecords.PairedControlDirectory}/. Each control's are in <run>/<leg>/{MutationRecords.ControlsDirectory}/<runner>/, and "
+            + $"each worker's whole build in <run>/<leg>/{MutationRecords.WorkersDirectory}/<n>/. A leg's line counts its arms by verdict; "
+            + "ARMS, below the table, names each arm that did not pass and why; --json carries every arm beneath its leg: "
+            + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds and records.");
+        builder.AppendLine();
+        builder.AppendLine("Self-test");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "check-mutations --self-test sweeps the fixture this tool carries - a CMake library, a test binary that writes "
+            + "its own JUnit report, and one arm to each verdict an arm's design can reach - in place of the repository's "
+            + "registry, which it does not need. It is built as each selected leg builds, with the leg's toolchain, "
+            + "configuration and sanitizer, and each arm is held to the verdict it is designed to reach: one that reaches "
+            + "it passed, saying so, and one that reaches another is violated, naming both - a defect of this tool's with "
+            + "that compiler, never the fixture's. --arms names the fixture's arms.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName}, "
+            + "only where it differs, its workers beside it, a few megabytes each; nothing removes them, so delete them by "
+            + "hand while no self-test runs. A self-test is placed by no room a build of the leg's tree needs, its workers' "
+            + "paths are reckoned by the fixture's own longest, and a leg on a host is self-tested there with the fixture "
+            + "that host's DssHarness carries.");
         builder.AppendLine();
         builder.AppendLine("Verdicts");
         builder.AppendLine();
@@ -891,6 +961,12 @@ internal static class HelpCommand
         builder.AppendLine("one whose command has ended - crashed, killed - is reclaimed by the next leg that");
         builder.AppendLine("looks, and said to be. A waiting leg keeps its lock: another run of its variant is");
         builder.AppendLine("refused-locked meanwhile, as it would be while the leg ran.");
+        builder.AppendLine();
+        builder.AppendLine("A check-mutations leg, whose sweep can last hours, is admitted unit by unit instead:");
+        builder.AppendLine("each worker as it is made, claiming the room its copy and build still need, and each");
+        builder.AppendLine("arm as it starts, each unit holding a slot only while it runs. Only the sweep's first");
+        builder.AppendLine("unit settles; the rest are read once. A sweep run in a WSL distribution is taken");
+        builder.AppendLine("whole by the command that sends it there, and runs one worker.");
         builder.AppendLine();
         builder.AppendLine("  \"defaults\": { \"admission\": { \"heavyLegs\": 2, \"maxMemoryPercent\": 76 } },");
         builder.AppendLine("  \"hosts\": { \"local\": { \"admission\": { \"heavyLegs\": 1 } } }");
@@ -971,7 +1047,8 @@ internal static class HelpCommand
         builder.AppendLine($"  {ToolPackage.Command} build                   Build every selected leg");
         builder.AppendLine($"  {ToolPackage.Command} test                    Build and test every selected leg");
         builder.AppendLine($"  {ToolPackage.Command} run <runner>            Run a predefined runner across its legs");
-        builder.AppendLine($"  {ToolPackage.Command} clean                   Remove selected legs' build directories where they run");
+        builder.AppendLine($"  {ToolPackage.Command} check-mutations         Prove each selected leg's tests can fail, arm by arm");
+        builder.AppendLine($"  {ToolPackage.Command} clean                   Remove legs' build directories and mutation workers");
         builder.AppendLine($"  {ToolPackage.Command} list-worktree           Show worktrees and the copies hosts keep of them");
         builder.AppendLine($"  {ToolPackage.Command} list-orchestrator       Show orchestrators and where each agent stands");
         builder.AppendLine($"  {ToolPackage.Command} read-anchors            List the deferred work recorded as anchors");
@@ -1355,7 +1432,9 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("clean removes each selected leg's build directory where the leg runs: in this");
         builder.AppendLine("machine's tree, or in a WSL distribution's or an ssh host's copy of the tree it is");
-        builder.AppendLine("typed in.");
+        builder.AppendLine("typed in. The mutation workers a sweep of the leg keeps beside that tree go with");
+        builder.AppendLine("it, under the lock a sweep takes: one a live sweep claims is kept, and a directory");
+        builder.AppendLine("under a worker's name that no sync made is said and left ('help mutations').");
         builder.AppendLine();
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug,linux-arm64-release");
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug --dry-run");
@@ -1390,6 +1469,9 @@ internal static class HelpCommand
         builder.AppendLine("was, and so is one whose directory no build of this version recorded. Nothing is");
         builder.AppendLine("walked to decide: the room is the filesystem's own count, and what a directory holds");
         builder.AppendLine("is what its build recorded. Commands that build nothing - sync, clean - need no room.");
+        builder.AppendLine("A sweep of a leg's mutation arms builds in its first worker, never in the leg's own");
+        builder.AppendLine("directory, and is placed by the room that worker's build still needs; a self-test");
+        builder.AppendLine("builds no tree of the leg's, and is placed by none.");
         builder.AppendLine();
         builder.AppendLine("One command counts only its own legs. Where a machine declares admission ('help");
         builder.AppendLine("admission'), each heavy leg whose need is known also claims the room its build");

@@ -65,6 +65,23 @@ public sealed class CheckMutationsCliTests
         Assert.Contains(said, result.StandardError, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A self-test reads the fixture's registry, never the repository's - which this one does not configure - and an arm
+    /// <c>--arms</c> names that the fixture does not declare is a usage error naming it, before any host is touched.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTestsArmsValueNamingNoArmOfTheFixture_IsAUsageError()
+    {
+        using var temp = new TempDirectory();
+        await PrepareAsync(temp, new MutationSettings());
+
+        var result = await CliRunner.RunAsync(["check-mutations", "--self-test", "--arms", "charge", "-C", temp.Path], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+        Assert.Contains("--arms names 'charge', which no A row of the registry declares", result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("mutations.registry", result.StandardError, StringComparison.Ordinal);
+    }
+
     /// <summary>A repository holding one leg this machine runs, its mutation testing configured by <paramref name="settings"/>.</summary>
     private static async Task PrepareAsync(TempDirectory temp, MutationSettings settings)
     {

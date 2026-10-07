@@ -88,6 +88,19 @@ public static partial class MutationRegistryParser
     }
 
     /// <summary>
+    /// The lines of a registry's <paramref name="text"/>, as <see cref="Parse"/> takes them: however they end, so a line
+    /// number names the line an editor shows. The empty one after a last line ending is a blank line, which reads as
+    /// nothing.
+    /// </summary>
+    /// <param name="text">The registry's text.</param>
+    public static IReadOnlyList<string> Lines(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        return text.ReplaceLineEndings("\n").Split('\n');
+    }
+
+    /// <summary>
     /// What is wrong with <paramref name="path"/> as a path a row names, or <see langword="null"/> where nothing is: a
     /// file relative to the repository root, spelled one way on every platform.
     /// </summary>

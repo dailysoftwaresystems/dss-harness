@@ -17,14 +17,35 @@ using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Mutations;
 
-/// <summary>What one leg's sweep sweeps: the tree it reads, the project its workers build, its arms and its settings.</summary>
+/// <summary>
+/// What one leg's sweep sweeps: the tree it reads, the project its workers build, its arms and its settings - the leg's
+/// own, or for a self-test the fixture this tool carries, built the leg's way.
+/// </summary>
 internal sealed record MutationSubject
 {
     /// <summary>The tree read once for every worker, beside which the workers are kept.</summary>
     public required string TreeRoot { get; init; }
 
-    /// <summary>The project each worker builds: the leg's own.</summary>
+    /// <summary>The project each worker builds, as the leg's variant builds it.</summary>
     public required ProjectConfig Project { get; init; }
+
+    /// <summary>
+    /// The test settings each binary's run starts by - in the directory the leg's tests start in, with their environment
+    /// over its host's - or <see langword="null"/> where it starts in the worker with what the leg's host gives it.
+    /// </summary>
+    public TestConfig? Tests { get; init; }
+
+    /// <summary>
+    /// The longest path a build of the project makes below its build directory, which each worker's paths are reckoned
+    /// with; <see langword="null"/> for <c>worktrees.pathBudgetReserve</c>, the leg's own project's.
+    /// </summary>
+    public int? PathReserve { get; init; }
+
+    /// <summary>
+    /// What a self-test makes of each arm's verdict as the judge reached it, given the arm's id: the arm held to the
+    /// verdict it is designed to reach. <see langword="null"/> where each arm's verdict is the judge's own.
+    /// </summary>
+    public Func<string, ReachedVerdict, ReachedVerdict>? Hold { get; init; }
 
     /// <summary>The arms the leg drives, and those it does not, with why.</summary>
     public required LegArms Arms { get; init; }
@@ -74,21 +95,6 @@ internal sealed class MutationLegRunner(
     IHarnessOutput output,
     string commandName)
 {
-    /// <summary>Where a leg's arms keep their records, under its directory in the run's.</summary>
-    public const string ArmsDirectory = "arms";
-
-    /// <summary>Where a leg's pristine controls keep theirs, one directory to a test binary.</summary>
-    public const string ControlsDirectory = "controls";
-
-    /// <summary>Where a leg's workers keep the logs of their baseline builds, one directory to a worker.</summary>
-    public const string WorkersDirectory = "workers";
-
-    /// <summary>Where a BUILD-RED arm's paired control keeps its build's logs, within the arm's records.</summary>
-    public const string PairedControlDirectory = "control";
-
-    /// <summary>The record each arm leaves among its records.</summary>
-    public const string ArmRecordFileName = "arm.json";
-
     private readonly IMutationSource _source = source;
     private readonly IWorkerCopies _copies = copies;
     private readonly IWorkerSite _site = site;
@@ -274,8 +280,8 @@ internal sealed class MutationLegRunner(
 
         /// <summary>
         /// Whether worker <paramref name="number"/>'s build stays within this machine's path limit, reckoned as a worktree's
-        /// is: the worker, its build directory below it, and below that the longest path a build makes,
-        /// <c>worktrees.pathBudgetReserve</c>, with <c>worktrees.pathBudgetMargin</c> to spare.
+        /// is: the worker, its build directory below it, and below that the longest path a build of the project makes -
+        /// <c>worktrees.pathBudgetReserve</c>, or the subject's own - with <c>worktrees.pathBudgetMargin</c> to spare.
         /// </summary>
         private PathBudgetResult Budget(int number)
         {
@@ -286,18 +292,20 @@ internal sealed class MutationLegRunner(
             // longest variant this machine builds.
             var below = _leg.Variant.DirectoryUnder(worker).Length - Path.TrimEndingDirectorySeparator(worker).Length;
 
-            return _runner._pathBudget.Check(worker, below + settings.PathBudgetReserve, settings.PathBudgetMargin, settings.PathLimit);
+            return _runner._pathBudget.Check(worker, below + (_subject.PathReserve ?? settings.PathBudgetReserve), settings.PathBudgetMargin, settings.PathLimit);
         }
 
         /// <summary>Why worker <paramref name="number"/> is not run: its build would pass this machine's path limit.</summary>
         private string TooLong(int number)
         {
             var budget = Budget(number);
+            var reckoned = _subject.PathReserve is { } reserve
+                ? $"as the {reserve} its project's build makes below its build directory and worktrees.pathBudgetMargin reckon them"
+                : "as worktrees.pathBudgetReserve and pathBudgetMargin reckon them";
 
             return $"worker {number} would be kept at '{Worker(number)}', where its build needs paths of {budget.RequiredLength} "
-                + $"characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under "
-                + $"{budget.Limit}: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build runs "
-                + "takes longer ones";
+                + $"characters, {reckoned}, and every path must stay under {budget.Limit}: keep the tree at a shorter path, or set "
+                + "worktrees.pathLimit where every tool its build runs takes longer ones";
         }
 
         /// <summary>
@@ -441,7 +449,7 @@ internal sealed class MutationLegRunner(
                 await _runner._copies.SyncAsync(_reading, worker, cancellationToken).ConfigureAwait(false);
 
                 _work.Progress($"worker {number}: building it whole");
-                var request = Request(number, worker, $"{WorkersDirectory}/{number}", _subject.Project);
+                var request = Request(number, worker, $"{MutationRecords.WorkersDirectory}/{number}", _subject.Project);
                 var baseline = await _runner._builder.BuildAsync(_config, request, cancellationToken).ConfigureAwait(false);
 
                 if (baseline.Verdict.Verdict != LegVerdict.Passed)
@@ -477,7 +485,7 @@ internal sealed class MutationLegRunner(
         private async Task<(ArmEntry Entry, string? Retired)> DriveArmAsync(int number, MutationArm arm, IWorkerGraph graph, CancellationToken cancellationToken)
         {
             var started = Stopwatch.GetTimestamp();
-            var records = Path.Combine(_work.RunDirectory, _leg.Name, ArmsDirectory, arm.Id);
+            var records = Path.Combine(_work.RunDirectory, _leg.Name, MutationRecords.ArmsDirectory, arm.Id);
 
             using var admitted = await _work.AdmitUnit(new UnitAdmission(arm.Id, null, First()), cancellationToken).ConfigureAwait(false);
 
@@ -527,7 +535,7 @@ internal sealed class MutationLegRunner(
 
             if (ArmJudge.Judge(arm, observation) is { } refused)
             {
-                return (refused, null, null);
+                return (Held(arm, refused), null, null);
             }
 
             ReachedVerdict? failure = null;
@@ -542,7 +550,7 @@ internal sealed class MutationLegRunner(
                 await WriteAsync([.. sites.Select(state => (state, state.Mutated!))], buildDirectory, cancellationToken).ConfigureAwait(false);
 
                 var build = await _runner._builder
-                    .BuildAsync(_config, Request(number, worker, $"{ArmsDirectory}/{arm.Id}", project), cancellationToken)
+                    .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ArmsDirectory}/{arm.Id}", project), cancellationToken)
                     .ConfigureAwait(false);
 
                 observation = observation with { Build = Observe(build, before, buildDirectory, preflight.Dependents, graph) };
@@ -555,7 +563,7 @@ internal sealed class MutationLegRunner(
                     await WriteAsync([(sites[0], control!)], buildDirectory, cancellationToken).ConfigureAwait(false);
 
                     var controlBuild = await _runner._builder
-                        .BuildAsync(_config, Request(number, worker, $"{ArmsDirectory}/{arm.Id}/{PairedControlDirectory}", project), cancellationToken)
+                        .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ArmsDirectory}/{arm.Id}/{MutationRecords.PairedControlDirectory}", project), cancellationToken)
                         .ConfigureAwait(false);
 
                     observation = observation with { Control = Observe(controlBuild, controlBefore, buildDirectory, preflight.Dependents, graph) };
@@ -563,7 +571,7 @@ internal sealed class MutationLegRunner(
                 else if (ArmJudge.Judge(arm, observation) is null)
                 {
                     var run = await _runner._tests
-                        .RunAsync(RunRequest($"{_leg.Name}/{ArmsDirectory}/{arm.Id}", worker, buildDirectory, graph.ProgramOf(arm.Runner).Path!, records, bound, diagnostic), cancellationToken)
+                        .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ArmsDirectory}/{arm.Id}", worker, buildDirectory, graph.ProgramOf(arm.Runner).Path!, records, bound, diagnostic), cancellationToken)
                         .ConfigureAwait(false);
 
                     report = run.Run.Report;
@@ -602,8 +610,19 @@ internal sealed class MutationLegRunner(
                 return (failure, report, failure.Verdict == LegVerdict.Poisoned ? $"arm '{arm.Id}' ended in a defect: {failure.Detail}" : null);
             }
 
-            return (ArmJudge.Judge(arm, observation) ?? ReachedVerdict.OrPoisoned(null, $"{_leg.Name}/{arm.Id}"), report, null);
+            return (
+                ArmJudge.Judge(arm, observation) is { } judged ? Held(arm, judged) : ReachedVerdict.OrPoisoned(null, $"{_leg.Name}/{arm.Id}"),
+                report,
+                null);
         }
+
+        /// <summary>
+        /// <paramref name="judged"/>, the verdict the judge reached for <paramref name="arm"/>, as the sweep reports it: held
+        /// to the arm's designed verdict in a self-test, and as reached otherwise. Only the judge's own verdict is held: one
+        /// a sweep ended the arm with - stopped, not admitted, a defect - says nothing of how the judge read it.
+        /// </summary>
+        private ReachedVerdict Held(MutationArm arm, ReachedVerdict judged)
+            => _subject.Hold is { } hold ? hold(arm.Id, judged) : judged;
 
         /// <summary>
         /// What an arm's pre-flight reads of the worker's copy and its build, with what the arm writes once it passes: the
@@ -710,7 +729,7 @@ internal sealed class MutationLegRunner(
         {
             var worker = Worker(number);
             var buildDirectory = _leg.Variant.DirectoryUnder(worker);
-            var records = Path.Combine(_work.RunDirectory, _leg.Name, ControlsDirectory, runner);
+            var records = Path.Combine(_work.RunDirectory, _leg.Name, MutationRecords.ControlsDirectory, runner);
             var program = graph.ProgramOf(runner);
 
             // A runner that builds no program is each of its arms' pre-flight to say, as violated: there is nothing to control.
@@ -724,7 +743,7 @@ internal sealed class MutationLegRunner(
             try
             {
                 var build = await _runner._builder
-                    .BuildAsync(_config, Request(number, worker, $"{ControlsDirectory}/{runner}", _subject.Project.Retargeted([runner], graph.OutputsOf(runner))), cancellationToken)
+                    .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ControlsDirectory}/{runner}", _subject.Project.Retargeted([runner], graph.OutputsOf(runner))), cancellationToken)
                     .ConfigureAwait(false);
                 var observed = new ArmBuild(build.Verdict, [], []);
 
@@ -734,7 +753,7 @@ internal sealed class MutationLegRunner(
                 }
 
                 var run = await _runner._tests
-                    .RunAsync(RunRequest($"{_leg.Name}/{ControlsDirectory}/{runner}", worker, buildDirectory, path, records, null, null), cancellationToken)
+                    .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ControlsDirectory}/{runner}", worker, buildDirectory, path, records, null, null), cancellationToken)
                     .ConfigureAwait(false);
 
                 return Decided(PristineJudge.Judge(runner, observed, run.Run, run.Duration, _subject.Settings.RunTimeFactor));
@@ -870,11 +889,13 @@ internal sealed class MutationLegRunner(
                 TreeRoot = worker,
             };
 
-        /// <summary>A whole run of <paramref name="program"/>, built in <paramref name="buildDirectory"/>, as the leg's tests start.</summary>
+        /// <summary>
+        /// A whole run of <paramref name="program"/>, built in <paramref name="buildDirectory"/>, as the subject's tests start:
+        /// the leg's, or where the subject has none, in the worker with what the leg's host gives it.
+        /// </summary>
         private ArmRunRequest RunRequest(string named, string worker, string buildDirectory, string program, string records, TimeSpan? bound, string? diagnostic)
         {
-            var settings = TestInvocationResolver.SettingsFor(_config, _leg.Leg, _subject.Project);
-            var invocation = settings is null ? null : TestInvocationResolver.InvocationFor(settings, _leg.Host.Os ?? _leg.Leg.Os);
+            var invocation = _subject.Tests is { } settings ? TestInvocationResolver.InvocationFor(settings, _leg.Host.Os ?? _leg.Leg.Os) : null;
             var paths = new LegPaths(worker, buildDirectory) { Identity = _leg.IdentityFor(_work.RunId.Value) };
 
             return new ArmRunRequest
@@ -930,7 +951,7 @@ internal sealed class MutationLegRunner(
             try
             {
                 _runner._fileSystem.CreateDirectory(records);
-                _runner._fileSystem.WriteAllTextAtomic(Path.Combine(records, ArmRecordFileName), LedgerReport.ArmJson(entry) + "\n");
+                _runner._fileSystem.WriteAllTextAtomic(Path.Combine(records, MutationRecords.ArmRecordFileName), LedgerReport.ArmJson(entry) + "\n");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

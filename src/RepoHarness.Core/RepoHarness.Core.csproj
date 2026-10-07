@@ -31,4 +31,12 @@
                       LogicalName="RepoHarness.Core.Anchors.Templates.anchor-registry.md" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The fixture check-mutations sweeps for its self-test, and the end-to-end tests sweep: kept
+         beside the tests, and embedded whole, each file under its path in the fixture, so every
+         build of the tool carries the very fixture its own tests swept. -->
+    <EmbeddedResource Include="../../tests/mutation-fixture/**/*"
+                      LogicalName="RepoHarness.Core.MutationFixture/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
 </Project>

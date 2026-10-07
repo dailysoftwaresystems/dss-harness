@@ -123,7 +123,7 @@ public sealed class MutationLegRunnerTests
             Assert.Contains(arm.Worker, new int?[] { 1, 2 });
             Assert.Equal(sweep.Records(arm.Arm), arm.Records);
 
-            using var record = JsonDocument.Parse(File.ReadAllText(Path.Combine(arm.Records!, MutationLegRunner.ArmRecordFileName)));
+            using var record = JsonDocument.Parse(File.ReadAllText(Path.Combine(arm.Records!, MutationRecords.ArmRecordFileName)));
 
             Assert.Equal(arm.Arm, record.RootElement.GetProperty("arm").GetString());
             Assert.Equal("passed", record.RootElement.GetProperty("verdict").GetString());
@@ -173,7 +173,7 @@ public sealed class MutationLegRunnerTests
 
         Assert.Equal(2, sweep.Tests.Runs.Count);
         Assert.Equal((null, null), (control.Bound, control.Diagnostic));
-        Assert.Equal(Path.Combine(sweep.RunDirectory, LegName, MutationLegRunner.ControlsDirectory, "fixture_tests"), control.RecordDirectory);
+        Assert.Equal(Path.Combine(sweep.RunDirectory, LegName, MutationRecords.ControlsDirectory, "fixture_tests"), control.RecordDirectory);
         Assert.Equal(PristineJudge.Bound(Tests.Took, 10), mutated.Bound);
         Assert.Equal(10.0, mutated.Factor);
         Assert.Equal("charge exceeded", mutated.Diagnostic);
@@ -582,7 +582,7 @@ public sealed class MutationLegRunnerTests
 
         Assert.Equal((LegVerdict.NotAdmitted, "2 arm(s): 1 not-admitted, 1 passed"), (entry.Verdict, entry.Detail));
         Assert.Equal((LegVerdict.NotAdmitted, "memory 97% in use"), (entry.Arms[1].Verdict, entry.Arms[1].Detail));
-        Assert.True(File.Exists(Path.Combine(sweep.Records("depth-type"), MutationLegRunner.ArmRecordFileName)));
+        Assert.True(File.Exists(Path.Combine(sweep.Records("depth-type"), MutationRecords.ArmRecordFileName)));
         Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.StartsWith("native/arms/depth-type", StringComparison.Ordinal));
     }
 
@@ -766,6 +766,68 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// A subject that says how long a path its own build makes - the self-test's fixture - has each worker's paths reckoned
+    /// by it in place of <c>worktrees.pathBudgetReserve</c>, the leg's own project's, and a worker past the limit says so.
+    /// </summary>
+    [Fact]
+    public async Task ASubjectsOwnLongestPath_ReckonsItsWorkers_InPlaceOfTheConfiguredReserve()
+    {
+        using var sweep = new Sweep { PathReserve = 30, Worktrees = new WorktreeSettings { PathBudgetReserve = 100, PathBudgetMargin = 7, PathLimit = 400 } };
+
+        await sweep.RunAsync([DepthType]);
+
+        var below = Variant.DirectoryUnder(sweep.Worker(1)).Length - sweep.Worker(1).Length;
+
+        sweep.Budget.Received().Check(sweep.Worker(1), below + 30, 7, 400);
+
+        using var deep = new Sweep { PathReserve = 30, Worktrees = new WorktreeSettings { PathLimit = 40 } };
+        deep.Budget = new PathBudget(deep.Harness.Platform);
+
+        var turned = await deep.RunAsync([DepthType]);
+
+        Assert.Contains(
+            " characters, as the 30 its project's build makes below its build directory and worktrees.pathBudgetMargin reckon them, and every "
+            + "path must stay under 40: ",
+            turned.Detail,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A self-test holds each verdict the judge reached to the arm's design, its record written as held - a refusal of its
+    /// pre-flight included - and leaves a verdict the sweep ended an arm with, as a control that stops it, as it is.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTest_HoldsEachVerdictTheJudgeReached_AndNoOther()
+    {
+        var misplaced = ChargeBound with { Id = "misplaced", Line = 9, Own = new MutationSite("src/nowhere.cpp", "texts/charge.before", "texts/charge.after", 9) };
+        using var held = new Sweep { Workers = 1, Hold = (arm, reached) => ReachedVerdict.Of(LegVerdict.Passed, $"{arm} held, {Verdicts.Display(reached.Verdict)}: {reached.Detail}") };
+
+        var entry = await held.RunAsync([ChargeBound, DepthType, misplaced]);
+
+        Assert.Equal(
+            [
+                (LegVerdict.Passed, "charge-bound held, passed: ran 3 case(s), 1 red as declared, and said its diagnostic"),
+                (LegVerdict.Passed, $"depth-type held, passed: the mutation stops the build at {SiteObject}, and its paired control builds"),
+                (LegVerdict.Passed, "misplaced held, violated: site 'src/nowhere.cpp' is not a file in the worker's copy of the tree"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+
+        using (var record = JsonDocument.Parse(File.ReadAllText(Path.Combine(held.Records("charge-bound"), MutationRecords.ArmRecordFileName))))
+        {
+            Assert.Equal(entry.Arms[0].Detail, record.RootElement.GetProperty("detail").GetString());
+        }
+
+        using var stopped = new Sweep { Workers = 1, Hold = (_, _) => throw new InvalidOperationException("a verdict the judge never reached was held") };
+        stopped.Tests.Answer = request => request.Bound is null ? Tests.Ran(["Fixture.Depth"]) : Tests.Judged(request);
+
+        var unheld = await stopped.RunAsync([ChargeBound]);
+
+        Assert.Equal(
+            (LegVerdict.Stopped, "the unmutated fixture_tests has 1 red, so no mutation of it proves anything"),
+            (Assert.Single(unheld.Arms).Verdict, unheld.Arms[0].Detail));
+    }
+
+    /// <summary>
     /// A worker an earlier sweep left beyond <c>mutations.workers</c> is removed before the sweep plans, so lowering it frees
     /// the room it held - unless a live sweep holds it, or no sync made it, which is said and left.
     /// </summary>
@@ -866,6 +928,10 @@ public sealed class MutationLegRunnerTests
 
         public TestConfig? Test { get; init; }
 
+        public int? PathReserve { get; init; }
+
+        public Func<string, ReachedVerdict, ReachedVerdict>? Hold { get; init; }
+
         public Dictionary<string, string> HostEnv { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         public Func<UnitAdmission, Admission?> Admit { get; init; } = _ => null;
@@ -878,7 +944,7 @@ public sealed class MutationLegRunnerTests
 
         public string Worker(int number) => MutationWorkers.PathOf(Tree, Variant, number);
 
-        public string Records(string arm) => Path.Combine(RunDirectory, LegName, MutationLegRunner.ArmsDirectory, arm);
+        public string Records(string arm) => Path.Combine(RunDirectory, LegName, MutationRecords.ArmsDirectory, arm);
 
         /// <summary>Worker <paramref name="number"/> as a listing finds it, holding 2 KiB, its marker saying <paramref name="origin"/>.</summary>
         public WorkerCopy Copy(int number, CopyOrigin origin)
@@ -931,6 +997,9 @@ public sealed class MutationLegRunnerTests
                 {
                     TreeRoot = Tree,
                     Project = project,
+                    Tests = Test,
+                    PathReserve = PathReserve,
+                    Hold = Hold,
                     Arms = new LegArms(driven, unselected ?? []),
                     Settings = settings,
                     ExpectedBuildBytes = ExpectedBuildBytes,

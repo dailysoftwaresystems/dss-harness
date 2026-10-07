@@ -11,6 +11,7 @@ using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Testing;
 
 namespace RepoHarness.Core.Mutations;
 
@@ -22,7 +23,13 @@ namespace RepoHarness.Core.Mutations;
 /// <param name="Json">Whether the ledger is wanted as data rather than as a table.</param>
 /// <param name="UseStaged">Whether to sweep what is already staged on each host, without syncing again.</param>
 /// <param name="Here">The host this machine is to the machine that dispatched the legs here, or <see langword="null"/>.</param>
-/// <param name="RemoteArguments">The options a host sweeping one of the legs is given, so it sweeps the same arms.</param>
+/// <param name="RemoteArguments">
+/// The options a host sweeping one of the legs is given, so it sweeps the same arms, or self-tests as this machine does.
+/// </param>
+/// <param name="SelfTest">
+/// Whether to sweep the fixture this tool carries, through each leg's toolchain, holding each arm to the verdict it is
+/// designed to reach - rather than the arms the repository's registry declares.
+/// </param>
 public sealed record MutationRequest(
     string Directory,
     IReadOnlyList<string>? LegNames,
@@ -31,7 +38,8 @@ public sealed record MutationRequest(
     bool Json = false,
     bool UseStaged = false,
     HostId? Here = null,
-    IReadOnlyList<string>? RemoteArguments = null);
+    IReadOnlyList<string>? RemoteArguments = null,
+    bool SelfTest = false);
 
 /// <summary>The arms a sweep drives, as the registry declares them and <c>--arms</c> and the S rows select them.</summary>
 /// <param name="Registry">The registry, every arm in it.</param>
@@ -45,10 +53,17 @@ internal sealed record SweepArms(MutationRegistry Registry, IReadOnlyList<Mutati
 /// copies of its tree of their own, under a lock of their own - through the machinery every leg-running command shares.
 /// </summary>
 /// <remarks>
+/// <para>
 /// A registry that cannot be read whole, an arm <c>--arms</c> names that it does not declare, a scope naming no leg, and
 /// a leg built without the Ninja generator are refused before anything starts, each naming its fix: refused from inside
 /// a leg, the same refusal would end the run once its hosts were measured and its slots taken. A host sweeping one of
 /// the legs reads its own copy's registry the same way, and sweeps it with its own workers and its own admission.
+/// </para>
+/// <para>
+/// A self-test sweeps the fixture this tool carries instead (<see cref="MutationFixture"/>), on each selected leg as the
+/// leg builds - its toolchain, configuration and sanitizer - written where the machine running the leg keeps this tool's
+/// own data, and each arm held to the verdict it is designed to reach.
+/// </para>
 /// </remarks>
 public sealed class MutationService(
     IHarnessContextLoader contextLoader,
@@ -61,6 +76,7 @@ public sealed class MutationService(
     PhaseRunner phaseRunner,
     IPathBudget pathBudget,
     IFileSystem fileSystem,
+    MutationFixtureStore fixtures,
     IProcessIdentity identity,
     TimeProvider clock,
     IHarnessOutput output)
@@ -74,6 +90,12 @@ public sealed class MutationService(
     /// </summary>
     public static LegWorkload Workload { get; } = LegWorkload.BuildOnly with { AdmitsEachUnit = true };
 
+    /// <summary>
+    /// What a self-test has each leg do: build as a sweep builds, the fixture this tool carries in place of the leg's tree,
+    /// so no host is asked about the room a build of the leg's tree needs.
+    /// </summary>
+    public static LegWorkload SelfTestWorkload { get; } = Workload with { BuildsTheLegsTree = false };
+
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LegRunService _legRuns = legRuns;
     private readonly ISyncService _syncService = syncService;
@@ -84,6 +106,7 @@ public sealed class MutationService(
     private readonly PhaseRunner _phaseRunner = phaseRunner;
     private readonly IPathBudget _pathBudget = pathBudget;
     private readonly IFileSystem _fileSystem = fileSystem;
+    private readonly MutationFixtureStore _fixtures = fixtures;
     private readonly IProcessIdentity _identity = identity;
     private readonly TimeProvider _clock = clock;
     private readonly IHarnessOutput _output = output;
@@ -102,10 +125,10 @@ public sealed class MutationService(
         ArgumentNullException.ThrowIfNull(runId);
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
-        var arms = Read(context, request.ArmNames);
+        var arms = request.SelfTest ? SelfTestArms(request.ArmNames) : Read(context, request.ArmNames);
         var legs = LegSelection.Resolve(context.Config, request.LegNames).Legs;
 
-        RequireSweepable(context.Config, legs);
+        RequireSweepable(context.Config, legs, request.SelfTest);
 
         foreach (var arm in ArmSelection.DrivenNowhere([.. legs.Select(leg => leg.Name)], arms.Selected, arms.Scopes))
         {
@@ -113,7 +136,7 @@ public sealed class MutationService(
         }
 
         var runner = new MutationLegRunner(
-            new TreeMutationSource(_syncService),
+            request.SelfTest ? new FixtureMutationSource() : new TreeMutationSource(_syncService),
             new WorkerCopies(_syncService, _localTransport, _fileSystem, _output, _identity, CommandName),
             new WorkerSite(_fileSystem, _clock),
             new ArmBuilder(_buildService, _processRunner, _buildDirectoryGuard, _fileSystem),
@@ -137,31 +160,50 @@ public sealed class MutationService(
                     request.Here,
                     request.RemoteArguments)
                 {
-                    Workload = Workload,
+                    // A self-test takes the leg's own sweep lock, as a sweep of the leg does: the fixture's workers are
+                    // kept where this tool's data is, which a run elsewhere cannot name, and each is claimed as it is used.
+                    Workload = request.SelfTest ? SelfTestWorkload : Workload,
                     Lock = MutationWorkers.SweepLock,
                 },
-                (work, token) => runner.RunAsync(Subject(work, arms, request.ForceLock), work, token),
+                (work, token) => request.SelfTest
+                    ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
+                    : runner.RunAsync(Subject(work, arms, request.ForceLock), work, token),
                 cancellationToken)
             .ConfigureAwait(false);
     }
 
     /// <summary>
-    /// The options a host sweeping one of a run's legs is given, so it sweeps the arms this machine was asked to: each
-    /// value <c>--arms</c> was given, as it was given - an empty one among them, which the host refuses as this machine
-    /// does - and nothing where it was left out, which is every arm there too.
+    /// The options a host sweeping one of a run's legs is given, so it sweeps what this machine was asked to: a self-test
+    /// where this is one, and each value <c>--arms</c> was given, as it was given - an empty one among them, which the
+    /// host refuses as this machine does - and nothing where it was left out, which is every arm there too.
     /// </summary>
     /// <param name="arms">What <c>--arms</c> was given, or <see langword="null"/> where it was left out.</param>
+    /// <param name="selfTest">Whether the run is a self-test.</param>
     /// <remarks>
     /// <c>--legs</c> and <c>--json</c> are supplied by the dispatch itself, and the lock and the staging are this
     /// machine's decisions about its own state.
     /// </remarks>
-    public static IReadOnlyList<string> RemoteArguments(IReadOnlyList<string>? arms)
-        => arms is null ? [] : [.. arms.SelectMany(arm => new[] { "--arms", arm })];
+    public static IReadOnlyList<string> RemoteArguments(IReadOnlyList<string>? arms, bool selfTest)
+    {
+        var options = new List<string>();
+
+        if (selfTest)
+        {
+            options.Add("--self-test");
+        }
+
+        foreach (var arm in arms ?? [])
+        {
+            options.AddRange(["--arms", arm]);
+        }
+
+        return options;
+    }
 
     /// <summary>
     /// What <paramref name="work"/>'s leg sweeps: its tree; its project, configured with the dependency sources its own
-    /// build fetched; the arms it drives; and what a build of its variant is expected to come to, as its own build
-    /// directory or the main checkout's copy of it last recorded.
+    /// build fetched; the arms it drives; the test settings its tests start by; and what a build of its variant is
+    /// expected to come to, as its own build directory or the main checkout's copy of it last recorded.
     /// </summary>
     internal MutationSubject Subject(LegWork work, SweepArms arms, bool force)
     {
@@ -171,15 +213,71 @@ public sealed class MutationService(
             BuildRecord.BytesIn(_fileSystem, leg.BuildDirectory),
             BuildRecord.BytesIn(_fileSystem, leg.Variant.DirectoryUnder(work.Context.Layout.MainCheckoutRoot)));
         var fetched = FetchedSources.CacheVarsFor(_buildDirectoryGuard.Read(leg.BuildDirectory), _fileSystem);
+        var project = leg.BuildableProject();
 
         return new MutationSubject
         {
             TreeRoot = leg.TreeRoot,
-            Project = leg.BuildableProject().WithCacheVarsBeneath(fetched),
+            Project = project.WithCacheVarsBeneath(fetched),
+            Tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project),
             Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = work.Context.Config.Mutations,
             ExpectedBuildBytes = bytes,
             ExpectedBuildSource = source,
+            Force = force,
+        };
+    }
+
+    /// <summary>
+    /// The arms a self-test drives: those of the fixture's own registry <paramref name="armNames"/> selects, every arm
+    /// where it was left out.
+    /// </summary>
+    /// <exception cref="HarnessException"><c>--arms</c> names an arm the fixture does not declare (<see cref="HarnessExit.UsageError"/>).</exception>
+    internal static SweepArms SelfTestArms(IReadOnlyList<string>? armNames)
+    {
+        var registry = MutationFixture.Registry();
+
+        // Scoped to no leg: the fixture declares no S row, so every arm runs on every selected leg.
+        return new SweepArms(registry, ArmSelection.Resolve(registry, armNames), new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Self-tests <paramref name="work"/>'s leg: the fixture written where this machine keeps this tool's own data, and
+    /// swept there as the leg builds.
+    /// </summary>
+    /// <exception cref="HarnessException">
+    /// This machine has nowhere of this user's own to keep the fixture, or it could not be written there
+    /// (<see cref="HarnessExit.Refused"/>).
+    /// </exception>
+    private async Task<LegEntry> SelfTestAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, CancellationToken cancellationToken)
+    {
+        var directory = _fixtures.Directory;
+
+        work.Progress($"writing the self-test's fixture to '{directory}'");
+        _fixtures.Write();
+
+        return await runner.RunAsync(SelfTestSubject(work, arms, force, directory), work, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// What a self-test of <paramref name="work"/>'s leg sweeps: the fixture kept in <paramref name="directory"/>, built as
+    /// the leg's variant builds, its binary run in its worker with what the leg's host gives it, each worker's paths
+    /// reckoned by the fixture's own build, and each arm held to the verdict it is designed to reach. Nothing says what a
+    /// build of it comes to: a few megabytes, which the copy's own size is planned with.
+    /// </summary>
+    internal static MutationSubject SelfTestSubject(LegWork work, SweepArms arms, bool force, string directory)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        ArgumentNullException.ThrowIfNull(arms);
+
+        return new MutationSubject
+        {
+            TreeRoot = directory,
+            Project = MutationFixture.Project,
+            Arms = ArmSelection.For(work.Leg.Name, arms.Registry, arms.Selected, arms.Scopes),
+            Settings = MutationFixture.SettingsFor(work.Context.Config.Mutations),
+            PathReserve = MutationFixture.LongestBuildPath,
+            Hold = MutationFixture.Hold,
             Force = force,
         };
     }
@@ -214,7 +312,7 @@ public sealed class MutationService(
             throw new HarnessException(HarnessExit.ConfigInvalid, $"mutations.registry names '{registry}', which is not a file in '{root}'.");
         }
 
-        var reading = MutationRegistryParser.Parse(Lines(_fileSystem.ReadAllText(file)), Listing(root, settings.TextDirectory));
+        var reading = MutationRegistryParser.Parse(MutationRegistryParser.Lines(_fileSystem.ReadAllText(file)), Listing(root, settings.TextDirectory));
         var problems = new List<string>(reading.Problems);
 
         if (reading.Valid)
@@ -244,9 +342,13 @@ public sealed class MutationService(
     /// <summary>
     /// Refuses every one of <paramref name="legs"/> whose build a sweep cannot read: one that cannot be built, or is built
     /// by anything but CMake with the Ninja generator, whose own records are what says which objects each arm rebuilt.
+    /// A self-test builds the fixture, a CMake project whatever the leg's own is, so only the leg's toolchain is asked.
     /// </summary>
+    /// <param name="config">The configuration declaring the legs.</param>
+    /// <param name="legs">The selected legs.</param>
+    /// <param name="selfTest">Whether the run is a self-test.</param>
     /// <exception cref="HarnessException">Any of them is such a leg: one refusal names each, with its fix.</exception>
-    internal static void RequireSweepable(HarnessConfig config, IEnumerable<SelectedLeg> legs)
+    internal static void RequireSweepable(HarnessConfig config, IEnumerable<SelectedLeg> legs, bool selfTest = false)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(legs);
@@ -264,7 +366,7 @@ public sealed class MutationService(
                 continue;
             }
 
-            if (!string.Equals(project.Type, "cmake", StringComparison.OrdinalIgnoreCase))
+            if (!selfTest && !string.Equals(project.Type, "cmake", StringComparison.OrdinalIgnoreCase))
             {
                 problems.Add($"  - Leg '{leg.Name}' builds project '{project.Name}', a {project.Type} project: only a CMake build's ninja records say which objects a mutation rebuilt.");
                 continue;
@@ -373,14 +475,6 @@ public sealed class MutationService(
                 HarnessExit.ConfigInvalid,
                 string.Join(Environment.NewLine, [$"The arms registry '{registry}' cannot be swept: {problems.Count} problem(s), each to fix:", .. problems.Select(problem => "  - " + problem)]));
         }
-    }
-
-    /// <summary>The lines of <paramref name="text"/>, however they end, without the empty one after a last line ending.</summary>
-    private static IReadOnlyList<string> Lines(string text)
-    {
-        var lines = text.ReplaceLineEndings("\n").Split('\n');
-
-        return lines.Length > 0 && lines[^1].Length == 0 ? lines[..^1] : lines;
     }
 
     /// <summary>Where <paramref name="relative"/>, as configuration and rows spell it, is in <paramref name="root"/>.</summary>

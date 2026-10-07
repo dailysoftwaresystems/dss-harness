@@ -58,7 +58,7 @@ public static class LegRoom
     /// <param name="comparison">How this machine compares paths.</param>
     /// <param name="workload">
     /// What the command has each leg do: a leg it builds - on that leg's system - has a build directory worth asking
-    /// about, and one it does not build has none worth asking about.
+    /// about, and one it does not build, or builds no tree of its own, has none worth asking about.
     /// </param>
     public static IReadOnlyDictionary<HostId, RoomQuestions> Questions(
         HarnessContext context,
@@ -75,7 +75,9 @@ public static class LegRoom
 
         foreach (var (leg, hosts) in candidates)
         {
-            var builds = workload.On(leg.Leg.Os).Build;
+            // Asked about nothing a build fills where the build fills none of the leg's tree: what is not asked about is
+            // answered for no leg, which is then placed by no room its build needs.
+            var builds = workload.On(leg.Leg.Os) is { Build: true, BuildsTheLegsTree: true };
             var sweeps = workload.On(leg.Leg.Os).AdmitsEachUnit;
 
             foreach (var host in hosts)
@@ -114,7 +116,8 @@ public static class LegRoom
     /// <param name="comparison">How this machine compares paths.</param>
     /// <param name="workload">
     /// What the command has each leg do: a sweep of its mutation arms fills the build directory of its first worker,
-    /// never its own, and is placed by the room that worker's build needs - the least it runs with.
+    /// never its own, and is placed by the room that worker's build needs - the least it runs with; a self-test of the
+    /// sweep, which builds none of the leg's tree, by none, since <see cref="Questions"/> asked no host about any.
     /// </param>
     public static (IReadOnlyList<LegPlacement> Placements, IReadOnlyList<string> Unchecked) Apply(
         HarnessContext context,

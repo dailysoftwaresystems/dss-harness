@@ -197,7 +197,9 @@ internal static class HarnessServices
         services.AddSingleton<IRunnerRunService, RunnerRunService>();
         services.AddSingleton<ITestService, TestService>();
 
-        // Mutation testing: a sweep of each leg's arms, in worker copies of its own, through the leg machinery above.
+        // Mutation testing: a sweep of each leg's arms, in worker copies of its own, through the leg machinery above. A
+        // self-test's fixture is kept among this user's own data, as the slots are, whichever tree the command is typed in.
+        services.AddSingleton(provider => new MutationFixtureStore(provider.GetRequiredService<IFileSystem>(), MutationFixtureStore.DefaultDirectory));
         services.AddSingleton<MutationService>();
 
         // Guards that became commands.

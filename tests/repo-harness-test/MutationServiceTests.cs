@@ -22,6 +22,9 @@ public sealed class MutationServiceTests
 {
     private const string Registry = "mutations/arms.txt";
 
+    /// <summary>What every build the service starts in these tests ends with: none builds anything.</summary>
+    private const string Unbuilt = "no build runs in these tests";
+
     private const string TestRedArm = "A | charge | src/fixture.cpp | mutations/texts/charge.before | mutations/texts/charge.after | TEST-RED | fixture | fixture_tests | 3 | mutations/texts/charge.diag | the charge is pinned";
 
     private const string BuildRedArm = "A | depth | src/budget.hpp | mutations/texts/depth.before | mutations/texts/depth.after | BUILD-RED | fixture | - | 0 | PAIRED-CONTROL | a depth that is no integer does not compile";
@@ -255,8 +258,9 @@ public sealed class MutationServiceTests
 
     /// <summary>
     /// A leg's sweep is given its tree; its project, configured with the dependency sources the leg's own build fetched
-    /// beneath what the project sets itself - none for a leg never built; the arms it drives; and what a build of its
-    /// variant is expected to come to, as the leg's own last build recorded it.
+    /// beneath what the project sets itself - none for a leg never built; the test settings its tests start by; the arms
+    /// it drives; and what a build of its variant is expected to come to, as the leg's own last build recorded it. Its
+    /// paths are reckoned by the configured reserve, and each arm's verdict is the judge's own.
     /// </summary>
     [Fact]
     public void ALegsSweep_IsGivenItsProject_WithWhatItsOwnBuildFetched_AndWhatThatBuildCameTo()
@@ -265,7 +269,8 @@ public sealed class MutationServiceTests
         var config = Sweepable();
         var (service, context) = Prepare(temp, config);
         var arms = service.Read(context, null);
-        var project = new ProjectConfig { Name = "app", Type = "cmake", CacheVars = { ["FOO"] = "1" } };
+        var tests = new TestConfig { All = new TestInvocation { Runner = "ctest", WorkingDirectory = "{buildDir}" } };
+        var project = new ProjectConfig { Name = "app", Type = "cmake", CacheVars = { ["FOO"] = "1" }, Test = tests };
         var variant = VariantKey.For(config, config.Legs["native"], "linux");
         var build = variant.DirectoryUnder(temp.Path);
         var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
@@ -279,6 +284,9 @@ public sealed class MutationServiceTests
         var unbuilt = service.Subject(work, arms, force: false);
 
         Assert.Equal([("FOO", "1")], unbuilt.Project.CacheVars.Select(pair => (pair.Key, pair.Value)));
+        Assert.Same(tests, unbuilt.Tests);
+        Assert.Null(unbuilt.PathReserve);
+        Assert.Null(unbuilt.Hold);
         Assert.Null(unbuilt.ExpectedBuildBytes);
         Assert.Equal("what the main checkout's copy of the same variant came to there", unbuilt.ExpectedBuildSource);
         Assert.False(unbuilt.Force);
@@ -308,15 +316,138 @@ public sealed class MutationServiceTests
 
     /// <summary>
     /// A host sweeping one of a run's legs is given each value <c>--arms</c> was given, as given and in order - an empty
-    /// one among them, which the host refuses as this machine does - and nothing where it was left out.
+    /// one among them, which the host refuses as this machine does - and nothing where it was left out; and is told to
+    /// self-test where the run is a self-test.
     /// </summary>
     [Fact]
-    public void AHostSweepingALeg_IsGivenEachArmsValue_AsGiven()
+    public void AHostSweepingALeg_IsGivenEachArmsValue_AsGiven_AndTheSelfTest()
     {
-        Assert.Empty(MutationService.RemoteArguments(null));
+        Assert.Empty(MutationService.RemoteArguments(null, selfTest: false));
         Assert.Equal(
             ["--arms", "depth,charge", "--arms", string.Empty, "--arms", "floor"],
-            MutationService.RemoteArguments(["depth,charge", string.Empty, "floor"]));
+            MutationService.RemoteArguments(["depth,charge", string.Empty, "floor"], selfTest: false));
+        Assert.Equal(["--self-test"], MutationService.RemoteArguments(null, selfTest: true));
+        Assert.Equal(["--self-test", "--arms", "spare-unseen"], MutationService.RemoteArguments(["spare-unseen"], selfTest: true));
+    }
+
+    /// <summary>
+    /// A self-test drives the arms of the fixture's own registry - every one, in its order, or those <c>--arms</c> names -
+    /// whatever the repository's registry declares, and refuses an arm the fixture does not declare as a usage error.
+    /// </summary>
+    [Fact]
+    public void ASelfTest_DrivesTheFixturesArms_OrThoseArmsNames()
+    {
+        var every = MutationService.SelfTestArms(null);
+
+        Assert.Equal(MutationFixture.Registry().Arms.Select(arm => arm.Id), every.Selected.Select(arm => arm.Id));
+        Assert.Empty(every.Scopes);
+        Assert.Equal(["charge-bound", "spare-unseen"], MutationService.SelfTestArms(["SPARE-UNSEEN,charge-bound"]).Selected.Select(arm => arm.Id));
+
+        var refusal = Assert.Throws<HarnessException>(() => MutationService.SelfTestArms(["charge"]));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+    }
+
+    /// <summary>
+    /// A self-test of a leg sweeps the fixture kept where it was written, as the leg's variant builds it: the fixture's
+    /// project, settings and arms, its binary run in its worker with nothing of the leg's tests, each worker's paths
+    /// reckoned by the fixture's own build, nothing said of what a build of it comes to, and each arm held to its design.
+    /// </summary>
+    [Fact]
+    public void ASelfTest_SweepsTheFixture_AsTheLegBuilds_HoldingEachArmToItsDesign()
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable(new MutationSettings { Workers = 3, RunTimeFactor = 4 });
+        var context = new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config);
+        var project = new ProjectConfig { Name = "app", Type = "cmake", Test = new TestConfig { All = new TestInvocation { Runner = "ctest" } } };
+        var variant = VariantKey.For(config, config.Legs["native"], "linux");
+        var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
+        var work = new LegWork(
+            new PlacedLeg("native", config.Legs["native"], host, project, variant, temp.Path, temp.Path, variant.DirectoryUnder(temp.Path), new LocalHostConfig(), Emulated: false),
+            context,
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+        var fixture = temp.Combine("data", MutationFixture.DirectoryName);
+
+        var subject = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: true, fixture);
+
+        Assert.Equal(fixture, subject.TreeRoot);
+        Assert.Equal((MutationFixture.DirectoryName, "cmake", "."), (subject.Project.Name, subject.Project.Type, subject.Project.Path));
+        Assert.Equal(MutationFixture.Project.BuildOutputs, subject.Project.BuildOutputs);
+        Assert.Null(subject.Tests);
+        Assert.Equal(MutationFixture.LongestBuildPath, subject.PathReserve);
+        Assert.Null(subject.ExpectedBuildBytes);
+        Assert.Equal(("arms.txt", 3, 4.0), (subject.Settings.Registry, subject.Settings.Workers, subject.Settings.RunTimeFactor));
+        Assert.Equal(MutationFixture.Designed.Keys.Order(StringComparer.Ordinal), subject.Arms.Driven.Select(arm => arm.Id).Order(StringComparer.Ordinal));
+        Assert.True(subject.Force);
+
+        var survived = ReachedVerdict.Of(LegVerdict.Survived, "ran 3 case(s), and none failed");
+
+        Assert.Equal(MutationFixture.Hold("spare-unseen", survived), subject.Hold!("spare-unseen", survived));
+        Assert.Equal(LegVerdict.Violated, subject.Hold!("charge-bound", survived).Verdict);
+    }
+
+    /// <summary>
+    /// A self-test builds the fixture, a CMake project whatever the leg's own is: a leg whose project is no CMake one is
+    /// self-tested through its toolchain, and a toolchain without the Ninja generator, or a leg that cannot be built, is
+    /// still refused.
+    /// </summary>
+    [Fact]
+    public void ASelfTest_AsksOnlyTheLegsToolchain()
+    {
+        var config = Sweepable();
+        config.Toolchains["make"] = new ToolchainConfig { Generator = "Unix Makefiles" };
+        config.Projects.Add(new ProjectConfig { Name = "tool", Type = "dotnet", Path = "tool.sln" });
+        config.Legs["dotnet"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Toolchain = "gcc", Project = "tool" };
+        config.Legs["made"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Toolchain = "make", Project = "tool" };
+        config.Legs["bare"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Project = "app" };
+
+        MutationService.RequireSweepable(config, LegSelection.Resolve(config, ["native", "dotnet"]).Legs, selfTest: true);
+
+        var refusal = Assert.Throws<HarnessException>(() => MutationService.RequireSweepable(config, LegSelection.Resolve(config, ["made", "bare"]).Legs, selfTest: true));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains("Leg 'made' builds with toolchain 'make', whose generator is 'Unix Makefiles'", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("Leg 'bare' cannot be built", refusal.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("'dotnet'", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A self-test reads no registry of the repository's, and asks nothing of a leg's own project but its toolchain: one
+    /// with no registry configured, of a leg whose project is no CMake one, is not refused, where a sweep of it is refused
+    /// before any host is measured. It goes on to place its legs, asking no host about the room a build of the leg's tree
+    /// needs, and sweeps the fixture where the service was given to keep it - never among the data of the user running it.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTest_NeedsNoRegistry_AndAsksNoRoomOfTheLegsTree()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable(new MutationSettings());
+
+        config.Projects.Add(new ProjectConfig { Name = "tool", Type = "dotnet", Path = "tool.sln" });
+        config.Legs["dotnet"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Toolchain = "gcc", Project = "tool" };
+
+        // Every host measured as one the leg runs on.
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "x86_64" });
+        var service = Service(harness, temp, HostDoubles.Loader(config, temp.Path, temp.Path), inspector);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => service.RunAsync(new MutationRequest(temp.Path, ["dotnet"], null), RunId.New(), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Empty(inspector.Inspected);
+
+        var outcome = await service.RunAsync(new MutationRequest(temp.Path, ["dotnet"], null, SelfTest: true), RunId.New(), TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(inspector.RoomAsked);
+        Assert.All(inspector.RoomAsked, asked => Assert.Empty(asked.Room.Builds));
+
+        // Swept as far as its workers' builds, which no build here makes, from the fixture written where it is kept.
+        Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.Failed), outcome.ExitCode);
+        Assert.Contains($"worker 1: its build of the unmutated tree: {Unbuilt}", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.All(MutationFixture.Files(), pair => Assert.Equal(pair.Value, File.ReadAllBytes(Path.Combine(Fixture(temp), pair.Key))));
     }
 
     /// <summary>
@@ -355,10 +486,24 @@ public sealed class MutationServiceTests
             new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config));
     }
 
-    /// <summary>The service as the command builds it, its hosts measured by <paramref name="inspector"/> and nothing able to reach one.</summary>
+    /// <summary>
+    /// The service as the command builds it, its hosts measured by <paramref name="inspector"/>, nothing able to reach one,
+    /// every build it starts failing without building, and a self-test's fixture kept in <paramref name="temp"/>, never
+    /// among the data of the user running the tests.
+    /// </summary>
     private static MutationService Service(HarnessFactory harness, TempDirectory temp, IHarnessContextLoader loader, IHostInspector inspector)
     {
         var processes = Substitute.For<IProcessRunner>();
+        var builds = Substitute.For<IBuildService>();
+
+        builds.BuildAsync(Arg.Any<HarnessConfig>(), Arg.Any<BuildRequest>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var request = call.Arg<BuildRequest>();
+
+                return new BuildResult(ReachedVerdict.Of(LegVerdict.Failed, Unbuilt), request.Variant.DirectoryUnder(request.TreeRoot), [], null, null);
+            });
+
         var legRuns = new LegRunService(
             loader,
             new LegsService(loader, inspector, harness.Platform, harness.Output),
@@ -381,14 +526,18 @@ public sealed class MutationServiceTests
             legRuns,
             SyncKit.Service(harness, loader),
             SyncKit.Transport(harness),
-            Substitute.For<IBuildService>(),
+            builds,
             processes,
             new BuildDirectoryGuard(harness.FileSystem, harness.Platform, harness.FilePermissions),
             new PhaseRunner(processes, harness.FileSystem, harness.Output),
             harness.PathBudget,
             harness.FileSystem,
+            new MutationFixtureStore(harness.FileSystem, Fixture(temp)),
             harness.Identity,
             TimeProvider.System,
             harness.Output);
     }
+
+    /// <summary>Where the service <see cref="Service"/> builds over <paramref name="temp"/> keeps a self-test's fixture.</summary>
+    private static string Fixture(TempDirectory temp) => temp.Combine("state", MutationFixture.DirectoryName);
 }

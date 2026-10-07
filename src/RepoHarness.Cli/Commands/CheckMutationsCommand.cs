@@ -16,7 +16,7 @@ internal static class CheckMutationsCommand
 
     private static readonly Option<string[]> ArmsOption = new("--arms")
     {
-        Description = "Only these arms of the registry, by id: --arms a,b or --arms a b. Without it, every arm.",
+        Description = "Only these arms of the registry - with --self-test, of the fixture's - by id: --arms a,b or --arms a b. Without it, every arm.",
         AllowMultipleArgumentsPerToken = true,
     };
 
@@ -32,6 +32,11 @@ internal static class CheckMutationsCommand
 
     private static readonly Option<bool> UseStagedOption = DispatchOptions.UseStaged("Sweep");
 
+    private static readonly Option<bool> SelfTestOption = new("--self-test")
+    {
+        Description = "Sweep the fixture this tool carries instead of the registry's arms, built the way each selected leg builds, and hold each of its arms to the verdict it is designed to reach: proves this tool judges arms rightly with that leg's toolchain.",
+    };
+
     internal static Command Create()
     {
         var command = new Command(
@@ -43,6 +48,7 @@ internal static class CheckMutationsCommand
         command.Options.Add(JsonOption);
         command.Options.Add(ForceLockOption);
         command.Options.Add(UseStagedOption);
+        command.Options.Add(SelfTestOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
@@ -58,6 +64,8 @@ internal static class CheckMutationsCommand
                 ? arguments.GetValue(ArmsOption) ?? []
                 : null;
 
+            var selfTest = arguments.GetValue(SelfTestOption);
+
             return await context.Get<MutationService>()
                 .RunAsync(
                     new MutationRequest(
@@ -68,7 +76,8 @@ internal static class CheckMutationsCommand
                         arguments.GetValue(JsonOption),
                         arguments.GetValue(UseStagedOption),
                         arguments.GetValue(DispatchOptions.Here),
-                        MutationService.RemoteArguments(arms)),
+                        MutationService.RemoteArguments(arms, selfTest),
+                        selfTest),
                     run,
                     cancellationToken)
                 .ConfigureAwait(false);

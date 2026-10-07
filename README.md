@@ -77,8 +77,10 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `build [--legs a,b] [--time]` | Build every selected leg, in its own variant-keyed build directory |
 | `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |
 | `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run |
+| `check-mutations [--legs a,b] [--arms a,b] [--self-test]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain (`help mutations`) |
+| `clean [--legs a,b] [--dry-run]` | Remove each selected leg's build directory, and the mutation workers its sweeps keep beside its tree, wherever the leg runs, so a full disk can be freed (`help space`) |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
-| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, anchors, layout, secrets, tools, runners, verdicts and CI legs |
+| `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, anchors, layout, secrets, tools, runners, verdicts, mutation testing and CI legs |
 
 Every command takes `-C, --directory <dir>` and `-v, --verbose`.
 
