@@ -1,5 +1,6 @@
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
@@ -17,6 +18,9 @@ public sealed class ArmBuilderTests
 {
     private const string FixtureObject = "CMakeFiles/fixture.dir/src/fixture.cpp.o";
     private const string TestsObject = "CMakeFiles/fixture_tests.dir/tests/fixture_tests.cpp.o";
+
+    /// <summary>The one unit of a shared library whose target is named as a rule that links a program is.</summary>
+    private const string OddObject = "CMakeFiles/odd__EXECUTABLE_LINKER__name.dir/src/odd.cpp.o";
 
     private static readonly VariantKey Variant = new("x86_64", "gcc", "debug", null);
 
@@ -39,11 +43,13 @@ public sealed class ArmBuilderTests
 
     /// <summary>
     /// A runner builds a program where the file it names is linked as one; otherwise it says why it builds none it could
-    /// run: a library, several files, or nothing the build builds.
+    /// run: a library - one whose own name reads as a rule that links a program too - several files, or nothing the
+    /// build builds.
     /// </summary>
     [Theory]
     [InlineData("fixture_tests", "bin/fixture_tests", null)]
     [InlineData("fixture", null, "runner 'fixture' builds 'libfixture.a', which its build makes as no program")]
+    [InlineData("odd", null, "runner 'odd' builds 'libodd.so', which its build makes as no program")]
     [InlineData("all", null, "runner 'all' stands for several files, so it names no one program to run")]
     [InlineData("no-such-target", null, "runner 'no-such-target' is built by no line of the leg's build")]
     public void ARunner_BuildsAProgram_OrSaysWhyItBuildsNone(string runner, string? program, string? problem)
@@ -55,7 +61,8 @@ public sealed class ArmBuilderTests
 
     /// <summary>
     /// The objects depending on a site are those what the build builds reaches: the target's own, a runner's linking the
-    /// target's library, and none the build does not build.
+    /// target's library, and none the build does not build - and never the program or the library linking them, whose
+    /// linker recorded what it read.
     /// </summary>
     [Fact]
     public void TheObjectsDependingOnASite_AreThoseWhatTheBuildBuildsReaches()
@@ -69,6 +76,52 @@ public sealed class ArmBuilderTests
         Assert.Equal([FixtureObject], graph.DependentObjects(["fixture_tests"], [fixture]));
         Assert.Empty(graph.DependentObjects(["fixture"], [tests]));
         Assert.Equal([TestsObject], graph.DependentObjects(["fixture", "fixture_tests"], [tests]));
+        Assert.Equal([OddObject], graph.DependentObjects(["odd"], [temp.Combine("src", "odd.cpp")]));
+    }
+
+    /// <summary>
+    /// A mutation that compiles and no longer links failed at its link, which is no object depending on the site though
+    /// its linker recorded what it read, as a compiler does: the build failed, and the mutation is never said not to
+    /// compile.
+    /// </summary>
+    [Fact]
+    public void ABuildThatFailedAtItsLink_FailedAtNoObjectDependingOnTheSite_ThoughItsLinkerRecordedWhatItRead()
+    {
+        using var temp = new TempDirectory();
+        var graph = Graph(temp);
+        var arm = new MutationArm
+        {
+            Id = "depth-unlinked",
+            Line = 3,
+            Own = new MutationSite("src/fixture.cpp", "texts/unlinked.before", "texts/unlinked.after", 3),
+            Kind = RedKind.TestRed,
+            Target = "fixture",
+            Runner = "fixture_tests",
+            Cases = 3,
+            Diagnostic = "texts/unlinked.diag",
+            Why = "a depth nothing defines does not link",
+            Reds = ["Fixture.Depth"],
+        };
+        var preflight = new ArmPreflight
+        {
+            Counts = [new TextCount("texts/unlinked.before", "src/fixture.cpp", 1)],
+            Dependents = graph.DependentObjects(["fixture", "fixture_tests"], [temp.Combine("src", "fixture.cpp")]),
+        };
+        var failed = graph.FailedOutputs(
+        [
+            "[3/3] Linking CXX executable bin/fixture_tests",
+            "FAILED: bin/fixture_tests ",
+            ": && g++ " + TestsObject + " -o bin/fixture_tests libfixture.a && :",
+            "fixture_tests.cpp: undefined reference to 'depth_of()'",
+            "ninja: build stopped: subcommand failed.",
+        ]);
+
+        var reached = ArmJudge.Judge(arm, new ArmObservation(preflight) { Build = new ArmBuild(ReachedVerdict.Of(LegVerdict.Failed, "exited 1"), failed, []) });
+
+        Assert.Equal(["bin/fixture_tests"], failed);
+        Assert.Equal(
+            (LegVerdict.Failed, "the mutated build failed at bin/fixture_tests, which is no object that depends on the site"),
+            (reached?.Verdict, reached?.Detail));
     }
 
     /// <summary>The steps a failed build named are read from its lines, as its manifest names each.</summary>
@@ -178,8 +231,9 @@ public sealed class ArmBuilderTests
     }
 
     /// <summary>
-    /// A worker's build as CMake lays one out: a library, a test program linking it, a group of both, and a phony name
-    /// for a template no step builds.
+    /// A worker's build as CMake lays one out where the linker writes what it read, so the program and the shared library
+    /// record their dependencies as an object does: a library, a test program linking it, a group of both, a shared
+    /// library whose target is named as a rule that links a program is, and a phony name for a template no step builds.
     /// </summary>
     private static NinjaWorkerGraph Graph(TempDirectory temp)
     {
@@ -194,6 +248,16 @@ public sealed class ArmBuilderTests
             string.Empty,
             $"{TestsObject}: #deps 1, deps mtime 1 (VALID)",
             $"    {temp.Combine("tests", "fixture_tests.cpp").Replace('\\', '/')}",
+            string.Empty,
+            "bin/fixture_tests: #deps 2, deps mtime 1 (VALID)",
+            $"    {TestsObject}",
+            "    libfixture.a",
+            string.Empty,
+            $"{OddObject}: #deps 1, deps mtime 1 (VALID)",
+            $"    {temp.Combine("src", "odd.cpp").Replace('\\', '/')}",
+            string.Empty,
+            "libodd.so: #deps 1, deps mtime 1 (VALID)",
+            $"    {OddObject}",
         ]);
         var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
 
@@ -203,7 +267,7 @@ public sealed class ArmBuilderTests
     /// <summary>Writes the sources, and the manifest of a build of them in <paramref name="build"/>.</summary>
     private static void WriteBuild(TempDirectory temp, string build)
     {
-        foreach (var source in new[] { Path.Combine("src", "fixture.cpp"), Path.Combine("tests", "fixture_tests.cpp"), Path.Combine("src", "config.h.in") })
+        foreach (var source in new[] { Path.Combine("src", "fixture.cpp"), Path.Combine("tests", "fixture_tests.cpp"), Path.Combine("src", "odd.cpp"), Path.Combine("src", "config.h.in") })
         {
             temp.WriteFile(source, "// " + source + "\n");
         }
@@ -215,7 +279,9 @@ public sealed class ArmBuilderTests
             Path.Combine(build, NinjaDependencyCheck.ManifestFileName),
             "rule CXX_COMPILER__fixture_\n  deps = gcc\n  command = g++ -c $in -o $out\n"
             + "rule CXX_STATIC_LIBRARY_LINKER__fixture_\n  command = ar qc $out $in\n"
-            + "rule CXX_EXECUTABLE_LINKER__fixture_tests_\n  command = g++ $in -o $out\n"
+            + "rule CXX_EXECUTABLE_LINKER__fixture_tests_\n  deps = gcc\n  command = g++ $in -o $out\n"
+            + "rule CXX_COMPILER__odd__EXECUTABLE_LINKER__name_\n  deps = gcc\n  command = g++ -c $in -o $out\n"
+            + "rule CXX_SHARED_LIBRARY_LINKER__odd__EXECUTABLE_LINKER__name_\n  deps = gcc\n  command = g++ -shared $in -o $out\n"
             + $"build {FixtureObject}: CXX_COMPILER__fixture_ {Source("src", "fixture.cpp")}\n"
             + $"build libfixture.a: CXX_STATIC_LIBRARY_LINKER__fixture_ {FixtureObject}\n"
             + "build fixture: phony libfixture.a\n"
@@ -223,6 +289,9 @@ public sealed class ArmBuilderTests
             + $"build bin/fixture_tests: CXX_EXECUTABLE_LINKER__fixture_tests_ {TestsObject} | libfixture.a\n"
             + "build fixture_tests: phony bin/fixture_tests\n"
             + "build all: phony libfixture.a bin/fixture_tests\n"
+            + $"build {OddObject}: CXX_COMPILER__odd__EXECUTABLE_LINKER__name_ {Source("src", "odd.cpp")}\n"
+            + $"build libodd.so: CXX_SHARED_LIBRARY_LINKER__odd__EXECUTABLE_LINKER__name_ {OddObject}\n"
+            + "build odd: phony libodd.so\n"
             + $"build edit_template: phony {Source("src", "config.h.in")}\n");
     }
 

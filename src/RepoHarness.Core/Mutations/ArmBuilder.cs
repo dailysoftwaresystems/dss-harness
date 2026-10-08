@@ -144,9 +144,6 @@ internal sealed class ArmBuilder(
 /// <param name="program">The ninja CMake recorded the build runs, or <see langword="null"/>.</param>
 internal sealed class NinjaWorkerGraph(NinjaRebuildGraph graph, string? program) : IWorkerGraph
 {
-    /// <summary>What CMake's ninja generator names every rule that links a program: <c>CXX_EXECUTABLE_LINKER__app_Debug</c>.</summary>
-    private const string ProgramLinker = "_EXECUTABLE_LINKER__";
-
     private readonly NinjaRebuildGraph _graph = graph;
     private readonly string? _program = program;
 
@@ -181,7 +178,7 @@ internal sealed class NinjaWorkerGraph(NinjaRebuildGraph graph, string? program)
             return new WorkerProgram(null, $"runner '{target}' stands for several files, so it names no one program to run");
         }
 
-        return manifest.EdgeFor(artifact) is { } edge && edge.Rule.Contains(ProgramLinker, StringComparison.Ordinal)
+        return manifest.EdgeFor(artifact) is { } edge && CMakeNinjaRule.LinksAProgram(edge)
             ? new WorkerProgram(artifact, null)
             : new WorkerProgram(null, $"runner '{target}' builds '{artifact}', which its build makes as no program");
     }

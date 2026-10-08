@@ -20,6 +20,10 @@ public sealed class NinjaRebuildGraphTests
     private const string SupportObject = "CMakeFiles/upstream.dir/src/support.cpp.o";
     private const string OtherObject = "CMakeFiles/other.dir/src/other.cpp.o";
 
+    /// <summary>The one unit of a shared library whose target is named as a rule that links a program is.</summary>
+    private const string OddObject = "CMakeFiles/odd__EXECUTABLE_LINKER__name.dir/src/odd.cpp.o";
+    private const string OddLibrary = "lib/libodd.so";
+
     /// <summary>
     /// <c>ninja -t deps</c> read a line at a time: each record's header, the dependencies indented beneath it, keyed as
     /// ninja canonicalizes the object, its line endings either way; a line that is neither ends the record before it.
@@ -67,13 +71,16 @@ public sealed class NinjaRebuildGraphTests
     /// both a library's object and the target's own include, the library linked in; a header the precompiled header
     /// holds, reaching the unit built from it through the <c>.pch</c> it names; and a template a command generates a
     /// header from, which only the object's record names. An object the target does not build is never one, whatever it
-    /// includes, and a site nothing builds from has none.
+    /// includes, and a site nothing builds from has none. What links an object is never one either, though its linker
+    /// recorded what it read as a compiler does - the program, and a shared library linked into it - while a unit stays
+    /// one whatever its target is named, as a rule that links a program too.
     /// </summary>
     [Theory]
     [InlineData("src/fixture.cpp", new[] { FixtureObject })]
     [InlineData("src/budget.hpp", new[] { FixtureObject, SupportObject })]
     [InlineData("src/pch-held.hpp", new[] { FixtureObject, Pch })]
     [InlineData("src/config.h.in", new[] { FixtureObject })]
+    [InlineData("src/odd.cpp", new[] { OddObject })]
     [InlineData("src/other.cpp", new string[0])]
     [InlineData("src/unread.hpp", new string[0])]
     public void TheObjectsThatDependOnASite_AreThoseInTheClosureItReaches(string site, string[] expected)
@@ -103,7 +110,7 @@ public sealed class NinjaRebuildGraphTests
 
     /// <summary>
     /// A target's closure is every build line building it and what they read, however far back - its phony name, its
-    /// link, its objects, the library linked in and that library's own objects - and never a line only ordered before it.
+    /// link, its objects, each library linked in and that library's own objects - and never a line only ordered before it.
     /// </summary>
     [Fact]
     public void AClosure_IsWhatTheTargetBuilds_AndNothingOnlyOrderedBeforeIt()
@@ -113,7 +120,7 @@ public sealed class NinjaRebuildGraphTests
 
         var closure = manifest.Closure(["fixture"]).SelectMany(edge => edge.Outputs).ToList();
 
-        Assert.Equal(["fixture", "bin/fixture", FixtureObject, Pch, "libupstream.a", SupportObject], closure);
+        Assert.Equal(["fixture", "bin/fixture", FixtureObject, Pch, "libupstream.a", SupportObject, OddLibrary, OddObject], closure);
         Assert.DoesNotContain("cmake_object_order_depends_target_fixture", closure);
         Assert.Empty(manifest.Closure(["no-such-target"]));
         Assert.Contains("generated/config.h", manifest.Outputs);
@@ -141,12 +148,14 @@ public sealed class NinjaRebuildGraphTests
     }
 
     /// <summary>
-    /// A build directory laid out as CMake lays one out for g++: a library and the program linking it, the program's unit
-    /// built from a precompiled header and including a header a command generates, and another program beside them.
+    /// A build directory laid out as CMake lays one out for g++ where the linker writes what it read, so each program
+    /// and shared library records its dependencies as an object does: a library and the program linking it, the
+    /// program's unit built from a precompiled header and including a header a command generates, a shared library
+    /// linked in too, its target named as a rule that links a program is, and another program beside them.
     /// </summary>
     private static NinjaRebuildGraph Graph(TempDirectory temp, StringComparer? paths = null)
     {
-        foreach (var source in new[] { "fixture.cpp", "support.cpp", "other.cpp", "budget.hpp", "pch-held.hpp", "config.h.in", "unread.hpp" })
+        foreach (var source in new[] { "fixture.cpp", "support.cpp", "other.cpp", "odd.cpp", "budget.hpp", "pch-held.hpp", "config.h.in", "unread.hpp" })
         {
             temp.WriteFile(Path.Combine("src", source), "// " + source + "\n");
         }
@@ -157,7 +166,9 @@ public sealed class NinjaRebuildGraphTests
             Path.Combine("build", "CMakeFiles", "rules.ninja"),
             "rule CXX_COMPILER__fixture_\n  deps = gcc\n  command = g++ -c $in -o $out\n"
             + "rule CXX_STATIC_LIBRARY_LINKER__upstream_\n  command = ar qc $out $in\n"
-            + "rule CXX_EXECUTABLE_LINKER__fixture_\n  command = g++ $in -o $out\n"
+            + "rule CXX_EXECUTABLE_LINKER__fixture_\n  deps = gcc\n  command = g++ $in -o $out\n"
+            + "rule CXX_COMPILER__odd__EXECUTABLE_LINKER__name_\n  deps = gcc\n  command = g++ -c $in -o $out\n"
+            + "rule CXX_SHARED_LIBRARY_LINKER__odd__EXECUTABLE_LINKER__name_\n  deps = gcc\n  command = g++ -shared $in -o $out\n"
             + "rule CUSTOM_COMMAND\n  command = $COMMAND\n");
         temp.WriteFile(
             Path.Combine("build", NinjaDependencyCheck.ManifestFileName),
@@ -167,7 +178,9 @@ public sealed class NinjaRebuildGraphTests
             + $"build libupstream.a: CXX_STATIC_LIBRARY_LINKER__upstream_ {SupportObject}\n"
             + $"build {Pch}: CXX_COMPILER__fixture_ CMakeFiles/fixture.dir/cmake_pch.hxx.cxx || cmake_object_order_depends_target_fixture\n"
             + $"build {FixtureObject}: CXX_COMPILER__fixture_ {Source("fixture.cpp")} | {Pch} || cmake_object_order_depends_target_fixture\n"
-            + $"build bin/fixture: CXX_EXECUTABLE_LINKER__fixture_ {FixtureObject} | libupstream.a || libupstream.a\n"
+            + $"build {OddObject}: CXX_COMPILER__odd__EXECUTABLE_LINKER__name_ {Source("odd.cpp")}\n"
+            + $"build {OddLibrary}: CXX_SHARED_LIBRARY_LINKER__odd__EXECUTABLE_LINKER__name_ {OddObject}\n"
+            + $"build bin/fixture: CXX_EXECUTABLE_LINKER__fixture_ {FixtureObject} | libupstream.a {OddLibrary} || libupstream.a {OddLibrary}\n"
             + "build fixture: phony bin/fixture\n"
             + "build fixture.exe: phony fixture\n"
             + $"build {OtherObject}: CXX_COMPILER__fixture_ {Source("other.cpp")}\n"
@@ -196,6 +209,17 @@ public sealed class NinjaRebuildGraphTests
             $"{OtherObject}: #deps 2, deps mtime 1 (VALID)",
             $"    {Slashed(temp.Combine("src", "other.cpp"))}",
             $"    {Slashed(temp.Combine("src", "budget.hpp"))}",
+            "",
+            $"{OddObject}: #deps 1, deps mtime 1 (VALID)",
+            $"    {Slashed(temp.Combine("src", "odd.cpp"))}",
+            "",
+            $"{OddLibrary}: #deps 1, deps mtime 1 (VALID)",
+            $"    {OddObject}",
+            "",
+            "bin/fixture: #deps 3, deps mtime 1 (VALID)",
+            $"    {FixtureObject}",
+            "    libupstream.a",
+            $"    {OddLibrary}",
         ]);
         var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
 
