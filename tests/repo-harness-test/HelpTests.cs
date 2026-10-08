@@ -644,6 +644,55 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The runners topic names the two compiler names with what each is filled in with; says a line may start with one,
+    /// that a step naming one builds its leg first, when one is refused - before anything starts, and once the leg is
+    /// built - and that a test invocation may name one too. The tools and admission topics count a step naming one among
+    /// those that build their leg.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysWhatACompilersNameIs_WhereItMayStand_AndWhenItIsRefused()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var written = (await CliRunner.RunAsync(["help", "runners"], token)).StandardOutput;
+        var runners = Words(written);
+
+        foreach (var text in new[]
+        {
+            $"{{{LegPathNames.CompilerC}}} {{{LegPathNames.CompilerCxx}}} the C and the C++ compiler the leg's build identified: the whole path of the program CMake built with, as this machine spells it",
+            "The first token must be a program declared under tools, a path in the repository, or the name of one of the leg's compilers alone ({compiler_C}, below); anything else is refused before a single step runs.",
+            "starts it, a step naming {product}, {buildDir} or a compiler has its leg built first (below).",
+            "A step whose run line or workingDirectory names {buildDir}, {product}, {compiler_C} or {compiler_CXX} reads what the build made or identified, so every leg of a run that runs it is built first",
+            "{compiler_C} and {compiler_CXX} name what built the leg, never what a toolchain declares: the program CMake's own record in the leg's build directory names for that language - gcc on one leg and cl on another, from one run line.",
+            "A line may start with one, written alone: the leg's own compiler may run though nothing declares it under tools.",
+            "A leg whose project CMake does not build is refused before anything starts, naming each leg and step, since no build of it identifies a compiler;",
+            "a name the leg's build has nothing for is refused once the leg is built, before its first step, saying which case it is - no compiler identified for that language, or one the build runs with words after it, a launcher such as ccache given its compiler or a compiler given options: the name is a program alone, so the program and the words are named and neither is filled in.",
+            "A test invocation's args, coresArgs and workingDirectory may name one too: the check made before the build lets the name stand, and it is filled in, or refused, once the leg is built.",
+        })
+        {
+            Assert.Contains(text, runners, StringComparison.Ordinal);
+        }
+
+        // The rows of its tables of names are headed by the names this tool fills in, each of them and no other: one
+        // added to the code cannot be left out, and one the code dropped cannot stay.
+        var rows = written
+            .Split('\n')
+            .Select(line => Regex.Match(line, @"^  ((?:\{[A-Za-z_]+\} ?)+) +\S"))
+            .Where(row => row.Success)
+            .SelectMany(row => Regex.Matches(row.Groups[1].Value, @"\{([A-Za-z_]+)\}").Select(name => name.Groups[1].Value));
+
+        Assert.Equal(LegPathNames.All.Order(StringComparer.Ordinal), rows.Order(StringComparer.Ordinal));
+
+        Assert.Contains(
+            "runs a step or phase naming {product}, {buildDir} or a compiler on that leg's system",
+            Words((await CliRunner.RunAsync(["help", "tools"], token)).StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "requires the build or runs a step or phase naming {product}, {buildDir} or a compiler, and is heavy, too,",
+            Words((await CliRunner.RunAsync(["help", "admission"], token)).StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The tools topic says what --dry-run does, that init installs only when asked, how a tool
     /// narrows the legs that need it, and that a leg in a developer environment is told about a tool
     /// as the PATH it sets up holds it; the layout topic says init writes the tree it runs in and

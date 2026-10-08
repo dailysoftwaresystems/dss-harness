@@ -125,7 +125,7 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// <param name="checks">
     /// The runners its expected exceptions' run checks name, which run within its legs, each by name with the action
     /// steps a run of it runs, or whether those could not be read. One needing the build - requiring it, or by a step or
-    /// phase naming <c>{product}</c> or <c>{buildDir}</c> - builds its legs first, since a check runs on the leg as the
+    /// phase naming <c>{product}</c>, <c>{buildDir}</c> or a compiler - builds its legs first, since a check runs on the leg as the
     /// runner carrying it left it, and is never built itself; one heavy, itself or by a step, makes its legs heavy, as
     /// the runner itself would. One whose steps could not be read makes them heavy, and builds nothing: the check that
     /// runs it is refused, as it always was, so a build made for it would be made for nothing, and a leg that build
@@ -176,24 +176,28 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     /// <summary>
     /// Refuses, before any host is measured, each of <paramref name="legs"/> this workload builds first that cannot be
     /// built - it names no project, or no toolchain for its system - and each where a step or phase of the run's own
-    /// runner names <c>{product}</c> and its project declares no one product for its system.
+    /// runner names <c>{product}</c> and its project declares no one product for its system, or names one of the leg's
+    /// compilers and no build of its project identifies one.
     /// </summary>
     /// <param name="config">The whole configuration.</param>
     /// <param name="runnerName">The runner the run was given, as the refusal names it.</param>
     /// <param name="legs">The legs the run reaches.</param>
     /// <exception cref="HarnessException">
     /// A leg is built first that cannot be built, or a step or phase of the run's own runner names a <c>{product}</c> no
-    /// one declared file fills in. One refusal names every such leg, of both kinds: each that cannot be built with why
-    /// and what builds it, and each product with the step or phase naming it.
+    /// one declared file fills in, or a compiler on a leg no build identifies one for. One refusal names every such
+    /// leg, of each kind: each that cannot be built with why and what builds it, and each product and compiler with the
+    /// step or phase naming it.
     /// </exception>
     /// <remarks>
     /// Asked of the configuration alone, as a leg on whose system no step runs is, so nothing is synced, locked or
     /// built for a run that cannot happen. For a runner requiring the build, the first was found only where the leg's
     /// build began: it ended the whole run once its hosts were measured and its slots taken, without saying what built
-    /// the leg; and the second was refused only after the build it had just cost. A product a run check's step names is
-    /// refused by the check that runs it, when it runs: refused here, it would refuse a run whose checks may never run.
-    /// The build a check needs is made before the run whether or not the check runs, so a leg it cannot build is
-    /// refused here, naming the check.
+    /// the leg; and the second was refused only after the build it had just cost, as the third would be - which leg has
+    /// a compiler its build identifies is the configuration's to say (<see cref="CMakeToolchainReader.IdentifiesNone"/>),
+    /// while which compiler that is, is the build's. A product or a compiler a run check's step names is refused by the
+    /// check that runs it, when it runs: refused here, it would refuse a run whose checks may never run. The build a
+    /// check needs is made before the run whether or not the check runs, so a leg it cannot build is refused here,
+    /// naming the check.
     /// </remarks>
     public void RequireBuildable(HarnessConfig config, string runnerName, IEnumerable<SelectedLeg> legs)
     {
@@ -203,6 +207,7 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
 
         var unbuildable = new List<string>();
         var productless = new List<string>();
+        var compilerless = new List<string>();
 
         foreach (var leg in legs)
         {
@@ -227,18 +232,32 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
                 continue;
             }
 
-            if (project.Product(leg.Leg.Os).Problem is not { } problem)
+            // The run's own steps and phases alone: what a run check's names is the check's to refuse, when it runs.
+            var own = here.BuiltBy.Where(cause => cause.CheckRunner is null).ToList();
+
+            if (project.Product(leg.Leg.Os).Problem is { } problem)
             {
-                continue;
+                foreach (var cause in own.Where(cause => cause.Names.Contains(LegPathNames.Product, StringComparer.Ordinal)))
+                {
+                    productless.Add($"  - Leg '{leg.Name}': {cause.Kind} '{cause.Step}' names {{{LegPathNames.Product}}}, and {problem}.");
+                }
             }
 
-            foreach (var cause in here.BuiltBy.Where(cause => cause.CheckRunner is null && cause.Names.Contains(LegPathNames.Product, StringComparer.Ordinal)))
+            if (CMakeToolchainReader.IdentifiesNone(project) is { } none)
             {
-                productless.Add($"  - Leg '{leg.Name}': {cause.Kind} '{cause.Step}' names {{{LegPathNames.Product}}}, and {problem}.");
+                foreach (var cause in own)
+                {
+                    var compilers = cause.Names.Where(name => LegPathNames.CompilerLanguage(name) is not null).ToList();
+
+                    if (compilers.Count > 0)
+                    {
+                        compilerless.Add($"  - Leg '{leg.Name}': {cause.Kind} '{cause.Step}' names {LegPathNames.Spelled(compilers)}, and {none}.");
+                    }
+                }
             }
         }
 
-        if (unbuildable.Count + productless.Count == 0)
+        if (unbuildable.Count + productless.Count + compilerless.Count == 0)
         {
             return;
         }
@@ -262,6 +281,14 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
                 $"It runs a step or phase naming {{{LegPathNames.Product}}} where no one product fills it in: leave the leg out, "
                 + "or declare one build output for its system:");
             lines.AddRange(productless);
+        }
+
+        if (compilerless.Count > 0)
+        {
+            lines.Add(
+                "It runs a step or phase naming a compiler where no build of the leg identifies one: leave the leg out, or take "
+                + "the name out:");
+            lines.AddRange(compilerless);
         }
 
         throw new HarnessException(HarnessExit.ConfigInvalid, string.Join(Environment.NewLine, lines));

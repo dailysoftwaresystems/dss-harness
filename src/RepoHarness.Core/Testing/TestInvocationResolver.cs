@@ -612,7 +612,8 @@ public static class TestInvocationResolver
     /// <summary>
     /// The working directory <paramref name="invocation"/> declares, its names - <c>{buildDir}</c> and the rest - filled in
     /// from <paramref name="paths"/>, and read against the tree where it is relative; <see langword="null"/> where it
-    /// declares none, and its runner starts at the tree root.
+    /// declares none, and its runner starts at the tree root. One of the leg's compilers it names stands as written
+    /// ahead of the leg's build: see <see cref="LegCompilers.AheadOfTheBuild"/>.
     /// </summary>
     /// <param name="invocation">The test invocation.</param>
     /// <param name="paths">The directories of the leg - or of a copy of its tree - its tests run against.</param>

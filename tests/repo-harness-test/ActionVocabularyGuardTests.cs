@@ -176,6 +176,8 @@ public sealed class ActionVocabularyGuardTests
     [InlineData("os")]
     [InlineData("product")]
     [InlineData("leg")]
+    [InlineData("compiler_C")]
+    [InlineData("compiler_CXX")]
     public void AnInputNamedForSomethingThisToolFillsIn_IsRefusedWhenTheFileIsRead(string name)
     {
         var factory = new HarnessFactory();

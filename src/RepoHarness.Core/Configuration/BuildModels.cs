@@ -108,7 +108,7 @@ public sealed class ProjectConfig : VariantOverlay
     /// </summary>
     /// <remarks>
     /// An entry is a path, or a mapping of platform to path where the platforms disagree about what
-    /// the same target is called — a program is <c>dsscp</c> on one and <c>dsscp.exe</c> on another.
+    /// the same target is called — a program is <c>app</c> on one and <c>app.exe</c> on another.
     /// A bare path applies everywhere, so a list written before this still means what it did.
     /// </remarks>
     public List<BuildOutput> BuildOutputs { get; init; } = [];

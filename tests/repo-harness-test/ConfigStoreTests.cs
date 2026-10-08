@@ -1996,11 +1996,11 @@ public sealed class ConfigStoreTests
             """
             steps:
               - name: self-test
-                run: python3 self_test.py --dss={{product}} ${buildDir}
+                run: python3 self_test.py --app={{product}} ${buildDir}
               - name: recompile
                 manual: true
                 successPattern: '^built'
-                run: python3 recompile.py --dss="{product}" --out={buildDir}/recompile
+                run: python3 recompile.py --app="{product}" --out={buildDir}/recompile
               - name: report
                 manual: true
                 needs: [recompile]
@@ -2054,7 +2054,7 @@ public sealed class ConfigStoreTests
             """
             steps:
               - name: corpus
-                run: python3 corpus.py --dss="{product}"
+                run: python3 corpus.py --app="{product}"
             """);
 
         Assert.True(Core.Legs.LegWorkload.ForRunner(new RunnerConfig { Action = "corpus" }, Core.Runners.StepSelection.Default.Apply("corpus", corpus).File).Build);
@@ -2087,7 +2087,7 @@ public sealed class ConfigStoreTests
               - name: recompile
                 manual: true
                 successPattern: '^built'
-                run: python3 recompile.py --dss="{product}"
+                run: python3 recompile.py --app="{product}"
               - name: profile
                 manual: true
                 runOn: [linux]
@@ -2174,7 +2174,7 @@ public sealed class ConfigStoreTests
               - name: measure
                 manual: true
                 successPattern: '^measured'
-                run: python3 measure.py --dss="{product}"
+                run: python3 measure.py --app="{product}"
               - name: winbench
                 manual: true
                 runOn: [windows]
@@ -2274,6 +2274,122 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
+    /// A step or a runner's phase naming one of the leg's compilers - as its program, in an argument, or as its working
+    /// directory - reads what the build identified, so every leg of a run that runs it is built first, as for
+    /// {product}. Where no build of the leg's project identifies a compiler - another tool than CMake builds it - the
+    /// run is refused before any host is measured, naming the leg, the step and why: refused after its build, the leg
+    /// would have cost that build to say what the configuration already said. A run check's step naming one is the
+    /// check's to refuse, when it runs.
+    /// </summary>
+    [Fact]
+    public void AStepNamingTheLegsCompiler_BuildsItsLegFirst_AndIsRefusedWhereNoBuildIdentifiesOne()
+    {
+        var config = new HarnessConfig
+        {
+            Toolchains = { ["sdk"] = new ToolchainConfig { Platforms = ["windows", "linux"] } },
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Projects =
+            {
+                new ProjectConfig { Name = "engine", Type = "cmake" },
+                new ProjectConfig { Name = "app", Type = "dotnet", Path = "app.csproj" },
+            },
+            Legs =
+            {
+                ["native"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Toolchain = "sdk", Project = "engine" },
+                ["managed"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Toolchain = "sdk", Project = "app" },
+                ["win"] = new LegConfig { Os = "windows", Processor = "x86_64", Config = "debug", Toolchain = "sdk", Project = "app" },
+            },
+        };
+
+        var action = ActionKit.Parse(
+            Path.Combine("actions", "census", "census.yml"),
+            """
+            steps:
+              - name: version
+                run: python3 version.py
+              - name: census
+                manual: true
+                successPattern: '^counted'
+                run: python3 census.py --cc "{compiler_C}" --cxx "{compiler_CXX}" --into {buildDir}
+              - name: probe
+                manual: true
+                runOn: [linux]
+                successPattern: 'Free Software'
+                run: '{compiler_CXX} --version'
+              - name: literal
+                manual: true
+                successPattern: '^said'
+                run: python3 say.py {{compiler_C}} ${compiler_CXX}
+            """);
+
+        Assert.Equal([false, true, true, false], action.Steps.Select(step => step.NeedsBuild));
+        Assert.Equal(["compiler_C", "compiler_CXX", "buildDir"], action.Steps[1].NamesOfTheBuild);
+        Assert.Equal(["compiler_CXX"], action.Steps[2].NamesOfTheBuild);
+
+        var light = new RunnerConfig { Action = "census", Heavy = false };
+
+        Core.Legs.LegWorkload Run(params string[] manual)
+            => Core.Legs.LegWorkload.ForRunner(light, Core.Runners.StepSelection.For(light, manual).Apply("census", action).File);
+
+        List<Core.Legs.SelectedLeg> Legs(params string[] names) => [.. names.Select(name => new Core.Legs.SelectedLeg(name, config.Legs[name]))];
+
+        Assert.False(Run().Build);
+        Assert.False(Run("literal").Build);
+        Assert.True(Run("census").Build);
+        Assert.True(Run("census").Heavy);
+        Assert.True(Run("probe").On("linux").Build);
+        Assert.False(Run("probe").On("windows").Build);
+        Assert.Equal("step 'census' names {compiler_C} and {compiler_CXX} and {buildDir}", Assert.Single(Run("census").BuiltBy).Reason);
+
+        var phased = new RunnerConfig { Phases = [new RunnerPhase { Name = "probe", Command = ["{compiler_C}", "-dumpversion"] }] };
+        var inside = new RunnerConfig { Phases = [new RunnerPhase { Name = "probe", Command = ["python3", "probe.py"], WorkingDirectory = "{compiler_CXX}" }] };
+
+        Assert.True(Core.Legs.LegWorkload.ForRunner(phased, null).Build);
+        Assert.Equal("phase 'probe' names {compiler_CXX}", Assert.Single(Core.Legs.LegWorkload.ForRunner(inside, null).BuiltBy).Reason);
+
+        // A leg CMake builds is asked nothing more: which compiler its build identifies is the build's to say.
+        Run("census").RequireBuildable(config, "census", Legs("native"));
+        Run("probe").RequireBuildable(config, "census", Legs("native", "win"));
+        Run().RequireBuildable(config, "census", Legs("managed"));
+        Run("literal").RequireBuildable(config, "census", Legs("managed"));
+
+        var refusal = Assert.Throws<Core.Results.HarnessException>(() => Run("census", "probe").RequireBuildable(config, "census", Legs("native", "managed", "win")));
+
+        Assert.Equal(Core.Results.HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                [
+                    "A run of runner 'census' cannot run every leg it reaches, so nothing was run.",
+                    "It runs a step or phase naming a compiler where no build of the leg identifies one: leave the leg out, or take the "
+                        + "name out:",
+                    "  - Leg 'managed': step 'census' names {compiler_C} and {compiler_CXX}, and project 'app' is built by dotnet, which "
+                        + "identifies no compiler: only a build CMake configures records one.",
+                    "  - Leg 'managed': step 'probe' names {compiler_CXX}, and project 'app' is built by dotnet, which identifies no "
+                        + "compiler: only a build CMake configures records one.",
+                    "  - Leg 'win': step 'census' names {compiler_C} and {compiler_CXX}, and project 'app' is built by dotnet, which "
+                        + "identifies no compiler: only a build CMake configures records one.",
+                ]),
+            refusal.Message);
+
+        // A phase of the run's own runner is refused as a step is, and called a phase.
+        Assert.Contains(
+            "  - Leg 'managed': phase 'probe' names {compiler_C}, and project 'app' is built by dotnet",
+            Assert.Throws<Core.Results.HarnessException>(() => Core.Legs.LegWorkload.ForRunner(phased, null).RequireBuildable(config, "census", Legs("managed"))).Message,
+            StringComparison.Ordinal);
+
+        // A run check's step naming one is the check's to refuse, when it runs.
+        var check = new RunnerConfig { Action = "census", Steps = ["census"] };
+        var carrying = Core.Legs.LegWorkload.ForRunner(
+            light,
+            Core.Runners.StepSelection.For(light, []).Apply("census", action).File,
+            [("confirm", check, Core.Runners.StepSelection.For(check, []).Apply("confirm", action).File, false)]);
+
+        Assert.True(carrying.Build);
+        carrying.RequireBuildable(config, "census", Legs("managed"));
+    }
+
+    /// <summary>
     /// What a run's refusal gives for a leg is what builds that leg, on its own system - a step limited by runOn to
     /// another names nothing there - and a leg is refused for its product only where a step names {product}: a step
     /// naming the build directory alone reads no one file, so a project declaring several asks nothing of it, while one
@@ -2303,7 +2419,7 @@ public sealed class ConfigStoreTests
               - name: measure
                 manual: true
                 successPattern: '^measured'
-                run: python3 measure.py --dss="{product}"
+                run: python3 measure.py --app="{product}"
               - name: winbench
                 manual: true
                 runOn: [windows]

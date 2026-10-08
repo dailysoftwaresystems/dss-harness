@@ -76,7 +76,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own |
 | `build [--legs a,b] [--time]` | Build every selected leg, in its own variant-keyed build directory |
 | `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |
-| `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run |
+| `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run. A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
 | `check-mutations [--legs a,b] [--arms a,b] [--self-test]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain (`help mutations`) |
 | `clean [--legs a,b] [--dry-run]` | Remove each selected leg's build directory, and the mutation workers its sweeps and self-tests keep beside its tree, wherever the leg runs, so a full disk can be freed (`help space`) |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
@@ -113,8 +113,9 @@ even when its machines do not — a license server, a network share, a sync's ba
 
 Both are counted by one command. Where a machine declares `admission` — under `defaults`, or its own
 under `hosts.local` or an ssh host — its heavy legs (a build, a test, a runner that requires the build
-or says `"heavy": true`, a run of an action step or a runner's own phase that names `{product}` or
-`{buildDir}` — which builds its leg first — or of a step that says `heavy: true`) share it across every
+or says `"heavy": true`, a run of an action step or a runner's own phase that names `{product}`,
+`{buildDir}` or one of the leg's compilers — which builds its leg first — or of a step that says
+`heavy: true`) share it across every
 command this user runs there: each waits for one of its `heavyLegs` slots, in the order they asked,
 then for the memory in use to fall below `maxMemoryPercent`, then - where its build's need is known -
 for room on the filesystem it fills beside what the other admitted legs claim, says who holds each slot

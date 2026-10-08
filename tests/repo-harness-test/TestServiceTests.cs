@@ -318,6 +318,67 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
+    /// A test invocation naming one of the leg's compilers passes the check made before the build - the build is what
+    /// identifies the compiler, so the name stands until then - and is filled in once the leg is built, with what its
+    /// build identified. Where the build identified none, the leg is refused before its runner starts, saying why; and
+    /// where no build of the leg ever identifies one - it builds nothing, or another tool than CMake builds its project
+    /// - at the check, before the build that would have cost.
+    /// </summary>
+    [Fact]
+    public async Task ATestInvocationNamingTheLegsCompiler_PassesTheCheckBeforeTheBuild_AndIsFilledInOnceTheLegIsBuilt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var service = Service(factory);
+        var token = TestContext.Current.CancellationToken;
+        var gcc = Path.Combine(temp.Path, "toolchain", "bin", "gcc");
+        var engine = new ProjectConfig { Name = "engine", Type = "cmake" };
+
+        temp.WriteFile(Fixture, "fixture");
+
+        var request = Request(temp, Child("--cc", "{compiler_C}", "tests passed")) with
+        {
+            Project = engine,
+            Compilers = LegCompilers.Of(new Dictionary<string, LegCompiler> { ["C"] = LegCompiler.Of(gcc) }),
+        };
+
+        service.Check(Config(), request);
+
+        var result = await service.RunAsync(Config(), request, token);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Contains($"[{gcc}]", await File.ReadAllLinesAsync(result.LogFile, token));
+
+        // What the build identified is the build's to say: none for the language named is refused once it is built.
+        var none = request with { Compilers = LegCompilers.Of(new Dictionary<string, LegCompiler> { ["CXX"] = LegCompiler.Of(gcc) }) };
+
+        service.Check(Config(), none);
+
+        var unidentified = await Assert.ThrowsAsync<HarnessException>(() => service.RunAsync(Config(), none, token));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, unidentified.ExitCode);
+        Assert.Equal("test.args names '{compiler_C}', and the leg's build identified no C compiler.", unidentified.Message);
+
+        // Nothing given to read it by is refused once built too, and not before: the check has nothing to say of it yet.
+        service.Check(Config(), request with { Compilers = null });
+
+        Assert.Contains(
+            "and nothing here reads which compiler the leg's build identified",
+            (await Assert.ThrowsAsync<HarnessException>(() => service.RunAsync(Config(), request with { Compilers = null }, token))).Message,
+            StringComparison.Ordinal);
+
+        // No build of these ever identifies one, which the configuration says: refused at the check.
+        var managed = Assert.Throws<HarnessException>(() => service.Check(Config(), request with { Project = new ProjectConfig { Name = "app", Type = "dotnet" } }));
+        var nothing = Assert.Throws<HarnessException>(() => service.Check(Config(), request with { Project = null }));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, managed.ExitCode);
+        Assert.Equal(
+            "test.args names '{compiler_C}', and project 'app' is built by dotnet, which identifies no compiler: only a build CMake configures records one.",
+            managed.Message);
+        Assert.Equal("test.args names '{compiler_C}', and its leg builds nothing, so no build identifies a compiler.", nothing.Message);
+    }
+
+    /// <summary>
     /// ctest that found no test to run says so in the detail of a leg that did not pass, whichever way it ended:
     /// exiting 8 under --no-tests=error, or 0 with its success pattern unmatched, as measured with ctest 4.3.2 - and
     /// 0 too where it was given no option at all and found no test configuration. Another runner printing the same

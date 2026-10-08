@@ -58,8 +58,8 @@ public sealed class RunnerConfig
     /// <summary>
     /// Whether this runner needs the repository built before it runs. A runner that calls a program
     /// the build produces otherwise runs against whatever was left there. A step or phase it runs that
-    /// names what the build makes - <c>{product}</c> or <c>{buildDir}</c> - builds the leg whatever this
-    /// says: see <see cref="Runners.ActionStep.NeedsBuild"/>. Where a run check names this runner, it
+    /// names what the build makes - <c>{product}</c>, <c>{buildDir}</c> or one of the leg's compilers - builds
+    /// the leg whatever this says: see <see cref="Runners.ActionStep.NeedsBuild"/>. Where a run check names this runner, it
     /// builds the legs of the runner carrying the check first instead: a check is never built itself.
     /// </summary>
     /// <remarks>
@@ -68,16 +68,17 @@ public sealed class RunnerConfig
     /// action file from it — so the tree is put there whether or not anything is compiled. Use
     /// <c>--use-staged</c> to run against a copy already known to be current.
     /// </remarks>
-    [Description("build its legs first; absent, only where a step or phase names {product} or {buildDir}")]
+    [Description("build its legs first; absent, only where a step or phase names {product}, {buildDir} or a compiler")]
     public bool RequireBuild { get; init; }
 
     /// <summary>
     /// Whether each leg of this runner is heavy - taking one of its machine's heavy-leg slots before it starts, where
     /// that machine declares admission - or <see langword="null"/> to be heavy only where it builds, as a runner that
-    /// requires the build is. Given false beside <see cref="RequireBuild"/>, or beside a phase naming <c>{product}</c> or
-    /// <c>{buildDir}</c>, it is refused: its build is heavy. A step of its action that a run runs and that says
-    /// <c>heavy: true</c> makes its legs heavy whatever this says, false included: the step's work is the step's to
-    /// declare. So does one naming <c>{product}</c> or <c>{buildDir}</c>, which builds them.
+    /// requires the build is. Given false beside <see cref="RequireBuild"/>, or beside a phase naming what the build
+    /// makes - <c>{product}</c>, <c>{buildDir}</c> or one of the leg's compilers - it is refused: its build is heavy.
+    /// A step of its action that a run runs and that says <c>heavy: true</c> makes its legs heavy whatever this says,
+    /// false included: the step's work is the step's to declare. So does one naming what the build makes, which
+    /// builds them.
     /// </summary>
     [Description("its legs take a heavy-leg slot ('help admission'); absent, only where it builds or runs a step that says heavy")]
     public bool? Heavy { get; init; }
@@ -143,15 +144,17 @@ public sealed record RunnerPhase
 
     /// <summary>
     /// Whether the phase needs its leg built first: its command or its working directory names what the build makes -
-    /// <c>{product}</c> or <c>{buildDir}</c> - as a step of an action does: see <see cref="Runners.ActionStep.NeedsBuild"/>.
+    /// <c>{product}</c>, <c>{buildDir}</c> or one of the leg's compilers - as a step of an action does: see
+    /// <see cref="Runners.ActionStep.NeedsBuild"/>.
     /// </summary>
     [JsonIgnore]
     public bool NeedsBuild => NamesOfTheBuild.Count > 0;
 
     /// <summary>
     /// What the command or the working directory of this phase names that the build makes - <c>product</c>,
-    /// <c>buildDir</c> - each once, in the order it first names them; empty where it names neither. Read from what a
-    /// run fills in as it starts the phase: its program, its arguments and its directory.
+    /// <c>buildDir</c>, <c>compiler_C</c>, <c>compiler_CXX</c> - each once, in the order it first names them; empty
+    /// where it names none. Read from what a run fills in as it starts the phase: its program, its arguments and its
+    /// directory.
     /// </summary>
     [JsonIgnore]
     public IReadOnlyList<string> NamesOfTheBuild => LegPathNames.BuiltNamesIn([.. Command, WorkingDirectory]);

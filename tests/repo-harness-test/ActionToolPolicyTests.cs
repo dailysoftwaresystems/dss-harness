@@ -256,6 +256,63 @@ public sealed class ActionToolPolicyTests
         Assert.DoesNotContain("s3cr", problem, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A line written as the name of one of the leg's compilers alone starts what the leg's build identified and built
+    /// with, wherever on the machine that is, declared under 'tools' or not: its third allowance. One run line then
+    /// starts gcc on one leg and cl on another.
+    /// </summary>
+    [Theory]
+    [InlineData("{compiler_C}")]
+    [InlineData("{compiler_CXX}")]
+    public void ALineWrittenAsTheLegsCompilerAlone_MayStartIt_WhereverItIs(string name)
+    {
+        var compiler = Path.Combine(Path.GetTempPath(), "harness-policy-elsewhere", "bin", "cc");
+        var policy = new ActionToolPolicy(new HostPlatform());
+        var action = Parse($$"""
+            steps:
+              - name: census
+                run: |
+                  {{name}} -dumpversion
+            """);
+
+        var command = Assert.Single(Assert.Single(action.Steps).Commands);
+
+        Assert.Equal(ProgramAllowance.LegCompiler, policy.Classify(command, (compiler, Root), Config.Tools, Root));
+        Assert.Empty(policy.Problems(action, Config, Root, (_, _) => (compiler, Root)));
+
+        policy.Enforce(action, new HarnessConfig(), Root, (_, _) => (compiler, Root));
+    }
+
+    /// <summary>
+    /// Only the name alone: a line whose program is a compiler's name with anything beside it starts another program,
+    /// and one filled in with the compiler's path from an input or a value is a path like any other - each judged as
+    /// what it starts, and refused where that is neither declared nor the repository's.
+    /// </summary>
+    [Theory]
+    [InlineData("{compiler_C}.exe")]
+    [InlineData("{compiler_C}/../other")]
+    [InlineData("{cc}")]
+    [InlineData("{{compiler_C}}")]
+    public void ALineThatIsMoreThanTheCompilersName_IsJudgedAsWhatItStarts(string program)
+    {
+        var elsewhere = Path.Combine(Path.GetTempPath(), "harness-policy-elsewhere", "bin", "cc");
+        var policy = new ActionToolPolicy(new HostPlatform());
+        var action = Parse($$"""
+            steps:
+              - name: census
+                run: |
+                  {{program}} -dumpversion
+            """);
+
+        var command = Assert.Single(Assert.Single(action.Steps).Commands);
+
+        Assert.Equal(ProgramAllowance.Undeclared, policy.Classify(command, (elsewhere, Root), Config.Tools, Root));
+        Assert.Contains("is not declared under 'tools' and is not a path inside the repository", Assert.Single(policy.Problems(action, Config, Root, (_, _) => (elsewhere, Root))), StringComparison.Ordinal);
+
+        // And as what it starts where that may run: a declared tool, whatever the line was written as.
+        Assert.Equal(ProgramAllowance.DeclaredTool, policy.Classify(command, ("cmake", Root), Config.Tools, Root));
+    }
+
     private static string Root => Path.Combine(Path.GetTempPath(), "harness-policy-root");
 
     /// <summary>

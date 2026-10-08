@@ -110,7 +110,9 @@ public sealed class TestInvocation
     /// May name the directories a leg runs against — <c>{buildDir}</c>, <c>{treeDir}</c>,
     /// <c>{harnessDir}</c> — which is how a project that builds out of source points its runner at
     /// the tests: the build directory is derived per leg from the processor, the toolchain and the
-    /// configuration, so no tracked file can spell it.
+    /// configuration, so no tracked file can spell it. May name the leg's own compilers too —
+    /// <c>{compiler_C}</c>, <c>{compiler_CXX}</c> — which only its build can say: filled in once the
+    /// leg is built, and refused there where its build identified none.
     /// </remarks>
     public List<string>? Args { get; init; }
 

@@ -328,12 +328,12 @@ public sealed class ProcessSamplerTests
     [Fact]
     public void ASharedToolInASiblingsBuildDirectory_IsThatSiblingsWork_AndOneNamingNoneIsNobodysKnown()
     {
-        var sibling = Process(5001, "dsscp", $"dsscp -o \"{Path.Combine(OtherBuildDirectory, "a.o")}\"", parent: 9999);
-        var stranger = Process(5002, "dsscp", "dsscp --serve", parent: 9999);
+        var sibling = Process(5001, "toolcc", $"toolcc -o \"{Path.Combine(OtherBuildDirectory, "a.o")}\"", parent: 9999);
+        var stranger = Process(5002, "toolcc", "toolcc --serve", parent: 9999);
 
         var report = Classify(
             [Sample(0, sibling, stranger)],
-            sharedResourceTools: ["dsscp"],
+            sharedResourceTools: ["toolcc"],
             otherLegs: new Dictionary<string, string> { ["lin-gcc-release"] = OtherBuildDirectory });
 
         Assert.Equal("lin-gcc-release", report.SharedResourceUsers.Single(user => user.Process.Id == 5001).Owner);
@@ -352,12 +352,12 @@ public sealed class ProcessSamplerTests
             [
                 Sample(
                     0,
-                    Process(7003, "dsscp", $"dsscp \"{Path.Combine(OtherBuildDirectory, "c.o")}\"", parent: 9999),
-                    Process(7001, "dsscp", $"dsscp \"{Path.Combine(OtherBuildDirectory, "a.o")}\"", parent: 9999),
-                    Process(7002, "dsscp", $"dsscp \"{Path.Combine(OtherBuildDirectory, "b.o")}\"", parent: 9999),
-                    Process(8001, "dsscp", "dsscp --serve", parent: 9999)),
+                    Process(7003, "toolcc", $"toolcc \"{Path.Combine(OtherBuildDirectory, "c.o")}\"", parent: 9999),
+                    Process(7001, "toolcc", $"toolcc \"{Path.Combine(OtherBuildDirectory, "a.o")}\"", parent: 9999),
+                    Process(7002, "toolcc", $"toolcc \"{Path.Combine(OtherBuildDirectory, "b.o")}\"", parent: 9999),
+                    Process(8001, "toolcc", "toolcc --serve", parent: 9999)),
             ],
-            sharedResourceTools: ["dsscp"],
+            sharedResourceTools: ["toolcc"],
             otherLegs: new Dictionary<string, string> { ["lin-gcc-release"] = OtherBuildDirectory });
 
         var lines = ContentionWarnings.SharedLines(
@@ -365,8 +365,8 @@ public sealed class ProcessSamplerTests
             report,
             new ContentionConfig
             {
-                SharedResourceTools = ["dsscp"],
-                SharedState = { ["dsscp"] = "the per-user compiler cache" },
+                SharedResourceTools = ["toolcc"],
+                SharedState = { ["toolcc"] = "the per-user compiler cache" },
             });
 
         Assert.Equal(2, lines.Count);
@@ -383,13 +383,13 @@ public sealed class ProcessSamplerTests
     public void ASharedToolNobodyDescribed_SaysWhereToDescribeIt()
     {
         var report = Classify(
-            [Sample(0, Process(9001, "dsscp", "dsscp --serve", parent: 9999))],
-            sharedResourceTools: ["dsscp"]);
+            [Sample(0, Process(9001, "toolcc", "toolcc --serve", parent: 9999))],
+            sharedResourceTools: ["toolcc"]);
 
         var line = Assert.Single(ContentionWarnings.SharedLines(
             "win-msvc-release",
             report,
-            new ContentionConfig { SharedResourceTools = ["dsscp"] }));
+            new ContentionConfig { SharedResourceTools = ["toolcc"] }));
 
         Assert.Contains("contention.sharedState", line, StringComparison.Ordinal);
     }
@@ -402,13 +402,13 @@ public sealed class ProcessSamplerTests
         {
             Contention = new ContentionConfig
             {
-                SharedResourceTools = ["dsscp"],
-                SharedState = { ["dsscpp"] = "a typo's cache", ["dsscp"] = " " },
+                SharedResourceTools = ["toolcc"],
+                SharedState = { ["toolccc"] = "a typo's cache", ["toolcc"] = " " },
             },
         });
 
-        Assert.Contains(problems, problem => problem.Contains("describes 'dsscpp'", StringComparison.Ordinal));
-        Assert.Contains(problems, problem => problem.Contains("contention.sharedState.dsscp is blank", StringComparison.Ordinal));
+        Assert.Contains(problems, problem => problem.Contains("describes 'toolccc'", StringComparison.Ordinal));
+        Assert.Contains(problems, problem => problem.Contains("contention.sharedState.toolcc is blank", StringComparison.Ordinal));
     }
 
     private static ContentionReport Classify(

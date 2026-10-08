@@ -124,6 +124,9 @@ internal sealed class MutationLegRunner(
     private readonly IHarnessOutput _output = output;
     private readonly string _commandName = commandName;
 
+    /// <summary>Reads which compilers a worker's build identified, for a test invocation that names one.</summary>
+    private readonly CMakeToolchainReader _toolchains = new(fileSystem);
+
     /// <summary>Sweeps <paramref name="subject"/> on <paramref name="work"/>'s leg, and returns the leg's line.</summary>
     /// <param name="subject">What the leg sweeps.</param>
     /// <param name="work">The leg, its run and its context, and how it asks its machine to take each unit.</param>
@@ -1225,7 +1228,13 @@ internal sealed class MutationLegRunner(
         private ArmRunRequest RunRequest(string named, string worker, string buildDirectory, string program, string records, TimeSpan? bound, string? diagnostic)
         {
             var invocation = _subject.Tests is { } settings ? TestInvocationResolver.InvocationFor(settings, _leg.Host.Os ?? _leg.Leg.Os) : null;
-            var paths = new LegPaths(worker, buildDirectory) { Identity = _leg.IdentityFor(_work.RunId.Value) };
+
+            // What the worker's own build identified, where the invocation names a compiler: the worker is what runs.
+            var paths = new LegPaths(worker, buildDirectory)
+            {
+                Identity = _leg.IdentityFor(_work.RunId.Value),
+                Compilers = _runner._toolchains.NamedFor(_subject.Project, buildDirectory),
+            };
 
             return new ArmRunRequest
             {

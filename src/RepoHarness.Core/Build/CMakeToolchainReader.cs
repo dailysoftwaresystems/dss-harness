@@ -408,6 +408,17 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
     /// </remarks>
     public (IReadOnlyList<IdentifiedCompiler> Compilers, IReadOnlyList<string> Unread) Identified(string buildDirectory)
     {
+        var (compilers, unread) = Records(buildDirectory);
+
+        return (compilers, [.. unread.Select(record => record.Why)]);
+    }
+
+    /// <summary>
+    /// What <see cref="Identified"/> reads, each thing that could not be read with the language whose record it is -
+    /// <see langword="null"/> where it is CMake's answer as a whole, which says nothing of any language.
+    /// </summary>
+    private (IReadOnlyList<IdentifiedCompiler> Compilers, IReadOnlyList<(string? Language, string Why)> Unread) Records(string buildDirectory)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
 
         string? version;
@@ -423,7 +434,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            return ([], [$"CMake's file API answer could not be read: {ex.Message.TrimEnd('.')}"]);
+            return ([], [(null, $"CMake's file API answer could not be read: {ex.Message.TrimEnd('.')}")]);
         }
 
         if (version is null)
@@ -432,7 +443,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
         }
 
         var compilers = new List<IdentifiedCompiler>();
-        var unread = new List<string>();
+        var unread = new List<(string? Language, string Why)>();
 
         foreach (var language in new[] { "C", "CXX" })
         {
@@ -453,7 +464,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
                 // one missing is a record CMake did not write whole, and none of it can be relied on.
                 if (Setting(string.Empty) is not { } program || Setting("_ID") is not { } id || Setting("_VERSION") is not { } identified)
                 {
-                    unread.Add($"'{record}' lacks a line CMake writes in every record of a compiler: its path, id or version, for {language}");
+                    unread.Add((language, $"'{record}' lacks a line CMake writes in every record of a compiler: its path, id or version, for {language}"));
                     continue;
                 }
 
@@ -470,12 +481,114 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                unread.Add($"'{record}' could not be read: {ex.Message.TrimEnd('.')}");
+                unread.Add((language, $"'{record}' could not be read: {ex.Message.TrimEnd('.')}"));
             }
         }
 
         return (compilers, unread);
     }
+
+    /// <summary>
+    /// Why no build of <paramref name="project"/> identifies a compiler, as a refusal ends; <see langword="null"/> where
+    /// one does: a project CMake builds.
+    /// </summary>
+    /// <param name="project">The leg's project, or <see langword="null"/> for a leg that builds nothing.</param>
+    /// <remarks>
+    /// The one place that says which legs have a compiler their build identified: a run reads it before any host is
+    /// measured, a test before its leg is built, and both once the leg is built - so none of them refuses a leg another
+    /// would fill in.
+    /// </remarks>
+    public static string? IdentifiesNone(ProjectConfig? project)
+    {
+        if (project is null)
+        {
+            return "its leg builds nothing, so no build identifies a compiler";
+        }
+
+        return BuildAdapters.Find(project.Type) switch
+        {
+            CMakeAdapter => null,
+            { } adapter => Other(adapter.Program),
+            null => Other($"'{project.Type}'"),
+        };
+
+        string Other(string builder)
+            => $"project '{project.Name}' is built by {builder}, which identifies no compiler: only a build CMake configures records one";
+    }
+
+    /// <summary>
+    /// What the names of a leg's compilers are filled in with ahead of its build: nothing yet, each standing as written,
+    /// where the build of <paramref name="project"/> will identify them - and none, saying why, where no build of it does.
+    /// </summary>
+    /// <param name="project">The leg's project, or <see langword="null"/> for a leg that builds nothing.</param>
+    public static LegCompilers BeforeTheBuild(ProjectConfig? project)
+        => IdentifiesNone(project) is { } why ? LegCompilers.None(why) : LegCompilers.AheadOfTheBuild;
+
+    /// <summary>
+    /// What the names of a leg's compilers are filled in with once <paramref name="project"/> is built in
+    /// <paramref name="buildDirectory"/>: what <see cref="Named"/> reads there, read where a line first names one, and
+    /// once - or none, saying why, where no build of the project identifies one.
+    /// </summary>
+    /// <param name="project">The leg's project, or <see langword="null"/> for a leg that builds nothing.</param>
+    /// <param name="buildDirectory">The leg's build directory.</param>
+    public LegCompilers NamedFor(ProjectConfig? project, string buildDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
+
+        return IdentifiesNone(project) is { } why ? LegCompilers.None(why) : LegCompilers.ReadBy(() => Named(buildDirectory));
+    }
+
+    /// <summary>
+    /// What a line naming the compiler of each language is filled in with for the leg built in
+    /// <paramref name="buildDirectory"/>, by the language as CMake names it: the program its record of identifying that
+    /// compiler names, as this machine spells a path - or why none fills the name in.
+    /// </summary>
+    /// <param name="buildDirectory">The leg's build directory.</param>
+    /// <remarks>
+    /// What built the leg, never what a toolchain declares: read, as <see cref="Identified"/> reads it, from the record
+    /// every configure of the directory after the first loads, the one the build's own witness is held to. A compiler
+    /// the build runs with words after it - a launcher such as ccache given its compiler, or a compiler given options -
+    /// fills no name in: the name is a program alone, and the program alone is not what built the leg, so the two are
+    /// named rather than one of them handed over as the whole.
+    /// </remarks>
+    public IReadOnlyDictionary<string, LegCompiler> Named(string buildDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
+
+        var (identified, records) = Records(buildDirectory);
+        var named = new Dictionary<string, LegCompiler>(StringComparer.Ordinal);
+
+        foreach (var (_, language) in LegPathNames.Compilers)
+        {
+            // What could not be read of this language's own record, or of the answer every language's is found by:
+            // another language's record that could not be read says nothing of this one.
+            List<string> unread = [.. records.Where(record => record.Language is null || string.Equals(record.Language, language, StringComparison.Ordinal)).Select(record => record.Why)];
+
+            named[language] = identified.FirstOrDefault(compiler => string.Equals(compiler.Language, language, StringComparison.Ordinal)) switch
+            {
+                null when unread.Count > 0 => LegCompiler.None($"which {language} compiler its build identified could not be read: {string.Join("; ", unread)}"),
+                null => LegCompiler.None($"its build identified no {language} compiler: '{buildDirectory}' holds no record of CMake identifying one"),
+                { Program: var program } when string.IsNullOrWhiteSpace(program) || program.Contains('\0', StringComparison.Ordinal)
+                    => LegCompiler.None($"CMake's record of its build's {language} compiler names no program"),
+                { Arguments.Count: > 0 } launched => LegCompiler.None(
+                    $"its build runs its {language} compiler as '{launched.Program}' followed by '{string.Join(' ', launched.Arguments)}' - a launcher "
+                    + "given a compiler, or a compiler given options - while the name is filled in with a program alone, which would "
+                    + "start something other than what built the leg. Take those words out of the toolchain's compiler, or write the "
+                    + "line's program and words as they are"),
+                { } compiler => LegCompiler.Of(AsThisMachineSpells(compiler.Program)),
+            };
+        }
+
+        return named;
+    }
+
+    /// <summary>
+    /// <paramref name="program"/> as this machine spells a path, where it is a whole one here: CMake writes a path with
+    /// '/' on every system, and a run line is handed the leg's directories as its machine spells them. One that is no
+    /// whole path here is handed over as its record names it.
+    /// </summary>
+    private static string AsThisMachineSpells(string program)
+        => Path.IsPathFullyQualified(program) ? Path.GetFullPath(program) : program;
 
     /// <summary>
     /// What <paramref name="buildDirectory"/> was last configured with, where <paramref name="project"/>

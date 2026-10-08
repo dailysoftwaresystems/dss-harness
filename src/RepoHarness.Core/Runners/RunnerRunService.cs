@@ -96,7 +96,8 @@ public sealed record RunnerRunRequest
 
     /// <summary>
     /// Whether this run built the leg before starting the runner: where it did not, a runner requiring the build, and a
-    /// step or phase naming <c>{product}</c> or <c>{buildDir}</c>, are refused before the first step starts. The caller
+    /// step or phase naming <c>{product}</c>, <c>{buildDir}</c> or one of the leg's compilers, are refused before the
+    /// first step starts. The caller
     /// decides the build - <c>run</c>, from what the runner, the steps it runs and its run checks need - and says here
     /// what it decided, for the runner it names and for each a run check starts.
     /// </summary>
@@ -112,6 +113,12 @@ public sealed record RunnerRunRequest
 
     /// <summary>Why there is no product, for a refusal that can say which case it is.</summary>
     public string? ProductProblem { get; init; }
+
+    /// <summary>
+    /// What a run line naming one of the leg's compilers - <c>{compiler_C}</c>, <c>{compiler_CXX}</c> - is filled in
+    /// with: what the leg's build identified, read where a line first names one. Left out, a line naming one is refused.
+    /// </summary>
+    public Execution.LegCompilers? Compilers { get; init; }
 
     /// <summary>Whether the leg runs under emulation, which decides what its timings are compared with.</summary>
     public bool Emulated { get; init; }
@@ -1731,6 +1738,10 @@ public sealed class RunnerRunService(
         Identity = request.Identity,
         Product = request.Product,
         ProductProblem = request.ProductProblem,
+
+        // Read only on a leg this run built: on any other, a step naming one of them is refused as every step reading
+        // the build is (RefuseUnbuilt), and nothing an earlier build left there is read to fill the name in meanwhile.
+        Compilers = request.Built ? request.Compilers : LegCompilers.AheadOfTheBuild,
         ActionBuild = scratch?.Build,
         ActionArtifacts = scratch?.Artifacts,
         RunArtifacts = scratch is null ? null : Path.GetDirectoryName(scratch.Artifacts),

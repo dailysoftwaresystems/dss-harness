@@ -1410,8 +1410,8 @@ it, and never read as free: that is the one reading that would start every waiti
 
 **Heavy** is what builds or tests: a `build` or `test` leg, and a `run` leg whose runner - or a
 runner its expected exceptions' run checks name, which run within its legs - builds, requiring the
-build or running a step or phase that names `{product}` or `{buildDir}`, or says `"heavy": true`, or
-runs a step whose action says `heavy: true`. A step's `heavy: true` holds whichever runner starts it,
+build or running a step or phase that names `{product}`, `{buildDir}` or one of the leg's compilers,
+or says `"heavy": true`, or runs a step whose action says `heavy: true`. A step's `heavy: true` holds whichever runner starts it,
 one saying `"heavy": false` included: when weight was declared only on runners, a manual step that
 rebuilds, kept in an action a light runner also runs, was started through that runner with
 `--manual-step` and built with no slot at all. A heavy step limited by `runOn` makes heavy the legs
@@ -1420,7 +1420,7 @@ it. A run check's runner whose action cannot be read counts as heavy, said as th
 nothing - not even where it declares `requireBuild` - and is refused by the check that runs it, as
 before. A runner that only reads the tree - a repository guard - is light and starts at once. A
 runner saying `"heavy": false` while it requires the build, or while a phase of its own names
-`{product}` or `{buildDir}`, is refused, naming all of them at once: its build is heavy.
+`{product}`, `{buildDir}` or a compiler, is refused, naming all of them at once: its build is heavy.
 
 **Room is claimed as a leg is admitted.** Where its build's need is known - its `buildSpaceGiB`, or
 what a build recorded - and is more than its build directory already holds, a heavy leg is let start
@@ -2190,11 +2190,11 @@ leg-running command gets. A runner that declares `requireBuild` has its leg buil
 a runner that calls a program the build produces otherwise runs against whatever was left there.
 
 **A step naming what the build makes builds its leg first, whichever runner starts it.** A run that
-runs a step whose run line or `workingDirectory` names `{product}` or `{buildDir}` - however the
-run comes to run it: by default, named with `--manual-step` or under a runner's `steps`, or needed
-by one that is, through a runner that declares `requireBuild` or not - builds each leg before its
-steps start; one limited by `runOn` builds the legs of those systems alone, and a runner's own
-phase naming either builds as a step does. Read from the line rather than declared
+runs a step whose run line or `workingDirectory` names `{product}`, `{buildDir}`, `{compiler_C}` or
+`{compiler_CXX}` - however the run comes to run it: by default, named with `--manual-step` or under
+a runner's `steps`, or needed by one that is, through a runner that declares `requireBuild` or not -
+builds each leg before its steps start; one limited by `runOn` builds the legs of those systems
+alone, and a runner's own phase naming one builds as a step does. Read from the line rather than declared
 beside it, because a line naming the product reads the product whoever starts it: when the build
 was declared only on runners, a manual step naming `{product}`, kept in an action a runner that
 builds nothing also runs, was started through that runner and read whatever the last build left -
@@ -2206,19 +2206,50 @@ explains came from. A leg that builds asks its host for the build's programs and
 A leg a run would build that cannot be built - it names no project, or no toolchain for its
 system - is refused before any host is measured, naming the leg and what builds it, and so is a
 step or phase of the run's own runner naming `{product}` on a leg whose project declares no one
-file for its system; one refusal names every such leg, of both kinds. For a runner requiring the
-build, the first was found only where the leg's build began: it ended the whole run once its hosts
-were measured and its slots taken, without saying what built the leg; and the second was refused
-only after the build it had just cost. A product a run check's step names is refused by the check
-that runs it, when it runs: refused before the run, it would refuse a run whose checks may never
-run. The build a check needs is made before the run whether or not the check runs, so a leg it
-cannot build is refused then.
+file for its system, or naming a compiler on a leg whose project CMake does not build; one refusal
+names every such leg, of each kind. For a runner requiring the build, the first was found only
+where the leg's build began: it ended the whole run once its hosts were measured and its slots
+taken, without saying what built the leg; and the second was refused only after the build it had
+just cost, as the third would be. A product or a compiler a run check's step names is refused by
+the check that runs it, when it runs: refused before the run, it would refuse a run whose checks
+may never run. The build a check needs is made before the run whether or not the check runs, so a
+leg it cannot build is refused then.
+
+**A leg's own compiler is named, never typed.** `{compiler_C}` and `{compiler_CXX}` are filled in
+with the program the leg's build identified for that language: the whole path CMake's record of
+identifying it names, in the leg's build directory, as that machine spells a path. It is the
+record every configure of the directory after the first loads, and the one the build's own
+`compilerId` witness is held to - so the name is what built the leg, and never what a toolchain
+declares, which may be a bare `gcc` that `PATH` resolves differently for the next process, or
+nothing at all where CMake chose. A runner that must judge each leg through that leg's compiler
+says so in one run line, which is gcc on one leg and cl on another; an `--input` reaches every leg
+of a run alike and could not. A line may start with one, written alone: the tool policy allows the
+leg's own compiler as it allows a declared tool, since the build ran it. Anything beside the name
+makes the line another program, judged as what it starts; so does a path that merely equals the
+compiler's, from an input or a value, which nothing says a build identified.
+
+The name is known only once the leg is built, so a step naming one builds its leg first, and what
+fills it in is read then, once, for the check before the first step and the step itself. A name
+nothing fills in is refused before the first step runs, saying which case it is: no compiler
+identified for that language, a record that could not be read, or a compiler the build runs with
+words after it - a launcher such as ccache given its compiler, a compiler given options. The name
+is a program alone, and the program alone is not what built the leg, so the refusal names the
+program and the words and hands over neither. Which legs have a compiler at all is the
+configuration's to say - only a build CMake configures identifies one - so that is refused before
+any host is measured, and never after a build it would have cost.
+
+A test invocation names one too, in its `args`, `coresArgs` and `workingDirectory`. Its command is
+checked before the leg's build, where no compiler is identified yet: there the name stands as
+written, and is filled in - or refused, as above - once the leg is built and before its runner
+starts. A sweep of mutation arms fills it in from each worker's own build, which is what the
+worker's tests run against.
 
 **A runner is refused on a leg the run did not build, where what it runs reads the build.** The run
 decides the build, and says to each runner it starts - its own and each a run check starts - whether
-it built the leg; a runner requiring the build, or a step or phase naming `{product}` or
-`{buildDir}` among those that leg runs, is refused there before anything changes the tree, naming
-each. It is the rule above asked again of what will run, so a file edited between the run's reading
+it built the leg; a runner requiring the build, or a step or phase naming `{product}`,
+`{buildDir}` or a compiler among those that leg runs, is refused there before anything changes the
+tree, naming each. Nothing an earlier build left there is read to fill a compiler's name in
+meanwhile. It is the rule above asked again of what will run, so a file edited between the run's reading
 it and the leg's is refused rather than started on whatever the last build left.
 
 **`cleanDirectories` never reaches what the run stands on.** Each is deleted, with all it holds,
@@ -2325,7 +2356,7 @@ sibling directory whose name merely starts the same way is outside, not inside.
   is not manual, a runner naming a step its action lacks, and a leg on whose system none of the
   steps a run names runs - it would run only what they need, and pass, with the step named run
   nowhere - are refused before any host is measured, naming the steps there are. Whichever runner
-  starts it, a step that names `{product}` or `{buildDir}` has its leg built first.
+  starts it, a step that names `{product}`, `{buildDir}` or a compiler has its leg built first.
 - **An input's value comes from `run --input name=value` first**, the runner's `.env` directory
   second and the input's own `default` last; `.secrets` never gives an input a value. A step may
   declare inputs of its own beside the action's, resolved the same way and read by that step
@@ -2348,9 +2379,11 @@ sibling directory whose name merely starts the same way is outside, not inside.
   alternative is a command that runs with arguments nobody can see are missing. An argument that
   must keep a quote, or that uses single quotes, is carried as its own list item rather than
   inside a `run` line.
-- The first token must be a program the configuration declares under `tools`, or a path inside
-  the repository. An undeclared program is refused before anything runs — the same list
-  `install-missing-tools` guarantees is installed. It is judged as it will start: its names
+- The first token must be a program the configuration declares under `tools`, a path inside
+  the repository, or the name of one of the leg's compilers alone - `{compiler_C}` or
+  `{compiler_CXX}`, which starts what the leg's build identified and built with. An undeclared
+  program is refused before anything runs — the same list `install-missing-tools` guarantees is
+  installed. It is judged as it will start: its names
   filled in, and a relative path read from the directory its step runs in, both worked out by the
   one function the run starts it with. Read as written, `{dir}/tool` was inside the repository
   while the step started a program wherever `{dir}` pointed. A refusal says what a line was

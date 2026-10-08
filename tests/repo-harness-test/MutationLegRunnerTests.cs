@@ -1622,6 +1622,48 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// Where the leg's tests start in a directory naming one of the leg's compilers, an arm's run and its binary's
+    /// control start where the worker's own build identified it: the worker is what they run, and CMake's record of the
+    /// compiler is in the worker's build directory - the leg's own, which a sweep never reads, holds none here.
+    /// </summary>
+    [Fact]
+    public async Task AnArmsRun_NamingTheLegsCompiler_IsFilledInWithWhatItsWorkersBuildIdentified()
+    {
+        using var sweep = new Sweep
+        {
+            Workers = 1,
+            Test = new TestConfig { All = new TestInvocation { Runner = "ctest", WorkingDirectory = "{compiler_CXX}.d" } },
+        };
+
+        var gxx = Path.Combine(sweep.Tree, "toolchain", "bin", "g++");
+
+        // As a configure leaves it: an answer naming the CMake that gave it, and that CMake's record of the compiler.
+        sweep.Builder.Before = (request, _) =>
+        {
+            var build = request.Variant.DirectoryUnder(request.TreeRoot);
+            var record = Path.Combine(build, "CMakeFiles", "4.3.2", "CMakeCXXCompiler.cmake");
+
+            Directory.CreateDirectory(Path.Combine(build, ".cmake", "api", "v1", "reply"));
+            Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+            File.WriteAllText(
+                Path.Combine(build, ".cmake", "api", "v1", "reply", "index-2026-09-22T12-00-00-0000.json"),
+                """{ "cmake": { "version": { "string": "4.3.2" } }, "reply": {} }""");
+            File.WriteAllText(
+                record,
+                $"set(CMAKE_CXX_COMPILER \"{gxx.Replace('\\', '/')}\")\nset(CMAKE_CXX_COMPILER_ID \"GNU\")\nset(CMAKE_CXX_COMPILER_VERSION \"13.3.0\")\n");
+
+            return Task.CompletedTask;
+        };
+
+        var leg = await sweep.RunAsync([ChargeBound]);
+
+        Assert.True(leg.Verdict == LegVerdict.Passed, leg.Detail);
+        Assert.Equal(2, sweep.Tests.Runs.Count);
+        Assert.All(sweep.Tests.Runs, request => Assert.Equal(gxx + ".d", request.WorkingDirectory));
+        Assert.False(Directory.Exists(Path.Combine(Variant.DirectoryUnder(sweep.Tree), "CMakeFiles")), "The leg's own build directory holds no record, so the worker's was read.");
+    }
+
+    /// <summary>
     /// A leg asked about no arm it drives touches nothing - no reading, no worker - and says each arm it left out, and
     /// why, beneath it; an arm left out beside driven ones is listed among them in the registry's order.
     /// </summary>

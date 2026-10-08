@@ -97,6 +97,12 @@ public sealed record LegPaths
     public string? ProductProblem { get; init; }
 
     /// <summary>
+    /// What the names of this leg's compilers are filled in with, or <see langword="null"/> for a caller that reads no
+    /// build: a name of one is then refused, saying so, never passed through.
+    /// </summary>
+    public LegCompilers? Compilers { get; init; }
+
+    /// <summary>
     /// Where this run of the action writes while it runs, or <see langword="null"/> outside an
     /// action.
     /// </summary>
@@ -124,6 +130,115 @@ public sealed record LegPaths
     /// built on one machine runs on another, so the consumer has to be able to name the producer.
     /// </remarks>
     public string? RunArtifacts { get; init; }
+}
+
+/// <summary>
+/// What a compiler's name is filled in with for one language: the program the leg's build identified, or why no program
+/// fills the name in. Exactly one of the two.
+/// </summary>
+public sealed record LegCompiler
+{
+    private LegCompiler(string? program, string? problem)
+    {
+        Program = program;
+        Problem = problem;
+    }
+
+    /// <summary>The program, whole, as its machine spells a path; <see langword="null"/> where none fills the name in.</summary>
+    public string? Program { get; }
+
+    /// <summary>Why no program fills the name in, as a refusal ends; <see langword="null"/> where one does.</summary>
+    public string? Problem { get; }
+
+    /// <summary>The compiler <paramref name="program"/> is.</summary>
+    /// <param name="program">The program the leg's build identified, whole.</param>
+    public static LegCompiler Of(string program)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(program);
+
+        return new(program, null);
+    }
+
+    /// <summary>No compiler, for <paramref name="problem"/>.</summary>
+    /// <param name="problem">Why, as a refusal ends: it follows "and", and takes the full stop.</param>
+    public static LegCompiler None(string problem)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(problem);
+
+        return new(null, problem);
+    }
+}
+
+/// <summary>
+/// What the names of a leg's compilers - <c>{compiler_C}</c>, <c>{compiler_CXX}</c> - are filled in with.
+/// </summary>
+/// <remarks>
+/// A leg's compiler is what its build identified, so it is known only once the leg is built: CMake identifies a compiler
+/// as it first configures a directory. Read where a line first names one, and once: the check made before a leg's first
+/// step and the step itself are given one answer, and a run naming none reads nothing.
+/// </remarks>
+public sealed class LegCompilers
+{
+    private readonly Lazy<IReadOnlyDictionary<string, LegCompiler>>? _read;
+    private readonly string? _none;
+
+    private LegCompilers(Lazy<IReadOnlyDictionary<string, LegCompiler>>? read, string? none)
+    {
+        _read = read;
+        _none = none;
+    }
+
+    /// <summary>
+    /// Ahead of the leg's build, which is what identifies them: a name stands as written, for a check made then of a
+    /// line that is filled in - or refused - once the leg is built.
+    /// </summary>
+    public static LegCompilers AheadOfTheBuild { get; } = new(null, null);
+
+    /// <summary>None, whichever the language, for <paramref name="why"/>.</summary>
+    /// <param name="why">Why no build identifies one, as a refusal ends.</param>
+    public static LegCompilers None(string why)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+
+        return new(null, why);
+    }
+
+    /// <summary>What <paramref name="read"/> reads, where a line first names a compiler, and never again.</summary>
+    /// <param name="read">Reads the compiler of each language the leg's build identified, by the language as CMake names it.</param>
+    public static LegCompilers ReadBy(Func<IReadOnlyDictionary<string, LegCompiler>> read)
+    {
+        ArgumentNullException.ThrowIfNull(read);
+
+        return new(new Lazy<IReadOnlyDictionary<string, LegCompiler>>(read), null);
+    }
+
+    /// <summary><paramref name="named"/>, already read.</summary>
+    /// <param name="named">The compiler of each language, by the language as CMake names it.</param>
+    public static LegCompilers Of(IReadOnlyDictionary<string, LegCompiler> named)
+    {
+        ArgumentNullException.ThrowIfNull(named);
+
+        return ReadBy(() => named);
+    }
+
+    /// <summary>
+    /// What fills in the compiler of <paramref name="language"/>, or <see langword="null"/> ahead of the leg's build,
+    /// where the name stands as written. A language the build identified no compiler for has none, saying so.
+    /// </summary>
+    /// <param name="language">The language, as CMake names it: <c>C</c> or <c>CXX</c>.</param>
+    public LegCompiler? For(string language)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(language);
+
+        if (_none is { } why)
+        {
+            return LegCompiler.None(why);
+        }
+
+        return _read is null
+            ? null
+            : _read.Value.GetValueOrDefault(language) ?? LegCompiler.None($"the leg's build identified no {language} compiler");
+    }
 }
 
 /// <summary>
@@ -214,20 +329,45 @@ public static partial class LegPathNames
     /// <summary>Names this run's artifacts across every leg, one directory per leg.</summary>
     public const string RunArtifacts = "runArtifacts";
 
+    /// <summary>Names the C compiler the leg's build identified.</summary>
+    public const string CompilerC = "compiler_C";
+
+    /// <summary>Names the C++ compiler the leg's build identified.</summary>
+    public const string CompilerCxx = "compiler_CXX";
+
+    /// <summary>
+    /// The names of a leg's compilers, each with the language whose compiler it names, as CMake names the language:
+    /// the two CMake keeps a record of identifying.
+    /// </summary>
+    public static IReadOnlyList<(string Name, string Language)> Compilers { get; } = [(CompilerC, "C"), (CompilerCxx, "CXX")];
+
+    /// <summary>The language whose compiler <paramref name="name"/> names, or <see langword="null"/> where it names none.</summary>
+    /// <param name="name">A name, without its braces.</param>
+    public static string? CompilerLanguage(string name)
+        => Compilers.FirstOrDefault(compiler => string.Equals(compiler.Name, name, StringComparison.Ordinal)).Language;
+
+    /// <summary>
+    /// Whether <paramref name="written"/> is one compiler's name in its braces and nothing beside it: a run line that
+    /// starts so starts the leg's own compiler, whatever its path.
+    /// </summary>
+    /// <param name="written">A run line's program, as written.</param>
+    public static bool IsACompilerAlone(string? written)
+        => Compilers.Any(compiler => string.Equals(written, $"{{{compiler.Name}}}", StringComparison.Ordinal));
+
     /// <summary>Every name, in the order a refusal lists them.</summary>
     public static IReadOnlyList<string> All { get; } =
     [
         BuildDirectory, TreeRoot, HarnessDirectory,
         Leg, Os, Processor, Toolchain, Config, Variant, Host, RunId,
-        Product, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
+        Product, CompilerC, CompilerCxx, ActionBuild, ActionArtifacts, StepBuild, RunArtifacts,
     ];
 
     /// <summary>
-    /// The names whose value the leg's build makes: its build directory, and the one file it is declared to make. A step
-    /// or a runner's phase naming either reads what the build left there, so a run that runs it builds the leg first:
-    /// see <see cref="BuiltNamesIn"/>.
+    /// The names whose value the leg's build makes: its build directory, the one file it is declared to make, and the
+    /// compilers it identifies. A step or a runner's phase naming any reads what the build left there, so a run that
+    /// runs it builds the leg first: see <see cref="BuiltNamesIn"/>.
     /// </summary>
-    public static IReadOnlyList<string> Built { get; } = [BuildDirectory, Product];
+    public static IReadOnlyList<string> Built { get; } = [BuildDirectory, Product, CompilerC, CompilerCxx];
 
     /// <summary>
     /// The names of <see cref="Built"/> that <paramref name="values"/> ask to have filled in, each once, in the order they
@@ -339,6 +479,13 @@ public static partial class LegPathNames
             }
 
             var name = match.Groups["name"].Value;
+
+            if (CompilerLanguage(name) is { } language)
+            {
+                // Null ahead of the leg's build, which is what identifies it: the name stands as written for the
+                // check made then, and is filled in - or refused - by the one made once the leg is built.
+                return Compiler(setting, name, language, paths) ?? match.Value;
+            }
 
             if (Value(name, paths) is { } resolved)
             {
@@ -478,6 +625,40 @@ public static partial class LegPathNames
             default:
                 break;
         }
+    }
+
+    /// <summary>
+    /// The program <paramref name="name"/> is filled in with - the compiler the leg's build identified for
+    /// <paramref name="language"/> - or <see langword="null"/> ahead of that build, where the name stands as written.
+    /// </summary>
+    /// <exception cref="HarnessException">
+    /// Nothing fills the name in: the run reaches no leg, the caller reads no build, or the leg's build has no one
+    /// program for that language. Each says which.
+    /// </exception>
+    private static string? Compiler(string setting, string name, string language, LegPaths paths)
+    {
+        if (paths.BuildDirectory is null)
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                $"{setting} names '{{{name}}}', and this run reaches no leg, so no build identified a compiler to put "
+                + "there. Run it for a leg, or take the name out.");
+        }
+
+        if (paths.Compilers is not { } compilers)
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"{setting} names '{{{name}}}', and nothing here reads which compiler the leg's build identified: only "
+                + "a run line and a test invocation are filled in with one.");
+        }
+
+        return compilers.For(language) switch
+        {
+            null => null,
+            { Program: { } program } => program,
+            var none => throw new HarnessException(HarnessExit.ConfigInvalid, $"{setting} names '{{{name}}}', and {none.Problem}."),
+        };
     }
 
     /// <summary>

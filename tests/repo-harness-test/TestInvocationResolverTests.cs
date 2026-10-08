@@ -1042,6 +1042,44 @@ public sealed class TestInvocationResolverTests
     }
 
     /// <summary>
+    /// A test invocation names one of the leg's compilers as it names its build directory: its args, its coresArgs and
+    /// its working directory are filled in with what the leg's build identified - and ahead of that build each stands
+    /// as written, so the command made to be checked then is refused over nothing the build has yet to say.
+    /// </summary>
+    [Fact]
+    public void AnInvocationNamingTheLegsCompiler_IsFilledInWithIt_AndStandsAsWrittenAheadOfTheBuild()
+    {
+        var invocation = Invocation(args: ["--cxx={compiler_CXX}"], coresArgs: ["-j", "{cores}", "--cc", "{compiler_C}"], workingDirectory: "{compiler_CXX}.d");
+        var built = new LegPaths("/tree", "/tree/build/v")
+        {
+            Compilers = LegCompilers.Of(new Dictionary<string, LegCompiler>
+            {
+                ["C"] = LegCompiler.Of("/opt/gcc/bin/gcc"),
+                ["CXX"] = LegCompiler.Of("/opt/gcc/bin/g++"),
+            }),
+        };
+
+        var filled = TestInvocationResolver.CommandFor(invocation, cores: 6, filter: null, excludes: null, built);
+
+        Assert.Equal(["--cxx=/opt/gcc/bin/g++", "-j", "6", "--cc", "/opt/gcc/bin/gcc"], filled.Arguments);
+        Assert.Equal("/opt/gcc/bin/g++.d", filled.WorkingDirectory);
+
+        var ahead = TestInvocationResolver.CommandFor(invocation, cores: 6, filter: null, excludes: null, built with { Compilers = LegCompilers.AheadOfTheBuild });
+
+        Assert.Equal(["--cxx={compiler_CXX}", "-j", "6", "--cc", "{compiler_C}"], ahead.Arguments);
+        Assert.Equal(Path.Combine("/tree", "{compiler_CXX}.d"), ahead.WorkingDirectory);
+
+        var refused = Assert.Throws<HarnessException>(() => TestInvocationResolver.CommandFor(
+            Invocation(workingDirectory: "{compiler_CXX}"),
+            cores: 6,
+            filter: null,
+            excludes: null,
+            built with { Compilers = LegCompilers.None("project 'app' is built by dotnet, which identifies no compiler") }));
+
+        Assert.Equal("test.workingDirectory names '{compiler_CXX}', and project 'app' is built by dotnet, which identifies no compiler.", refused.Message);
+    }
+
+    /// <summary>
     /// Expanded after the filter and the exclusions are spliced in, so every argument the runner
     /// sees has been through one rule. Expanded before them, an argument that arrived from --filter
     /// could name a directory an argument from the configuration could not.

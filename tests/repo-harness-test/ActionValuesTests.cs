@@ -108,6 +108,8 @@ public sealed class ActionValuesTests
     [InlineData("product")]
     [InlineData("buildDir")]
     [InlineData("config")]
+    [InlineData("compiler_C")]
+    [InlineData("compiler_CXX")]
     public async Task ReadAsync_Refuses_APlainValueNamedLikeANameThisToolFillsIn(string name)
     {
         using var temp = new TempDirectory();

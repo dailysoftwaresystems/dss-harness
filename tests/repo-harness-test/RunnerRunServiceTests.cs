@@ -2332,6 +2332,140 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
+    /// A run line naming one of the leg's compilers is filled in with the program the leg's build identified, in an
+    /// argument and as the line's own program alike: a runner's phase starts it as it starts any program, and its log
+    /// names the whole path that ran.
+    /// </summary>
+    [Fact]
+    public async Task ARunLineNamingTheLegsCompiler_IsFilledInWithWhatItsBuildIdentified()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var gxx = Path.Combine(temp.Path, "toolchain", "bin", "g++");
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("census", "echo-args", ["--cxx", "{compiler_CXX}"], successPattern: System.Text.RegularExpressions.Regex.Escape(gxx)),
+                new RunnerPhase { Name = "version", Command = ["{compiler_C}", "--version"] },
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with
+            {
+                Built = true,
+                BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+                Compilers = LegCompilers.Of(new Dictionary<string, LegCompiler>
+                {
+                    ["C"] = LegCompiler.Of(TestHost.DotnetExecutable),
+                    ["CXX"] = LegCompiler.Of(gxx),
+                }),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["[--cxx]", $"[{gxx}]"], result.Phases[0].Output.Lines());
+        Assert.Contains(
+            $"# command {TestHost.DotnetExecutable} --version",
+            File.ReadAllLines(temp.Combine(".harness-config", "runs", RunId, Leg, "version.log")).Select(line => line.Replace("\"", string.Empty, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A step of an action written as the leg's compiler alone starts it though nothing declares it under 'tools' - the
+    /// build that identified it ran it - where the run built the leg. Where it did not, the step is refused as any step
+    /// reading the build is, naming it, and nothing a build left there earlier is read to fill the name in.
+    /// </summary>
+    [Fact]
+    public async Task AStepStartingTheLegsCompiler_RunsWhereTheRunBuiltTheLeg_AndIsRefusedWhereItDidNot()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { StallSeconds = 0 } };
+        var reads = 0;
+
+        await WriteActionAsync(
+            factory,
+            temp,
+            """
+            name: corpus
+            steps:
+              - name: census
+                run: '{compiler_C} --version'
+            """);
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+        {
+            BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+            Compilers = LegCompilers.ReadBy(() =>
+            {
+                reads++;
+
+                return new Dictionary<string, LegCompiler> { ["C"] = LegCompiler.Of(TestHost.DotnetExecutable) };
+            }),
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $"Leg '{Leg}' was not built by this run, and runner 'corpus' reads the build - step 'census' names {{compiler_C}} - so "
+            + "nothing was run: unbuilt, it would read whatever the last build left there.",
+            refusal.Message);
+        Assert.Equal(0, reads);
+
+        var result = await Service(factory).RunAsync(config, request with { Built = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["census"], result.Phases.Select(phase => phase.Phase));
+        Assert.Equal(1, reads);
+    }
+
+    /// <summary>
+    /// A compiler's name nothing fills in - here one the build runs with a launcher's words after it - is refused before
+    /// the first step runs, naming the line and why, as is one nothing was given to read: found when its own step began,
+    /// the steps before it had already run.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "'late' run line names '{compiler_CXX}', and its build runs its CXX compiler as '/usr/bin/ccache' followed by 'g++'.")]
+    [InlineData(false, "'late' run line names '{compiler_CXX}', and nothing here reads which compiler the leg's build identified: only a run line and a test invocation are filled in with one.")]
+    public async Task ACompilersNameNothingFillsIn_IsRefusedBeforeAnythingRuns_SayingWhy(bool read, string said)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("harmless", "echo-args", ["one"]),
+                Phase("late", "echo-args", ["--cxx", "{compiler_CXX}"]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with
+            {
+                Built = true,
+                BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+                Compilers = read
+                    ? LegCompilers.Of(new Dictionary<string, LegCompiler>
+                    {
+                        ["CXX"] = LegCompiler.None("its build runs its CXX compiler as '/usr/bin/ccache' followed by 'g++'"),
+                    })
+                    : null,
+            },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(said, refusal.Message);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
     /// A secret a name fills in is refused as one written out, before the first step runs: the argument
     /// list the log header and the process table hold is the filled-in one, and the guard read it as
     /// written, where it held only the name.

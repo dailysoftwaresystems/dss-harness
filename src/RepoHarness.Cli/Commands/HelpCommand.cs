@@ -238,7 +238,8 @@ internal static class HelpCommand
         builder.AppendLine("  test    those, and the test runner; with --no-build, the runner alone");
         builder.AppendLine("  run     what the runner's steps start, and the build's too on a leg it builds:");
         builder.AppendLine("          where the runner, or a runner its run checks name, requires the build or");
-        builder.AppendLine("          runs a step or phase naming {product} or {buildDir} on that leg's system");
+        builder.AppendLine("          runs a step or phase naming {product}, {buildDir} or a compiler on that");
+        builder.AppendLine("          leg's system");
         builder.AppendLine("  sync    nothing: a copy starts no program");
         builder.AppendLine("  clean   nothing: removing a directory starts no program");
         builder.AppendLine("  legs    what build and test start");
@@ -370,8 +371,9 @@ internal static class HelpCommand
         builder.AppendLine("Quoting is double quotes only, no escapes, and a line with an unbalanced quote is");
         builder.AppendLine("refused when the file is read: the splitter silently drops everything after one,");
         builder.AppendLine("so the alternative is a command missing arguments nobody can see are missing.");
-        builder.AppendLine("The first token must be a program declared under tools, or a path in the");
-        builder.AppendLine("repository; anything else is refused before a single step runs. It is judged as");
+        builder.AppendLine("The first token must be a program declared under tools, a path in the");
+        builder.AppendLine("repository, or the name of one of the leg's compilers alone ({compiler_C},");
+        builder.AppendLine("below); anything else is refused before a single step runs. It is judged as");
         builder.AppendLine("it will start, its names filled in and read from the directory its step runs in:");
         builder.AppendLine("'{dir}/tool' is inside the repository only where {dir} keeps it there. A line, or");
         builder.AppendLine("a step's directory, that fills in to nothing is refused the same way, naming it.");
@@ -420,7 +422,8 @@ internal static class HelpCommand
         builder.AppendLine("shares modules with, can be a runner of its own with legs of its own. What");
         builder.AppendLine($"{StepSelection.Option} names wins over a runner's steps. A leg lists the steps it ran as");
         builder.AppendLine("ranSteps on its line, and the manual ones among them as manualSteps. Whichever runner");
-        builder.AppendLine("starts it, a step naming {product} or {buildDir} has its leg built first (below).");
+        builder.AppendLine("starts it, a step naming {product}, {buildDir} or a compiler has its leg built first");
+        builder.AppendLine("(below).");
         builder.AppendLine();
         builder.AppendLine("A manual step declares successPattern: it runs only when named, and a line of its own");
         builder.AppendLine("output is what says it did the work it was named for. A step can need only one");
@@ -463,23 +466,41 @@ internal static class HelpCommand
         builder.AppendLine("  {product}                           the one file this build is declared to make.");
         builder.AppendLine("                                      Refused where the project declares none or");
         builder.AppendLine("                                      several, rather than guessing which");
+        builder.AppendLine($"  {{{LegPathNames.CompilerC}}} {{{LegPathNames.CompilerCxx}}}         the C and the C++ compiler the leg's build");
+        builder.AppendLine("                                      identified: the whole path of the program");
+        builder.AppendLine("                                      CMake built with, as this machine spells it");
         builder.AppendLine("  <input name>                        any input the action declares, or the step");
         builder.AppendLine("                                      declares for itself, by its name");
         builder.AppendLine($"  <value name>                        any value the runner's {HarnessLayout.RunnerEnvDirectoryName} holds, by its name");
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A step whose run line or workingDirectory names {buildDir} or {product} reads what the build made, so "
+            $"A step whose run line or workingDirectory names {{{LegPathNames.BuildDirectory}}}, {{{LegPathNames.Product}}}, "
+            + $"{{{LegPathNames.CompilerC}}} or {{{LegPathNames.CompilerCxx}}} reads what the build made or identified, so "
             + "every leg of a run that runs it is built first - however the run comes to run it: by default, named "
             + $"with {StepSelection.Option} or under a runner's steps, or needed by one that is - whichever runner "
             + "starts it, requireBuild or not; one limited by runOn builds the legs of those systems alone, and a "
-            + "runner's own phase naming either builds as a step does. So does a runner whose run checks name a "
+            + "runner's own phase naming one builds as a step does. So does a runner whose run checks name a "
             + "runner that needs the build: a check runs on the leg as the runner carrying it left it. Left unbuilt, "
             + "such a step would read whatever the last build left: nothing, or what an older commit built. A leg a "
             + "run would build that cannot be built - it names no project, or no toolchain for its system - is "
             + "refused before anything starts, naming each leg and what builds it; so is a {product} the runner's "
             + "own steps or phases name where the leg's project declares no one file for its system. A run check's "
-            + "{product} is the check's to refuse, when it runs.");
+            + "{product} or compiler is the check's to refuse, when it runs.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"{{{LegPathNames.CompilerC}}} and {{{LegPathNames.CompilerCxx}}} name what built the leg, never what a toolchain "
+            + "declares: the program CMake's own record in the leg's build directory names for that language - gcc on one "
+            + "leg and cl on another, from one run line. A line may start with one, written alone: the leg's own compiler "
+            + "may run though nothing declares it under tools. A leg whose project CMake does not build is refused before "
+            + "anything starts, naming each leg and step, since no build of it identifies a compiler; and a name the "
+            + "leg's build has nothing for is refused once the leg is built, before its first step, saying which case it "
+            + "is - no compiler identified for that language, or one the build runs with words after it, a launcher such "
+            + "as ccache given its compiler or a compiler given options: the name is a program alone, so the program and "
+            + "the words are named and neither is filled in. A test invocation's args, coresArgs and workingDirectory may "
+            + "name one too: the check made before the build lets the name stand, and it is filled in, or refused, once "
+            + "the leg is built.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1018,7 +1039,7 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("A leg that builds or tests is heavy. A run's leg builds where its runner, or a runner");
         builder.AppendLine("its expected exceptions' run checks name, requires the build or runs a step or phase");
-        builder.AppendLine("naming {product} or {buildDir}, and is heavy, too, where one of them says");
+        builder.AppendLine("naming {product}, {buildDir} or a compiler, and is heavy, too, where one of them says");
         builder.AppendLine("\"heavy\": true or runs a step whose action says heavy: true. Either kind of step counts");
         builder.AppendLine("however the run comes to run it - by default, named with --manual-step or under a");
         builder.AppendLine("runner's steps, or needed by one that is - whichever runner starts it, and one");

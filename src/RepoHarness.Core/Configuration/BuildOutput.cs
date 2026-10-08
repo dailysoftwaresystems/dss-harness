@@ -10,8 +10,8 @@ namespace RepoHarness.Core.Configuration;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The same target is not the same file everywhere: a program CMake calls <c>dsscp</c> is
-/// <c>dsscp.exe</c> on Windows, and a static library differs by prefix as well as suffix
+/// The same target is not the same file everywhere: a program CMake calls <c>app</c> is
+/// <c>app.exe</c> on Windows, and a static library differs by prefix as well as suffix
 /// (<c>libfoo.a</c> against <c>foo.lib</c>). A single path is therefore wrong on one platform or
 /// the other, which left a mixed leg set with no way to witness a build at all.
 /// </para>

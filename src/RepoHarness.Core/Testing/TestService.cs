@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Enumeration;
 using System.Text.RegularExpressions;
+using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
@@ -59,6 +60,13 @@ public sealed record TestRequest
 
     /// <summary>Why there is no product, for a refusal that can say which case it is.</summary>
     public string? ProductProblem { get; init; }
+
+    /// <summary>
+    /// What a test invocation naming one of the leg's compilers - <c>{compiler_C}</c>, <c>{compiler_CXX}</c> - is filled
+    /// in with once the leg is built: what its build identified, read where the invocation first names one. Left out, an
+    /// invocation naming one is refused.
+    /// </summary>
+    public Execution.LegCompilers? Compilers { get; init; }
 
     /// <summary>
     /// The host's <c>testCores</c>, when it declares one. A remote host rarely has the same core
@@ -281,7 +289,7 @@ public sealed class TestService(
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(request);
 
-        var (settings, invocation, cores, command, counter) = Command(config, request);
+        var (settings, invocation, cores, command, counter) = Command(config, request, built: true);
 
         var logFile = Path.Combine(request.RunDirectory, request.Leg, request.PhaseName + ".log");
         var (inputs, unmeasurable) = await ResolveInputsAsync(settings, request, cancellationToken).ConfigureAwait(false);
@@ -376,17 +384,25 @@ public sealed class TestService(
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(request);
 
-        _ = Command(config, request);
+        _ = Command(config, request, built: false);
     }
 
     /// <summary>
     /// The settings, invocation, core count, command and count pattern <paramref name="request"/> runs its
     /// tests with, refused wherever the run could not start as asked.
     /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="request">The leg, and what was asked of its tests.</param>
+    /// <param name="built">
+    /// Whether the leg's build is done, so the compilers it identified can fill their names in. Ahead of it - the check
+    /// before the build - a compiler's name stands as written where a build of the leg's project will identify one, and
+    /// is refused where none ever does; the command made then is never started.
+    /// </param>
     /// <exception cref="HarnessException">The tests could not be run as asked.</exception>
     private (TestConfig Settings, ResolvedTestInvocation Invocation, CoreCount Cores, TestCommand Command, Regex? Counter) Command(
         HarnessConfig config,
-        TestRequest request)
+        TestRequest request,
+        bool built)
     {
         var settings = TestInvocationResolver.SettingsFor(config, request.LegSettings, request.Project)
             ?? throw new HarnessException(
@@ -401,6 +417,7 @@ public sealed class TestService(
             Identity = request.Identity,
             Product = request.Product,
             ProductProblem = request.ProductProblem,
+            Compilers = built ? request.Compilers : CMakeToolchainReader.BeforeTheBuild(request.Project),
         };
         IReadOnlyList<string> remote = request.Remote ? invocation.RemoteExcludes ?? [] : [];
 

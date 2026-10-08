@@ -157,6 +157,9 @@ internal static class TestCommand
             Identity = leg.IdentityFor(work.RunId.Value),
             Product = testProduct,
             ProductProblem = testProductProblem,
+
+            // Read only once the leg is built, and only where the invocation names a compiler.
+            Compilers = toolchains.NamedFor(leg.Project, leg.BuildDirectory),
             HostTestCores = leg.HostSettings.TestCores,
             HostEnvironment = leg.Environment,
             Filter = filter,

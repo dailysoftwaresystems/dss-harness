@@ -189,15 +189,17 @@ internal static class RunCommand
             }
 
             // Built only where the runner, or a runner its run checks name, requires the build or runs a step or
-            // phase naming {product} or {buildDir}, and never tested: a host needs cmake for a runner that measures
-            // a build product, and not for one that only runs a script. Decided once, here, for every leg: whether
-            // a leg builds is this workload read for its system.
+            // phase naming what the build makes - {product}, {buildDir} or one of the leg's compilers - and never
+            // tested: a host needs cmake for a runner that measures a build product, and not for one that only runs
+            // a script. Decided once, here, for every leg: whether a leg builds is this workload read for its system.
             var workload = LegWorkload.ForRunner(runner, file?.File, checks);
 
-            // A leg it would build that cannot be built, and a {product} this runner's steps or phases name that no one
-            // declared file fills in, refused here as a leg that would run nothing is: before a host is measured, naming
-            // every such leg and what builds it.
+            // A leg it would build that cannot be built, a {product} this runner's steps or phases name that no one
+            // declared file fills in, and a compiler they name on a leg no build identifies one for, refused here as
+            // a leg that would run nothing is: before a host is measured, naming every such leg and what builds it.
             workload.RequireBuildable(harness.Config, runnerName, legs);
+
+            var toolchains = context.Get<CMakeToolchainReader>();
 
             return await context.Get<LegRunService>()
                 .RunAsync(
@@ -215,7 +217,7 @@ internal static class RunCommand
                     {
                         Workload = workload,
                     },
-                    (work, token) => RunLegAsync(runners, builds, runnerName, inputs, manualSteps, workload, work, token),
+                    (work, token) => RunLegAsync(runners, builds, toolchains, runnerName, inputs, manualSteps, workload, work, token),
                     cancellationToken)
                 .ConfigureAwait(false);
         }, JsonOption));
@@ -238,6 +240,7 @@ internal static class RunCommand
     private static async Task<LegEntry> RunLegAsync(
         IRunnerRunService runners,
         IBuildService builds,
+        CMakeToolchainReader toolchains,
         string runnerName,
         IReadOnlyDictionary<string, string> inputs,
         IReadOnlyList<string> manualSteps,
@@ -252,8 +255,8 @@ internal static class RunCommand
 
         // Built before the runner starts where the workload says so for this leg's system: the runner,
         // or a runner its run checks name, requires the build or runs a step or phase naming what the
-        // build makes - {product} or {buildDir} - on this leg's system, whether or not a check ever
-        // runs. Unbuilt, such a step would read whatever was left there last time: a file that is not
+        // build makes - {product}, {buildDir} or one of the leg's compilers - on this leg's system,
+        // whether or not a check ever runs. Unbuilt, such a step would read whatever was left there last time: a file that is not
         // there, or one an older commit built. Only a leg that builds names the compilers: one that
         // does not may never touch the build.
         IReadOnlyList<CompilerFact> compilers = [];
@@ -291,7 +294,7 @@ internal static class RunCommand
         var result = await runners
             .RunAsync(
                 config,
-                RequestFor(work, runnerName, runner, building) with
+                RequestFor(work, runnerName, runner, building, toolchains) with
                 {
                     Time = work.Time,
 
@@ -304,7 +307,7 @@ internal static class RunCommand
 
                     // One level deep by construction: the runner a check names carries no checks of
                     // its own, and this delegate reaches the service only for that one.
-                    InvokeRunner = (name, token) => ConfirmAsync(runners, config, work, name, building, token),
+                    InvokeRunner = (name, token) => ConfirmAsync(runners, toolchains, config, work, name, building, token),
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -329,6 +332,7 @@ internal static class RunCommand
     /// </remarks>
     private static async Task<RunOutcome> ConfirmAsync(
         IRunnerRunService runners,
+        CMakeToolchainReader toolchains,
         HarnessConfig config,
         LegWork work,
         string runnerName,
@@ -336,7 +340,7 @@ internal static class RunCommand
         CancellationToken cancellationToken)
     {
         var result = await runners
-            .RunAsync(config, RequestFor(work, runnerName, Resolve(config, runnerName), built), cancellationToken)
+            .RunAsync(config, RequestFor(work, runnerName, Resolve(config, runnerName), built, toolchains), cancellationToken)
             .ConfigureAwait(false);
 
         return result.Outcome;
@@ -348,7 +352,7 @@ internal static class RunCommand
     /// runs and for the one a check names, so what the host declares reaches both or neither, and so
     /// does whether the leg was built: a step reading the build is refused on a leg that was not.
     /// </summary>
-    private static RunnerRunRequest RequestFor(LegWork work, string runnerName, RunnerConfig runner, bool built)
+    private static RunnerRunRequest RequestFor(LegWork work, string runnerName, RunnerConfig runner, bool built, CMakeToolchainReader toolchains)
     {
         var leg = work.Leg;
 
@@ -379,6 +383,10 @@ internal static class RunCommand
             Identity = leg.IdentityFor(work.RunId.Value),
             Product = product,
             ProductProblem = productProblem,
+
+            // From that same directory, and read only where a run line names a compiler: what the build this run made
+            // there identified, for the runner the command line named and for each a run check starts alike.
+            Compilers = toolchains.NamedFor(leg.Project, buildDirectory),
             ResolvedLegs = [leg.Name],
             Emulated = leg.Emulated,
         };

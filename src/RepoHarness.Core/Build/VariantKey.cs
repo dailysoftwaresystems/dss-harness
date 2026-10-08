@@ -74,7 +74,8 @@ public sealed record VariantKey(string Processor, string Toolchain, string Confi
     /// </summary>
     /// <remarks>
     /// A leg whose run builds nothing - its runner neither requires the build nor runs a step or phase
-    /// naming <c>{product}</c> or <c>{buildDir}</c>, and neither does a runner its run checks name -
+    /// naming <c>{product}</c>, <c>{buildDir}</c> or one of the leg's compilers, and neither does a runner
+    /// its run checks name -
     /// needs no project and no compiler, but it still needs a variant: the lock is keyed by one, and
     /// so is the directory contention watches. Naming the absence keeps those keys distinct from a
     /// leg that does build, rather than making a repository declare a project it has no use for.

@@ -1,4 +1,5 @@
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -17,6 +18,12 @@ public enum ProgramAllowance
 
     /// <summary>It is a path inside the repository, so the repository itself ships it.</summary>
     RepositoryPath,
+
+    /// <summary>
+    /// The line is written as the name of one of the leg's compilers alone, so it starts what the leg's build
+    /// identified and built with.
+    /// </summary>
+    LegCompiler,
 }
 
 /// <summary>
@@ -26,7 +33,9 @@ public enum ProgramAllowance
 /// <para>
 /// The first token of every <c>run</c> line must be a program declared under <c>tools</c>, which is
 /// what <c>install-missing-tools</c> guarantees is present and at a known version, or a path inside
-/// the repository, because a repository ships programs of its own. Anything else is refused
+/// the repository, because a repository ships programs of its own, or the name of one of the leg's
+/// compilers alone, because the leg's build identified that program and built with it, and a run
+/// builds the leg first to name it. Anything else is refused
 /// <em>before anything runs</em>: an action file that reaches its fourth step and then fails on a
 /// program nobody declared has already changed the tree, and the run has to be understood before it
 /// can be repeated.
@@ -79,6 +88,29 @@ public sealed class ActionToolPolicy(IHostPlatform platform)
             || tool.Name.Equals(bare, StringComparison.OrdinalIgnoreCase))
             ? ProgramAllowance.DeclaredTool
             : ProgramAllowance.Undeclared;
+    }
+
+    /// <summary>
+    /// Why what <paramref name="command"/> starts may run, or <see cref="ProgramAllowance.Undeclared"/>: the leg's own
+    /// compiler where the line is written as its name alone, and otherwise as <paramref name="started"/> is judged.
+    /// </summary>
+    /// <param name="command">The line, as written.</param>
+    /// <param name="started">What it starts, and the directory it starts in, as the run works them out.</param>
+    /// <param name="tools">The repository's declared tools.</param>
+    /// <param name="repositoryRoot">Root of the tree the runner acts on.</param>
+    public ProgramAllowance Classify(
+        ActionCommand command,
+        (string Program, string WorkingDirectory) started,
+        IReadOnlyList<ToolConfig> tools,
+        string repositoryRoot)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        // Judged by what the line says rather than by where its program is: a path that merely equals the compiler's -
+        // an input's, a value's - is a path like any other, and nothing says its leg was built to know it.
+        return LegPathNames.IsACompilerAlone(command.Program)
+            ? ProgramAllowance.LegCompiler
+            : Classify(started.Program, tools, repositoryRoot, started.WorkingDirectory);
     }
 
     /// <summary>
@@ -138,7 +170,7 @@ public sealed class ActionToolPolicy(IHostPlatform platform)
             return $"{line} starts nothing once its names are filled in.";
         }
 
-        if (Classify(started.Program, tools, repositoryRoot, started.WorkingDirectory) != ProgramAllowance.Undeclared)
+        if (Classify(command, started, tools, repositoryRoot) != ProgramAllowance.Undeclared)
         {
             return null;
         }

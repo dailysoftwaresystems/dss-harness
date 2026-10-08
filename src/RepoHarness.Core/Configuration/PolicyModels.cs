@@ -57,7 +57,7 @@ public sealed class ContentionConfig
 
     /// <summary>
     /// What each of <see cref="SharedResourceTools"/> shares, by tool name, said in the warning when
-    /// one is found beside a leg - "the per-user compiler cache under ~/.cache/dsscp".
+    /// one is found beside a leg - "the per-user compiler cache under ~/.cache/toolcc".
     /// </summary>
     /// <remarks>
     /// The harness cannot know what a tool shares; the file's author does. Without it the warning can

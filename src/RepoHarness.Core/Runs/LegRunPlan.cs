@@ -342,7 +342,7 @@ public static class LegRunPlan
         var leg = selected.Leg;
 
         // Neither is required here. A leg whose run builds nothing - its runner neither requires the
-        // build nor runs a step or phase naming {product} or {buildDir} - compiles nothing, and making
+        // build nor runs a step or phase naming {product}, {buildDir} or a compiler - compiles nothing, and making
         // it declare a project it has no use for would be a demand the tool invents. The commands that
         // do build refuse a leg with no project, naming what is missing: a run before any host is
         // measured, a build and a test as the build starts.
