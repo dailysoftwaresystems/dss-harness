@@ -149,7 +149,7 @@ public sealed class OrchestratorServiceTests
 
     /// <summary>
     /// An agent whose worktree is gone already still has the workers a sweep left beside it removed as it is deleted,
-    /// and said: nothing else would remove them before its orchestrator goes. One a sweep still running holds keeps the
+    /// and said: left there, they would stay until its worktree was deleted again or its orchestrator went. One a sweep still running holds keeps the
     /// agent from being deleted yet, said with what holds it; deleted again once the sweep has ended, it is finished.
     /// </summary>
     [Fact]
@@ -186,6 +186,38 @@ public sealed class OrchestratorServiceTests
             deleted.Details ?? [],
             line => line.Contains("removed 1 mutation worker(s) kept beside it, ", StringComparison.Ordinal) && line.EndsWith($": '{left}'", StringComparison.Ordinal));
         Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
+    }
+
+    /// <summary>
+    /// An agent whose worktree is gone, where the directory a sweep would have left its workers in cannot be looked in,
+    /// is not deleted yet: whether one is left is never read as none, and delete-worktree, asked, says it could not look.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentGoneAlready_WhoseWorkersCannotBeLookedFor_IsNotDeletedYet()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
+
+        var left = await WorkerAsync(kit, worktree + ".mutation-357e24cw-1");
+        var agents = kit.Harness.Agents(new UnlistableFileSystem(kit.Harness.FileSystem, kit.Worktrees), kit.Harness.AnchorRegistryService);
+
+        var waiting = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, waiting.ExitCode);
+        Assert.NotEqual(AgentStates.Deleted, kit.Record("ag").State);
+        Assert.True(Directory.Exists(left));
+        Assert.Contains(
+            "delete-worktree o1/ag: Worktree 'o1/ag' is gone already, and the mutation workers left beside it could not be removed: "
+            + "run 'dssharness delete-worktree o1/ag' once that is put right.",
+            waiting.Details ?? []);
+        Assert.Contains(
+            waiting.Details ?? [],
+            line => line.StartsWith(
+                $"  the mutation workers kept beside it could not be removed: '{Path.GetDirectoryName(worktree)}' could not be looked in: Access to the path '",
+                StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -277,6 +309,187 @@ public sealed class OrchestratorServiceTests
         Assert.Equal("mine", File.ReadAllText(Path.Combine(notes, "notes.txt")));
         Assert.Contains(deleted.Details ?? [], line => line.StartsWith("its agent 'notes': ", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// A directory that was looked in for worktrees and cannot be looked in for the workers agents left there is never
+    /// read as holding none: the orchestrator is not deleted, and nothing is changed.
+    /// </summary>
+    [Fact]
+    public async Task DeletingAnOrchestrator_WhenTheWorkersLeftBelowItCannotBeLookedFor_ChangesNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-357e24cw-1");
+        var service = Over(kit, new ListsOnce(kit.Harness.FileSystem, kit.Worktrees));
+
+        var failure = await Assert.ThrowsAsync<HarnessException>(() => service.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token));
+
+        Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
+        Assert.Equal($"'{kit.Worktrees}' could not be looked in: the disk would not say", failure.Message);
+        Assert.True(File.Exists(kit.Layout.RecordFile));
+        Assert.True(Directory.Exists(left));
+    }
+
+    /// <summary>
+    /// A directory under the worktrees root that cannot be looked in once the orchestrator is gone is said as that -
+    /// never as empty, which nothing told - and is left where it is, beside the deletion.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryUnderTheRootThatCannotBeLookedIn_IsSaidAsThat_AndTheOrchestratorIsStillDeleted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        Directory.CreateDirectory(kit.Worktrees);
+        var service = Over(kit, new CannotTellEmpty(kit.Harness.FileSystem, kit.Worktrees));
+
+        var deleted = await service.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Contains(
+            $"its directory under the worktrees root, '{kit.Worktrees}', is left: whether it is empty could not be told - the disk would not say",
+            deleted.Details ?? []);
+        Assert.True(Directory.Exists(kit.Worktrees));
+        Assert.False(Directory.Exists(kit.Layout.Directory));
+    }
+
+    /// <summary>A disk that will not say which files one directory holds, so not whether it is empty either.</summary>
+    private sealed class CannotTellEmpty(RepoHarness.Core.FileSystem.IFileSystem inner, string directory) : PassThroughFileSystem(inner)
+    {
+        public override IEnumerable<string> EnumerateFiles(string path, bool recursive)
+            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase)
+                ? throw new IOException("the disk would not say.")
+                : base.EnumerateFiles(path, recursive);
+    }
+
+    /// <summary>
+    /// A deletion interrupted as the workers its agents left go has deleted the orchestrator by then, and says so -
+    /// with what went, and each agent whose workers are still to be removed, by the command that removes them: asked
+    /// again, it would find no orchestrator and say nothing of them. Stopped between two agents or part way through
+    /// one's workers, the one it was stopped in is named with those not yet asked.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADeletionInterruptedAsTheWorkersItsAgentsLeftGo_SaysTheOrchestratorIsDeleted_AndWhatRemovesTheRest(bool partWay)
+    {
+        using var temp = new TempDirectory();
+        using var interruption = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var first = await WorkerAsync(kit, kit.Worktree("a") + ".mutation-357e24cw-1");
+        var second = partWay ? await WorkerAsync(kit, kit.Worktree("a") + ".mutation-357e24cw-2") : null;
+        var others = await WorkerAsync(kit, kit.Worktree("b") + ".mutation-357e24cw-1");
+        var size = kit.Harness.FileSystem.DirectorySize(first);
+        var service = Over(kit, new InterruptsOnceRemoved(kit.Harness.FileSystem, first, interruption));
+
+        var stopped = await service.DeleteAsync(kit.Main, "o1", deleteEvidence: false, interruption.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, stopped.ExitCode);
+        Assert.Equal(
+            "Orchestrator 'o1' was deleted, and the interruption came before the mutation workers left beside "
+            + (partWay ? "'o1/a', 'o1/b'" : "'o1/b'")
+            + " had all been removed: run 'dssharness delete-worktree <address>' for each to remove the rest.",
+            stopped.Message);
+        Assert.Contains($"removed {kit.Layout.Directory}", stopped.Details ?? []);
+        Assert.Contains(
+            stopped.Details ?? [],
+            line => line.Contains($"removed 1 mutation worker(s) kept beside it, {RepoHarness.Core.FileSystem.DiskSpace.Size(size)}: '{first}'", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(kit.Layout.Directory));
+        Assert.False(Directory.Exists(first));
+        Assert.True(Directory.Exists(others));
+        Assert.True(second is null || Directory.Exists(second));
+
+        // What it names finishes it: each agent's workers go as deleting its worktree again removes them.
+        foreach (var address in partWay ? new[] { "o1/a", "o1/b" } : ["o1/b"])
+        {
+            var gone = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, address, force: false, deleteEvidence: false, cancellationToken: Token);
+
+            Assert.True(gone.Succeeded, gone.Outcome.Message);
+        }
+
+        Assert.False(Directory.Exists(others));
+        Assert.True(second is null || !Directory.Exists(second));
+    }
+
+    /// <summary>
+    /// The workers an agent left that could not be asked about once the orchestrator is gone are said beside the
+    /// deletion, with the command that removes them, and the other agents' still go: the orchestrator is deleted either
+    /// way, and a failure raised there would say nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkersAnAgentLeft_ThatCouldNotBeAskedAbout_AreSaidBesideTheDeletion_AndTheOthersGo()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var kept = await WorkerAsync(kit, kit.Worktree("a") + ".mutation-357e24cw-1");
+        var gone = await WorkerAsync(kit, kit.Worktree("b") + ".mutation-357e24cw-1");
+        var service = new OrchestratorService(
+            kit.Harness.ContextLoader,
+            kit.Harness.GitClient,
+            kit.Harness.FileSystem,
+            kit.Harness.Platform,
+            kit.Harness.Output,
+            new RefusesOne(kit.Harness.WorktreeService, "o1/a"),
+            kit.Harness.OrchestrationStore,
+            kit.Harness.OrchestrationLog,
+            TimeProvider.System);
+
+        var deleted = await service.DeleteAsync(kit.Main, "o1", deleteEvidence: false, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Contains(
+            "its agent 'a': the mutation workers left beside it were not removed - git would not answer; "
+            + "'dssharness delete-worktree o1/a' removes them once that is put right",
+            deleted.Details ?? []);
+        Assert.Contains(deleted.Details ?? [], line => line.StartsWith("its agent 'b': removed 1 mutation worker(s) kept beside it, ", StringComparison.Ordinal));
+        Assert.True(Directory.Exists(kept));
+        Assert.False(Directory.Exists(gone));
+        Assert.False(Directory.Exists(kit.Layout.Directory));
+    }
+
+    /// <summary>The worktrees, except that deleting the one at <paramref name="address"/> fails as a git that cannot be asked fails it.</summary>
+    private sealed class RefusesOne(RepoHarness.Core.Worktrees.IWorktreeService inner, string address) : RepoHarness.Core.Worktrees.IWorktreeService
+    {
+        public Task<RepoHarness.Core.Worktrees.WorktreeOutcome> CreateAsync(string startDirectory, string? name, bool useRandomName, CancellationToken cancellationToken = default)
+            => inner.CreateAsync(startDirectory, name, useRandomName, cancellationToken);
+
+        public Task<RepoHarness.Core.Worktrees.WorktreeOutcome> CreateAtAsync(string startDirectory, RepoHarness.Core.Worktrees.WorktreeAddress address, CancellationToken cancellationToken = default)
+            => inner.CreateAtAsync(startDirectory, address, cancellationToken);
+
+        public Task<RepoHarness.Core.Worktrees.WorktreeOutcome> DeleteAsync(
+            string startDirectory,
+            string name,
+            bool force,
+            bool deleteEvidence,
+            bool discardUncommitted = false,
+            CancellationToken cancellationToken = default)
+            => name == address
+                ? throw new HarnessException(HarnessExit.CommandFailed, "git would not answer.")
+                : inner.DeleteAsync(startDirectory, name, force, deleteEvidence, discardUncommitted, cancellationToken);
+
+        public Task<IReadOnlyList<RepoHarness.Core.Worktrees.WorktreeListing>> ListAsync(string startDirectory, CancellationToken cancellationToken = default)
+            => inner.ListAsync(startDirectory, cancellationToken);
+    }
+
+    /// <summary>Deleting orchestrators over <paramref name="fileSystem"/>, the worktrees below them deleted over it as well.</summary>
+    private static OrchestratorService Over(OrchestrationKit kit, RepoHarness.Core.FileSystem.IFileSystem fileSystem)
+        => new(
+            kit.Harness.ContextLoader,
+            kit.Harness.GitClient,
+            fileSystem,
+            kit.Harness.Platform,
+            kit.Harness.Output,
+            new RepoHarness.Core.Worktrees.WorktreeService(
+                kit.Harness.ContextLoader,
+                kit.Harness.GitClient,
+                fileSystem,
+                kit.Harness.PathBudget,
+                kit.Harness.Platform,
+                kit.Harness.Output,
+                kit.Harness.HostCopies,
+                kit.Harness.Local(fileSystem)),
+            kit.Harness.OrchestrationStore,
+            kit.Harness.OrchestrationLog,
+            TimeProvider.System);
 
     /// <summary>The copies a sweep keeps its workers in, as it claims and releases them.</summary>
     private static RepoHarness.Core.Mutations.WorkerCopies Copies(OrchestrationKit kit)

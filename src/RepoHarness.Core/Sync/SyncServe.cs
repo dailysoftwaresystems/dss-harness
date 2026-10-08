@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Sync;
@@ -420,13 +421,40 @@ public sealed record WorkersRemoval(IReadOnlyList<WorkerRemoved> Removed, IReadO
     /// <summary>No worker beside the tree, so nothing removed and nothing left.</summary>
     public static WorkersRemoval None { get; } = new([], []);
 
+    /// <summary>
+    /// Whether the removal was stopped before every worker had been dealt with: what is here is what it had done by
+    /// then, and a worker it names nowhere was not reached.
+    /// </summary>
+    public bool Interrupted { get; init; }
+
     /// <summary>What the workers removed held together.</summary>
     [JsonIgnore]
     public long Bytes => Removed.Sum(worker => worker.Bytes);
 
-    /// <summary>The workers left because something is using them: what keeps their tree from being removed too.</summary>
+    /// <summary>
+    /// What became of the workers, as the one verdict every command that removes them reads: refused-locked where a
+    /// sweep still running holds one, which ends by waiting; failed where one could not be removed, or told; stopped
+    /// where the removal was stopped before each had been dealt with; and passed where none of that is - the most
+    /// fundamental of them where several are. A command's own code for the first two is the verdict's.
+    /// </summary>
     [JsonIgnore]
-    public IReadOnlyList<WorkerLeft> InUse => [.. Left.Where(worker => worker.InUse)];
+    public LegVerdict Verdict => Verdicts.Worst([.. Left.Select(worker => Of(worker.As)), Interrupted ? LegVerdict.Stopped : LegVerdict.Passed]);
+
+    /// <summary>
+    /// The worker that keeps its tree from being removed with the others, or <see langword="null"/> where none does:
+    /// the first of the kind <see cref="Verdict"/> ranks first, so what is said of it is what the verdict says.
+    /// </summary>
+    [JsonIgnore]
+    public WorkerLeft? Kept => Left.Where(worker => Of(worker.As) != LegVerdict.Passed).MinBy(worker => Verdicts.Rank(Of(worker.As)));
+
+    // What one worker left says of its tree: held, it is in use; not removed, its removal failed; somebody's, nothing.
+    private static LegVerdict Of(WorkerLeftAs left)
+        => left switch
+        {
+            WorkerLeftAs.Held => LegVerdict.RefusedLocked,
+            WorkerLeftAs.NotRemoved => LegVerdict.Failed,
+            _ => LegVerdict.Passed,
+        };
 }
 
 /// <summary>One mutation worker removed, or that would be.</summary>
@@ -437,11 +465,28 @@ public sealed record WorkerRemoved(string Path, long Bytes);
 /// <summary>One directory of a tree's mutation workers left where it is.</summary>
 /// <param name="Path">Where it is.</param>
 /// <param name="Why">Why it was left, as a line says it.</param>
-/// <param name="InUse">
-/// Whether something is using it - a sweep still running holds it, or its removal stopped at a file something holds - so
-/// that asking again later removes it; <see langword="false"/> where it is nothing the harness may remove.
-/// </param>
-public sealed record WorkerLeft(string Path, string Why, bool InUse);
+/// <param name="As">What it was left as, which says what would have it go.</param>
+public sealed record WorkerLeft(string Path, string Why, WorkerLeftAs As)
+{
+    /// <summary>Why it was left, naming it: its path first, where what is said of it does not name it already.</summary>
+    public string Told() => Why.Contains(Path, StringComparison.Ordinal) ? Why : $"'{Path}': {Why}";
+}
+
+/// <summary>What a directory of a tree's mutation workers was left as, which says whether asking again removes it.</summary>
+public enum WorkerLeftAs
+{
+    /// <summary>Somebody's: nothing the harness may remove, and nothing that keeps its tree.</summary>
+    Somebodys,
+
+    /// <summary>Held: a sweep still running holds it, and asking again removes it once the sweep has ended.</summary>
+    Held,
+
+    /// <summary>
+    /// Not removed: its removal failed or was stopped part way, or what it is could not be told - its marker cannot be
+    /// read. Nothing holds it that waiting would end: asking again removes it, or says whose it is, once that is put right.
+    /// </summary>
+    NotRemoved,
+}
 
 /// <summary>The worktree copies a host keeps beside its main copy.</summary>
 /// <param name="Copies">One for each, in the order of their names.</param>

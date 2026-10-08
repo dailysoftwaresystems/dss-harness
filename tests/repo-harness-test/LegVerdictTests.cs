@@ -256,9 +256,25 @@ public sealed class LegVerdictTests
         Assert.Equal(LegVerdict.SkippedToolMissing, Verdicts.ForRefusal(HarnessExit.ToolMissing));
         Assert.Equal(LegVerdict.LogHeld, Verdicts.ForRefusal(LegExit.LogHeld));
         Assert.Equal(LegVerdict.NotAdmitted, Verdicts.ForRefusal(LegExit.NotAdmitted));
-        Assert.Equal(LegVerdict.Violated, Verdicts.ForRefusal(LegExit.Violated));
-        Assert.Equal(LegVerdict.Survived, Verdicts.ForRefusal(LegExit.Survived));
-        Assert.Equal(LegVerdict.Unattributed, Verdicts.ForRefusal(LegExit.Unattributed));
         Assert.Equal(LegVerdict.Poisoned, Verdicts.ForRefusal(HarnessExit.InternalError));
+    }
+
+    /// <summary>
+    /// A refusal never names what only a sweep's judge decides: a program a host ran that exited 1, 2 or 8 - as any
+    /// program may - refuses with that code, and is no arm that was violated, survived or went unattributed. Whatever
+    /// code a refusal carries, the verdict it gives is one a build, a test or a run can reach.
+    /// </summary>
+    [Fact]
+    public void ARefusal_NeverNamesWhatOnlyASweepsJudgeDecides()
+    {
+        Assert.All(
+            Verdicts.All.Where(info => info.OfASweep),
+            info => Assert.Equal(LegVerdict.Poisoned, Verdicts.ForRefusal(info.ExitCode)));
+        Assert.All(
+            Enumerable.Range(0, 256),
+            code => Assert.False(Verdicts.All.Single(info => info.Verdict == Verdicts.ForRefusal(code)).OfASweep, $"a refusal carrying {code} names a sweep's verdict"));
+        Assert.Equal(
+            ReachedVerdict.Of(LegVerdict.Poisoned, "pi: 'manifest' exited 1"),
+            Verdicts.ForFailure(new HarnessException(LegExit.Violated, "pi: 'manifest' exited 1")));
     }
 }

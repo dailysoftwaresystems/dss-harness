@@ -6,10 +6,39 @@ using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Mutations;
 
-/// <summary>The program a runner target builds, or why it builds none a sweep can run.</summary>
-/// <param name="Path">The program, relative to the build directory, or <see langword="null"/> where there is none.</param>
-/// <param name="Problem">Why there is none, as a line says it, where there is none.</param>
-internal sealed record WorkerProgram(string? Path, string? Problem);
+/// <summary>The program a runner target builds, or why it builds none a sweep can run. Exactly one of the two.</summary>
+internal sealed record WorkerProgram
+{
+    private WorkerProgram(string? path, string? problem)
+    {
+        Path = path;
+        Problem = problem;
+    }
+
+    /// <summary>The program, relative to the build directory, or <see langword="null"/> where there is none.</summary>
+    public string? Path { get; }
+
+    /// <summary>Why there is none, as a line says it; <see langword="null"/> where there is one.</summary>
+    public string? Problem { get; }
+
+    /// <summary>The program <paramref name="path"/> is.</summary>
+    /// <param name="path">The program, relative to the build directory.</param>
+    public static WorkerProgram Of(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        return new(path, null);
+    }
+
+    /// <summary>No program, for <paramref name="problem"/>.</summary>
+    /// <param name="problem">Why there is none, as a line says it.</param>
+    public static WorkerProgram None(string problem)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(problem);
+
+        return new(null, problem);
+    }
+}
 
 /// <summary>
 /// What a worker's build says of how it builds each target, read from its own records once its baseline build is done: an
@@ -170,17 +199,17 @@ internal sealed class NinjaWorkerGraph(NinjaRebuildGraph graph, string? program)
 
         if (manifest.EdgeFor(target) is null)
         {
-            return new WorkerProgram(null, $"runner '{target}' is built by no line of the leg's build");
+            return WorkerProgram.None($"runner '{target}' is built by no line of the leg's build");
         }
 
         if (manifest.ArtifactOf(target) is not { } artifact)
         {
-            return new WorkerProgram(null, $"runner '{target}' stands for several files, so it names no one program to run");
+            return WorkerProgram.None($"runner '{target}' stands for several files, so it names no one program to run");
         }
 
         return manifest.EdgeFor(artifact) is { } edge && CMakeNinjaRule.LinksAProgram(edge)
-            ? new WorkerProgram(artifact, null)
-            : new WorkerProgram(null, $"runner '{target}' builds '{artifact}', which its build makes as no program");
+            ? WorkerProgram.Of(artifact)
+            : WorkerProgram.None($"runner '{target}' builds '{artifact}', which its build makes as no program");
     }
 
     /// <inheritdoc/>

@@ -26,7 +26,7 @@ public sealed class SyncTransportFactory(
     IHostCommandRunner hostCommandRunner,
     Platform.IHostPlatform platform,
     IHarnessOutput output,
-    ICopyClaims? claims = null) : ISyncTransportFactory
+    ICopyClaims claims) : ISyncTransportFactory
 {
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IManifestBuilder _manifestBuilder = manifestBuilder;

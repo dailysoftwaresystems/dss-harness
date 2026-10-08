@@ -259,10 +259,5 @@ public sealed class ReviewFixesTests
                 && problem.Contains("src/**/cache", StringComparison.Ordinal));
     }
 
-    private static LocalSyncTransport Transport(HarnessFactory harness)
-        => new(
-            harness.FileSystem,
-            new ManifestBuilder(harness.FileSystem, harness.Platform),
-            harness.GitClient,
-            harness.Platform);
+    private static LocalSyncTransport Transport(HarnessFactory harness) => SyncKit.Transport(harness);
 }

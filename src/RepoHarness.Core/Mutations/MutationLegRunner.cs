@@ -239,10 +239,10 @@ internal sealed class MutationLegRunner(
             var unlinked = await ReadFetchedAsync(cancellationToken).ConfigureAwait(false);
             var (plan, needs) = await PlanAsync(driven.Count, cancellationToken).ConfigureAwait(false);
 
-            if (plan.Count == 0)
+            if (plan.RunsNone)
             {
                 // No room for even one worker, which turns the leg away as a leg whose build does not fit is turned away.
-                var turned = ReachedVerdict.Of(LegVerdict.SkippedUnavailable, plan.Fewer!);
+                var turned = ReachedVerdict.Of(LegVerdict.SkippedUnavailable, plan.Fewer);
 
                 return Line([turned], [.. driven.Select(arm => (arm, Undriven(arm, turned))), .. unselected], []);
             }
@@ -386,10 +386,11 @@ internal sealed class MutationLegRunner(
             // Within this machine's path limit, as a worktree is kept: a worker whose build passes it fails as compile errors
             // in files nobody touched. A worker's path grows only with its number, so the workers that fit come first.
             var fit = Enumerable.Range(1, wanted).TakeWhile(number => Budget(number).IsWithinBudget).Count();
+            var tooLong = fit < wanted ? TooLong(fit + 1) : null;
 
             if (fit == 0)
             {
-                return (new WorkerPlan(0, wanted, TooLong(1), null), []);
+                return (WorkerRoom.Plan([], wanted, tooLong, room: null, unmeasured: null, source: null), []);
             }
 
             // A worker's copy is the tree and the dependency sources it is given, as the sweep's readings count them.
@@ -409,16 +410,9 @@ internal sealed class MutationLegRunner(
                 })
                 .ToList();
             var (room, unmeasured) = DiskSpace.Measure(_runner._fileSystem, Worker(1));
-            var plan = WorkerRoom.Plan(needs, room, unmeasured, _subject.ExpectedBuildBytes is null ? null : _subject.ExpectedBuildSource);
 
-            if (fit < wanted)
-            {
-                var tooLong = TooLong(fit + 1);
-
-                plan = plan with { Wanted = wanted, Fewer = plan.Fewer is { } fewer ? $"{fewer}; and {tooLong}" : $"{fit} of {wanted} workers: {tooLong}" };
-            }
-
-            return (plan, needs);
+            // Worded by the one owner of the plan, against the workers the sweep wanted: the room and the path limit both.
+            return (WorkerRoom.Plan(needs, wanted, tooLong, room, unmeasured, _subject.ExpectedBuildBytes is null ? null : _subject.ExpectedBuildSource), needs);
         }
 
         /// <summary>
@@ -751,7 +745,7 @@ internal sealed class MutationLegRunner(
 
                     _work.Progress($"arm {arm.Id}, on worker {number}");
 
-                    var bound = TimeSpan.Zero;
+                    RunBound? bound = null;
 
                     if (arm.Kind == RedKind.TestRed)
                     {
@@ -787,7 +781,7 @@ internal sealed class MutationLegRunner(
             MutationArm arm,
             IWorkerGraph graph,
             string records,
-            TimeSpan bound,
+            RunBound? bound,
             CancellationToken cancellationToken)
         {
             var worker = Worker(number);
@@ -860,14 +854,20 @@ internal sealed class MutationLegRunner(
                 }
                 else if (ArmJudge.Judge(arm, observation) is null)
                 {
+                    // An arm whose runner builds no program is refused by its pre-flight, so one that reaches its run has
+                    // the unmutated run that bounds it. Were the two ever to disagree, the arm says so, as a defect:
+                    // never a run with no bound, nor one stopped the moment it starts.
+                    var within = bound
+                        ?? throw new InvalidOperationException($"no unmutated run of '{arm.Runner}' bounds the run of arm '{arm.Id}'");
+
                     var run = Noted(
                         $"the run of arm '{arm.Id}'",
                         "which its bound is held against",
                         await _runner._tests
-                            .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ArmsDirectory}/{arm.Id}", worker, buildDirectory, graph.ProgramOf(arm.Runner).Path!, records, bound, diagnostic), cancellationToken)
+                            .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ArmsDirectory}/{arm.Id}", worker, buildDirectory, graph.ProgramOf(arm.Runner).Path!, records, within, diagnostic), cancellationToken)
                             .ConfigureAwait(false));
 
-                    report = run.Run.Report;
+                    report = run.Run.Report.Read;
                     observation = observation with { Run = run.Run };
                 }
             }
@@ -1061,7 +1061,7 @@ internal sealed class MutationLegRunner(
             // A runner that builds no program is each of its arms' pre-flight to say, as violated: there is nothing to control.
             if (program.Path is not { } path)
             {
-                return new PristineOutcome(null, null, TimeSpan.Zero);
+                return PristineOutcome.NothingToControl;
             }
 
             _work.Progress($"the unmutated {runner}, on worker {number}");
@@ -1096,10 +1096,9 @@ internal sealed class MutationLegRunner(
                 var could = $"the unmutated {runner} could not be built and run";
                 var failure = Failure(ex, could);
 
-                return Decided(new PristineOutcome(
+                return Decided(PristineOutcome.Stopped(
                     failure.Verdict == LegVerdict.Poisoned ? failure : failure with { Detail = $"{could}: {failure.Detail}" },
-                    $"{could}, so nothing could tell what a mutation of it changed",
-                    TimeSpan.Zero));
+                    $"{could}, so nothing could tell what a mutation of it changed"));
             }
         }
 
@@ -1245,7 +1244,7 @@ internal sealed class MutationLegRunner(
         /// A whole run of <paramref name="program"/>, built in <paramref name="buildDirectory"/>, as the subject's tests start:
         /// the leg's, or where the subject has none, in the worker with what the leg's host gives it.
         /// </summary>
-        private ArmRunRequest RunRequest(string named, string worker, string buildDirectory, string program, string records, TimeSpan? bound, string? diagnostic)
+        private ArmRunRequest RunRequest(string named, string worker, string buildDirectory, string program, string records, RunBound? bound, string? diagnostic)
         {
             var invocation = _subject.Tests is { } settings ? TestInvocationResolver.InvocationFor(settings, _leg.Host.Os ?? _leg.Leg.Os) : null;
 
@@ -1268,7 +1267,6 @@ internal sealed class MutationLegRunner(
                 StallSeconds = _config.Defaults.StallSeconds,
                 ClockStepToleranceMilliseconds = _config.Defaults.ClockStepToleranceMilliseconds,
                 Bound = bound,
-                Factor = _subject.Settings.RunTimeFactor,
                 Diagnostic = diagnostic,
             };
         }

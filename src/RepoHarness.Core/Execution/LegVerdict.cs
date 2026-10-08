@@ -144,7 +144,8 @@ public sealed record VerdictInfo(LegVerdict Verdict, string Display, bool IsFail
 {
     /// <summary>
     /// Whether only a sweep of mutation arms reaches it - what an arm's judge alone decides - so that no build, test or
-    /// run ever exits with its code, and that code is free to mean something else of theirs.
+    /// run ever exits with its code, that code is free to mean something else of theirs, and no refusal carrying it is
+    /// read as it (<see cref="Verdicts.ForRefusal"/>).
     /// </summary>
     public bool OfASweep { get; init; }
 }
@@ -354,20 +355,22 @@ public static class Verdicts
     /// that refuses is still a leg with a verdict: reported as poisoned, a host that is merely
     /// switched off would read as a defect in the tool.
     /// </summary>
+    /// <remarks>
+    /// Never one only a sweep reaches (<see cref="VerdictInfo.OfASweep"/>): those are what an arm's judge alone decides,
+    /// and a refusal may carry any code - what a program a host ran exited with, among them - so one carrying such a
+    /// verdict's code names nothing a judge decided, and is poisoned as any other code nobody gave a meaning is.
+    /// </remarks>
     /// <param name="exitCode">The code the refusal carried, as <see cref="HarnessException.ExitCode"/> reports it.</param>
     public static LegVerdict ForRefusal(int exitCode) => exitCode switch
     {
         HarnessExit.ToolMissing => LegVerdict.SkippedToolMissing,
         HarnessExit.HostUnavailable => LegVerdict.SkippedUnavailable,
         HarnessExit.CommandFailed => LegVerdict.Failed,
-        LegExit.Violated => LegVerdict.Violated,
-        LegExit.Survived => LegVerdict.Survived,
         LegExit.InputsMoved => LegVerdict.InputsMoved,
         LegExit.Contended => LegVerdict.Contended,
         LegExit.Unwitnessed => LegVerdict.Unwitnessed,
         LegExit.LogHeld => LegVerdict.LogHeld,
         LegExit.NotAdmitted => LegVerdict.NotAdmitted,
-        LegExit.Unattributed => LegVerdict.Unattributed,
         _ => LegVerdict.Poisoned,
     };
 }

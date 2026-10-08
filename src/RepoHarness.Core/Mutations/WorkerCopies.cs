@@ -7,10 +7,10 @@ using RepoHarness.Core.Sync;
 namespace RepoHarness.Core.Mutations;
 
 /// <summary>One worker's copy, as a listing of the copies beside a tree finds it.</summary>
-/// <param name="Family">The name its family's workers are kept under: its variant's, or its self-test's.</param>
+/// <param name="Family">Its family: its variant's, or its self-test's.</param>
 /// <param name="Number">The worker's number.</param>
 /// <param name="Found">The copy as the listing found it: where it is, what its files hold, and what its marker says.</param>
-public sealed record WorkerCopy(string Family, int Number, HostCopyFound Found)
+public sealed record WorkerCopy(WorkerFamily Family, int Number, HostCopyFound Found)
 {
     /// <summary>Where the copy is.</summary>
     public string Path => Found.Path;
@@ -119,13 +119,14 @@ internal sealed class WorkerClaims(IFileSystem fileSystem, IHarnessOutput output
     public DirectoryClaims Claims { get; } = new(fileSystem, output, identity, MutationWorkers.Claims(commandName));
 
     /// <inheritdoc/>
+    public bool Names(string name) => MutationWorkers.Named(name) is not null;
+
+    /// <inheritdoc/>
     public string? HeldBy(string copy)
     {
-        LogOwner? owner;
-
         try
         {
-            owner = Claims.Owner(copy);
+            return Standing(copy)?.Describe();
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
         {
@@ -134,13 +135,25 @@ internal sealed class WorkerClaims(IFileSystem fileSystem, IHarnessOutput output
             // longer runs.
             return ex.Message;
         }
-
-        return owner is not null && Claims.Stands(owner) ? owner.Describe() : null;
     }
 
     /// <inheritdoc/>
     public void Forget(string copy)
     {
+        try
+        {
+            // A sweep claims a worker before it makes its copy, so one that began while the copy was being removed holds
+            // a claim on a copy that is gone, and is about to make it again: its claim is its own, and stays.
+            if (Standing(copy) is not null)
+            {
+                return;
+            }
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
+        {
+            // One that cannot be read says nothing of anybody once its copy is gone, and goes with it.
+        }
+
         var file = Claims.OwnerFile(copy);
 
         try
@@ -156,6 +169,10 @@ internal sealed class WorkerClaims(IFileSystem fileSystem, IHarnessOutput output
             _output.Warn(_commandName, $"The claim file '{file}' of a mutation worker that was removed could not be removed, and is yours to remove: {ex.Message}");
         }
     }
+
+    /// <summary>The sweep still running that claims <paramref name="copy"/>, or <see langword="null"/> where none does.</summary>
+    /// <exception cref="HarnessException">Its claim cannot be read.</exception>
+    private LogOwner? Standing(string copy) => Claims.Owner(copy) is { } owner && Claims.Stands(owner) ? owner : null;
 }
 
 /// <inheritdoc cref="IWorkerCopies"/>
@@ -206,9 +223,9 @@ internal sealed class WorkerCopies(
         return
         [
             .. found
-                .Select(copy => (Copy: copy, Worker: MutationWorkers.Named(copy.Name)!.Value))
+                .Select(copy => (Copy: copy, Worker: MutationWorkers.Named(treeRoot, copy.Name)!.Value))
                 .Select(pair => new WorkerCopy(pair.Worker.Family, pair.Worker.Number, pair.Copy))
-                .OrderBy(copy => copy.Family, StringComparer.Ordinal)
+                .OrderBy(copy => copy.Family.Name, StringComparer.Ordinal)
                 .ThenBy(copy => copy.Number),
         ];
     }

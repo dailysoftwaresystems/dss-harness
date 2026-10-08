@@ -282,6 +282,14 @@ public sealed class MutationRegistryParserTests
             ["the text directory 'texts' is not a directory, so whether every text in it is cited cannot be read"],
             MutationRegistryParser.Parse(rows, new TextDirectoryListing("texts", null)).Problems);
         Assert.Equal(["the text directory 'texts' holds no file"], MutationRegistryParser.Parse(rows, new TextDirectoryListing("texts", [])).Problems);
+
+        // One a sync withholds is no text: a directory of them alone is said as that, and beside texts it is passed over.
+        Assert.Equal(
+            ["the text directory 'texts' holds no file a copy of the tree would: a sync withholds each of the 2 in it"],
+            MutationRegistryParser.Parse(rows, new TextDirectoryListing("texts", []) { Withheld = 2 }).Problems);
+        Assert.Empty(MutationRegistryParser.Parse(
+            rows,
+            new TextDirectoryListing("texts", ["charge.before", "charge.after", "charge.diag", "ctor.before", "ctor.after", "control.before", "control.after"]) { Withheld = 1 }).Problems);
         Assert.Empty(MutationRegistryParser.Parse(rows, null).Problems);
     }
 

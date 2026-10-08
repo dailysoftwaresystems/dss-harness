@@ -262,6 +262,8 @@ public sealed partial class HelpTests
             "unattributed the run failed and nothing ties that to a case: no report, one that is no JUnit report - its line says why - a "
             + "failing exit whose report names no failing case, or a run past its bound, or silent for defaults.stallSeconds, stopped as hung",
             "ARMS, below the table, names each arm selected that did not pass, and why;",
+            "a worker a sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended, and one that "
+            + "cannot be removed keeps it as a failure until that is put right - or --force deletes the worktree and leaves that worker,",
             "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
             + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
             + "of its own - a worker's rebuilt from clean with it.",
@@ -814,7 +816,8 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The worktrees topic says what becomes of the mutation workers kept beside a worktree that is deleted: asked about
-    /// before any goes, so a refusal for one a sweep holds removes nothing, and what --force leaves.
+    /// before any goes, so a worktree kept for one removes nothing; which code each one kept leaves it with; what an
+    /// interruption says; what --force leaves; and that a host's copy is treated as the worktree is.
     /// </summary>
     [Fact]
     public async Task WorktreesTopic_SaysWhatBecomesOfTheMutationWorkersBesideAWorktree()
@@ -823,11 +826,14 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "The mutation workers kept beside a worktree ('help mutations') go before it, once every check has passed. They are asked "
-            + $"about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), and workers that cannot be "
-            + $"looked for keep it too ({HarnessExit.CommandFailed}), with nothing removed. A sweep that takes one meanwhile keeps the worktree "
-            + "as well, the others gone by then, which the refusal says. --force deletes the worktree and leaves a worker still held, "
-            + "saying so; deleting the worktree again removes it once the sweep has ended. A worktree whose own removal then fails, or "
-            + "is stopped, says which workers went before it.",
+            + $"about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), and one that cannot be "
+            + $"removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as workers that cannot be looked for "
+            + "do, with nothing removed. A sweep that takes one meanwhile keeps the worktree as well, and so does one whose removal then "
+            + "fails, the others gone by then, which is said. An interruption as they go says which went, and that the worktree is whole "
+            + $"({HarnessExit.Cancelled}). --force deletes the worktree and leaves a worker that is held or could not be removed, saying "
+            + "so; deleting the worktree again removes it once nothing keeps it. A worktree whose own removal then fails, or is stopped, "
+            + "says which workers went before it. Beside a host's copy they are asked about first as well, and a copy kept once some had "
+            + "gone says which went.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
@@ -1127,7 +1133,13 @@ public sealed partial class HelpTests
         Assert.Contains("Commands that build nothing - sync, clean - need no room.", text, StringComparison.Ordinal);
         Assert.Contains(
             "with its mutation workers' as 'workerBytes': what was removed of them - 0 where every one there was kept - or, in a dry "
-            + "run, what is there. A leg whose line carries no space - its build directory a link, locked, or not removable - carries none.",
+            + "run, what is there. A leg whose build directory was not measured - a link, locked, not removable, or on a host holding "
+            + "no copy of the tree - carries a space saying its workers alone, where any is there.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "one a live sweep claims is kept, one that cannot be removed fails the leg, which still says what went, and a directory "
+            + "under a worker's name that no sync made is said and left",
             text,
             StringComparison.Ordinal);
         Assert.Contains("legs -v' says the room on each host it measured", text, StringComparison.Ordinal);

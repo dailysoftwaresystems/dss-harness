@@ -472,6 +472,306 @@ public sealed class WorktreeServiceTests
     }
 
     /// <summary>
+    /// An interruption as the workers are only asked about is the command's own: nothing has gone, so there is nothing
+    /// to say first, and what was seen by then - a worker a sweep holds - is no refusal of a deletion nobody finished
+    /// asking about.
+    /// </summary>
+    [Fact]
+    public async Task AnInterruptionAsTheWorkersAreAskedAbout_IsTheCommandsOwn_WithNothingRemoved()
+    {
+        using var temp = new TempDirectory();
+        using var interruption = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var held = await WorkerAsync(harness, created.Path + ".mutation-357e24cs-1", cancellationToken);
+        var other = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var local = new LocalSyncTransport(
+            harness.FileSystem,
+            new ManifestBuilder(harness.FileSystem, harness.Platform),
+            harness.GitClient,
+            harness.Platform,
+            new HeldAndInterrupting(held, interruption));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, local);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token));
+
+        Assert.True(Directory.Exists(created.Path));
+        Assert.True(Directory.Exists(held));
+        Assert.True(Directory.Exists(other));
+    }
+
+    /// <summary>The claims on a tree's workers, one of which a sweep holds - and asking about it interrupts the command.</summary>
+    private sealed class HeldAndInterrupting(string worker, CancellationTokenSource interruption) : ICopyClaims
+    {
+        public string? HeldBy(string copy)
+        {
+            if (!string.Equals(Path.GetFullPath(copy), Path.GetFullPath(worker), StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            interruption.Cancel();
+            return "run r, process 7 on this machine";
+        }
+
+        public void Forget(string copy)
+        {
+        }
+
+        public bool Names(string name) => MutationWorkers.Named(name) is not null;
+    }
+
+    /// <summary>
+    /// A worker that could not be removed keeps its worktree as one a sweep holds does, and is said as what it is: a
+    /// failure, with why - never something in use that waiting would end - which says the workers that went. Forced, the
+    /// worktree goes and that worker is left, said; and deleting it again fails while the worker still cannot be removed.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerThatCouldNotBeRemoved_KeepsItsWorktree_AsAFailure_SayingWhichWent()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var free = await WorkerAsync(harness, created.Path + ".mutation-357e24cs-1", cancellationToken);
+        var stuck = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var size = harness.FileSystem.DirectorySize(free);
+
+        Directory.CreateDirectory(Path.Combine(stuck, "held-build"));
+
+        var disk = new CannotRemoveNamed(harness.FileSystem, "held-build");
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk));
+
+        var failed = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, failed.Outcome.ExitCode);
+        Assert.StartsWith(
+            $"Worktree 'wt' was not deleted: a mutation worker kept beside it could not be removed - '{stuck}' could not be removed whole: the disk would not let go.",
+            failed.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.EndsWith(
+            " Put that right and try again, or pass --force to delete the worktree and leave that worker. Nothing of the worktree was removed.",
+            failed.Outcome.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("is in use", failed.Outcome.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(created.Path));
+        Assert.True(Directory.Exists(stuck));
+        Assert.False(Directory.Exists(free));
+        Assert.Contains($"removed 1 mutation worker(s) kept beside it, {DiskSpace.Size(size)}: '{free}'", failed.Outcome.Details ?? []);
+        Assert.Contains(
+            failed.Outcome.Details ?? [],
+            line => line.StartsWith($"left the mutation worker '{stuck}' kept beside it: '{stuck}' could not be removed whole: ", StringComparison.Ordinal)
+                && line.EndsWith("; 'dssharness delete-worktree wt' removes it once nothing stops it", StringComparison.Ordinal));
+
+        var forced = await service.DeleteAsync(temp.Path, "wt", force: true, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.True(forced.Succeeded, forced.Outcome.Message);
+        Assert.False(Directory.Exists(created.Path));
+        Assert.True(Directory.Exists(stuck));
+        Assert.Contains(forced.Outcome.Details ?? [], line => line.StartsWith($"left the mutation worker '{stuck}' kept beside it: ", StringComparison.Ordinal));
+
+        var again = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, again.Outcome.ExitCode);
+        Assert.Equal(
+            "Worktree 'wt' is gone already, and a mutation worker left beside it is not yet removed: run 'dssharness delete-worktree wt' once what keeps it is gone.",
+            again.Outcome.Message);
+    }
+
+    /// <summary>A disk that will not remove any directory of one name: something holds it.</summary>
+    private sealed class CannotRemoveNamed(IFileSystem inner, string name) : PassThroughFileSystem(inner)
+    {
+        public override void DeleteDirectory(string path)
+        {
+            if (string.Equals(Path.GetFileName(path), name, StringComparison.Ordinal))
+            {
+                throw new IOException("the disk would not let go.");
+            }
+
+            base.DeleteDirectory(path);
+        }
+    }
+
+    /// <summary>
+    /// A deletion interrupted as the workers kept beside its worktree go - between two of them, or part way through one
+    /// - says which went and which it was stopped in, and that the worktree is whole: a worker gone is gone whoever is
+    /// told, and an interruption that said nothing of it would leave nobody knowing.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADeletionInterruptedAsItsWorkersGo_SaysWhichWent_AndThatTheWorktreeIsWhole(bool partWay)
+    {
+        using var temp = new TempDirectory();
+        using var interruption = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var first = await WorkerAsync(harness, created.Path + ".mutation-357e24cs-1", cancellationToken);
+        var second = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var size = harness.FileSystem.DirectorySize(first);
+
+        // Interrupted as the first worker is gone, or as something within the second has gone.
+        var disk = new InterruptsOnceRemoved(harness.FileSystem, partWay ? Path.Combine(second, ".git") : first, interruption);
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk));
+
+        var stopped = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, stopped.Outcome.ExitCode);
+        Assert.Equal(
+            "Deleting worktree 'wt' was interrupted as the mutation workers kept beside it were being removed. Nothing of the worktree was removed: "
+            + "run 'dssharness delete-worktree wt' again to delete it.",
+            stopped.Outcome.Message);
+        Assert.True(Directory.Exists(created.Path));
+        Assert.False(Directory.Exists(first));
+        Assert.True(Directory.Exists(second));
+        Assert.Equal(
+            [
+                $"removed 1 mutation worker(s) kept beside it, {DiskSpace.Size(size)}: '{first}'",
+                .. partWay
+                    ? new[]
+                    {
+                        $"left the mutation worker '{second}' kept beside it: its removal was stopped part way, and asking again finishes it; "
+                        + "'dssharness delete-worktree wt' removes it once nothing stops it",
+                    }
+                    : [],
+            ],
+            stopped.Outcome.Details ?? []);
+    }
+
+    /// <summary>
+    /// An interruption that came as the last worker went - which the removal, with none left to reach, never saw - is
+    /// still the last moment the deletion can stop cleanly: it says the worker that went, and the worktree is whole.
+    /// </summary>
+    [Fact]
+    public async Task AnInterruptionAsTheLastWorkerGoes_StopsTheDeletionThere_SayingWhichWent()
+    {
+        using var temp = new TempDirectory();
+        using var interruption = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var only = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var size = harness.FileSystem.DirectorySize(only);
+        var disk = new InterruptsOnceRemoved(harness.FileSystem, only, interruption);
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk));
+
+        var stopped = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, stopped.Outcome.ExitCode);
+        Assert.Equal(
+            "Deleting worktree 'wt' was interrupted as the mutation workers kept beside it were being removed. Nothing of the worktree was removed: "
+            + "run 'dssharness delete-worktree wt' again to delete it.",
+            stopped.Outcome.Message);
+        Assert.Equal([$"removed 1 mutation worker(s) kept beside it, {DiskSpace.Size(size)}: '{only}'"], stopped.Outcome.Details ?? []);
+        Assert.True(Directory.Exists(created.Path));
+        Assert.False(Directory.Exists(only));
+    }
+
+    /// <summary>
+    /// An interruption that came once the workers had been asked about and before any had gone is the command's own, as
+    /// one that came while they were asked about is: nothing went, so there is nothing to say first.
+    /// </summary>
+    [Fact]
+    public async Task AnInterruptionBeforeAnyWorkerHasGone_IsTheCommandsOwn_WithNothingRemoved()
+    {
+        using var temp = new TempDirectory();
+        using var interruption = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var worker = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+
+        // Weighed once as the workers are asked about, and again as they are listed to be removed.
+        var disk = new InterruptsOnceWeighedAgain(harness.FileSystem, worker, interruption);
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token));
+
+        Assert.True(interruption.IsCancellationRequested);
+        Assert.True(Directory.Exists(created.Path));
+        Assert.True(Directory.Exists(worker));
+    }
+
+    /// <summary>
+    /// A worktree gone already, deleted again to remove the workers left beside it, says which went where that is
+    /// interrupted, and that the rest are there for asking again.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeGoneAlready_InterruptedAsItsWorkersGo_SaysWhichWent()
+    {
+        using var temp = new TempDirectory();
+        using var interruption = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+        Assert.True((await harness.WorktreeService.DeleteAsync(temp.Path, "wt", force: true, deleteEvidence: false, cancellationToken: cancellationToken)).Succeeded);
+
+        var first = await WorkerAsync(harness, created.Path + ".mutation-357e24cs-1", cancellationToken);
+        var second = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var size = harness.FileSystem.DirectorySize(first);
+        var disk = new InterruptsOnceRemoved(harness.FileSystem, first, interruption);
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk));
+
+        var stopped = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, stopped.Outcome.ExitCode);
+        Assert.Equal(
+            "Worktree 'wt' is gone already, and the interruption came before every mutation worker left beside it had been removed: "
+            + "run 'dssharness delete-worktree wt' to remove the rest.",
+            stopped.Outcome.Message);
+        Assert.Equal([$"removed 1 mutation worker(s) kept beside it, {DiskSpace.Size(size)}: '{first}'"], stopped.Outcome.Details ?? []);
+        Assert.False(Directory.Exists(first));
+        Assert.True(Directory.Exists(second));
+    }
+
+    /// <summary>
+    /// A worktree whose directory is gone and whose record git still holds has what it was made from forgotten with the
+    /// record: left behind, it would answer for a later worktree of the same name.
+    /// </summary>
+    [Fact]
+    public async Task DeleteAsync_ClearingARecordWhoseDirectoryIsGone_ForgetsWhatTheWorktreeWasMadeFrom()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+        Assert.False(string.IsNullOrWhiteSpace((await BaseCommitAsync()).StandardOutput), "the worktree's base commit was never recorded");
+
+        harness.FileSystem.DeleteDirectory(created.Path);
+
+        var cleared = await harness.WorktreeService.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.True(cleared.Succeeded, cleared.Outcome.Message);
+        Assert.True(string.IsNullOrWhiteSpace((await BaseCommitAsync()).StandardOutput), "The base commit record outlived its worktree.");
+
+        Task<RepoHarness.Core.Git.GitCommandResult> BaseCommitAsync()
+            => harness.GitClient.RunAsync(temp.Path, ["rev-parse", "--verify", "--quiet", WorktreeService.BaseCommitRefPrefix + "wt"], cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
     /// A deletion its own checks refuse - evidence in the worktree, a directory that is no worktree, uncommitted work,
     /// an entry another program holds - has removed nothing: the workers kept beside it go only once nothing refuses.
     /// </summary>
@@ -655,8 +955,9 @@ public sealed class WorktreeServiceTests
 
     /// <summary>
     /// Mutation workers that cannot be looked for keep their worktree, nothing of it removed, whatever kept them from
-    /// being: the disk, this user's rights, or a refusal of the transport's own. Forced, the worktree goes and the
-    /// deletion says they were left, and deleting it again fails while they still cannot be.
+    /// being: the disk or this user's rights, said naming the directory that could not be looked in, or a refusal of
+    /// the transport's own. Forced, the worktree goes and the deletion says they were left, and deleting it again fails
+    /// while they still cannot be.
     /// </summary>
     [Theory]
     [InlineData("the disk")]
@@ -680,12 +981,13 @@ public sealed class WorktreeServiceTests
         };
         var blind = new CannotWeigh(harness.FileSystem, worker, raised);
         var service = new WorktreeService(harness.ContextLoader, harness.GitClient, blind, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(blind));
+        var why = keptBy == "refused" ? "the disk would not say" : $"'{Path.GetDirectoryName(created.Path)}' could not be looked in: the disk would not say";
 
         var failed = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
         Assert.Equal(HarnessExit.CommandFailed, failed.Outcome.ExitCode);
         Assert.Equal(
-            "The mutation workers kept beside worktree 'wt' could not be removed: the disk would not say. Nothing of the worktree "
+            $"The mutation workers kept beside worktree 'wt' could not be removed: {why}. Nothing of the worktree "
             + "was removed: put that right and try again, or pass --force to delete the worktree and leave them.",
             failed.Outcome.Message);
         Assert.True(Directory.Exists(created.Path));
@@ -695,13 +997,16 @@ public sealed class WorktreeServiceTests
         Assert.True(forced.Succeeded, forced.Outcome.Message);
         Assert.False(Directory.Exists(created.Path));
         Assert.Contains(
-            "the mutation workers kept beside it could not be removed: the disk would not say; 'dssharness delete-worktree wt' removes them once that is put right",
+            $"the mutation workers kept beside it could not be removed: {why}; 'dssharness delete-worktree wt' removes them once that is put right",
             forced.Outcome.Details ?? []);
 
         var again = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
         Assert.Equal(HarnessExit.CommandFailed, again.Outcome.ExitCode);
-        Assert.StartsWith("Worktree 'wt' is gone already, and a mutation worker left beside it is not yet removed", again.Outcome.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "Worktree 'wt' is gone already, and the mutation workers left beside it could not be removed: run 'dssharness delete-worktree wt' "
+            + "once that is put right.",
+            again.Outcome.Message);
         Assert.True(Directory.Exists(worker));
     }
 
@@ -770,6 +1075,8 @@ public sealed class WorktreeServiceTests
         public void Forget(string copy)
         {
         }
+
+        public bool Names(string name) => MutationWorkers.Named(name) is not null;
     }
 
     /// <summary>A disk that will not say what one directory holds, raising <paramref name="raised"/> where it is asked.</summary>
@@ -1254,5 +1561,19 @@ public sealed class WorktreeServiceTests
 
         var worktrees = await harness.GitClient.ListWorktreesAsync(path, TestContext.Current.CancellationToken);
         Assert.Contains(worktrees, worktree => PathAssert.AreSame(path, worktree.Path));
+    }
+}
+
+/// <summary>A disk on which the command is interrupted once the directory <paramref name="gone"/> has been removed.</summary>
+internal sealed class InterruptsOnceRemoved(IFileSystem inner, string gone, CancellationTokenSource interruption) : PassThroughFileSystem(inner)
+{
+    public override void DeleteDirectory(string path)
+    {
+        base.DeleteDirectory(path);
+
+        if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(gone), StringComparison.OrdinalIgnoreCase))
+        {
+            interruption.Cancel();
+        }
     }
 }

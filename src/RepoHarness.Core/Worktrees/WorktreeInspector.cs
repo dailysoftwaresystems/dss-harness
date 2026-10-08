@@ -222,7 +222,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                throw new HarnessException(HarnessExit.CommandFailed, $"'{path}' could not be looked in: {ex.Message.TrimEnd('.')}");
+                throw CouldNotBeLookedIn(path, ex);
             }
 
             foreach (var child in children.Where(child => HoldsOwnGit(_fileSystem, child) && !IsMutationWorker(child)))
@@ -245,6 +245,19 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         string AddressOf(string root, string tree)
             => WorktreeAddress.OfTree(root, tree, _platform.PathComparison)?.Name
                 ?? Path.GetRelativePath(root, tree).Replace(Path.DirectorySeparatorChar, WorktreeAddress.Separator);
+    }
+
+    /// <summary>
+    /// What is raised where <paramref name="directory"/>, which worktrees and what was left beside them are kept in,
+    /// cannot be looked in: a failure (<see cref="HarnessExit.CommandFailed"/>), so that whoever asked never reads it as
+    /// a directory holding nothing.
+    /// </summary>
+    /// <param name="directory">The directory.</param>
+    /// <param name="why">What the disk raised.</param>
+    public static HarnessException CouldNotBeLookedIn(string directory, Exception why)
+    {
+        ArgumentNullException.ThrowIfNull(why);
+        return new HarnessException(HarnessExit.CommandFailed, $"'{directory}' could not be looked in: {why.Message.TrimEnd('.')}");
     }
 
     /// <summary>Whether <paramref name="directory"/> is named as a mutation worker kept beside a tree is: a copy of it, never a worktree.</summary>

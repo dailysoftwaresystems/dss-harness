@@ -2,6 +2,7 @@ using System.Globalization;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
@@ -133,7 +134,35 @@ public sealed class MutationWorkersTests
     [InlineData("w", null, false)]
     [InlineData("", null, false)]
     public void AFamilysName_IsAKeyAndAMark_AndAnyOtherIsNone(string name, string? key, bool selfTest)
-        => Assert.Equal(key is null ? null : new WorkerFamily("/home/pi/repo", key, selfTest), WorkerFamily.Named("/home/pi/repo", name));
+        => Assert.Equal(key is null ? null : WorkerFamily.Of("/home/pi/repo", key, selfTest), WorkerFamily.Named("/home/pi/repo", name));
+
+    /// <summary>
+    /// A family is made of a key that is one - seven hexadecimal digits, in lower case - and of no other: its workers'
+    /// names are read back by that spelling, so a family keyed any other way would keep workers nothing finds again.
+    /// </summary>
+    [Theory]
+    [InlineData("357e24c", true)]
+    [InlineData("0000000", true)]
+    [InlineData("357E24C", false)]
+    [InlineData("357e24", false)]
+    [InlineData("357e24cc", false)]
+    [InlineData("357e24g", false)]
+    [InlineData("x86_64-gcc-debug", false)]
+    [InlineData("", false)]
+    public void AFamily_IsMadeOfAKeyThatIsOne(string key, bool made)
+    {
+        if (made)
+        {
+            var family = WorkerFamily.Of("/home/pi/repo", key, selfTest: true);
+
+            Assert.Equal(("/home/pi/repo", key, true, key + "s"), (family.TreeRoot, family.Key, family.SelfTest, family.Name));
+            Assert.Equal(family, WorkerFamily.Named("/home/pi/repo", family.Name));
+        }
+        else
+        {
+            Assert.Throws<ArgumentException>(() => WorkerFamily.Of("/home/pi/repo", key));
+        }
+    }
 
     /// <summary>
     /// A worker's name is its family's, a hyphen and its number, in digits alone and never a leading zero; a name ending
@@ -159,7 +188,15 @@ public sealed class MutationWorkersTests
     [InlineData("notes", null, null)]
     [InlineData("", null, null)]
     public void AWorkersName_IsItsFamilysAndItsNumber(string name, string? family, int? number)
-        => Assert.Equal(family is null ? null : (family, number!.Value), MutationWorkers.Named(name));
+    {
+        Assert.Equal(family is null ? null : (family, number!.Value), MutationWorkers.Named(name));
+
+        // Read beside a tree, it is the same worker, of the family of that tree.
+        var beside = MutationWorkers.Named("/home/pi/repo", name);
+
+        Assert.Equal(family is null, beside is null);
+        Assert.Equal((family is null ? null : WorkerFamily.Named("/home/pi/repo", family), number), (beside?.Family, beside?.Number));
+    }
 
     /// <summary>
     /// A directory named as a mutation worker names the tree it copies, by what comes before the family's suffix where
@@ -198,6 +235,16 @@ public sealed class MutationWorkersTests
 
         Assert.Equal(["alpha", "beta"], MutationWorkers.TreesWithWorkersIn(harness.FileSystem, temp.Combine("group")));
         Assert.Empty(MutationWorkers.TreesWithWorkersIn(harness.FileSystem, temp.Combine("nowhere")));
+
+        // In order whatever order the disk lists them in: one that lists by name hides a listing nobody ordered.
+        Assert.Equal(["alpha", "beta"], MutationWorkers.TreesWithWorkersIn(new ListsBackwards(harness.FileSystem), temp.Combine("group")));
+    }
+
+    /// <summary>A disk that lists what a directory holds last name first.</summary>
+    private sealed class ListsBackwards(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public override IEnumerable<string> EnumerateDirectories(string path)
+            => base.EnumerateDirectories(path).OrderByDescending(found => found, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -304,6 +351,23 @@ public sealed class MutationWorkersTests
     [Fact]
     public void ARetargetedProject_BuildsItsTargets_WitnessedByTheirOutputs_AndIsOtherwiseTheProject()
     {
+        var project = WithEverySettingSet(new Dictionary<string, string> { ["FOO"] = "1" });
+
+        var retargeted = project.Retargeted(["fixture"], ["bin/fixture"]);
+
+        Assert.Equal(["fixture"], retargeted.Targets);
+        Assert.Equal(["bin/fixture"], retargeted.BuildOutputs.Select(output => output.For("linux")));
+        AssertCarriedOver(project, retargeted, nameof(ProjectConfig.Targets), nameof(ProjectConfig.BuildOutputs));
+        Assert.Throws<ArgumentException>(() => project.Retargeted([], []));
+    }
+
+    /// <summary>
+    /// A project every setting of which is one a new project does not hold: so a copy that left a setting behind shows
+    /// it, and a project that gains a setting fails here until this sets it - never passed as carried over for holding,
+    /// in the project and its copy alike, what every project starts with.
+    /// </summary>
+    private static ProjectConfig WithEverySettingSet(Dictionary<string, string> cacheVars)
+    {
         var project = new ProjectConfig
         {
             Name = "app",
@@ -312,23 +376,36 @@ public sealed class MutationWorkersTests
             Targets = ["all_tests"],
             BuildOutputs = [BuildOutput.Everywhere("bin/app")],
             Env = { ["CC"] = "gcc" },
-            CacheVars = { ["FOO"] = "1" },
+            CacheVars = cacheVars,
             DefaultToolchain = { ["linux"] = "gcc" },
             RebuildableFormats = [".cpp"],
             Test = new TestConfig(),
         };
+        var fresh = new ProjectConfig { Name = "fresh", Type = "none" };
 
-        var retargeted = project.Retargeted(["fixture"], ["bin/fixture"]);
+        Assert.All(
+            typeof(ProjectConfig).GetProperties(),
+            property => Assert.False(
+                Equals(property.GetValue(fresh), property.GetValue(project)) || property.GetValue(project) is System.Collections.ICollection { Count: 0 },
+                $"ProjectConfig.{property.Name} is left as a new project holds it, so nothing here shows whether a copy of the project carries it over"));
 
-        Assert.Equal(["fixture"], retargeted.Targets);
-        Assert.Equal(["bin/fixture"], retargeted.BuildOutputs.Select(output => output.For("linux")));
+        return project;
+    }
 
-        foreach (var property in typeof(ProjectConfig).GetProperties().Where(property => property.Name is not (nameof(ProjectConfig.Targets) or nameof(ProjectConfig.BuildOutputs))))
+    /// <summary>Each setting of <paramref name="project"/> but those <paramref name="changed"/> is its copy's too: the very value, not one like it.</summary>
+    private static void AssertCarriedOver(ProjectConfig project, ProjectConfig copy, params string[] changed)
+    {
+        foreach (var property in typeof(ProjectConfig).GetProperties().Where(property => !changed.Contains(property.Name)))
         {
-            Assert.Same(property.GetValue(project), property.GetValue(retargeted));
+            if (property.PropertyType.IsValueType)
+            {
+                Assert.Equal(property.GetValue(project), property.GetValue(copy));
+            }
+            else
+            {
+                Assert.Same(property.GetValue(project), property.GetValue(copy));
+            }
         }
-
-        Assert.Throws<ArgumentException>(() => project.Retargeted([], []));
     }
 
     /// <summary>
@@ -339,19 +416,11 @@ public sealed class MutationWorkersTests
     [Fact]
     public void CacheVarsBeneathAProjectsOwn_AreOutrankedByItsOwn_AndItIsOtherwiseTheProject()
     {
-        var project = new ProjectConfig
+        var project = WithEverySettingSet(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            Name = "app",
-            Type = "cmake",
-            Path = "native",
-            Targets = ["all_tests"],
-            BuildOutputs = [BuildOutput.Everywhere("bin/app")],
-            Env = { ["CC"] = "gcc" },
-            CacheVars = { ["FetchContent_Source_Dir_Json"] = "/mine/json", ["FOO"] = "1" },
-            DefaultToolchain = { ["linux"] = "gcc" },
-            RebuildableFormats = [".cpp"],
-            Test = new TestConfig(),
-        };
+            ["FetchContent_Source_Dir_Json"] = "/mine/json",
+            ["FOO"] = "1",
+        });
 
         var beneath = project.WithCacheVarsBeneath(new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -369,10 +438,7 @@ public sealed class MutationWorkersTests
         Assert.Equal("1", beneath.CacheVars["foo"]);
         Assert.Equal([("FetchContent_Source_Dir_Json", "/mine/json"), ("FOO", "1")], project.CacheVars.Select(pair => (pair.Key, pair.Value)));
 
-        foreach (var property in typeof(ProjectConfig).GetProperties().Where(property => property.Name is not nameof(ProjectConfig.CacheVars)))
-        {
-            Assert.Same(property.GetValue(project), property.GetValue(beneath));
-        }
+        AssertCarriedOver(project, beneath, nameof(ProjectConfig.CacheVars));
     }
 
     /// <summary>

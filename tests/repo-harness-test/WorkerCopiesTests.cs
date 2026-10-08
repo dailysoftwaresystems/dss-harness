@@ -96,7 +96,7 @@ public sealed class WorkerCopiesTests
 
         // By number, as it counts: the tenth after the third, where its name sorts it after the first.
         Assert.Equal([1, 2, 3, 10], workers.Select(worker => worker.Number));
-        Assert.All(workers, worker => Assert.Equal(MutationWorkers.Of(tree, Variant).Name, worker.Family));
+        Assert.All(workers, worker => Assert.Equal(MutationWorkers.Of(tree, Variant), worker.Family));
         Assert.Equal([true, true, false, false], workers.Select(worker => worker.Made));
         Assert.Equal(MutationWorkers.PathOf(tree, Variant, 1), workers[0].Path);
         Assert.True(workers[0].Bytes > 0);
@@ -104,7 +104,7 @@ public sealed class WorkerCopiesTests
 
         var own = Assert.Single(await copies.ListAsync(selfTest, cancellationToken));
 
-        Assert.Equal((selfTest.Name, 1, selfTest.PathOf(1)), (own.Family, own.Number, own.Path));
+        Assert.Equal((selfTest, 1, selfTest.PathOf(1)), (own.Family, own.Number, own.Path));
     }
 
     /// <summary>
@@ -139,7 +139,7 @@ public sealed class WorkerCopiesTests
         // By the name each family's workers are kept under, as the disk sorts them, and then by number.
         Assert.Equal(
             new[] { (selfTest.Name, 1), (own, 2), (own, 1), (others, 1) }.OrderBy(worker => worker.Item1, StringComparer.Ordinal).ThenBy(worker => worker.Item2),
-            every.Select(worker => (worker.Family, worker.Number)));
+            every.Select(worker => (worker.Family.Name, worker.Number)));
         Assert.Equal(3, every.Select(worker => worker.Family).Distinct().Count());
         Assert.Equal(4, weighed.Weighed.Count);
 
@@ -225,6 +225,60 @@ public sealed class WorkerCopiesTests
         Assert.False(File.Exists(worker + MutationWorkers.ClaimSuffix));
         Assert.Null(copies.ReleaseAbandoned(MutationWorkers.PathOf(tree, Variant, 2)));
         Assert.Contains("An earlier run was abandoned", harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What a removal left aside is told by its name alone, as nothing else is left of it: one spelt as a worker - its
+    /// family's key and mark, a hyphen and its number - is a worker's, and a directory named any other way is nobody's.
+    /// </summary>
+    [Theory]
+    [InlineData("357e24cw-1", true)]
+    [InlineData("357e24cs-12", true)]
+    [InlineData("notes", false)]
+    [InlineData("357e24cw", false)]
+    [InlineData("357e24cw-01", false)]
+    [InlineData("", false)]
+    public void OnlyWhatIsSpeltAsAWorker_IsOneARemovalLeftAside(string name, bool worker)
+    {
+        var harness = new HarnessFactory();
+
+        Assert.Equal(worker, MutationWorkers.CopyClaims(harness.FileSystem, harness.Output, harness.Identity).Names(name));
+    }
+
+    /// <summary>
+    /// A claim a sweep took while its worker was being removed - a sweep claims before it makes the copy again - is that
+    /// sweep's, and stays when whatever removed the copy forgets the claim on it; a claim nobody still running holds
+    /// goes, as does one that cannot be read, which says nothing of anybody.
+    /// </summary>
+    [Fact]
+    public async Task AClaimTakenWhileItsWorkerWasRemoved_IsKept_WhereItsSweepStillRuns()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var claims = MutationWorkers.CopyClaims(harness.FileSystem, harness.Output, harness.Identity);
+        var taken = MutationWorkers.PathOf(tree, Variant, 1);
+        var abandoned = MutationWorkers.PathOf(tree, Variant, 2);
+        var unread = MutationWorkers.PathOf(tree, Variant, 3);
+        var sweep = RunId.New();
+
+        Assert.True(copies.Claim(taken, sweep, force: false).Taken);
+        File.WriteAllText(
+            abandoned + MutationWorkers.ClaimSuffix,
+            "{ \"machine\": \"" + Environment.MachineName + "\", \"processId\": " + (int.MaxValue - 1).ToString(CultureInfo.InvariantCulture)
+            + ", \"processStamp\": \"gone\", \"runId\": \"20250101-120000-deadbeef\", \"takenUtc\": \"2025-01-01T12:00:00Z\" }");
+        File.WriteAllText(unread + MutationWorkers.ClaimSuffix, "{}");
+
+        foreach (var worker in new[] { taken, abandoned, unread })
+        {
+            claims.Forget(worker);
+        }
+
+        Assert.True(File.Exists(taken + MutationWorkers.ClaimSuffix));
+        Assert.Contains(sweep.Value, claims.HeldBy(taken), StringComparison.Ordinal);
+        Assert.False(File.Exists(abandoned + MutationWorkers.ClaimSuffix));
+        Assert.False(File.Exists(unread + MutationWorkers.ClaimSuffix));
     }
 
     /// <summary>

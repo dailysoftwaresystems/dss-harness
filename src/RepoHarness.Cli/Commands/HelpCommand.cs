@@ -842,7 +842,8 @@ internal static class HelpCommand
             + "runner outside [A-Za-z0-9_.+-]; a row naming an arm no A row above it declares; a case both red and green, or "
             + "declared twice; an M row mutating a file its arm already mutates, as the tree's own file system compares their "
             + "names; an S row naming neither a leg nor a leg set; "
-            + "a text no row cites in textDirectory, a mutation nobody drives; a cited text that is not there, or that a "
+            + "a text no row cites in textDirectory, a mutation nobody drives - but for a file there a sync withholds, which "
+            + "no copy of the tree holds; a cited text that is not there, or that a "
             + "sync withholds from every copy of the tree - one sync.neverTransfer, sync.exclude or worktrees.root "
             + "covers, or git ignores - as the registry itself is refused where git ignores it; and a "
             + "before-text, a control's before-text or a diagnostic holding nothing, which would match everywhere, or be said "
@@ -891,7 +892,7 @@ internal static class HelpCommand
             + "buildSpaceGiB where it declares one, else to what the leg's own build, or the main checkout's, last recorded "
             + "- and whose build stays within the path limit, "
             + "reckoned as a worktree's is; where not even the first does, the leg is skipped-unavailable, saying why, and "
-            + "one that runs fewer says so. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it, and "
+            + "one that runs fewer says how many of those it wanted, and what keeps each of the rest out. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it, and "
             + "a claim whose sweep died is released and said. Workers an earlier sweep left beyond the count workers allows "
             + "are removed before the sweep plans, so lowering it frees their room, and a directory under a worker's name "
             + "that no sync made is said and left.");
@@ -902,7 +903,8 @@ internal static class HelpCommand
             + "those of a variant no leg of that host and tree builds any more - and where a host holds no copy of the "
             + "tree, the host is asked to remove the workers left beside where it was. delete-worktree and delete-agent "
             + "remove the workers kept beside the worktree first, here and beside each host's copy of it; a worker a "
-            + "sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended - or --force "
+            + "sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended, and one that "
+            + "cannot be removed keeps it as a failure until that is put right - or --force "
             + "deletes the worktree and leaves that worker, which deleting it again then removes, as deleting an "
             + "agent whose worktree is gone already removes those left beside it. A worker is no "
             + "worktree, though it holds a repository of its own: list-worktree passes over it, and says one whose "
@@ -916,7 +918,7 @@ internal static class HelpCommand
             + "- a build that does not pass, a red case, no report, a failing exit, a hang - decides the leg's own verdict "
             + "and stops each of its arms. "
             + "Its run bounds theirs: a mutated run may take runTimeFactor times as long, never less than it and a minute, "
-            + "and is stopped as unattributed past that. Each arm is admitted as a unit of its own where its machine "
+            + "and is stopped as unattributed past that, naming which of the two set its bound. Each arm is admitted as a unit of its own where its machine "
             + "declares admission ('help admission'), pre-flighted, mutated - its sites dated past the worker's last build "
             + "- built with its runner beside its target, witnessed rebuilt from ninja's log, then run whole or paired with "
             + "its control. Every site is put back and checked by its hash; a site that cannot be put back poisons the arm "
@@ -1555,10 +1557,10 @@ internal static class HelpCommand
         builder.AppendLine("machine's tree, or in a WSL distribution's or an ssh host's copy of the tree it is");
         builder.AppendLine("typed in. The mutation workers a sweep of the leg keeps beside that tree go with");
         builder.AppendLine("it - its self-test's too, and those of a variant no leg there builds any more -");
-        builder.AppendLine("under the lock a sweep takes: one a live sweep claims is kept, and a directory");
-        builder.AppendLine("under a worker's name that no sync made is said and left ('help mutations'). Where");
-        builder.AppendLine("a host holds no copy of the tree, it is asked to remove the workers left beside");
-        builder.AppendLine("where the copy was.");
+        builder.AppendLine("under the lock a sweep takes: one a live sweep claims is kept, one that cannot be");
+        builder.AppendLine("removed fails the leg, which still says what went, and a directory under a worker's");
+        builder.AppendLine("name that no sync made is said and left ('help mutations'). Where a host holds no");
+        builder.AppendLine("copy of the tree, it is asked to remove the workers left beside where the copy was.");
         builder.AppendLine();
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug,linux-arm64-release");
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug --dry-run");
@@ -1572,8 +1574,9 @@ internal static class HelpCommand
         builder.AppendLine("leg's line says what was removed and the room left on its filesystem; --dry-run says");
         builder.AppendLine("what each holds and removes nothing; --json carries both as each leg's 'space',");
         builder.AppendLine("with its mutation workers' as 'workerBytes': what was removed of them - 0 where");
-        builder.AppendLine("every one there was kept - or, in a dry run, what is there. A leg whose line carries");
-        builder.AppendLine("no space - its build directory a link, locked, or not removable - carries none.");
+        builder.AppendLine("every one there was kept - or, in a dry run, what is there. A leg whose build");
+        builder.AppendLine("directory was not measured - a link, locked, not removable, or on a host holding no");
+        builder.AppendLine("copy of the tree - carries a space saying its workers alone, where any is there.");
         builder.AppendLine();
         builder.AppendLine("A host whose DssHarness is older than this machine's is updated first, as for any");
         builder.AppendLine("command, and the update needs room: a host that is both full and behind has to be");
@@ -1707,10 +1710,13 @@ internal static class HelpCommand
             builder,
             "The mutation workers kept beside a worktree ('help mutations') go before it, once every check has passed. "
             + $"They are asked about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), "
-            + $"and workers that cannot be looked for keep it too ({HarnessExit.CommandFailed}), with nothing removed. A sweep "
-            + "that takes one meanwhile keeps the worktree as well, the others gone by then, which the refusal says. --force "
-            + "deletes the worktree and leaves a worker still held, saying so; deleting the worktree again removes it once "
-            + "the sweep has ended. A worktree whose own removal then fails, or is stopped, says which workers went before it.");
+            + $"and one that cannot be removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as "
+            + "workers that cannot be looked for do, with nothing removed. A sweep that takes one meanwhile keeps the worktree as "
+            + "well, and so does one whose removal then fails, the others gone by then, which is said. An interruption as they go "
+            + $"says which went, and that the worktree is whole ({HarnessExit.Cancelled}). --force deletes the worktree and leaves a "
+            + "worker that is held or could not be removed, saying so; deleting the worktree again removes it once nothing keeps "
+            + "it. A worktree whose own removal then fails, or is stopped, says which workers went before it. Beside a host's copy "
+            + "they are asked about first as well, and a copy kept once some had gone says which went.");
         builder.AppendLine();
         AppendWrapped(
             builder,

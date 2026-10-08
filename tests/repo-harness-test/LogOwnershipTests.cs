@@ -24,7 +24,7 @@ public sealed class LogOwnershipTests
         var claim = await ownership.ClaimAsync(directory, runId, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(claim.Taken);
-        Assert.Null(claim.Verdict());
+        Assert.Null(claim.HeldBy);
         Assert.Equal(runId.Value, ownership.Owner(directory)!.RunId);
 
         // Beside the directory, not inside it: wiping a run directory must not quietly free a path
@@ -47,9 +47,7 @@ public sealed class LogOwnershipTests
         var claim = await ownership.ClaimAsync(directory, RunId.New(), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(claim.Taken);
-        Assert.Equal(LegVerdict.LogHeld, claim.Verdict()!.Verdict);
-        Assert.Equal(LegExit.LogHeld, Verdicts.ExitCodeFor(claim.Verdict()!.Verdict));
-        Assert.Contains("20250101-120000-deadbeef", claim.Verdict()!.Detail, StringComparison.Ordinal);
+        Assert.Contains("20250101-120000-deadbeef", claim.HeldBy, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -92,7 +90,7 @@ public sealed class LogOwnershipTests
         var claim = await ownership.ClaimAsync(directory, RunId.New(), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(claim.Taken);
-        Assert.Contains("recorded by an older build", claim.Verdict()!.Detail, StringComparison.Ordinal);
+        Assert.Contains("recorded by an older build", claim.HeldBy, StringComparison.Ordinal);
 
         // And the way out is the one the message names.
         var forced = await ownership.ClaimAsync(
@@ -216,7 +214,7 @@ public sealed class LogOwnershipTests
 
         Assert.False(held.Taken);
         Assert.Contains("another-machine pid", held.HeldBy, StringComparison.Ordinal);
-        Assert.Contains("--force-lock takes it", held.Verdict()!.Detail, StringComparison.Ordinal);
+        Assert.Contains("--force-lock takes it", held.HeldBy, StringComparison.Ordinal);
 
         var forced = await ownership.ClaimAsync(directory, RunId.New(), force: true, cancellationToken: TestContext.Current.CancellationToken);
 

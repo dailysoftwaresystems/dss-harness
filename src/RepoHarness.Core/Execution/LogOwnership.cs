@@ -40,7 +40,11 @@ public sealed record LogOwner(
         => ProcessHolders.Describe(Machine, ProcessId, RunId, TakenUtc) + ProcessHolders.OlderBuildNote(ProcessStamp);
 }
 
-/// <summary>What claiming a log directory found.</summary>
+/// <summary>
+/// What claiming a directory a run owns found: its log directory, or a mutation worker's copy. What a claim not taken
+/// means is its claimer's to say - a run that cannot own its log path is <c>log-held</c>, a sweep that cannot own a
+/// worker leaves it for the sweep that does - so the claim itself names no verdict.
+/// </summary>
 /// <param name="Taken">Whether this run now owns it.</param>
 /// <param name="Holder">The live run that owns it instead, when one does.</param>
 /// <param name="OwnerFile">Where the ownership is recorded.</param>
@@ -48,18 +52,6 @@ public sealed record LogClaim(bool Taken, LogOwner? Holder, string OwnerFile)
 {
     /// <summary>The run that owns it instead, as a refusal names it, where one does.</summary>
     public string? HeldBy { get; init; }
-
-    /// <summary>
-    /// The verdict this forces on the leg, or <see langword="null"/> when the claim succeeded. A run
-    /// that cannot own its log path cannot keep the evidence for its own verdict, and a verdict with
-    /// no evidence behind it is the thing this tool exists to stop reporting.
-    /// </summary>
-    public ReachedVerdict? Verdict()
-        => Taken
-            ? null
-            : ReachedVerdict.Of(
-                LegVerdict.LogHeld,
-                HeldBy is null ? "another run owns this log path" : $"another run owns this log path: {HeldBy}");
 }
 
 /// <summary>

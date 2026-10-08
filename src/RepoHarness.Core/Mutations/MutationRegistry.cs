@@ -120,9 +120,18 @@ public sealed record MutationRegistryReading(MutationRegistry Registry, IReadOnl
 
 /// <summary>The files directly in the registry's text directory, as the cover check reads them.</summary>
 /// <param name="Directory">The directory, relative to the repository root, with forward separators.</param>
-/// <param name="Files">The names of the files directly in it, or <see langword="null"/> where it is not a directory.</param>
+/// <param name="Files">
+/// The names of the files directly in it that a copy of the tree holds, or <see langword="null"/> where it is not a
+/// directory.
+/// </param>
 public sealed record TextDirectoryListing(string Directory, IReadOnlyList<string>? Files)
 {
     /// <summary>Why the directory, which is there, could not be listed; <see langword="null"/> where it was, or is not there.</summary>
     public string? Unlisted { get; init; }
+
+    /// <summary>
+    /// How many files directly in it a sync withholds from every copy of the tree, which <see cref="Files"/> leaves
+    /// out: no copy holds one, so it is no text anybody could drive.
+    /// </summary>
+    public int Withheld { get; init; }
 }

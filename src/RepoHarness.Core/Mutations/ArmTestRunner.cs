@@ -36,22 +36,20 @@ internal sealed record ArmRunRequest
     /// </summary>
     public int ClockStepToleranceMilliseconds { get; init; }
 
-    /// <summary>How long it may run before it is stopped, or <see langword="null"/> for a control, which is unbounded.</summary>
-    public TimeSpan? Bound { get; init; }
-
-    /// <summary>What <see cref="Bound"/> is of the unmutated run, as a verdict says it.</summary>
-    public double Factor { get; init; }
+    /// <summary>How long it may run before it is stopped, and what set that, or <see langword="null"/> for a control, which is unbounded.</summary>
+    public RunBound? Bound { get; init; }
 
     /// <summary>The text its output must say, or <see langword="null"/> where nothing is watched for.</summary>
     public string? Diagnostic { get; init; }
 }
 
-/// <summary>What one run established, and where it was kept.</summary>
+/// <summary>
+/// What one run established. Its output and its report are kept in the directory its request named, under
+/// <see cref="ArmTestRunner.PhaseName"/> and <see cref="ArmTestRunner.ReportFileName"/>.
+/// </summary>
 /// <param name="Run">What the judge reads of it.</param>
 /// <param name="Duration">How long it ran, from the monotonic clock.</param>
-/// <param name="LogFile">Its output, both streams in the order they came.</param>
-/// <param name="ReportFile">Where it was told to write its report.</param>
-internal sealed record ArmRunResult(ArmRun Run, TimeSpan Duration, string LogFile, string ReportFile)
+internal sealed record ArmRunResult(ArmRun Run, TimeSpan Duration)
 {
     /// <summary>
     /// How far wall-clock time moved from monotonic time across the run, where that is past the tolerance its request
@@ -129,7 +127,7 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
             _fileSystem.DeleteFile(report);
         }
 
-        using var timed = request.Bound is { } bound ? new CancellationTokenSource(bound, _clock) : new CancellationTokenSource();
+        using var timed = request.Bound is { } bound ? new CancellationTokenSource(bound.Limit, _clock) : new CancellationTokenSource();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timed.Token);
         var started = _clock.GetTimestamp();
         var startedAt = _clock.GetUtcNow();
@@ -165,60 +163,23 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timed.IsCancellationRequested)
         {
-            return new ArmRunResult(
-                new ArmRun
-                {
-                    StoppedAtBound = true,
-                    Bound = request.Bound!.Value,
-                    Factor = request.Factor,
-                    ReportWritten = _fileSystem.FileExists(report),
-                },
-                _clock.GetElapsedTime(started),
-                log,
-                report)
-            {
-                SteppedBy = SteppedBy(),
-            };
+            // The timer that stopped it is the request's own bound's, so the bound is there.
+            return new ArmRunResult(ArmRun.StoppedAt(request.Bound!), _clock.GetElapsedTime(started)) { SteppedBy = SteppedBy() };
         }
 
         var steppedBy = SteppedBy();
 
         if (phase.Stalled)
         {
-            return new ArmRunResult(
-                new ArmRun
-                {
-                    StalledAfterSeconds = phase.StallSeconds,
-                    Bound = request.Bound ?? TimeSpan.Zero,
-                    Factor = request.Factor,
-                    ReportWritten = _fileSystem.FileExists(report),
-                },
-                phase.Duration,
-                log,
-                report)
-            {
-                SteppedBy = steppedBy,
-            };
+            return new ArmRunResult(ArmRun.Hung(phase.StallSeconds), phase.Duration) { SteppedBy = steppedBy };
         }
 
-        var written = _fileSystem.FileExists(report);
-        var read = written ? await ReadAsync(report, cancellationToken).ConfigureAwait(false) : default;
-
         return new ArmRunResult(
-            new ArmRun
-            {
-                ExitCode = phase.ExitCode,
-                Bound = request.Bound ?? TimeSpan.Zero,
-                Factor = request.Factor,
-                ReportWritten = written,
-                Report = read.Report,
-                ReportProblem = read.Problem,
-                ReportUnread = read.Unread,
-                DiagnosticSaid = request.Diagnostic is { } diagnostic && DiagWindow.Appears(diagnostic, phase.Output.Lines()),
-            },
-            phase.Duration,
-            log,
-            report)
+            ArmRun.Exited(
+                phase.ExitCode,
+                _fileSystem.FileExists(report) ? await ReadAsync(report, cancellationToken).ConfigureAwait(false) : RunReport.None,
+                request.Diagnostic is { } diagnostic && DiagWindow.Appears(diagnostic, phase.Output.Lines())),
+            phase.Duration)
         {
             SteppedBy = steppedBy,
         };
@@ -229,21 +190,19 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
     /// read, tried <see cref="ReadAttempts"/> times, <see cref="ReadRetry"/> apart. The two are never said as one: a
     /// file this could not read is the harness's own failure, and what it holds may be a report naming every case.
     /// </summary>
-    private async Task<(JUnitReport? Report, string? Problem, string? Unread)> ReadAsync(string path, CancellationToken cancellationToken)
+    private async Task<RunReport> ReadAsync(string path, CancellationToken cancellationToken)
     {
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                var report = JUnitReport.Read(_fileSystem.ReadAllText(path), out var problem);
-
-                return (report, problem, null);
+                return JUnitReport.Read(_fileSystem.ReadAllText(path), out var problem) is { } report ? RunReport.Of(report) : RunReport.NoReport(problem);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 if (attempt == ReadAttempts)
                 {
-                    return (null, null, ex.Message);
+                    return RunReport.NotRead(ex.Message);
                 }
             }
 

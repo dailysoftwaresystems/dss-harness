@@ -291,7 +291,9 @@ public static partial class MutationRegistryParser
 
             if (texts.Files.Count == 0)
             {
-                Problems.Add($"the text directory '{texts.Directory}' holds no file");
+                Problems.Add(texts.Withheld == 0
+                    ? $"the text directory '{texts.Directory}' holds no file"
+                    : $"the text directory '{texts.Directory}' holds no file a copy of the tree would: a sync withholds each of the {texts.Withheld} in it");
                 return;
             }
 

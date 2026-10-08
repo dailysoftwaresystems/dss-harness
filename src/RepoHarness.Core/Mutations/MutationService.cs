@@ -370,7 +370,7 @@ public sealed class MutationService(
 
         var reading = MutationRegistryParser.Parse(
             MutationRegistryParser.Lines(rows),
-            Listing(root, settings.TextDirectory),
+            Listing(root, settings.TextDirectory, carried.IsWithheldFromTransfer),
             PathCase.In(_fileSystem, root));
         var problems = new List<string>(reading.Problems);
 
@@ -535,9 +535,11 @@ public sealed class MutationService(
 
     /// <summary>
     /// The files directly in the text directory, as the cover check reads them - or why it could not be listed - or
-    /// <see langword="null"/> where none is configured.
+    /// <see langword="null"/> where none is configured. One <paramref name="withheld"/> says no copy of the tree would
+    /// hold - what git ignores, as a desktop's or an editor's leftover is, or what the configuration keeps from a sync -
+    /// is counted and left out: no worker holds it, so it is no text anybody could drive.
     /// </summary>
-    private TextDirectoryListing? Listing(string root, string? textDirectory)
+    private TextDirectoryListing? Listing(string root, string? textDirectory, Func<string, bool> withheld)
     {
         if (textDirectory is null)
         {
@@ -554,7 +556,12 @@ public sealed class MutationService(
 
         try
         {
-            return new TextDirectoryListing(named, [.. _fileSystem.EnumerateFiles(directory, recursive: false).Select(Path.GetFileName).OfType<string>()]);
+            var carried = _fileSystem.EnumerateFiles(directory, recursive: false)
+                .Select(Path.GetFileName)
+                .OfType<string>()
+                .ToLookup(name => !withheld(PathPatterns.Normalize(named + "/" + name)));
+
+            return new TextDirectoryListing(named, [.. carried[true]]) { Withheld = carried[false].Count() };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

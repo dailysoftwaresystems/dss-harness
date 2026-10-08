@@ -17,9 +17,6 @@ namespace RepoHarness.Core.Mutations;
 /// its variant's (<see cref="MutationWorkers.KeyOf"/>), the mark <see cref="OwnMark"/> for the variant's own workers
 /// and <see cref="SelfTestMark"/> for its self-test's.
 /// </summary>
-/// <param name="TreeRoot">The tree the workers are kept beside.</param>
-/// <param name="Key">The variant's key: <see cref="KeyLength"/> hexadecimal digits, in lower case.</param>
-/// <param name="SelfTest">Whether they are a self-test's, copies of the fixture this tool carries rather than of the tree.</param>
 /// <remarks>
 /// A key, never the variant's name: a worker is a second tree, built as deep as the first, so on a machine whose paths
 /// are bounded every character its name adds is one the tree's own path must leave free. Spelt out, a variant's name
@@ -28,7 +25,7 @@ namespace RepoHarness.Core.Mutations;
 /// its variant is called, and which leg a worker is the lines of the sweep that makes it, and of the clean that
 /// removes it, say.
 /// </remarks>
-public sealed record WorkerFamily(string TreeRoot, string Key, bool SelfTest = false)
+public sealed record WorkerFamily
 {
     /// <summary>How many characters a variant's key is.</summary>
     public const int KeyLength = 7;
@@ -41,6 +38,22 @@ public sealed record WorkerFamily(string TreeRoot, string Key, bool SelfTest = f
 
     /// <summary>The digits a key is written in.</summary>
     private const string KeyDigits = "0123456789abcdef";
+
+    private WorkerFamily(string treeRoot, string key, bool selfTest)
+    {
+        TreeRoot = treeRoot;
+        Key = key;
+        SelfTest = selfTest;
+    }
+
+    /// <summary>The tree the workers are kept beside.</summary>
+    public string TreeRoot { get; }
+
+    /// <summary>The variant's key: <see cref="KeyLength"/> hexadecimal digits, in lower case.</summary>
+    public string Key { get; }
+
+    /// <summary>Whether they are a self-test's, copies of the fixture this tool carries rather than of the tree.</summary>
+    public bool SelfTest { get; }
 
     /// <summary>The name its workers are kept under, before each one's number: the variant's key, then the family's mark.</summary>
     public string Name => Key + (SelfTest ? SelfTestMark : OwnMark);
@@ -75,11 +88,31 @@ public sealed record WorkerFamily(string TreeRoot, string Key, bool SelfTest = f
         ArgumentNullException.ThrowIfNull(name);
 
         return name.Length == KeyLength + 1
-            && name.AsSpan(0, KeyLength).IndexOfAnyExcept(KeyDigits) < 0
+            && IsKey(name.AsSpan(0, KeyLength))
             && name[KeyLength] is OwnMark or SelfTestMark
             ? new WorkerFamily(treeRoot, name[..KeyLength], name[KeyLength] == SelfTestMark)
             : null;
     }
+
+    /// <summary>
+    /// The family of <paramref name="treeRoot"/> keyed <paramref name="key"/>: made of a key that is one, and of no
+    /// other, since its workers' names are read back by that spelling (<see cref="Named"/>).
+    /// </summary>
+    /// <param name="treeRoot">The tree the workers are kept beside.</param>
+    /// <param name="key">The variant's key (<see cref="MutationWorkers.KeyOf"/>).</param>
+    /// <param name="selfTest">Whether the family is the self-test's.</param>
+    /// <exception cref="ArgumentException"><paramref name="key"/> is spelt as no key.</exception>
+    public static WorkerFamily Of(string treeRoot, string key, bool selfTest = false)
+    {
+        ArgumentNullException.ThrowIfNull(treeRoot);
+        ArgumentNullException.ThrowIfNull(key);
+
+        return IsKey(key)
+            ? new WorkerFamily(treeRoot, key, selfTest)
+            : throw new ArgumentException($"'{key}' is no key of a worker family: {KeyLength} hexadecimal digits, in lower case.", nameof(key));
+    }
+
+    private static bool IsKey(ReadOnlySpan<char> key) => key.Length == KeyLength && key.IndexOfAnyExcept(KeyDigits) < 0;
 }
 
 /// <summary>
@@ -160,7 +193,7 @@ public static class MutationWorkers
     /// <param name="variant">The leg's variant.</param>
     /// <param name="selfTest">Whether the family is the self-test's.</param>
     public static WorkerFamily Of(string treeRoot, VariantKey variant, bool selfTest = false)
-        => new(treeRoot, KeyOf(variant), selfTest);
+        => WorkerFamily.Of(treeRoot, KeyOf(variant), selfTest);
 
     /// <summary>Where worker <paramref name="number"/> of <paramref name="variant"/> copies <paramref name="treeRoot"/>.</summary>
     /// <param name="treeRoot">The tree the worker copies.</param>
@@ -176,6 +209,15 @@ public static class MutationWorkers
     /// </summary>
     /// <param name="name">The name the copy is kept under.</param>
     public static (string Family, int Number)? Named(string name)
+        => Named(string.Empty, name) is { } worker ? (worker.Family.Name, worker.Number) : null;
+
+    /// <summary>
+    /// The worker kept under <paramref name="name"/> beside <paramref name="treeRoot"/>, as <see cref="Named(string)"/>
+    /// reads its name: its family, of that tree, and its number.
+    /// </summary>
+    /// <param name="treeRoot">The tree the worker is kept beside.</param>
+    /// <param name="name">The name the copy is kept under.</param>
+    public static (WorkerFamily Family, int Number)? Named(string treeRoot, string name)
     {
         ArgumentNullException.ThrowIfNull(name);
 
@@ -186,8 +228,8 @@ public static class MutationWorkers
             && hyphen < name.Length - 1
             && name[hyphen + 1] != '0'
             && int.TryParse(name[(hyphen + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var number)
-            && WorkerFamily.Named(string.Empty, name[..hyphen]) is not null
-            ? (name[..hyphen], number)
+            && WorkerFamily.Named(treeRoot, name[..hyphen]) is { } family
+            ? (family, number)
             : null;
     }
 

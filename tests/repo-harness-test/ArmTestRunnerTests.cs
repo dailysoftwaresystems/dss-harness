@@ -1,6 +1,7 @@
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Processes;
 
 namespace RepoHarness.Tests;
 
@@ -28,13 +29,12 @@ public sealed class ArmTestRunnerTests
         var result = await RunAsync(Child("write-file", records, "{report}", Report));
 
         Assert.Equal(0, result.Run.ExitCode);
-        Assert.True(result.Run.ReportWritten);
-        Assert.Equal(["Fixture.Charge"], result.Run.Report?.Reds);
-        Assert.Equal(2, result.Run.Report?.Ran);
-        Assert.Equal(Path.Combine(records, ArmTestRunner.ReportFileName), result.ReportFile);
-        Assert.Equal(Path.Combine(records, ArmTestRunner.PhaseName + ".log"), result.LogFile);
-        Assert.True(File.Exists(result.LogFile));
-        Assert.False(result.Run.StoppedAtBound);
+        Assert.True(result.Run.Report.Written);
+        Assert.Equal(["Fixture.Charge"], result.Run.Report.Read?.Reds);
+        Assert.Equal(2, result.Run.Report.Read?.Ran);
+        Assert.True(File.Exists(Path.Combine(records, ArmTestRunner.ReportFileName)));
+        Assert.True(File.Exists(Path.Combine(records, ArmTestRunner.PhaseName + ".log")));
+        Assert.Null(result.Run.PastBound);
         Assert.Null(result.Run.StalledAfterSeconds);
         Assert.True(result.Duration > TimeSpan.Zero);
     }
@@ -50,8 +50,7 @@ public sealed class ArmTestRunnerTests
         var result = await RunAsync(Child("exit", records, "3"));
 
         Assert.Equal(3, result.Run.ExitCode);
-        Assert.False(result.Run.ReportWritten);
-        Assert.Null(result.Run.Report);
+        Assert.Same(RunReport.None, result.Run.Report);
         Assert.False(File.Exists(left));
     }
 
@@ -63,10 +62,10 @@ public sealed class ArmTestRunnerTests
 
         var result = await RunAsync(Child("write-file", temp.Combine("arms", "charge-bound"), "{report}", "Segmentation fault"));
 
-        Assert.True(result.Run.ReportWritten);
-        Assert.Null(result.Run.Report);
-        Assert.StartsWith("it is no XML: ", result.Run.ReportProblem, StringComparison.Ordinal);
-        Assert.Null(result.Run.ReportUnread);
+        Assert.True(result.Run.Report.Written);
+        Assert.Null(result.Run.Report.Read);
+        Assert.StartsWith("it is no XML: ", result.Run.Report.Problem, StringComparison.Ordinal);
+        Assert.Null(result.Run.Report.Unread);
     }
 
     /// <summary>
@@ -89,30 +88,28 @@ public sealed class ArmTestRunnerTests
 
         var result = await RunAsync(Child("write-file", temp.Combine("arms", "charge-bound"), "{report}", Report), fileSystem: held, clock: clock);
 
-        Assert.True(result.Run.ReportWritten);
-        Assert.Null(result.Run.ReportProblem);
+        Assert.True(result.Run.Report.Written);
+        Assert.Null(result.Run.Report.Problem);
 
         // Waited between two reads, each time as long: what holds a report lets go within moments, never at once.
         Assert.Equal(Enumerable.Repeat(ArmTestRunner.ReadRetry, Math.Min(heldFor, ArmTestRunner.ReadAttempts - 1)), clock.Waits);
 
         if (heldFor == int.MaxValue)
         {
-            Assert.Null(result.Run.Report);
-            Assert.Equal("'report.xml' is held by another process", result.Run.ReportUnread);
+            Assert.Null(result.Run.Report.Read);
+            Assert.Equal("'report.xml' is held by another process", result.Run.Report.Unread);
             Assert.Equal(ArmTestRunner.ReadAttempts, held.Reads);
         }
         else
         {
-            Assert.Equal(["Fixture.Charge"], result.Run.Report?.Reds);
-            Assert.Null(result.Run.ReportUnread);
+            Assert.Equal(["Fixture.Charge"], result.Run.Report.Read?.Reds);
+            Assert.Null(result.Run.Report.Unread);
             Assert.Equal(heldFor + 1, held.Reads);
         }
     }
 
     /// <summary>
-    /// A run starts where it is told, and finds programs in the directories it is given beside its PATH: where the
-    /// leg's tests start, and with the compiler's own libraries the leg's host found - without which a binary a
-    /// compiler outside the PATH built does not start at all.
+    /// A run starts where it is told, with the directories it is given on its PATH.
     /// </summary>
     [Fact]
     public async Task ARun_StartsWhereItIsTold_AndFindsProgramsInTheDirectoriesItIsGiven()
@@ -129,13 +126,15 @@ public sealed class ArmTestRunnerTests
         var printed = await RunAsync(Child("print-env", temp.Combine("arms", "path"), "PATH") with { AppendToPath = [given] });
 
         Assert.Equal(0, printed.Run.ExitCode);
-        Assert.Contains(given, await File.ReadAllTextAsync(printed.LogFile, TestContext.Current.CancellationToken), StringComparison.Ordinal);
+        Assert.Contains(
+            given,
+            await File.ReadAllTextAsync(Path.Combine(temp.Combine("arms", "path"), ArmTestRunner.PhaseName + ".log"), TestContext.Current.CancellationToken),
+            StringComparison.Ordinal);
     }
 
     /// <summary>
     /// A run whose log no longer holds what it printed, once it has ended, is not read for its diagnostic as one that
-    /// printed nothing - which would be a mutation whose red never said why: it is said as unread, which its arm ends
-    /// unmeasured for.
+    /// printed nothing - which would be a mutation whose red never said why: it is said as unread.
     /// </summary>
     [Fact]
     public async Task ARunWhoseOutputCouldNotBeReadBack_IsSaidAsUnread_NeverAsOneThatDidNotSayItsDiagnostic()
@@ -151,18 +150,18 @@ public sealed class ArmTestRunnerTests
         Assert.Contains("it was written again since", unread.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>A run past its bound is stopped and said as one, with the bound and the factor it had.</summary>
+    /// <summary>A run past its bound is stopped and said as one, with the bound it had and what set it.</summary>
     [Fact]
     public async Task ARunPastItsBound_IsStopped_AndSaidAsOne()
     {
         using var temp = new TempDirectory();
+        var bound = new RunBound(TimeSpan.FromSeconds(1), "10x the unmutated run");
 
-        var result = await RunAsync(Child("sleep", temp.Combine("arms", "loop"), "120000") with { Bound = TimeSpan.FromSeconds(1), Factor = 10 });
+        var result = await RunAsync(Child("sleep", temp.Combine("arms", "loop"), "120000") with { Bound = bound });
 
-        Assert.True(result.Run.StoppedAtBound);
-        Assert.Equal((TimeSpan.FromSeconds(1), 10.0), (result.Run.Bound, result.Run.Factor));
+        Assert.Same(bound, result.Run.PastBound);
         Assert.Null(result.Run.ExitCode);
-        Assert.False(result.Run.ReportWritten);
+        Assert.Same(RunReport.None, result.Run.Report);
         Assert.True(result.Duration < TimeSpan.FromSeconds(60), $"the run took {result.Duration}");
     }
 
@@ -172,12 +171,11 @@ public sealed class ArmTestRunnerTests
     {
         using var temp = new TempDirectory();
 
-        var result = await RunAsync(Child("sleep", temp.Combine("arms", "silent"), "120000") with { StallSeconds = 1, Bound = TimeSpan.FromMinutes(10) });
+        var result = await RunAsync(Child("sleep", temp.Combine("arms", "silent"), "120000") with { StallSeconds = 1, Bound = new RunBound(TimeSpan.FromMinutes(10), "10x the unmutated run") });
 
         Assert.Equal(1, result.Run.StalledAfterSeconds);
-        Assert.False(result.Run.StoppedAtBound);
+        Assert.Null(result.Run.PastBound);
         Assert.Null(result.Run.ExitCode);
-        Assert.Equal(TimeSpan.FromMinutes(10), result.Run.Bound);
     }
 
     /// <summary>
@@ -216,13 +214,13 @@ public sealed class ArmTestRunnerTests
         var request = ended switch
         {
             "stall" => Child("sleep", records, "120000") with { StallSeconds = 1 },
-            "bound" => Child("sleep", records, "120000") with { Bound = TimeSpan.FromSeconds(1), Factor = 10 },
+            "bound" => Child("sleep", records, "120000") with { Bound = new RunBound(TimeSpan.FromSeconds(1), "10x the unmutated run") },
             _ => Child("exit", records, "0"),
         };
 
-        var result = await RunAsync(request with { ClockStepToleranceMilliseconds = 2000 }, clock: new SteppedOnce(TimeSpan.FromSeconds(steppedSeconds)));
+        var result = await RunAsync(request with { ClockStepToleranceMilliseconds = 2000 }, steppedAsItStarts: TimeSpan.FromSeconds(steppedSeconds));
 
-        Assert.Equal(ended == "bound", result.Run.StoppedAtBound);
+        Assert.Equal(ended == "bound", result.Run.PastBound is not null);
         Assert.Equal(ended == "stall" ? 1 : (int?)null, result.Run.StalledAfterSeconds);
         Assert.NotNull(result.SteppedBy);
         Assert.InRange(result.SteppedBy.Value, TimeSpan.FromSeconds(89), TimeSpan.FromSeconds(91));
@@ -242,21 +240,36 @@ public sealed class ArmTestRunnerTests
 
         var result = await RunAsync(
             Child("exit", temp.Combine("arms", "charge-bound"), "0") with { ClockStepToleranceMilliseconds = tolerance },
-            clock: new SteppedOnce(TimeSpan.FromSeconds(steppedSeconds)));
+            steppedAsItStarts: TimeSpan.FromSeconds(steppedSeconds));
 
         Assert.Equal(0, result.Run.ExitCode);
         Assert.Null(result.SteppedBy);
     }
 
     /// <summary>
-    /// The system's clock, save that its wall time is moved <paramref name="by"/> once it has been read once: a clock
-    /// that stepped while a run went. Its monotonic time, and its timers, are the system's.
+    /// The real runner, save that <paramref name="clock"/> is stepped by <paramref name="step"/> once the child has
+    /// started: a clock that stepped while a run went, and at no other moment - whichever readings are taken of it, and
+    /// whatever this machine's own wall clock does meanwhile.
     /// </summary>
-    private sealed class SteppedOnce(TimeSpan by) : TimeProvider
+    private sealed class SteppingAsItStarts(IProcessRunner inner, SteppingClock clock, TimeSpan step) : IProcessRunner
     {
-        private int _read;
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(request);
 
-        public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + (Interlocked.Increment(ref _read) > 1 ? by : TimeSpan.Zero);
+            return inner.RunAsync(
+                request with
+                {
+                    OnStarted = () =>
+                    {
+                        clock.Step(step);
+                        request.OnStarted?.Invoke();
+                    },
+                },
+                cancellationToken);
+        }
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
     }
 
     /// <summary>A sweep stopped while a run goes is the sweep's to say: the run is not said as one past its bound.</summary>
@@ -269,15 +282,29 @@ public sealed class ArmTestRunnerTests
         stop.CancelAfter(TimeSpan.FromMilliseconds(500));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => RunAsync(Child("sleep", temp.Combine("arms", "loop"), "120000") with { Bound = TimeSpan.FromMinutes(10) }, stop.Token));
+            () => RunAsync(Child("sleep", temp.Combine("arms", "loop"), "120000") with { Bound = new RunBound(TimeSpan.FromMinutes(10), "10x the unmutated run") }, stop.Token));
     }
 
-    /// <summary>Runs <paramref name="request"/> as a sweep runs an arm's binary.</summary>
-    private static Task<ArmRunResult> RunAsync(ArmRunRequest request, CancellationToken? cancellationToken = null, IFileSystem? fileSystem = null, TimeProvider? clock = null)
+    /// <summary>
+    /// Runs <paramref name="request"/> as a sweep runs an arm's binary, timed by <paramref name="clock"/> - or, where
+    /// the test says <paramref name="steppedAsItStarts"/>, by a wall clock of the test's own, stepped by that much once
+    /// the binary has started.
+    /// </summary>
+    private static Task<ArmRunResult> RunAsync(
+        ArmRunRequest request,
+        CancellationToken? cancellationToken = null,
+        IFileSystem? fileSystem = null,
+        TimeProvider? clock = null,
+        TimeSpan? steppedAsItStarts = null)
     {
         var harness = new HarnessFactory();
+        var stepping = new SteppingClock();
+        IProcessRunner processes = steppedAsItStarts is { } step ? new SteppingAsItStarts(harness.ProcessRunner, stepping, step) : harness.ProcessRunner;
 
-        return new ArmTestRunner(new PhaseRunner(harness.ProcessRunner, harness.FileSystem, harness.Output), fileSystem ?? harness.FileSystem, clock ?? TimeProvider.System)
+        return new ArmTestRunner(
+                new PhaseRunner(processes, harness.FileSystem, harness.Output),
+                fileSystem ?? harness.FileSystem,
+                steppedAsItStarts is null ? clock ?? TimeProvider.System : stepping)
             .RunAsync(request, cancellationToken ?? TestContext.Current.CancellationToken);
     }
 

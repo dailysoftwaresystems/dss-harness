@@ -110,3 +110,39 @@ internal sealed class FullDiskFileSystem(IFileSystem inner) : PassThroughFileSys
         base.WriteAllTextAtomic(path, contents);
     }
 }
+
+/// <summary>A disk that will not say what one directory holds: something holds it, or it is not this user's to read.</summary>
+internal sealed class CannotList(IFileSystem inner, string directory, bool denied) : PassThroughFileSystem(inner)
+{
+    public override IEnumerable<string> EnumerateDirectories(string path)
+        => !string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase) ? base.EnumerateDirectories(path)
+            : denied ? throw new UnauthorizedAccessException("the disk would not say.")
+            : throw new IOException("the disk would not say.");
+}
+
+/// <summary>A disk that says what one directory holds once, and never again.</summary>
+internal sealed class ListsOnce(IFileSystem inner, string directory) : PassThroughFileSystem(inner)
+{
+    private int _asked;
+
+    public override IEnumerable<string> EnumerateDirectories(string path)
+        => string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase) && _asked++ > 0
+            ? throw new IOException("the disk would not say.")
+            : base.EnumerateDirectories(path);
+}
+
+/// <summary>A disk on which the command is interrupted the second time one directory is weighed.</summary>
+internal sealed class InterruptsOnceWeighedAgain(IFileSystem inner, string directory, CancellationTokenSource interruption) : PassThroughFileSystem(inner)
+{
+    private int _weighed;
+
+    public override long DirectorySize(string path)
+    {
+        if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase) && ++_weighed == 2)
+        {
+            interruption.Cancel();
+        }
+
+        return base.DirectorySize(path);
+    }
+}

@@ -72,48 +72,134 @@ public sealed record ArmPreflight
 /// <param name="NotRebuilt">The dependent objects ninja's log shows no step run for, where the build passed.</param>
 public sealed record ArmBuild(ReachedVerdict Verdict, IReadOnlyList<string> Failed, IReadOnlyList<string> NotRebuilt);
 
-/// <summary>One whole run of an arm's test binary.</summary>
-public sealed record ArmRun
+/// <summary>How long a mutated run of a test binary may take before it is stopped, and what set that.</summary>
+/// <param name="Limit">How long it may take.</param>
+/// <param name="SetBy">
+/// What set it, as the verdict of a run stopped at it says after "ran past": <c>mutations.runTimeFactor</c> times the
+/// unmutated run, or whichever end of the bound held instead (<see cref="PristineJudge.Bound"/>).
+/// </param>
+public sealed record RunBound(TimeSpan Limit, string SetBy);
+
+/// <summary>
+/// What a run that exited left as its report: none, one this read, what is no report, or one whose file could not be
+/// read. Exactly one of the four.
+/// </summary>
+public sealed record RunReport
 {
-    /// <summary>What the binary exited with, or <see langword="null"/> where it was stopped: at its bound, or as hung.</summary>
-    public int? ExitCode { get; init; }
+    private RunReport(bool written, JUnitReport? read, string? problem, string? unread)
+    {
+        Written = written;
+        Read = read;
+        Problem = problem;
+        Unread = unread;
+    }
 
-    /// <summary>Whether it ran past its bound, and was stopped.</summary>
-    public bool StoppedAtBound { get; init; }
-
-    /// <summary>
-    /// How long it went without printing a line before it was stopped as hung, at <c>defaults.stallSeconds</c>, as every
-    /// phase is; <see langword="null"/> where it was not.
-    /// </summary>
-    public int? StalledAfterSeconds { get; init; }
-
-    /// <summary>The bound the run had: <c>mutations.runTimeFactor</c> times the unmutated run, never less than it and a minute.</summary>
-    public TimeSpan Bound { get; init; }
-
-    /// <summary>The factor the bound was set by.</summary>
-    public double Factor { get; init; }
+    /// <summary>The binary wrote no report.</summary>
+    public static RunReport None { get; } = new(false, null, null, null);
 
     /// <summary>Whether the binary wrote its report at all.</summary>
-    public bool ReportWritten { get; init; }
+    public bool Written { get; }
 
     /// <summary>The report, or <see langword="null"/> where it was not written, is no report, or could not be read from its file.</summary>
-    public JUnitReport? Report { get; init; }
+    public JUnitReport? Read { get; }
 
     /// <summary>
     /// Why what it wrote is no report this reads - no XML, no JUnit report, one declaring a document type - or
-    /// <see langword="null"/> where it is one, or none was read.
+    /// <see langword="null"/> where it is one, none was read, or nothing says why.
     /// </summary>
-    public string? ReportProblem { get; init; }
+    public string? Problem { get; }
 
     /// <summary>
     /// Why the report it wrote could not be read from its file, each time that was tried - held by another process, not
     /// this user's to read - or <see langword="null"/> where it was read, or none was written. The harness's own
     /// failure to read, and nothing the binary did.
     /// </summary>
-    public string? ReportUnread { get; init; }
+    public string? Unread { get; }
+
+    /// <summary>The report the binary wrote, read.</summary>
+    /// <param name="report">The report.</param>
+    public static RunReport Of(JUnitReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        return new(true, report, null, null);
+    }
+
+    /// <summary>What the binary wrote is no report this reads.</summary>
+    /// <param name="problem">Why it is none, or <see langword="null"/> where nothing says.</param>
+    public static RunReport NoReport(string? problem) => new(true, null, problem, null);
+
+    /// <summary>The report the binary wrote could not be read from its file.</summary>
+    /// <param name="why">Why, as the last attempt to read it said.</param>
+    public static RunReport NotRead(string why)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+
+        return new(true, null, null, why);
+    }
+}
+
+/// <summary>
+/// One whole run of an arm's test binary: it exited, it ran past its bound and was stopped, or it was stopped as hung.
+/// Exactly one of the three, and only a run that exited left a report anybody reads.
+/// </summary>
+public sealed record ArmRun
+{
+    private ArmRun(int? exitCode, RunBound? pastBound, int? stalledAfterSeconds, RunReport report, bool diagnosticSaid)
+    {
+        ExitCode = exitCode;
+        PastBound = pastBound;
+        StalledAfterSeconds = stalledAfterSeconds;
+        Report = report;
+        DiagnosticSaid = diagnosticSaid;
+    }
+
+    /// <summary>What the binary exited with, or <see langword="null"/> where it was stopped: at its bound, or as hung.</summary>
+    public int? ExitCode { get; }
+
+    /// <summary>The bound it ran past, and was stopped at, or <see langword="null"/> where it was not.</summary>
+    public RunBound? PastBound { get; }
+
+    /// <summary>
+    /// How long it went without printing a line before it was stopped as hung, at <c>defaults.stallSeconds</c>, as every
+    /// phase is; <see langword="null"/> where it was not.
+    /// </summary>
+    public int? StalledAfterSeconds { get; }
+
+    /// <summary>What it left as its report: none where it was stopped, which nothing reads a report of.</summary>
+    public RunReport Report { get; }
 
     /// <summary>Whether the run's output said the arm's diagnostic.</summary>
-    public bool DiagnosticSaid { get; init; }
+    public bool DiagnosticSaid { get; }
+
+    /// <summary>A run that ended of its own accord.</summary>
+    /// <param name="exitCode">What the binary exited with.</param>
+    /// <param name="report">What it left as its report.</param>
+    /// <param name="diagnosticSaid">Whether its output said the arm's diagnostic.</param>
+    public static ArmRun Exited(int exitCode, RunReport report, bool diagnosticSaid = false)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        return new(exitCode, null, null, report, diagnosticSaid);
+    }
+
+    /// <summary>A run that ran past its bound, and was stopped.</summary>
+    /// <param name="bound">The bound it had.</param>
+    public static ArmRun StoppedAt(RunBound bound)
+    {
+        ArgumentNullException.ThrowIfNull(bound);
+
+        return new(null, bound, null, RunReport.None, false);
+    }
+
+    /// <summary>A run stopped as hung.</summary>
+    /// <param name="seconds">How long it had printed nothing for.</param>
+    public static ArmRun Hung(int seconds)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(seconds);
+
+        return new(null, null, seconds, RunReport.None, false);
+    }
 }
 
 /// <summary>Everything observed of one arm so far: what is not observed yet is <see langword="null"/>.</summary>
@@ -371,12 +457,9 @@ public static class ArmJudge
 
     private static ReachedVerdict JudgeRun(MutationArm arm, ArmRun run)
     {
-        if (run.StoppedAtBound)
+        if (run.PastBound is { } bound)
         {
-            return ReachedVerdict.Of(
-                LegVerdict.Unattributed,
-                $"ran past {run.Factor.ToString(System.Globalization.CultureInfo.InvariantCulture)}x the unmutated run, "
-                + $"{LedgerReport.FormatDuration(run.Bound)}, and was stopped");
+            return ReachedVerdict.Of(LegVerdict.Unattributed, $"ran past {bound.SetBy}, {LedgerReport.FormatDuration(bound.Limit)}, and was stopped");
         }
 
         if (run.StalledAfterSeconds is { } quiet)
@@ -384,19 +467,20 @@ public static class ArmJudge
             return ReachedVerdict.Of(LegVerdict.Unattributed, $"printed nothing for {quiet}s, and was stopped as hung");
         }
 
-        if (run.ReportUnread is { } unread)
+        // It exited, then: only a run stopped at its bound, or as hung, has no exit code.
+        if (run.Report.Unread is { } unread)
         {
             return ReachedVerdict.Of(
                 LegVerdict.Unmeasured,
                 $"its report was written and could not be read, after it exited {run.ExitCode}, so nothing says which cases failed: {unread}");
         }
 
-        if (run.Report is not { } report)
+        if (run.Report.Read is not { } report)
         {
             return ReachedVerdict.Of(
                 LegVerdict.Unattributed,
-                run.ReportWritten
-                    ? $"its report is no JUnit report this reads, after it exited {run.ExitCode}{Why(run.ReportProblem)}"
+                run.Report.Written
+                    ? $"its report is no JUnit report this reads, after it exited {run.ExitCode}{Why(run.Report.Problem)}"
                     : $"exited {run.ExitCode} and wrote no report");
         }
 

@@ -19,7 +19,7 @@ public sealed class LocalSyncTransport(
     IManifestBuilder manifestBuilder,
     IGitClient gitClient,
     IHostPlatform platform,
-    ICopyClaims? claims = null) : ISyncTransport
+    ICopyClaims claims) : ISyncTransport
 {
     /// <summary>
     /// The file recording that the harness made this copy, inside the copy's own harness directory,
@@ -32,10 +32,10 @@ public sealed class LocalSyncTransport(
     private readonly IGitClient _gitClient = gitClient;
 
     /// <summary>
-    /// Which run is using a copy kept beside a tree, asked before a mutation worker is removed; <see langword="null"/>
-    /// where nothing here records any, and so nothing holds one.
+    /// Which run is using a copy kept beside a tree, asked before a mutation worker is removed, and what a worker is
+    /// named. Never optional: a transport built without it would remove a worker from under the sweep mutating it.
     /// </summary>
-    private readonly ICopyClaims? _claims = claims;
+    private readonly ICopyClaims _claims = claims ?? throw new ArgumentNullException(nameof(claims));
     private readonly IHostPlatform _platform = platform;
 
     /// <inheritdoc/>
@@ -347,17 +347,16 @@ public sealed class LocalSyncTransport(
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(family);
 
-        var main = Path.TrimEndingDirectorySeparator(Home(root));
-        var parent = Path.GetDirectoryName(main);
-        var prefix = Path.GetFileName(main) + family;
         var found = new List<HostCopyFound>();
 
-        if (string.IsNullOrEmpty(parent) || !_fileSystem.DirectoryExists(parent))
+        if (Beside(root, family) is not { } beside)
         {
             return Task.FromResult<IReadOnlyList<HostCopyFound>>(found);
         }
 
-        foreach (var directory in _fileSystem.EnumerateDirectories(parent))
+        var prefix = beside.Prefix;
+
+        foreach (var directory in _fileSystem.EnumerateDirectories(beside.Parent))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -373,87 +372,158 @@ public sealed class LocalSyncTransport(
         return Task.FromResult<IReadOnlyList<HostCopyFound>>([.. found.OrderBy(copy => copy.Name, StringComparer.Ordinal)]);
     }
 
+    /// <summary>
+    /// Where the copies of <paramref name="family"/> beside <paramref name="root"/> are kept, and what the name of each
+    /// starts with: the directory the root is in, and the root's own name followed by the family's suffix. Or
+    /// <see langword="null"/> where that directory is not there, which keeps none.
+    /// </summary>
+    /// <param name="root">What the copies are kept beside.</param>
+    /// <param name="family">The family's suffix.</param>
+    private (string Parent, string Prefix)? Beside(string root, string family)
+    {
+        var main = Path.TrimEndingDirectorySeparator(Home(root));
+        var parent = Path.GetDirectoryName(main);
+
+        return string.IsNullOrEmpty(parent) || !_fileSystem.DirectoryExists(parent) ? null : (parent, Path.GetFileName(main) + family);
+    }
+
+    /// <summary>Why a worker a removal was stopped in was left, as its line says it.</summary>
+    internal const string StoppedPartWay = "its removal was stopped part way, and asking again finishes it";
+
     /// <inheritdoc/>
     /// <remarks>
+    /// <para>
     /// Each worker is removed as a copy is, by its marker, so one a removal stopped in is still the harness's to remove
     /// when asked again. What a removal left aside (<see cref="RemovalAside"/>) was a worker a sync made, renamed with
     /// nothing sweeping in it, and goes whatever it still holds.
+    /// </para>
+    /// <para>
+    /// Everything is listed before anything goes, so a listing that fails has removed nothing - and is raised naming
+    /// the directory that could not be looked in, as a failure of the harness's, since for every host but this one only
+    /// that message comes back; and from then on each worker answers for itself. One that cannot be removed - something
+    /// holds a file of it, its marker cannot be read by now - is left, saying why, and the others still go; and a removal
+    /// stopped before every worker was dealt with answers with what it had done rather than throwing it away, since a
+    /// worker gone is one nothing else would say went.
+    /// </para>
     /// </remarks>
     public async Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
     {
         var removed = new List<WorkerRemoved>();
         var left = new List<WorkerLeft>();
 
-        foreach (var copy in await ListCopiesAsync(root, HostCopies.MutationSuffix, cancellationToken).ConfigureAwait(false))
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            IReadOnlyList<HostCopyFound> copies;
+            IReadOnlyList<string> asides;
 
-            if (copy.Origin != CopyOrigin.Made)
+            try
             {
-                left.Add(new WorkerLeft(copy.Path, WorktreeReports.Origin(copy), InUse: false));
-                continue;
+                copies = await ListCopiesAsync(root, HostCopies.MutationSuffix, cancellationToken).ConfigureAwait(false);
+                asides = WorkersAside(root, _claims.Names);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw WorktreeInspector.CouldNotBeLookedIn(Beside(root, HostCopies.MutationSuffix)?.Parent ?? root, ex);
             }
 
-            // Asked about where this machine keeps the worker, which is where the sweep that holds it claimed it: the
-            // path the caller spelt may start from a home only this machine expands, and names another file as it stands.
-            var kept = Home(copy.Path);
-
-            if (_claims?.HeldBy(kept) is { } holder)
+            foreach (var copy in copies)
             {
-                left.Add(new WorkerLeft(copy.Path, $"a sweep still running holds it: {holder}", InUse: true));
-                continue;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
 
-            if (!measureOnly)
-            {
+                if (copy.Origin != CopyOrigin.Made)
+                {
+                    // One whose marker cannot be read is not told from one a sync made: left as not removed, which keeps
+                    // its tree until it can be told, where somebody's keeps nothing.
+                    left.Add(new WorkerLeft(
+                        copy.Path,
+                        WorktreeReports.Origin(copy),
+                        copy.Origin == CopyOrigin.Unreadable ? WorkerLeftAs.NotRemoved : WorkerLeftAs.Somebodys));
+                    continue;
+                }
+
+                // Asked about where this machine keeps the worker, which is where the sweep that holds it claimed it: the
+                // path the caller spelt may start from a home only this machine expands, and names another file as it stands.
+                var kept = Home(copy.Path);
+
+                if (_claims.HeldBy(kept) is { } holder)
+                {
+                    left.Add(new WorkerLeft(copy.Path, $"a sweep still running holds it: {holder}", WorkerLeftAs.Held));
+                    continue;
+                }
+
+                if (measureOnly)
+                {
+                    removed.Add(new WorkerRemoved(copy.Path, copy.Bytes));
+                    continue;
+                }
+
                 CopyRemoval removal;
 
                 try
                 {
                     removal = await RemoveCopyAsync(copy.Path, cancellationToken).ConfigureAwait(false);
                 }
-                catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    left.Add(new WorkerLeft(copy.Path, ex.Message, InUse: true));
+                    // Its marker goes last, so what is left of it is still the harness's to remove.
+                    left.Add(new WorkerLeft(copy.Path, StoppedPartWay, WorkerLeftAs.NotRemoved));
+                    throw;
+                }
+                catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
+                {
+                    left.Add(new WorkerLeft(copy.Path, ex.Message, WorkerLeftAs.NotRemoved));
                     continue;
                 }
 
-                // Its marker is read again as it is removed, and may say otherwise by then: a directory left where it is
-                // is said as that, never as removed, and the claim on it stays.
-                if (removal is CopyRemoval.Adopted or CopyRemoval.NotACopy)
+                switch (removal)
                 {
-                    var origin = removal == CopyRemoval.Adopted ? CopyOrigin.TakenOver : CopyOrigin.Unmarked;
+                    // Its marker is read again as it is removed, and may say otherwise by then: a directory left where
+                    // it is is said as that, never as removed, and the claim on it stays.
+                    case CopyRemoval.Adopted or CopyRemoval.NotACopy:
+                        var origin = removal == CopyRemoval.Adopted ? CopyOrigin.TakenOver : CopyOrigin.Unmarked;
 
-                    left.Add(new WorkerLeft(copy.Path, WorktreeReports.Origin(copy with { Origin = origin }), InUse: false));
-                    continue;
+                        left.Add(new WorkerLeft(copy.Path, WorktreeReports.Origin(copy with { Origin = origin }), WorkerLeftAs.Somebodys));
+                        break;
+
+                    // Gone by now: another command took it meanwhile, and says so. This one took nothing of it.
+                    case CopyRemoval.Absent:
+                        _claims.Forget(kept);
+                        break;
+
+                    default:
+                        _claims.Forget(kept);
+                        removed.Add(new WorkerRemoved(copy.Path, copy.Bytes));
+                        break;
                 }
-
-                _claims?.Forget(kept);
             }
 
-            removed.Add(new WorkerRemoved(copy.Path, copy.Bytes));
-        }
-
-        foreach (var aside in WorkersAside(root))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var bytes = _fileSystem.DirectorySize(aside);
-
-            if (!measureOnly)
+            foreach (var aside in asides)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                long bytes;
+
                 try
                 {
-                    _fileSystem.DeleteDirectory(aside);
+                    bytes = _fileSystem.DirectorySize(aside);
+
+                    if (!measureOnly)
+                    {
+                        _fileSystem.DeleteDirectory(aside);
+                    }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    left.Add(new WorkerLeft(aside, $"what a removal left aside could not be removed: {ex.Message}", InUse: true));
+                    left.Add(new WorkerLeft(aside, $"what a removal left aside could not be {(measureOnly ? "measured" : "removed")}: {ex.Message}", WorkerLeftAs.NotRemoved));
                     continue;
                 }
-            }
 
-            removed.Add(new WorkerRemoved(aside, bytes));
+                removed.Add(new WorkerRemoved(aside, bytes));
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new WorkersRemoval(removed, left) { Interrupted = true };
         }
 
         return new WorkersRemoval(removed, left);
@@ -461,15 +531,17 @@ public sealed class LocalSyncTransport(
 
     /// <summary>
     /// What an unfinished removal of the workers beside <paramref name="root"/> left aside: each directory beside it
-    /// named as the aside of one of its mutation family, in the order of their names.
+    /// named as the aside (<see cref="RemovalAside"/>) of a worker of its mutation family whose name
+    /// <paramref name="named"/> takes, in the order of their names. Told by name alone, as nothing else is left to tell
+    /// one by: so only what is spelt as a worker is one, and a directory named any other way is nobody's to remove.
     /// </summary>
-    private IReadOnlyList<string> WorkersAside(string root)
+    /// <param name="root">The tree the workers copy.</param>
+    /// <param name="named">Whether what follows the family's suffix is the name of a worker the caller removes.</param>
+    public IReadOnlyList<string> WorkersAside(string root, Func<string, bool> named)
     {
-        var main = Path.TrimEndingDirectorySeparator(Home(root));
-        var parent = Path.GetDirectoryName(main);
-        var prefix = Path.GetFileName(main) + HostCopies.MutationSuffix;
+        ArgumentNullException.ThrowIfNull(named);
 
-        if (string.IsNullOrEmpty(parent) || !_fileSystem.DirectoryExists(parent))
+        if (Beside(root, HostCopies.MutationSuffix) is not var (parent, prefix))
         {
             return [];
         }
@@ -478,8 +550,8 @@ public sealed class LocalSyncTransport(
         [
             .. _fileSystem.EnumerateDirectories(parent)
                 .Where(directory => RemovalAside.Was(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))) is { } was
-                    && was.Length > prefix.Length
-                    && was.StartsWith(prefix, StringComparison.Ordinal))
+                    && was.StartsWith(prefix, StringComparison.Ordinal)
+                    && named(was[prefix.Length..]))
                 .Order(StringComparer.Ordinal),
         ];
     }

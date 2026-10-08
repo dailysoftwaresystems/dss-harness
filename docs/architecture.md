@@ -446,13 +446,15 @@ worktree, names everything it found on one line, each with its remedy, and exits
 - **Held, on Windows.** Looked at last, once every check above has passed: a worktree something
   holds part of is refused on its own, since git's removal would stop part way on it.
   [Removal](#removal) says what holds one.
-- **A mutation worker in use.** The workers kept beside the worktree (see *Mutation testing*) go
+- **A mutation worker kept.** The workers kept beside the worktree (see *Mutation testing*) go
   before it, once every check above has passed, and are asked about before any goes: one a sweep
-  still running holds keeps the worktree, with nothing removed, and workers that cannot be looked
-  for keep it too, exit 20. A sweep that takes one between the asking and the removal keeps the
-  worktree as well, the workers no sweep held gone by then, which the refusal says. `--force`
-  deletes the worktree and leaves a worker still held, saying so, and deleting the worktree again
-  removes it once the sweep has ended.
+  still running holds keeps the worktree, exit 13, and one that cannot be removed, or told for the
+  harness's - its marker cannot be read - keeps it as a failure, exit 20, as workers that cannot be
+  looked for do; nothing is removed. A sweep that takes one between the asking and the removal keeps
+  the worktree as well, and so does one whose removal then fails, the others gone by then, which is
+  said. An interruption as they go says which went and that the worktree is whole, exit 130.
+  `--force` deletes the worktree and leaves a worker that is held or could not be removed, saying
+  so, and deleting the worktree again removes it once nothing keeps it.
 
 Without `--force`, when the check cannot be finished, because git cannot answer, a record cannot
 be read or its directory found, or, on Windows, a directory in it cannot be looked through for
@@ -1776,8 +1778,10 @@ while a gate ran turned a green suite red, with four test processes live at once
   same name - made by hand, or by another tool, outside the worktrees root - still holds: synced by
   both, each would replace the tree the other put there. Deleting a worktree asks each host that
   holds one of its copies to remove it, only where the harness made it, and no other host - and
-  first the mutation workers kept beside it, one of which a sweep still running there holds keeps
-  the copy, still recorded (see *Mutation testing*). A host is
+  first the mutation workers kept beside it, asked about before any goes, as beside the worktree
+  itself: one a sweep still running there holds keeps the copy, still recorded, as does one that
+  cannot be removed or told, and a copy kept once some had gone says which went (see *Mutation
+  testing*). A host is
   reached through the worktree's own configuration, read before it goes - its branch may declare a
   host the configuration the command runs in does not - or else through that one; a host neither
   declares is not asked, and its copy is forgotten, named. Each copy is removed under the lock a leg
@@ -1974,12 +1978,16 @@ removes from before it has removed - no sync, no lock entry, no run records.
   which nothing else would ever remove - another leg's are that leg's. Each variant's go under the
   lock a sweep of it takes rather than its build's, and are said on the leg's line with what they
   held, which `--json` carries as `space.workerBytes` - what was removed of them, 0 where every one
-  there was kept, or in a dry run what is there; a leg whose line carries no `space`, its build
-  directory a link, locked or not removable, carries none: a worker a live sweep still claims is kept,
-  as is one whose claim cannot be read; one whose sweep died holding it is released first, and
-  said; and a directory under a worker's name that no sync made is said and left. Where a host
-  holds no copy of the tree, nothing there can run a clean, and the host is asked instead to remove
-  the workers left beside where the copy was (see *Mutation testing*).
+  there was kept, or in a dry run what is there - wherever anything named as a worker of the leg's
+  was found: a leg whose build directory was not measured, a link, locked, not removable or on a
+  host holding no copy of the tree, carries a `space` saying its workers alone. A worker a live
+  sweep still claims is kept, the leg `refused-locked`, as is one whose claim cannot be read; one
+  that cannot be removed fails the leg, whose line still says what went, and counts it; one whose
+  sweep died holding it is released first, and said; and a directory under a worker's name that no
+  sync made is said and left. Where a host holds no copy of the tree, nothing there can run a
+  clean, and the host is asked instead to remove the workers left beside where the copy was (see
+  *Mutation testing*): one a sweep holds there leaves the leg `refused-locked`, one that could not
+  be removed `failed`, and a removal that was stopped `stopped`.
 
 A host whose DssHarness is older than this machine's is brought to this build first, as it is by
 every command that asks it anything, and that write needs room. A host that is both full and
@@ -2486,7 +2494,9 @@ runs on. A
 text is a file in `mutations.textDirectory`, read as it is held, less a UTF-8 byte order mark at
 its start and one line ending at its end, and given the site's line endings where the site ends its
 lines otherwise, so one registry serves a checkout with either. Every file directly in that
-directory must be cited by some row; what lies below it is not listed.
+directory must be cited by some row; what lies below it is not listed, and a file there that a sync
+withholds - one git ignores, as a desktop's or an editor's leftover is, or one the configuration
+keeps from a sync - is no text: no copy of the tree holds it, so nobody could drive it.
 
 The whole registry is read, with every text it cites, before any host is touched, and every
 problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once
@@ -2547,7 +2557,9 @@ sweep runs the workers that fit the room, in order, saying it runs fewer; where 
 does, the leg is `skipped-unavailable`, as a leg whose build does not fit is. A worker's build is
 kept within this machine's path limit as a worktree's is - the worker, its build directory, and
 `worktrees.pathBudgetReserve` below that, with the margin to spare - since a build past it fails as
-compile errors in files nobody touched. Workers an earlier sweep left beyond `mutations.workers` are
+compile errors in files nobody touched. A sweep that runs fewer says how many of those it wanted -
+`mutations.workers`, no more than its arms - and what keeps each of the rest out, the room, the path
+limit, or both. Workers an earlier sweep left beyond `mutations.workers` are
 removed before a sweep plans, so lowering it frees the room they held; a directory under a worker's
 name that no sync made is said and left.
 
@@ -2555,14 +2567,23 @@ The workers go with their tree, since nothing would remove them once it is gone.
 leg's with its build directory (see *Disk space*). `delete-worktree`, and so `delete-agent`,
 removes the workers kept beside the worktree before the worktree itself, and each host removes
 those kept beside its copy before the copy (`remove-workers`, served as every sync operation is):
-each worker a sync made, of whichever variant, with what an unfinished removal left aside. A
-worker a sweep still running holds says its tree is in use: the worktree is not deleted, nothing of
-it removed, and a host's copy stays, still recorded - or `--force` deletes the worktree and leaves
-that worker, said, which deleting the worktree again removes once the sweep has ended, as it
-removes whatever a worktree already gone left. A worktree whose own removal then fails, or is
-stopped, says which workers went before it. `list-worktree` says a worker whose worktree is gone,
-with that command; `delete-agent` removes those left beside an agent whose worktree is gone
-already, and `delete-orchestrator` takes those left beside agents that are gone.
+each worker a sync made, of whichever variant, with what an unfinished removal left aside - only
+what is named as a worker's, since a name is all that is left to tell one by. Each worker answers
+for itself: one that cannot be removed is left, saying why, and the others still go; one gone by
+the time it is reached was somebody else's to count; and a removal that is stopped answers with
+what it had done. A worker a sweep still running holds says its tree is in use: the worktree is
+not deleted, nothing of it removed, and a host's copy stays, still recorded - and one that cannot
+be removed, or told for the harness's, keeps its tree as well, as a failure rather than a tree in
+use - or `--force` deletes the worktree and leaves that worker, said, which deleting the worktree
+again removes once nothing keeps it, as it removes whatever a worktree already gone left. A claim a
+sweep took while its worker was being removed is that sweep's, and stays. A worktree whose own
+removal then fails, or is stopped, says which workers went before it. `list-worktree` says a
+worker whose worktree is gone, with the `delete-worktree` that removes it; `delete-agent` removes
+those left beside an agent whose worktree is gone already, and leaves the agent undeleted where
+they cannot be looked for; and `delete-orchestrator` takes those left beside agents that are gone,
+refusing where they cannot be looked for and, once the orchestrator is deleted, saying beside the
+deletion whatever kept any - interrupted as they go, it names each agent whose workers are still
+to be removed.
 
 ### Fetched sources
 
@@ -2896,7 +2917,9 @@ A mutation arm's run is the one whole-duration bound a phase gets, and it is not
 mutation that turns a loop endless can go on printing for ever, which no stall bound catches, and
 the unmutated run of the very same binary, measured minutes before on the same machine, says how
 long it takes when nothing is wrong. So a mutated run may take `mutations.runTimeFactor` (10) times that run, never less than it
-and a minute, and one stopped past that is `unattributed`, saying so. A stall bound applies to it as
+and a minute, and one stopped past that is `unattributed`, saying so and which of the two set its
+bound: a binary whose unmutated run is short is stopped at that run and a minute, never said to have
+run past ten times it. A stall bound applies to it as
 to every phase. Each such run, and the unmutated one that bounds it, is timed on both clocks as
 every phase is, by the sweep itself: one that spanned a clock step or a host sleep is said on the
 leg's line, among why its timings are suspect, however it ended - stopped past its bound included,

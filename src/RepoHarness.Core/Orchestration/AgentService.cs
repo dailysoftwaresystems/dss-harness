@@ -1320,8 +1320,8 @@ public sealed class AgentService(
 
     /// <summary>
     /// Whether a mutation worker is kept beside where the agent's worktree is, or was: told by its name, as deleting its
-    /// orchestrator tells one. None where the directory cannot be looked in - what is left of the worktree itself says
-    /// that, where it matters.
+    /// orchestrator tells one. One may be where the directory cannot be looked in - nothing else of a worktree that is
+    /// gone looks there - so delete-worktree is asked, and it is the one that says it could not look.
     /// </summary>
     private bool WorkersLeft(Target target)
     {
@@ -1334,7 +1334,7 @@ public sealed class AgentService(
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return false;
+            return true;
         }
     }
 

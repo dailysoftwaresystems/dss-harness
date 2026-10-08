@@ -41,7 +41,7 @@ public sealed class WorkerRoomTests
     /// <summary>Every worker wanted runs where they fit together, the last to the byte.</summary>
     [Fact]
     public void EveryWorkerRuns_WhereTheyFitTogether()
-        => Assert.Equal(new WorkerPlan(2, 2, null, null), WorkerRoom.Plan([6 * Gibibyte, 4 * Gibibyte], Room(10 * Gibibyte), null, null));
+        => Assert.Equal(WorkerPlan.Running(2), Plan([6 * Gibibyte, 4 * Gibibyte], Room(10 * Gibibyte), null, null));
 
     /// <summary>
     /// Workers are counted in order, each beside the ones before it: a sweep runs those that fit, and says it runs fewer,
@@ -50,34 +50,91 @@ public sealed class WorkerRoomTests
     [Fact]
     public void FewerWorkersRun_WhereFewerFit_SayingSo()
     {
-        var plan = WorkerRoom.Plan([6 * Gibibyte, 5 * Gibibyte, 0], Room(10 * Gibibyte), null, "as its buildSpaceGiB, 4, declares");
+        var plan = Plan([6 * Gibibyte, 5 * Gibibyte, 0], Room(10 * Gibibyte), null, "as its buildSpaceGiB, 4, declares");
 
         Assert.Equal(
-            new WorkerPlan(1, 3, "1 of 3 workers: 10 GiB free on '/srv', and 2 need ~11 GiB, each worker's build as its buildSpaceGiB, 4, declares", null),
+            WorkerPlan.Running(1, "1 of 3 workers: 10 GiB free on '/srv', and 2 need ~11 GiB, each worker's build as its buildSpaceGiB, 4, declares"),
             plan);
+        Assert.False(plan.RunsNone);
     }
 
     /// <summary>A sweep whose first worker does not fit runs none, saying what is free and what that worker needs.</summary>
     [Fact]
     public void NoWorkerRuns_WhereTheFirstDoesNotFit()
     {
+        var none = Plan([12 * Gibibyte, 0], Room(10 * Gibibyte), null, "what its last build there came to");
+
         Assert.Equal(
-            new WorkerPlan(0, 2, "10 GiB free on '/srv', and its first worker needs ~12 GiB, each worker's build what its last build there came to", null),
-            WorkerRoom.Plan([12 * Gibibyte, 0], Room(10 * Gibibyte), null, "what its last build there came to"));
+            WorkerPlan.None("10 GiB free on '/srv', and its first worker needs ~12 GiB, each worker's build what its last build there came to"),
+            none);
+        Assert.True(none.RunsNone);
+        Assert.Equal((0, null), (none.Count, none.Unchecked));
         Assert.Equal(
-            new WorkerPlan(0, 1, "1 GiB free on '/srv', and its first worker needs ~3 GiB", null),
-            WorkerRoom.Plan([3 * Gibibyte], Room(Gibibyte), null, null));
+            WorkerPlan.None("1 GiB free on '/srv', and its first worker needs ~3 GiB"),
+            Plan([3 * Gibibyte], Room(Gibibyte), null, null));
     }
 
-    /// <summary>Where the room could not be measured every worker wanted runs, unchecked, saying why; and a sweep wanting none plans none.</summary>
+    /// <summary>
+    /// Where the room could not be measured every worker wanted runs, unchecked, saying why - with whatever reason
+    /// nothing gave said as that.
+    /// </summary>
     [Fact]
     public void AnUnmeasuredRoom_RunsEveryWorker_Unchecked()
     {
         Assert.Equal(
-            new WorkerPlan(2, 2, null, "the room for its workers could not be measured: the drive is gone"),
-            WorkerRoom.Plan([100 * Gibibyte, 100 * Gibibyte], null, "the drive is gone", null));
-        Assert.Equal(new WorkerPlan(0, 0, null, null), WorkerRoom.Plan([], null, "the drive is gone", null));
+            WorkerPlan.Running(2, null, "the room for its workers could not be measured: the drive is gone"),
+            Plan([100 * Gibibyte, 100 * Gibibyte], null, "the drive is gone", null));
+        Assert.Equal(
+            WorkerPlan.Running(1, null, "the room for its workers could not be measured: no reason was given"),
+            Plan([100 * Gibibyte], null, null, null));
+    }
+
+    /// <summary>
+    /// A sweep kept from some of the workers it wanted by the machine's path limit says how many it runs of those it
+    /// wanted, and why the next is not run - beside what the room keeps out, where it keeps any out too; and where not
+    /// even its first is within the limit it runs none, for that.
+    /// </summary>
+    [Theory]
+    [InlineData(3, 100, 3, "3 of 4 workers: worker 4 is past the limit", null)]
+    [InlineData(3, 10, 2, "2 of 4 workers: 10 GiB free on '/srv', and 3 need ~12 GiB, each worker's build as declared; and worker 4 is past the limit", null)]
+    [InlineData(3, 3, 0, "3 GiB free on '/srv', and its first worker needs ~4 GiB, each worker's build as declared; and worker 4 is past the limit", null)]
+    [InlineData(3, null, 3, "3 of 4 workers: worker 4 is past the limit", "the room for its workers could not be measured: the drive is gone")]
+    [InlineData(0, 100, 0, "worker 1 is past the limit", null)]
+    [InlineData(0, null, 0, "worker 1 is past the limit", null)]
+    public void WorkersPastThePathLimit_AreCountedAmongThoseWanted(int within, int? freeGiB, int count, string fewer, string? unmeasured)
+    {
+        var plan = WorkerRoom.Plan(
+            [.. Enumerable.Repeat(4 * Gibibyte, within)],
+            wanted: 4,
+            beyond: $"worker {within + 1} is past the limit",
+            freeGiB is { } free ? Room(free * Gibibyte) : null,
+            "the drive is gone",
+            "as declared");
+
+        Assert.Equal((count, fewer, unmeasured), (plan.Count, plan.Fewer, plan.Unchecked));
+        Assert.Equal(count == 0, plan.RunsNone);
+    }
+
+    /// <summary>
+    /// A plan is made for a sweep that wants a worker, of no more workers than it wanted, with why those beyond the path
+    /// limit are not run said where there are any and only there; and a plan that runs some runs at least one, where one
+    /// that runs none says why.
+    /// </summary>
+    [Fact]
+    public void APlan_IsMadeOnlyOfWhatASweepCanWant()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => WorkerRoom.Plan([], 0, null, Room(Gibibyte), null, null));
+        Assert.Throws<ArgumentOutOfRangeException>(() => WorkerRoom.Plan([1, 1], 1, null, Room(Gibibyte), null, null));
+        Assert.Throws<ArgumentException>(() => WorkerRoom.Plan([1], 2, null, Room(Gibibyte), null, null));
+        Assert.Throws<ArgumentException>(() => WorkerRoom.Plan([1], 2, " ", Room(Gibibyte), null, null));
+        Assert.Throws<ArgumentException>(() => WorkerRoom.Plan([1], 1, "worker 2 is past the limit", Room(Gibibyte), null, null));
+        Assert.Throws<ArgumentOutOfRangeException>(() => WorkerPlan.Running(0));
+        Assert.Throws<ArgumentException>(() => WorkerPlan.None(" "));
     }
 
     private static DiskSpace Room(long free) => new(free, 100 * Gibibyte, "/srv");
+
+    /// <summary>The plan of a sweep that wants a worker for each of <paramref name="needs"/>, every one within the path limit.</summary>
+    private static WorkerPlan Plan(long[] needs, DiskSpace? room, string? unmeasured, string? source)
+        => WorkerRoom.Plan(needs, needs.Length, beyond: null, room, unmeasured, source);
 }

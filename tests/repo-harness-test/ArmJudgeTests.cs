@@ -92,27 +92,31 @@ public sealed class ArmJudgeTests
     private static readonly Dictionary<string, (ArmRun Run, LegVerdict Verdict, string Detail)> RunRows = new()
     {
         ["11 past its bound"] = (
-            new ArmRun { StoppedAtBound = true, Bound = TimeSpan.FromSeconds(100), Factor = 10, ReportWritten = true, Report = Report(["Fixture.Charge"], ["Fixture.Depth", "Fixture.Other"]) },
+            ArmRun.StoppedAt(new RunBound(TimeSpan.FromSeconds(100), "10x the unmutated run")),
             LegVerdict.Unattributed,
             "ran past 10x the unmutated run, 1m40s, and was stopped"),
+        ["11 past a bound the factor did not set"] = (
+            ArmRun.StoppedAt(PristineJudge.Bound(TimeSpan.FromSeconds(1), 10)),
+            LegVerdict.Unattributed,
+            "ran past the unmutated run and 1m00s more, 1m01s, and was stopped"),
         ["11 silent until it was stopped as hung"] = (
-            new ArmRun { StalledAfterSeconds = 45, Bound = TimeSpan.FromSeconds(100), Factor = 10, ReportWritten = true, Report = Report(["Fixture.Charge"], ["Fixture.Depth", "Fixture.Other"]) },
+            ArmRun.Hung(45),
             LegVerdict.Unattributed,
             "printed nothing for 45s, and was stopped as hung"),
         ["12 no report"] = (
-            new ArmRun { ExitCode = -1073741819, DiagnosticSaid = true },
+            ArmRun.Exited(-1073741819, RunReport.None, diagnosticSaid: true),
             LegVerdict.Unattributed,
             "exited -1073741819 and wrote no report"),
         ["12 a report this could not read from its file"] = (
-            new ArmRun { ExitCode = 1, ReportWritten = true, ReportUnread = "'report.xml' is held by another process", DiagnosticSaid = true },
+            ArmRun.Exited(1, RunReport.NotRead("'report.xml' is held by another process"), diagnosticSaid: true),
             LegVerdict.Unmeasured,
             "its report was written and could not be read, after it exited 1, so nothing says which cases failed: 'report.xml' is held by another process"),
         ["12 a report that is no report"] = (
-            new ArmRun { ExitCode = 1, ReportWritten = true, ReportProblem = "its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'", DiagnosticSaid = true },
+            ArmRun.Exited(1, RunReport.NoReport("its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'"), diagnosticSaid: true),
             LegVerdict.Unattributed,
             "its report is no JUnit report this reads, after it exited 1: its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'"),
         ["12 a report that is none, nothing said of why"] = (
-            new ArmRun { ExitCode = 1, ReportWritten = true, DiagnosticSaid = true },
+            ArmRun.Exited(1, RunReport.NoReport(null), diagnosticSaid: true),
             LegVerdict.Unattributed,
             "its report is no JUnit report this reads, after it exited 1"),
         ["13 a failing exit and no failing case"] = (
@@ -365,18 +369,16 @@ public sealed class ArmJudgeTests
     }
 
     /// <summary>
-    /// The run's rows are read in order: a hang - past its bound, or silent - before the report; a failing exit with no failing case
-    /// before the count; a count that differs before no case red, so a run that skipped the guarded case never reads as
-    /// one that survived; the red set before the neighbours, and the neighbours before the diagnostic.
+    /// The run's rows are read in order: a hang - past its bound, or silent - which leaves no report anybody reads; a
+    /// failing exit with no failing case before the count; a count that differs before no case red, so a run that
+    /// skipped the guarded case never reads as one that survived; the red set before the neighbours, and the neighbours
+    /// before the diagnostic.
     /// </summary>
     [Fact]
     public void TheRunsRows_AreReadInOrder()
     {
-        Assert.StartsWith("ran past", Detail(new ArmRun { StoppedAtBound = true, Bound = TimeSpan.FromMinutes(2), Factor = 10 }), StringComparison.Ordinal);
-        Assert.StartsWith(
-            "printed nothing for 30s",
-            Detail(new ArmRun { StalledAfterSeconds = 30, ReportWritten = true, Report = Report([], ["Fixture.Depth"]) }),
-            StringComparison.Ordinal);
+        Assert.StartsWith("ran past", Detail(ArmRun.StoppedAt(new RunBound(TimeSpan.FromMinutes(2), "10x the unmutated run"))), StringComparison.Ordinal);
+        Assert.StartsWith("printed nothing for 30s", Detail(ArmRun.Hung(30)), StringComparison.Ordinal);
         Assert.StartsWith("exited 1, and", Detail(Ran(1, Report([], ["Fixture.Depth"]))), StringComparison.Ordinal);
         Assert.StartsWith("ran 1 case(s), and the arm declares", Detail(Ran(0, Report([], ["Fixture.Depth"]))), StringComparison.Ordinal);
         Assert.StartsWith(
@@ -398,8 +400,7 @@ public sealed class ArmJudgeTests
     private static ArmBuild FailedAt(params string[] steps) => new(ReachedVerdict.Of(LegVerdict.Failed, "exited 1"), steps, []);
 
     /// <summary>A run that exited <paramref name="exitCode"/> and wrote <paramref name="report"/>.</summary>
-    private static ArmRun Ran(int exitCode, JUnitReport report, bool said = true)
-        => new() { ExitCode = exitCode, ReportWritten = true, Report = report, DiagnosticSaid = said, Bound = TimeSpan.FromMinutes(2), Factor = 10 };
+    private static ArmRun Ran(int exitCode, JUnitReport report, bool said = true) => ArmRun.Exited(exitCode, RunReport.Of(report), said);
 
     /// <summary>A report as GoogleTest writes one: the red cases, the green ones, and those it did not run.</summary>
     private static JUnitReport Report(string[] reds, string[] greens, string[]? notRun = null)

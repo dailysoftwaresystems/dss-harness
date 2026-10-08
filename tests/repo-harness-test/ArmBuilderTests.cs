@@ -56,7 +56,13 @@ public sealed class ArmBuilderTests
     {
         using var temp = new TempDirectory();
 
-        Assert.Equal(new WorkerProgram(program, problem), Graph(temp).ProgramOf(runner));
+        var found = Graph(temp).ProgramOf(runner);
+
+        // One of the two, never both and never neither.
+        Assert.Equal((program, problem), (found.Path, found.Problem));
+        Assert.Equal(program is null ? WorkerProgram.None(problem!) : WorkerProgram.Of(program), found);
+        Assert.Throws<ArgumentException>(() => WorkerProgram.Of(" "));
+        Assert.Throws<ArgumentException>(() => WorkerProgram.None(" "));
     }
 
     /// <summary>

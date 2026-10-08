@@ -189,7 +189,6 @@ public sealed class MutationLegRunnerTests
         Assert.Equal((null, null), (control.Bound, control.Diagnostic));
         Assert.Equal(Path.Combine(sweep.RunDirectory, LegName, MutationRecords.ControlsDirectory, "fixture_tests"), control.RecordDirectory);
         Assert.Equal(PristineJudge.Bound(Tests.Took, 10), mutated.Bound);
-        Assert.Equal(10.0, mutated.Factor);
         Assert.Equal("charge exceeded", mutated.Diagnostic);
         Assert.Equal(sweep.Records("charge-bound"), mutated.RecordDirectory);
         Assert.Equal(Path.Combine(Variant.DirectoryUnder(sweep.Worker(charge.Worker!.Value)), Program), mutated.Program);
@@ -597,6 +596,29 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// An arm that reaches its run with no unmutated run to bound it - its control found no program where its
+    /// pre-flight then found one, which the two never do - says so, as the defect it is: never run with no bound, nor
+    /// stopped the moment it starts and read as a hang.
+    /// </summary>
+    [Fact]
+    public async Task AnArmReachingItsRunWithNothingToBoundIt_IsPoisoned_SayingSo_AndIsNeverRun()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var asked = 0;
+
+        // The control asks first, and is told the runner builds no program; whoever asks after it is told it builds one.
+        sweep.Builder.Graph.Programs = target => Interlocked.Increment(ref asked) == 1 ? WorkerProgram.None($"runner '{target}' builds no program") : null;
+
+        var entry = await sweep.RunAsync([ChargeBound]);
+
+        Assert.Equal(
+            [(LegVerdict.Poisoned, "the sweep could not judge this arm, InvalidOperationException: no unmutated run of 'fixture_tests' bounds the run of arm 'charge-bound'")],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.Empty(sweep.Tests.Runs);
+        Assert.Equal(TreeFiles["src/fixture.cpp"], File.ReadAllText(Path.Combine(sweep.Worker(1), "src", "fixture.cpp")));
+    }
+
+    /// <summary>
     /// A defect of the harness's in one arm poisons that arm, naming it, and retires its worker, whose copy nothing then
     /// vouches for; the site is still put back.
     /// </summary>
@@ -887,7 +909,7 @@ public sealed class MutationLegRunnerTests
     {
         using var sweep = new Sweep { Workers = 1 };
         sweep.Tests.Answer = request => request.Leg == "native/arms/charge-bound"
-            ? new ArmRun { ExitCode = 1, ReportWritten = true, ReportUnread = "'report.xml' is held by another process" }
+            ? ArmRun.Exited(1, RunReport.NotRead("'report.xml' is held by another process"))
             : Tests.Judged(request);
 
         var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
@@ -1620,7 +1642,7 @@ public sealed class MutationLegRunnerTests
     /// An arm's run starts where the leg's tests start, read for the worker's copy, in the environment they start in: the
     /// leg's host's, and the test invocation's over it. It and its binary's control both find the programs the leg's
     /// host found - a compiler's own libraries among them - and are watched as every phase is, for a stall and for a
-    /// clock that stepped, which the leg's line then says.
+    /// clock that stepped.
     /// </summary>
     [Fact]
     public async Task AnArmsRun_StartsWhereTheLegsTestsStart_InTheWorker_WithTheirEnvironment()
@@ -1655,8 +1677,8 @@ public sealed class MutationLegRunnerTests
     /// <summary>
     /// What a sweep timed that its clock makes suspect is said on the leg's line, as a build's or a test's is, and
     /// changes no verdict: each run - an arm's, and the unmutated one that bounds it - that spanned a clock step or a
-    /// host sleep, and what each of its builds says of its own, a worker's rebuilt from clean among them. Said in one
-    /// order, whichever worker met it first.
+    /// host sleep, and what each of its builds says of its own - one that failed, as a BUILD-RED arm's own does, as one
+    /// that passed - a worker's rebuilt from clean among them. Said in one order, whichever worker met it first.
     /// </summary>
     [Fact]
     public async Task WhatASweepTimedAcrossAClockStep_IsSaidOnTheLegsLine_AndChangesNoVerdict()
@@ -1668,7 +1690,7 @@ public sealed class MutationLegRunnerTests
             ? TimeSpan.FromSeconds(90)
             : request.Leg.EndsWith("/charge-bound", StringComparison.Ordinal) ? TimeSpan.FromSeconds(5) : null;
         sweep.Builder.RebuiltFromClean = request => request.Leg == "native/workers/1" ? "its record names another compiler" : null;
-        sweep.Builder.Stepped = request => request.Leg is "native/arms/charge-floor" or "native/arms/depth-type/control" or "native/controls/fixture_tests";
+        sweep.Builder.Stepped = request => request.Leg is "native/arms/charge-floor" or "native/arms/depth-type" or "native/arms/depth-type/control" or "native/controls/fixture_tests";
 
         var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
 
@@ -1676,6 +1698,7 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(
             [
                 $"the build of arm 'charge-floor': {stepped}",
+                $"the build of arm 'depth-type': {stepped}",
                 $"the build of the paired control of arm 'depth-type': {stepped}",
                 $"the build of the unmutated fixture_tests: {stepped}",
                 "the run of arm 'charge-bound' spanned a clock step or a host sleep (wall and monotonic time disagreed by 00:00:05), so its "
@@ -1817,6 +1840,31 @@ public sealed class MutationLegRunnerTests
             + "path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);
         Assert.Equal([second.Worker(1)], second.Copies.Synced.Select(sync => sync.Worker));
+    }
+
+    /// <summary>
+    /// A sweep kept from some workers by the path limit and from others by the room says how many it runs of those it
+    /// wanted - never of those the path limit left - with what keeps each of the rest out.
+    /// </summary>
+    [Fact]
+    public async Task WorkersKeptOutByTheRoomAndByThePathLimit_AreCountedAgainstThoseWanted()
+    {
+        var copy = TreeFiles.Values.Sum(text => (long)text.Length);
+
+        using var tight = new Sweep { Workers = 3, ExpectedBuildBytes = 1L << 30 };
+        tight.Files = new ScriptedRoom(tight.Harness.FileSystem, (1L << 30) + copy + 100);
+        tight.Budget.Check(Arg.Is<string>(path => path.EndsWith("-3", StringComparison.Ordinal)), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int?>())
+            .Returns(PathBudgetResult.Exceeded(300, 260, -5));
+
+        var fewer = await tight.RunAsync([ChargeBound, DepthType, ChargeFloor]);
+
+        Assert.Equal(
+            $"3 arm(s): 3 passed; 1 of 3 workers: {DiskSpace.Size((1L << 30) + copy + 100)} free on '/data', and 2 need "
+            + $"~{DiskSpace.Size(2 * ((1L << 30) + copy))}, each worker's build as declared; and worker 3 would be kept at '{tight.Worker(3)}', where its "
+            + "build needs paths of 300 characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under "
+            + "260: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
+            fewer.Detail);
+        Assert.Equal([tight.Worker(1)], tight.Copies.Synced.Select(sync => sync.Worker));
     }
 
     /// <summary>
@@ -2730,7 +2778,7 @@ public sealed class MutationLegRunnerTests
 
         /// <summary>Worker <paramref name="number"/> as a listing finds it, holding 2 KiB, its marker saying <paramref name="origin"/>.</summary>
         public WorkerCopy Copy(int number, CopyOrigin origin)
-            => new(Family.Name, number, new HostCopyFound($"{Family.Name}-{number}", Worker(number), origin, 2048));
+            => new(Family, number, new HostCopyFound($"{Family.Name}-{number}", Worker(number), origin, 2048));
 
         public async Task<LegEntry> RunAsync(IReadOnlyList<MutationArm> driven, IReadOnlyList<UnselectedArm>? unselected = null, CancellationToken? cancellationToken = null)
         {
@@ -3037,7 +3085,7 @@ public sealed class MutationLegRunnerTests
         /// <summary>What happens before a build answers or throws, once it has been noted as started.</summary>
         public Func<BuildRequest, CancellationToken, Task> Before { get; set; } = (_, _) => Task.CompletedTask;
 
-        /// <summary>Whether a build that passes spanned a clock step, which its phase then says.</summary>
+        /// <summary>Whether a build spanned a clock step, which its phase then says: one that passes, or one that fails.</summary>
         public Func<BuildRequest, bool> Stepped { get; set; } = _ => false;
 
         /// <summary>Why a build was rebuilt from clean, or <see langword="null"/> where it was not.</summary>
@@ -3077,11 +3125,12 @@ public sealed class MutationLegRunnerTests
                 _generations.AddOrUpdate(directory, 1, (_, generation) => generation + 1);
             }
 
+            var stepped = Stepped(request);
             IReadOnlyList<PhaseResult> phases = verdict.Verdict == LegVerdict.Failed
-                ? [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 1, false, 0, null, TimeSpan.Zero, TimeSpan.Zero, false, [], Path.Combine(directory, "build.log"), Output(request) ?? PhaseOutput.Of($"[1/2] Building CXX object {SiteObject}\nFAILED: {SiteObject}\nerror: depth is no integer\n"))]
+                ? [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 1, false, 0, null, TimeSpan.Zero, stepped ? TimeSpan.FromSeconds(90) : TimeSpan.Zero, stepped, [], Path.Combine(directory, "build.log"), Output(request) ?? PhaseOutput.Of($"[1/2] Building CXX object {SiteObject}\nFAILED: {SiteObject}\nerror: depth is no integer\n"))]
                 : [];
 
-            if (verdict.Verdict == LegVerdict.Passed && Stepped(request))
+            if (verdict.Verdict == LegVerdict.Passed && stepped)
             {
                 phases = [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 0, false, 0, null, TimeSpan.Zero, TimeSpan.FromSeconds(90), true, [], Path.Combine(directory, "build.log"), PhaseOutput.Of("built"))];
             }
@@ -3126,8 +3175,12 @@ public sealed class MutationLegRunnerTests
             _ => [],
         };
 
+        /// <summary>What a target is said to build, in place of the fixture's own answer, or <see langword="null"/> for that answer.</summary>
+        public Func<string, WorkerProgram?> Programs { get; set; } = _ => null;
+
         public WorkerProgram ProgramOf(string target)
-            => target == "fixture_tests" ? new WorkerProgram(Program, null) : new WorkerProgram(null, $"runner '{target}' is built by no line of the leg's build");
+            => Programs(target)
+                ?? (target == "fixture_tests" ? WorkerProgram.Of(Program) : WorkerProgram.None($"runner '{target}' is built by no line of the leg's build"));
 
         public IReadOnlyList<string> DependentObjects(IReadOnlyList<string> targets, IReadOnlyCollection<string> sites)
         {
@@ -3161,10 +3214,7 @@ public sealed class MutationLegRunnerTests
             Runs.Enqueue(request);
             await Before(request, cancellationToken);
 
-            return new ArmRunResult(Answer(request), Took, Path.Combine(request.RecordDirectory, "run.log"), Path.Combine(request.RecordDirectory, "report.xml"))
-            {
-                SteppedBy = SteppedBy(request),
-            };
+            return new ArmRunResult(Answer(request), Took) { SteppedBy = SteppedBy(request) };
         }
 
         /// <summary>What the binary built in the request's worker says, read from the worker's source as it stands.</summary>
@@ -3185,26 +3235,22 @@ public sealed class MutationLegRunnerTests
                 reds.Add("Fixture.Floor");
             }
 
-            return Ran(reds) with
-            {
-                Bound = request.Bound ?? TimeSpan.Zero,
-                Factor = request.Factor,
-                DiagnosticSaid = request.Diagnostic == "charge exceeded" && reds.Count > 0,
-            };
+            return Ran(reds, said: request.Diagnostic == "charge exceeded" && reds.Count > 0);
         }
 
-        /// <summary>A whole run of the binary's three cases, those in <paramref name="reds"/> red, exiting 1 where any is.</summary>
-        public static ArmRun Ran(IReadOnlyList<string> reds)
+        /// <summary>
+        /// A whole run of the binary's three cases, those in <paramref name="reds"/> red, exiting 1 where any is - its
+        /// diagnostic said where <paramref name="said"/>.
+        /// </summary>
+        public static ArmRun Ran(IReadOnlyList<string> reds, bool said = false)
         {
             var cases = string.Concat(new[] { "Charge", "Floor", "Depth" }.Select(name =>
                 $"<testcase classname=\"Fixture\" name=\"{name}\">{(reds.Contains($"Fixture.{name}") ? "<failure message=\"red\"/>" : string.Empty)}</testcase>"));
 
-            return new ArmRun
-            {
-                ExitCode = reds.Count > 0 ? 1 : 0,
-                ReportWritten = true,
-                Report = JUnitReport.Read($"<testsuites><testsuite name=\"Fixture\">{cases}</testsuite></testsuites>"),
-            };
+            return ArmRun.Exited(
+                reds.Count > 0 ? 1 : 0,
+                RunReport.Of(JUnitReport.Read($"<testsuites><testsuite name=\"Fixture\">{cases}</testsuite></testsuites>")!),
+                said);
         }
     }
 

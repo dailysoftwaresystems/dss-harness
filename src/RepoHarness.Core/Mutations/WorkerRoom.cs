@@ -1,21 +1,61 @@
+using System.Diagnostics.CodeAnalysis;
 using RepoHarness.Core.FileSystem;
 
 namespace RepoHarness.Core.Mutations;
 
-/// <summary>How many workers a leg's sweep runs, and why it runs fewer than it wanted where it does.</summary>
-/// <param name="Count">How many it runs: none where not even its first worker fits the room.</param>
-/// <param name="Wanted">
-/// How many it wanted: <c>mutations.workers</c>, never more than it has arms to drive, and one in a WSL distribution.
-/// </param>
-/// <param name="Fewer">
-/// Why it runs fewer than it wanted, as the leg's detail says it - what is free, and what the workers need - or
-/// <see langword="null"/> where it runs every worker it wanted.
-/// </param>
-/// <param name="Unchecked">
-/// Why the room was not checked, where it could not be measured, so the sweep runs every worker it wanted unchecked; or
-/// <see langword="null"/> where it was checked.
-/// </param>
-public sealed record WorkerPlan(int Count, int Wanted, string? Fewer, string? Unchecked);
+/// <summary>
+/// How many workers a leg's sweep runs, and why it runs fewer than it wanted where it does: some of them
+/// (<see cref="Running"/>), or none (<see cref="None"/>), which always says why.
+/// </summary>
+public sealed record WorkerPlan
+{
+    private WorkerPlan(int count, string? fewer, string? unmeasured)
+    {
+        Count = count;
+        Fewer = fewer;
+        Unchecked = unmeasured;
+    }
+
+    /// <summary>How many it runs: none where not even its first worker fits the room, or the machine's path limit.</summary>
+    public int Count { get; }
+
+    /// <summary>
+    /// Why it runs fewer than it wanted, as the leg's detail says it - how many of those it wanted, what is free and
+    /// what the workers need, and the path limit the build of one more would pass - or <see langword="null"/> where it
+    /// runs every worker it wanted.
+    /// </summary>
+    public string? Fewer { get; }
+
+    /// <summary>
+    /// Why the room was not checked, where it could not be measured, so the sweep runs unchecked every worker it wanted
+    /// that is within the path limit; or <see langword="null"/> where it was checked.
+    /// </summary>
+    public string? Unchecked { get; }
+
+    /// <summary>Whether it runs none, which turns its leg away for <see cref="Fewer"/>.</summary>
+    [MemberNotNullWhen(true, nameof(Fewer))]
+    public bool RunsNone => Count == 0;
+
+    /// <summary>A sweep that runs <paramref name="count"/> workers.</summary>
+    /// <param name="count">How many: at least one.</param>
+    /// <param name="fewer">Why that is fewer than it wanted, or <see langword="null"/> where it is every one.</param>
+    /// <param name="unmeasured">Why the room was not checked, or <see langword="null"/> where it was.</param>
+    public static WorkerPlan Running(int count, string? fewer = null, string? unmeasured = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+
+        return new(count, fewer, unmeasured);
+    }
+
+    /// <summary>A sweep that runs no worker, for <paramref name="why"/>.</summary>
+    /// <param name="why">Why not even its first is run, as the leg's detail says it.</param>
+    public static WorkerPlan None(string why)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(why);
+
+        return new(0, why, null);
+    }
+}
 
 /// <summary>
 /// How many workers a leg's sweep can run in the room its machine has: each worker a copy of the tree with a build
@@ -74,52 +114,74 @@ public static class WorkerRoom
     }
 
     /// <summary>
-    /// How many of <paramref name="needs"/>'s workers fit <paramref name="room"/>: each, in order, beside the ones before
-    /// it; or all of them, unchecked, where the room could not be measured.
+    /// How many of the <paramref name="wanted"/> workers a sweep runs: of those within the machine's path limit, whose
+    /// <paramref name="needs"/> these are, the ones that fit <paramref name="room"/> - each, in order, beside the ones
+    /// before it - or all of those, unchecked, where the room could not be measured. Where that is fewer than it wanted,
+    /// the plan says how many of those it wanted, and what keeps each of the rest out: the room, the path limit, or both.
     /// </summary>
-    /// <param name="needs">What each worker the sweep wants still needs, in the order the workers are numbered.</param>
+    /// <param name="needs">
+    /// What each worker within the path limit still needs, in the order the workers are numbered: a worker's path grows
+    /// only with its number, so those within the limit come first.
+    /// </param>
+    /// <param name="wanted">How many workers the sweep wanted: at least one, and no fewer than <paramref name="needs"/> holds.</param>
+    /// <param name="beyond">
+    /// Why the workers past those of <paramref name="needs"/> are not run - the path limit the build of the next would
+    /// pass, as a line says it - where the sweep wanted more of them; <see langword="null"/> where it did not.
+    /// </param>
     /// <param name="room">The room where the workers are kept, or <see langword="null"/> where it could not be measured.</param>
     /// <param name="unmeasured">Why it could not be measured, where it could not.</param>
     /// <param name="source">What said how much a worker's build comes to, as a line says it, or <see langword="null"/> where nothing does.</param>
-    public static WorkerPlan Plan(IReadOnlyList<long> needs, DiskSpace? room, string? unmeasured, string? source)
+    /// <exception cref="ArgumentException">
+    /// <paramref name="beyond"/> is given where no worker is beyond the limit, or is not where one is.
+    /// </exception>
+    public static WorkerPlan Plan(IReadOnlyList<long> needs, int wanted, string? beyond, DiskSpace? room, string? unmeasured, string? source)
     {
         ArgumentNullException.ThrowIfNull(needs);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(wanted);
+        ArgumentOutOfRangeException.ThrowIfLessThan(wanted, needs.Count);
 
-        var wanted = needs.Count;
+        var within = needs.Count;
 
-        if (wanted == 0)
+        if (within < wanted == string.IsNullOrWhiteSpace(beyond))
         {
-            return new WorkerPlan(0, 0, null, null);
+            throw new ArgumentException("Why the workers beyond the path limit are not run is said where there are any, and only there.", nameof(beyond));
         }
+
+        if (within == 0)
+        {
+            return WorkerPlan.None(beyond!);
+        }
+
+        // How many of those wanted the path limit alone leaves, said where the room keeps none of them out.
+        var limited = within < wanted ? $"{within} of {wanted} workers: {beyond}" : null;
 
         if (room is null)
         {
-            return new WorkerPlan(wanted, wanted, null, $"the room for its workers could not be measured: {unmeasured ?? "no reason was given"}");
+            return WorkerPlan.Running(within, limited, $"the room for its workers could not be measured: {unmeasured ?? "no reason was given"}");
         }
 
         var taken = 0L;
         var fitting = 0;
 
-        while (fitting < wanted && taken + needs[fitting] <= room.FreeBytes)
+        while (fitting < within && taken + needs[fitting] <= room.FreeBytes)
         {
             taken += needs[fitting];
             fitting++;
         }
 
-        if (fitting == wanted)
+        if (fitting == within)
         {
-            return new WorkerPlan(wanted, wanted, null, null);
+            return WorkerPlan.Running(within, limited);
         }
 
         var reckoned = source is null ? string.Empty : $", each worker's build {source}";
+        var past = within < wanted ? $"; and {beyond}" : string.Empty;
 
-        return new WorkerPlan(
-            fitting,
-            wanted,
-            fitting == 0
-                ? $"{DiskSpace.Size(room.FreeBytes)} free on '{room.Filesystem}', and its first worker needs ~{DiskSpace.Size(needs[0])}{reckoned}"
-                : $"{fitting} of {wanted} workers: {DiskSpace.Size(room.FreeBytes)} free on '{room.Filesystem}', and {fitting + 1} need "
-                    + $"~{DiskSpace.Size(taken + needs[fitting])}{reckoned}",
-            null);
+        return fitting == 0
+            ? WorkerPlan.None($"{DiskSpace.Size(room.FreeBytes)} free on '{room.Filesystem}', and its first worker needs ~{DiskSpace.Size(needs[0])}{reckoned}{past}")
+            : WorkerPlan.Running(
+                fitting,
+                $"{fitting} of {wanted} workers: {DiskSpace.Size(room.FreeBytes)} free on '{room.Filesystem}', and {fitting + 1} need "
+                + $"~{DiskSpace.Size(taken + needs[fitting])}{reckoned}{past}");
     }
 }

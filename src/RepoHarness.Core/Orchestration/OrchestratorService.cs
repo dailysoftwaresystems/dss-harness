@@ -225,6 +225,7 @@ public sealed class OrchestratorService(
 
         // The mutation workers left beside agents that are gone - by a build that did not remove them with their agent -
         // are no worktrees below it: they go with it, each removed as deleting its agent's worktree again removes it.
+        // Looked for before anything is decided, as the worktrees were: a directory that cannot be looked in is raised.
         var orphans = Orphans(group);
 
         // Decided and done with no other command deciding about this orchestrator meanwhile: an agent made beside this
@@ -295,29 +296,65 @@ public sealed class OrchestratorService(
             return outcome;
         }
 
+        // The orchestrator is deleted by now, and asking again would find none: so whatever stops the workers its agents
+        // left from going is said here, beside the deletion, with the command that removes each agent's.
         var details = new List<string>(outcome.Details ?? []);
 
-        foreach (var agent in orphans)
+        for (var asked = 0; asked < orphans.Count; asked++)
         {
-            var gone = await _worktrees
-                .DeleteAsync(startDirectory, WorktreeAddress.Nested(name, agent).Name, force: false, deleteEvidence: false, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+            var agent = orphans[asked];
+            var address = WorktreeAddress.Nested(name, agent).Name;
+            WorktreeOutcome gone;
+
+            try
+            {
+                gone = await _worktrees
+                    .DeleteAsync(startDirectory, address, force: false, deleteEvidence: false, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return Interrupted(asked);
+            }
+            catch (HarnessException ex)
+            {
+                details.Add(
+                    $"its agent '{agent}': the mutation workers left beside it were not removed - {ex.Message.TrimEnd('.')}; "
+                    + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, address)} removes them once that is put right");
+                continue;
+            }
 
             details.AddRange(gone.Succeeded
                 ? (gone.Outcome.Details ?? []).Select(line => $"its agent '{agent}': {line}")
                 : [$"its agent '{agent}': {gone.Outcome.Message}", .. gone.Outcome.Details ?? []]);
+
+            // Stopped in this one, which says which of its workers went: it is still to finish, with those not yet asked.
+            if (gone.Outcome.ExitCode == HarnessExit.Cancelled)
+            {
+                return Interrupted(asked);
+            }
         }
 
         details.AddRange(RemoveEmptyGroup(group));
 
         return outcome with { Details = details };
+
+        CommandOutcome Interrupted(int from)
+            => CommandOutcome.Failed(
+                HarnessExit.Cancelled,
+                $"Orchestrator '{name}' was deleted, and the interruption came before the mutation workers left beside "
+                + $"{string.Join(", ", orphans.Skip(from).Select(agent => $"'{WorktreeAddress.Nested(name, agent).Name}'"))} had all been removed: "
+                + $"run {OrchestrationReports.Line(WorktreeService.DeleteCommand, "<address>")} for each to remove the rest.",
+                details);
     }
 
     /// <summary>
     /// The agents of the orchestrator whose directory is <paramref name="group"/> that left mutation workers there, by
-    /// name - each gone itself once the orchestrator may be deleted, which is when this is used; none where the directory
-    /// cannot be looked in, which whatever looks in it next says.
+    /// name - each gone itself once the orchestrator may be deleted, which is when this is used.
     /// </summary>
+    /// <exception cref="HarnessException">
+    /// The directory could not be looked in (<see cref="HarnessExit.CommandFailed"/>): never read as no worker left.
+    /// </exception>
     private IReadOnlyList<string> Orphans(string group)
     {
         try
@@ -326,7 +363,7 @@ public sealed class OrchestratorService(
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return [];
+            throw WorktreeInspector.CouldNotBeLookedIn(group, ex);
         }
     }
 
@@ -383,17 +420,26 @@ public sealed class OrchestratorService(
 
     /// <summary>
     /// Removes the directory named for a deleted orchestrator under the worktrees root, where it is left empty; one that
-    /// cannot be is said, beside the deletion, never in place of it - the orchestrator is gone either way.
+    /// cannot be removed, or looked in to tell whether it is empty, is said as which - beside the deletion, never in
+    /// place of it: the orchestrator is gone either way.
     /// </summary>
     private IEnumerable<string> RemoveEmptyGroup(string group)
     {
         try
         {
-            if (_fileSystem.DirectoryExists(group) && _fileSystem.IsEmpty(group))
+            if (!_fileSystem.DirectoryExists(group) || !_fileSystem.IsEmpty(group))
             {
-                _fileSystem.DeleteDirectory(group);
+                return [];
             }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [$"its directory under the worktrees root, '{group}', is left: whether it is empty could not be told - {ex.Message.TrimEnd('.')}"];
+        }
 
+        try
+        {
+            _fileSystem.DeleteDirectory(group);
             return [];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

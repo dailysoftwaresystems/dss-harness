@@ -4,6 +4,7 @@ using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
@@ -507,6 +508,108 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A file in the text directory that a sync withholds from every copy of the tree - one git ignores, as a desktop's
+    /// or an editor's leftover is, or one the configuration never transfers or excludes - is no mutation text: no copy
+    /// would hold it, so nobody could drive it, and the cover check passes it over. One a sync carries that no row
+    /// cites is still a text nobody drives.
+    /// </summary>
+    [Theory]
+    [InlineData("git")]
+    [InlineData("neverTransfer")]
+    [InlineData("exclude")]
+    public async Task AFileInTheTextDirectoryThatASyncWithholds_IsNoTextNobodyDrives(string withheldBy)
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable();
+        var token = TestContext.Current.CancellationToken;
+
+        switch (withheldBy)
+        {
+            case "neverTransfer":
+                config.Sync.NeverTransfer.Add("mutations/texts/.DS_Store");
+                break;
+
+            case "exclude":
+                config.Sync.Exclude.Add("mutations/texts/.DS_Store");
+                break;
+        }
+
+        var (service, context) = Prepare(temp, config);
+
+        temp.WriteFile(Path.Combine("mutations", "texts", ".DS_Store"), "a desktop's own");
+
+        if (withheldBy == "git")
+        {
+            temp.WriteFile(".gitignore", ".DS_Store\n");
+        }
+
+        Assert.Equal(2, (await service.ReadAsync(context, null, token)).Selected.Count);
+
+        temp.WriteFile(Path.Combine("mutations", "texts", "stray.diag"), "nobody's");
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, token));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "The arms registry 'mutations/arms.txt' cannot be swept: 1 problem(s), each to fix:",
+                "  - 'mutations/texts/stray.diag' is in the text directory and no row cites it: a mutation text nobody drives"),
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// A sweep that cannot ask git what it ignores in the tree is refused, as a failure, before anything is read as
+    /// carried: no sync of the tree could be made without it, and read as a tree git ignores nothing in, a registry or
+    /// a text no worker would hold would pass.
+    /// </summary>
+    [Fact]
+    public async Task ASweepWhereGitCannotSayWhatItIgnores_IsRefused_AsAFailure()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var git = new InterceptingGitClient(harness.GitClient)
+        {
+            InsteadOfRun = arguments => arguments is ["ls-files", "--others", "--ignored", ..] ? new GitCommandResult(128, string.Empty, "fatal: the index is locked") : null,
+        };
+        var (service, context) = Prepare(temp, Sweepable(), harness: harness, git: git);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+        Assert.Equal(
+            $"What git ignores in '{temp.Path}' could not be listed, so a sync cannot tell which files are local to this machine: fatal: the index is locked",
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// A text directory holding only what a sync withholds holds no text any copy of the tree would, and is said as
+    /// that, with how many: never as a directory holding no file, which it does.
+    /// </summary>
+    [Fact]
+    public async Task ATextDirectoryOfNothingButWhatASyncWithholds_IsSaidAsThat()
+    {
+        using var temp = new TempDirectory();
+        var (service, context) = Prepare(
+            temp,
+            Sweepable(new MutationSettings { Registry = Registry, TextDirectory = "mutations/held", ReportArgs = ["--gtest_output=xml:{report}"] }));
+
+        temp.WriteFile(Path.Combine("mutations", "held", ".DS_Store"), "a desktop's own");
+        temp.WriteFile(Path.Combine("mutations", "held", "Thumbs.db"), "another's");
+        temp.WriteFile(".gitignore", ".DS_Store\nThumbs.db\n");
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "The arms registry 'mutations/arms.txt' cannot be swept: 1 problem(s), each to fix:",
+                "  - the text directory 'mutations/held' holds no file a copy of the tree would: a sync withholds each of the 2 in it"),
+            refusal.Message);
+    }
+
+    /// <summary>
     /// What git ignores a sync leaves behind as it leaves what the configuration names, and only the tree says which
     /// that is: a cited text git ignores is in no copy of the tree, and is refused before anything starts, with its
     /// row's line - never each arm citing it read violated for a text nobody carried. A registry git ignores is refused
@@ -792,7 +895,8 @@ public sealed class MutationServiceTests
         HarnessFactory? harness = null,
         IHostInspector? inspector = null,
         IFileSystem? files = null,
-        ScriptedHostCommands? hosts = null)
+        ScriptedHostCommands? hosts = null,
+        IGitClient? git = null)
     {
         harness ??= new HarnessFactory();
 
@@ -807,7 +911,7 @@ public sealed class MutationServiceTests
         var loader = HostDoubles.Loader(config, temp.Path, temp.Path);
 
         return (
-            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files, hosts),
+            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files, hosts, git),
             new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config));
     }
 
@@ -823,7 +927,8 @@ public sealed class MutationServiceTests
         IHarnessContextLoader loader,
         IHostInspector inspector,
         IFileSystem? files = null,
-        ScriptedHostCommands? hosts = null)
+        ScriptedHostCommands? hosts = null,
+        IGitClient? git = null)
     {
         var processes = Substitute.For<IProcessRunner>();
         var builds = Substitute.For<IBuildService>();
@@ -856,7 +961,7 @@ public sealed class MutationServiceTests
         return new MutationService(
             loader,
             legRuns,
-            SyncKit.Service(harness, loader),
+            SyncKit.Service(harness, loader, git: git),
             SyncKit.Transport(harness),
             builds,
             processes,
