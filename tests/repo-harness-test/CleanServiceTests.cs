@@ -8,6 +8,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
@@ -230,6 +231,37 @@ public sealed class CleanServiceTests
         Assert.Equal(
             ["clean", "--legs", "arm", "--json", RemoteLegRunner.HereOption, $"ssh {HostName}", .. dryRun ? new[] { CleanService.DryRunOption } : []],
             request.Arguments);
+    }
+
+    /// <summary>
+    /// A leg its host left alone for a lock held there - a sweep still running on it - is refused-locked, as it is when
+    /// this machine holds the lock: the run reports on its legs and is no refusal, though that verdict's code is one.
+    /// </summary>
+    [Fact]
+    public async Task ALegItsHostLeftForALockHeldThere_IsRefusedLocked_AndTheRunIsNoRefusal()
+    {
+        const string Why = "a sweep still running holds its mutation workers: pi pid 4242, run 20261007-101500-abcd";
+
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var report = LedgerReport.From([new LegEntry { Leg = "arm", Verdict = LegVerdict.RefusedLocked, Detail = Why }], durationWarningFactor: 0);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For(CleanService.CommandName, report.Summarize(cancelled: false, unfinished: [])));
+            ScriptedHostCommands.Answer(command, report.ToJson(cancelled: false, unfinished: []));
+
+            return HostResults.Finished(command, report.ExitCodeGiven(cancelled: false, unfinished: []));
+        });
+
+        var (outcome, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), hosts: hosts, copyThere: true);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+
+        Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.RefusedLocked), outcome.ExitCode);
+        Assert.Equal("refused-locked", document.RootElement.GetProperty("verdict").GetString());
+        Assert.Equal("refused-locked: 1 of 1 leg(s)", document.RootElement.GetProperty("summary").GetString());
+        Assert.Equal(("refused-locked", $"ssh {HostName}: {Why}"), (leg.GetProperty("verdict").GetString(), leg.GetProperty("detail").GetString()));
     }
 
     /// <summary>

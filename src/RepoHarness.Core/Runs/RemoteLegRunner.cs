@@ -293,8 +293,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
             // A refusal of the run the host made once the leg had its line - a sweep that had judged arms by then - is
             // this run's refusal as one with no line is: the line is this leg's, and the refusal ends the run after it,
-            // in the host's own words. No ledger writes it, so the code the host ended with is all that carries it.
-            EndsTheRun = HarnessExit.RefusesTheRun(exitCode) ? Refusal(leg, commandName, exitCode, failure) : null,
+            // in the host's own words. The host's document says which it is - written where something other than its
+            // legs ended the run, it names no verdict of its own - and the code it ended with is then the refusal's. A
+            // run that reported on its legs names its verdict, and a refusal's code there is that verdict's own: a leg
+            // left for a lock held there, which is this leg's line and ends no run.
+            EndsTheRun = ledger!.Verdict is null && HarnessExit.RefusesTheRun(exitCode) ? Refusal(leg, commandName, exitCode, failure) : null,
 
             // Why a leg did not run there is that host's reason, and is named by the host this
             // machine knows: the host places the leg on itself, and has no name for itself but
@@ -362,9 +365,14 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <summary>The shape a host's ledger arrives in, read back by name rather than by position.</summary>
     /// <param name="Legs">Each leg's line.</param>
     /// <param name="RunDirectory">Where the host's own run keeps its records, when it got that far.</param>
+    /// <param name="Verdict">
+    /// The verdict of the host's run, which a run that reported on its legs names; <see langword="null"/> where
+    /// something other than its legs ended it, as <see cref="LedgerReport"/> writes such a run.
+    /// </param>
     private sealed record RemoteLedger(
         [property: JsonPropertyName("legs")] IReadOnlyList<RemoteLedgerLeg>? Legs,
-        [property: JsonPropertyName("runDirectory")] string? RunDirectory = null);
+        [property: JsonPropertyName("runDirectory")] string? RunDirectory = null,
+        [property: JsonPropertyName("verdict")] string? Verdict = null);
 
     /// <summary>One leg's line of a host's ledger.</summary>
     private sealed record RemoteLedgerLeg(

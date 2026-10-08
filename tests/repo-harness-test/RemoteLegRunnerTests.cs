@@ -630,7 +630,7 @@ public sealed class RemoteLegRunnerTests
     /// <summary>
     /// A host's refusal of the run that came with the leg's line - a sweep whose arms were judged before something there
     /// refused the run - is this run's refusal too: the line is carried, with every arm on it, and ends the run with the
-    /// host's code and words, as the same sweep on this machine does. A code that is the leg's own verdict's ends none.
+    /// host's code and words, as the same sweep on this machine does. A run the host ended with any other code ends none.
     /// </summary>
     [Theory]
     [InlineData(HarnessExit.Refused, true)]
@@ -677,6 +677,33 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(
             refuses ? $"wsl Example-Linux refused '{MutationService.CommandName}' for leg 'wsl-debug': {Said}" : null,
             entry.EndsTheRun?.Message);
+    }
+
+    /// <summary>
+    /// A leg its host could not run for a lock held there is that leg's verdict, though the code the host ends with is
+    /// a refusal's: the host reported on its legs as any run does, nothing ended its run, and nothing ends this one.
+    /// </summary>
+    [Fact]
+    public async Task AHostsLegRefusedForALock_IsThatLegsVerdict_AndEndsNoRun()
+    {
+        const string Why = "a sweep still running holds its mutation workers: vps pid 4242, run 20261007-101500-abcd";
+
+        var report = LedgerReport.From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.RefusedLocked, Detail = Why }], durationWarningFactor: 0);
+        var code = report.ExitCodeGiven(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For(CleanService.CommandName, report.Summarize(cancelled: false, unfinished: [])));
+            Answer(command, report.ToJson(cancelled: false, unfinished: []));
+
+            return HostResults.Finished(command, code);
+        });
+
+        var entry = await Runner(hosts).RunAsync(CleanService.CommandName, Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, code);
+        Assert.Equal((LegVerdict.RefusedLocked, "wsl Example-Linux: " + Why), (entry.Verdict, entry.Detail));
+        Assert.Null(entry.EndsTheRun);
     }
 
     /// <summary>
