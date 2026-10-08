@@ -52,7 +52,7 @@ public static partial class HarnessConfigValidator
         ValidateDefaults(config, problems);
         ValidateWorktrees(config.Worktrees, problems);
         ValidateAnchors(config.Anchors, problems);
-        ValidateMutations(config.Mutations, problems);
+        ValidateMutations(config, problems);
         ValidateProjects(config, problems);
         ValidateToolchains(config, problems);
         ValidateHosts(config.Hosts, problems);
@@ -279,8 +279,11 @@ public static partial class HarnessConfigValidator
     /// tree where sync carries them, since every host reads them from its own copy; the report must be named somewhere
     /// the run can be told of; and the bound on a mutated run must be one a run can stay within.
     /// </summary>
-    private static void ValidateMutations(MutationSettings mutations, List<string> problems)
+    private static void ValidateMutations(HarnessConfig config, List<string> problems)
     {
+        var mutations = config.Mutations;
+        var carried = new Sync.SyncExclusions(config.Sync, config.Worktrees.Root);
+
         foreach (var (path, setting) in new[] { (mutations.Registry, "mutations.registry"), (mutations.TextDirectory, "mutations.textDirectory") })
         {
             if (path is null)
@@ -295,12 +298,22 @@ public static partial class HarnessConfigValidator
                 problems.Add($"{setting} names '{path}', which {misspelled}");
             }
 
-            // A host sweeps its own copy, so a registry the sync never carries there is one no host has.
-            if (Sync.HarnessDirectorySync.Withholds(Repository.PathPatterns.Normalize(path)))
+            // A host sweeps its own copy, and a worker is a copy a sync makes: a registry or a text directory no sync
+            // carries is one neither has - every arm read violated for a text nobody carried, or no registry found.
+            var named = Repository.PathPatterns.Normalize(path);
+
+            if (Sync.HarnessDirectorySync.Withholds(named))
             {
                 problems.Add(
                     $"{setting} names '{path}', inside the harness's own directory, which sync never carries to another "
                     + "host but for its runner actions: put it in the tree, or under an action's directory");
+            }
+            else if (carried.IsWithheldFromTransfer(named))
+            {
+                problems.Add(
+                    $"{setting} names '{path}', which a sync withholds from every copy of the tree - sync.neverTransfer, "
+                    + "sync.exclude or worktrees.root covers it - so no worker, and no host sweeping a leg, would hold it: "
+                    + "keep it where a sync carries it");
             }
         }
 

@@ -190,4 +190,13 @@ internal static class AdmissionKit
     /// <summary>What the slots' record holds now.</summary>
     public static IReadOnlyList<SlotEntry> Read(string record)
         => File.Exists(record) ? JsonSerializer.Deserialize<List<SlotEntry>>(File.ReadAllText(record), JsonStateFile.Options) ?? [] : [];
+
+    /// <summary>
+    /// What the slots' record holds now, and the room's beside it, read while legs are asking: each under its record's
+    /// own machine-wide step, as every reader of one is. Read past it, a read that meets the write of a unit taken or
+    /// given back fails - or fails that write.
+    /// </summary>
+    public static (IReadOnlyList<SlotEntry> Slots, IReadOnlyList<RoomClaim> Claims) ReadWhileAsked(string record)
+        => (MachineWideFile.Update(Path.GetFullPath(record), MachineWideFile.Window, () => Read(record)),
+            MachineWideFile.Update(Path.GetFullPath(HeavyLegSlots.RoomPathFor(record)), MachineWideFile.Window, () => ReadClaims(record)));
 }

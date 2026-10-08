@@ -2121,7 +2121,7 @@ public sealed partial class CliEndToEndTests
                 Assert.Contains("compiler: ", result.StandardError, StringComparison.Ordinal);
             }
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }
@@ -2199,7 +2199,7 @@ public sealed partial class CliEndToEndTests
             Assert.Contains(Renamed, second.StandardError, StringComparison.Ordinal);
             Assert.DoesNotContain("WARN - native: the deepest path below this build directory", second.StandardError, StringComparison.Ordinal);
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }
@@ -2386,7 +2386,7 @@ public sealed partial class CliEndToEndTests
             Assert.True(untied.GetProperty("verdict").GetString() == "unwitnessed", untiedSaid);
             Assert.Contains("CMake identified none for it", untied.GetProperty("detail").GetString(), StringComparison.Ordinal);
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }
@@ -2542,7 +2542,7 @@ public sealed partial class CliEndToEndTests
                 Assert.Equal("visualStudio", line.GetProperty("developerEnvironment").GetProperty("name").GetString());
             }
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }

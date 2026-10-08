@@ -115,7 +115,7 @@ public sealed class CheckMutationsEndToEndTests
                 Assert.True(built.ExitCode == HarnessExit.Success, built.StandardError + built.StandardOutput);
             }
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }
@@ -185,7 +185,7 @@ public sealed class CheckMutationsEndToEndTests
             Assert.True(cleaned.ExitCode == HarnessExit.Success, cleaned.StandardError + cleaned.StandardOutput);
             Assert.False(Directory.Exists(worker), cleaned.StandardError + cleaned.StandardOutput);
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }
@@ -270,7 +270,7 @@ public sealed class CheckMutationsEndToEndTests
             Assert.False(Directory.Exists(FetchedSources.KeptIn(worker)), "The worker kept dependency sources it was no longer given.");
             Assert.True(File.Exists(Path.Combine(variant.DirectoryUnder(worker), "_deps", "plumb-src", "CMakeLists.txt")), "The worker did not fetch as the leg would.");
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }

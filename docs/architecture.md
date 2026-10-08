@@ -2439,7 +2439,11 @@ a checkout with either.
 
 The whole registry is read, with every text it cites, before any host is touched, and every
 problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once
-its hosts were measured and its slots taken. The rows a mutation harness of a repository's own once
+its hosts were measured and its slots taken. What a sync withholds is in no copy of the tree, and a
+worker is such a copy, as a host's is: so a registry or a text directory under `sync.neverTransfer`,
+`sync.exclude` or the worktrees root is refused when the configuration is read, as one inside the
+harness's own directory is, and a cited text so withheld is a problem of its row - never every arm
+read `violated` for a text nobody carried. The rows a mutation harness of a repository's own once
 needed and this one derives - R, X, I, F and T - are refused, each naming what took its place: the
 leg's own tree, project and variant; sync's exclusions; the variant's configure; the dependency
 sources the leg's own build fetched; and ninja's records. A leg built by anything but CMake with the
@@ -2607,9 +2611,10 @@ records staying on that host and its home written as `~`, as a leg's are (see "A
 `check-mutations --self-test` sweeps the fixture this tool carries, in place of the repository's
 registry, which it does not need. The fixture is `tests/mutation-fixture/`, embedded whole into the
 tool so every build carries the very fixture its own tests swept: a CMake library, a test binary
-that writes its own JUnit report - nothing is fetched to build it - and a registry of one arm to
-each verdict an arm's design can reach on any machine: passed, as a TEST-RED and a BUILD-RED arm;
-violated; survived; unattributed; and failed. It is built as each selected leg builds - its
+that writes its own JUnit report - nothing is fetched to build it - and a registry of seven arms,
+one to each verdict an arm's design can reach on any machine: passed, as a TEST-RED arm, as a
+BUILD-RED arm, and as an arm whose mutation is coupled across two files, neither edit building
+without the other; violated; survived; unattributed; and failed. It is built as each selected leg builds - its
 toolchain, configuration and sanitizer, its developer environment - and each arm is held to the
 verdict it is designed to reach: one that reaches it passed, saying so; one that reaches another
 verdict an arm's design decides is `violated`, naming both, which is this tool's defect with that

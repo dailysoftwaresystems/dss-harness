@@ -1443,6 +1443,7 @@ public sealed class LegRunServiceTests
         var record = AdmissionRecord(temp);
         IReadOnlyList<SlotEntry>? during = null;
         Admission? unit = null;
+        var asked = false;
 
         var config = new HarnessConfig
         {
@@ -1482,6 +1483,7 @@ public sealed class LegRunServiceTests
             hosts: hosts,
             workAsync: async (work, token) =>
             {
+                asked = true;
                 unit = await work.AdmitUnit(new UnitAdmission("arm"), token);
                 during = AdmissionKit.Read(record);
 
@@ -1490,7 +1492,62 @@ public sealed class LegRunServiceTests
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal(inTheDistribution ? [] : ["remote"], during!.Select(entry => entry.Leg));
+
+        // The leg's work runs where the leg is: in the distribution its unit asks, and nothing there takes it; the machine
+        // that sent the leg runs none of its work, so no unit of it asks here at all.
+        Assert.Equal(inTheDistribution, asked);
         Assert.Null(unit);
+        Assert.Empty(AdmissionKit.Read(record));
+    }
+
+    /// <summary>
+    /// A host sent a leg of such a command admits each unit by the admission its own entry among the hosts declares:
+    /// what the machine that typed the command declares for itself says nothing of this one's memory, so a host whose
+    /// entry declares none asks nothing, whatever that machine declares.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AHostSentALegOfAWorkloadAdmittingEachUnit_AdmitsEachByItsOwnSettings(bool declared)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var admission = new AdmissionSettings { HeavyLegs = 2 };
+        IReadOnlyList<SlotEntry>? withBoth = null;
+        var taken = new List<bool>();
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = declared ? null : admission },
+                Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree, Admission = declared ? admission : null } },
+            },
+            Legs = { ["arm"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", Ssh = HostName } },
+        };
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, Here: HostId.Ssh(HostName)) { Workload = Sweep },
+            workAsync: async (work, token) =>
+            {
+                using var first = await work.AdmitUnit(new UnitAdmission("first-arm"), token);
+                using var second = await work.AdmitUnit(new UnitAdmission("second-arm", Settle: false), token);
+
+                taken.AddRange([first is not null, second is not null]);
+                withBoth = AdmissionKit.Read(record);
+
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal([declared, declared], taken);
+        Assert.Equal(declared ? ["arm/first-arm", "arm/second-arm"] : [], withBoth!.Select(entry => entry.Leg));
         Assert.Empty(AdmissionKit.Read(record));
     }
 

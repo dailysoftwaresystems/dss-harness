@@ -36,16 +36,25 @@ internal sealed class ClockWatch : IDisposable
 
     private readonly Lock _gate = new();
     private readonly ManualResetEventSlim _stop = new();
+    private readonly Func<DateTimeOffset> _now;
     private readonly Thread _reader;
     private DateTimeOffset _wall;
     private long _monotonic;
     private TimeSpan _stepped;
     private int _disposed;
 
-    /// <summary>Starts watching.</summary>
+    /// <summary>Starts watching this machine's clock.</summary>
     public ClockWatch()
+        : this(() => DateTimeOffset.UtcNow)
     {
-        _wall = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>Starts watching the clock <paramref name="now"/> reads.</summary>
+    /// <param name="now">What the wall clock says.</param>
+    public ClockWatch(Func<DateTimeOffset> now)
+    {
+        _now = now;
+        _wall = now();
         _monotonic = Stopwatch.GetTimestamp();
         _reader = new Thread(() =>
         {
@@ -79,6 +88,14 @@ internal sealed class ClockWatch : IDisposable
     /// <summary>Whether its steps added up to less than a second throughout.</summary>
     public bool Held => Stepped < Tolerance;
 
+    /// <summary>
+    /// Whether <paramref name="failure"/> is one a clock that did not hold explains: a failed assertion about what a
+    /// build or a run came to. Any other failure is the test's own, or the code's - nothing a clock that stepped raises -
+    /// and is never set aside for it.
+    /// </summary>
+    /// <param name="failure">What the test raised.</param>
+    public bool Explains(Exception failure) => failure is Xunit.Sdk.XunitException && !Held;
+
     /// <summary>What the clock did, for a skip's reason.</summary>
     public string Seen => $"this machine's clock stepped by {Stepped.TotalSeconds:0.0} seconds in all while it ran";
 
@@ -98,7 +115,7 @@ internal sealed class ClockWatch : IDisposable
     {
         lock (_gate)
         {
-            var wall = DateTimeOffset.UtcNow;
+            var wall = _now();
             var monotonic = Stopwatch.GetTimestamp();
             var jump = (wall - _wall - Stopwatch.GetElapsedTime(_monotonic, monotonic)).Duration();
 

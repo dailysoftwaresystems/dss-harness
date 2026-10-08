@@ -35,6 +35,10 @@ public sealed class MutationFixtureTests
                 "texts/charge.after",
                 "texts/charge.before",
                 "texts/charge.diag",
+                "texts/coupled-use.after",
+                "texts/coupled-use.before",
+                "texts/coupled.after",
+                "texts/coupled.diag",
                 "texts/depth.after",
                 "texts/depth.before",
                 "texts/depth.control-after",
@@ -61,8 +65,9 @@ public sealed class MutationFixtureTests
 
     /// <summary>
     /// Its registry reads whole, every text in its text directory cited; it designs a verdict for every arm it declares and
-    /// for no other; and each text an arm replaces occurs exactly once where it is replaced - the arm's own, and a paired
-    /// control's in the site as it was - so each arm's verdict is its design's, never its pre-flight's.
+    /// for no other; and each text an arm replaces occurs exactly once where it is replaced, and is replaced by another -
+    /// the arm's own, and a paired control's in the site as it was - so each arm's verdict is its design's, never its
+    /// pre-flight's.
     /// </summary>
     [Fact]
     public void ItsRegistry_ReadsWhole_AndEveryArmIsDesigned_AndEachTextOccursOnce()
@@ -77,12 +82,18 @@ public sealed class MutationFixtureTests
         {
             foreach (var site in arm.Sites)
             {
-                Assert.Equal(1, SiteEdit.Apply(files[site.Site], SiteEdit.Text(files[site.Before]), SiteEdit.Text(files[site.After])).Occurrences);
+                var edit = SiteEdit.Apply(files[site.Site], SiteEdit.Text(files[site.Before]), SiteEdit.Text(files[site.After]));
+
+                Assert.Equal(1, edit.Occurrences);
+                Assert.False(edit.ChangesNothing, $"arm '{arm.Id}' replaces a text of '{site.Site}' with itself");
             }
 
             if (arm.Control is { } control)
             {
-                Assert.Equal(1, SiteEdit.Apply(files[arm.Own.Site], SiteEdit.Text(files[control.Before]), SiteEdit.Text(files[control.After])).Occurrences);
+                var edit = SiteEdit.Apply(files[arm.Own.Site], SiteEdit.Text(files[control.Before]), SiteEdit.Text(files[control.After]));
+
+                Assert.Equal(1, edit.Occurrences);
+                Assert.False(edit.ChangesNothing, $"the control of arm '{arm.Id}' replaces a text of '{arm.Own.Site}' with itself");
             }
         }
 

@@ -64,8 +64,10 @@ public sealed record PlacedLeg(
     /// <remarks>
     /// What the leg is called wherever a reader sees its host - a <c>{host}</c> a label records, the
     /// progress a dispatching machine shows - and what its settings were read under. Never what it
-    /// is locked or scheduled by: that is the machine the work physically runs on, which to itself
-    /// is always this one.
+    /// is locked by: that is the machine the work physically runs on, which to itself is always this
+    /// one. It is what says the leg runs in a WSL distribution, there as on the machine that sent it:
+    /// that machine takes such a leg whole, its units asking nothing in the distribution, and a sweep
+    /// of it runs one worker - none of which the host it runs on, this one, could tell.
     /// </remarks>
     public HostId Named
     {

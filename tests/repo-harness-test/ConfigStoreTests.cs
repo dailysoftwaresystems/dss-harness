@@ -1024,9 +1024,11 @@ public sealed class ConfigStoreTests
 
     /// <summary>
     /// What check-mutations could not use is refused when the file is read: a registry or text directory outside the
-    /// tree, spelt two ways, or inside the harness's own directory, which sync never carries to another host but for its
-    /// runner actions; fewer than one worker; report arguments naming anything in braces but {report}, or never naming
-    /// it; and a bound on a mutated run at or below the unmutated run's own duration.
+    /// tree, spelt two ways, inside the harness's own directory, which sync never carries to another host but for its
+    /// runner actions, or where the configuration's own sync settings or its worktrees root keep a sync from carrying it -
+    /// a worker is a copy a sync makes, and a host sweeps its own; fewer than one worker; report arguments naming
+    /// anything in braces but {report}, or never naming it; and a bound on a mutated run at or below the unmutated run's
+    /// own duration.
     /// </summary>
     [Theory]
     [InlineData("""{ "mutations": { "registry": "../arms.registry" } }""", "mutations.registry entry '../arms.registry' must be a relative path inside the tree")]
@@ -1034,6 +1036,15 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "mutations": { "registry": "tests/./arms.registry" } }""", "mutations.registry names 'tests/./arms.registry', which holds a '.' segment")]
     [InlineData("""{ "mutations": { "registry": ".harness-config/arms.registry" } }""", "mutations.registry names '.harness-config/arms.registry', inside the harness's own directory, which sync never carries")]
     [InlineData("""{ "mutations": { "textDirectory": ".harness-config/runner/actions/sweep/build" } }""", "mutations.textDirectory names '.harness-config/runner/actions/sweep/build', inside the harness's own directory")]
+    [InlineData(
+        """{ "mutations": { "registry": "tests/arms.registry" }, "sync": { "neverTransfer": ["tests/"] } }""",
+        "mutations.registry names 'tests/arms.registry', which a sync withholds from every copy of the tree - sync.neverTransfer, sync.exclude or worktrees.root covers it - so no worker, and no host sweeping a leg, would hold it: keep it where a sync carries it")]
+    [InlineData(
+        """{ "mutations": { "textDirectory": "tests/texts" }, "sync": { "exclude": ["tests/texts"] } }""",
+        "mutations.textDirectory names 'tests/texts', which a sync withholds from every copy of the tree - sync.neverTransfer, sync.exclude or worktrees.root covers it")]
+    [InlineData(
+        """{ "mutations": { "registry": "kept/trees/arms.registry" }, "worktrees": { "root": "kept/trees" } }""",
+        "mutations.registry names 'kept/trees/arms.registry', which a sync withholds from every copy of the tree - sync.neverTransfer, sync.exclude or worktrees.root covers it")]
     [InlineData("""{ "mutations": { "workers": 0 } }""", "mutations.workers must be at least 1, found 0")]
     [InlineData("""{ "mutations": { "reportArgs": ["--out={reprot}"] } }""", "mutations.reportArgs names '{reprot}', which nothing fills in: it can hold only {report}.")]
     [InlineData("""{ "mutations": { "reportArgs": ["--gtest_output=xml"] } }""", "mutations.reportArgs never names {report}, so a test binary would write its report where no arm reads it")]
@@ -1053,8 +1064,12 @@ public sealed class ConfigStoreTests
     [Fact]
     public void Load_AcceptsARegistryUnderAnActionsDirectory_AndNoReportArgument()
     {
+        // Beside what a sync withholds, and under none of it.
         var config = LoadValid("""
-            { "mutations": { "registry": ".harness-config/runner/actions/sweep/arms.registry", "reportArgs": [] } }
+            {
+              "mutations": { "registry": ".harness-config/runner/actions/sweep/arms.registry", "textDirectory": "tests/texts", "reportArgs": [] },
+              "sync": { "neverTransfer": ["tests/texts-old"], "exclude": ["tests/text"] }
+            }
             """);
 
         Assert.Equal(".harness-config/runner/actions/sweep/arms.registry", config.Mutations.Registry);

@@ -28,7 +28,8 @@ public sealed class MutationSettings
     /// The arms registry, relative to the repository root, or <see langword="null"/> where the repository declares
     /// none, and <c>check-mutations</c> refuses to sweep, naming this key. Carried by sync like the rest of the tree,
     /// so a host reads the registry its copy holds: one inside the harness's own directory, which sync never carries
-    /// but for its runner actions, is refused when the file is read.
+    /// but for its runner actions, is refused when the file is read, and so is one the configuration's own sync
+    /// settings or its worktrees root keep a sync from carrying.
     /// </summary>
     [Description("the arms registry, relative to the repository root")]
     public string? Registry { get; init; }
@@ -37,7 +38,7 @@ public sealed class MutationSettings
     /// The directory, relative to the repository root, holding the texts the registry's rows cite - each mutation's
     /// before and after, each diagnostic, each control - every file of which some row must cite: a text nobody cites is
     /// a mutation nobody drives. Left out, the texts may lie anywhere in the tree, and nothing checks that each is
-    /// cited.
+    /// cited. Carried by sync as the registry is, and refused where it would not be, as the registry is.
     /// </summary>
     [Description("the directory of the texts the registry cites, every file cited")]
     public string? TextDirectory { get; init; }

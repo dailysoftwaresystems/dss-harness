@@ -5,10 +5,11 @@ namespace RepoHarness.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The heap is read every few milliseconds on a thread of its own, above the priority of the work it watches, from a
-/// baseline taken once everything collectable was collected. What a reading counts includes what has been allocated and
-/// not yet collected, so a reader that drops what it reads still shows the garbage it makes between collections: a bound
-/// has room for that, and for nothing that grows with what is read.
+/// The heap is read every few tens of milliseconds on a thread of its own, above the priority of the work it watches,
+/// from a baseline taken once everything collectable was collected - and each reading is taken once everything
+/// collectable was collected again. So what is counted is what is still held: a reader that drops what it reads shows
+/// no growth, however much garbage the collector lets gather before it collects on its own - which is the collector's
+/// budget, as large as the machine's caches and its settings make it, and nothing the code under test decides.
 /// </para>
 /// <para>
 /// The heap is the process's, so what the rest of a test run allocates at the same time is counted too: a test watched by
@@ -17,13 +18,14 @@ namespace RepoHarness.Tests;
 /// </remarks>
 internal sealed class HeapWatch : IDisposable
 {
-    /// <summary>How often the heap is read.</summary>
-    private static readonly TimeSpan Every = TimeSpan.FromMilliseconds(5);
+    /// <summary>How often the heap is read, each reading a collection of its own.</summary>
+    private static readonly TimeSpan Every = TimeSpan.FromMilliseconds(25);
 
     private readonly ManualResetEventSlim _stop = new();
     private readonly Thread _reader;
     private readonly long _baseline;
     private long _peak;
+    private long _readings;
 
     public HeapWatch()
     {
@@ -47,6 +49,9 @@ internal sealed class HeapWatch : IDisposable
     /// <summary>The most the heap grew by over its baseline, in bytes, so far.</summary>
     public long Growth => Interlocked.Read(ref _peak) - _baseline;
 
+    /// <summary>How many times the heap has been read so far.</summary>
+    public long Readings => Interlocked.Read(ref _readings);
+
     public void Dispose()
     {
         _stop.Set();
@@ -58,12 +63,17 @@ internal sealed class HeapWatch : IDisposable
     {
         do
         {
+            // Collected first: what remains is held by something, and garbage is not.
+            GC.Collect();
+
             var now = GC.GetTotalMemory(forceFullCollection: false);
 
             if (now > Interlocked.Read(ref _peak))
             {
                 Interlocked.Exchange(ref _peak, now);
             }
+
+            Interlocked.Increment(ref _readings);
         }
         while (!_stop.Wait(Every));
     }

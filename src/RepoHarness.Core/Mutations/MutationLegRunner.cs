@@ -290,7 +290,7 @@ internal sealed class MutationLegRunner(
             }
             else
             {
-                notes.AddRange(_unmade.OrderBy(pair => pair.Key).Select(pair => $"{pair.Value.Detail}, so it drove no arm"));
+                notes.AddRange(_unmade.OrderBy(pair => pair.Key).Select(pair => $"{pair.Value.Detail.TrimEnd('.')}, so it drove no arm"));
             }
 
             return Line(own, [.. driven.Select(arm => (arm, _entries[arm.Id])), .. unselected], notes) with { EndsTheRun = refusal };

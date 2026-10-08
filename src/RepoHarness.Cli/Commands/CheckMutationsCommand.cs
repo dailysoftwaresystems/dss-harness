@@ -76,7 +76,6 @@ internal static class CheckMutationsCommand
                         arguments.GetValue(JsonOption),
                         arguments.GetValue(UseStagedOption),
                         arguments.GetValue(DispatchOptions.Here),
-                        MutationService.RemoteArguments(arms, selfTest),
                         selfTest),
                     run,
                     cancellationToken)

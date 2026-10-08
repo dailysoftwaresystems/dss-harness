@@ -16,10 +16,12 @@ namespace RepoHarness.Tests;
 public sealed class PhaseFloodTests
 {
     /// <summary>
-    /// How far this process's heap may grow while a phase runs, whatever its child prints: room for what reading a line at
-    /// a time leaves to be collected, and for nothing that grows with the output.
+    /// How much more this process's heap may hold while a phase runs, whatever its child prints: many times what a phase
+    /// holds at once as it reads - its last lines and the end of each stream, a few megabytes where every line is the
+    /// longest handed on - and a small part of what the output kept whole would come to, over two gigabytes. What a
+    /// reader drops is not counted (<see cref="HeapWatch"/>), so the bound has no need of room for it.
     /// </summary>
-    private const long HeapBound = 256L * 1024 * 1024;
+    private const long HeapBound = 64L * 1024 * 1024;
 
     /// <summary>How long each line of a flood is.</summary>
     private const int LineLength = 1024;
@@ -37,8 +39,8 @@ public sealed class PhaseFloodTests
     /// </summary>
     /// <remarks>
     /// Measured on the runner that kept the output as text, this ended as the consumer's leg did: an
-    /// OutOfMemoryException from StringBuilder.ToString in ProcessRunner.CaptureAsync. Measured since, the heap grew by
-    /// under 18 MB while the phase ran.
+    /// OutOfMemoryException from StringBuilder.ToString in ProcessRunner.CaptureAsync. Measured since, what the heap
+    /// held grew by under a megabyte while the phase ran, and by under 4 MB for the line that never ends.
     /// </remarks>
     [Fact]
     public async Task AChildPrintingMoreThanAStringHolds_IsKeptWhole_InItsLog_WithinABoundedHeap()

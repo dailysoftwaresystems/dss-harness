@@ -552,7 +552,8 @@ public sealed class MutationLegRunnerTests
 
     /// <summary>
     /// A site that is no file at all - the worker's copy does not hold it, and the sweep's reading of the tree holds it
-    /// under no spelling - is violated before anything of the arm is built, said missing and nothing else.
+    /// under no spelling - is violated before anything of the arm is built, said missing and nothing else: its own
+    /// site, or a coupled one.
     /// </summary>
     [Fact]
     public async Task ASiteThatIsNoFile_IsViolated_SaidMissing()
@@ -564,6 +565,21 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(
             (LegVerdict.Violated, "site 'src/nowhere.cpp' is not a file in the worker's copy of the tree"),
             (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
+
+        // A coupled site that is no file is said missing as its arm's own is, though its own is there.
+        var coupled = ChargeBound with
+        {
+            Id = "charge-coupled",
+            Line = 2,
+            Coupled = [new MutationSite("src/nowhere.hpp", "texts/depth.control-before", "texts/depth.control-after", 3)],
+        };
+
+        var beside = await sweep.RunAsync([coupled]);
+
+        Assert.Equal(
+            (LegVerdict.Violated, "site 'src/nowhere.hpp' is not a file in the worker's copy of the tree"),
+            (beside.Arms[0].Verdict, beside.Arms[0].Detail));
         Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
     }
 
@@ -1078,7 +1094,8 @@ public sealed class MutationLegRunnerTests
     /// <summary>
     /// A worker whose making ends in a failure nobody named - the disk full as its copy is written, or as its build
     /// records what it built - is retired alone, saying what failed: the other worker drives every arm, and the leg says
-    /// it ran with fewer. Where no worker could be made, their failures are the leg's own, and each arm is stopped.
+    /// it ran with fewer. Where no worker could be made, their failures are the leg's own, and each arm is stopped. A tree
+    /// edited between the sweep's reading and a worker's copy is that worker's alone too, said as the sync says it.
     /// </summary>
     [Fact]
     public async Task AWorkerThatCannotBeMade_IsRetired_AndTheOthersSweep()
@@ -1103,6 +1120,23 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(
             (LegVerdict.Poisoned, "worker 1: it could not be made, UnauthorizedAccessException: Access to the path is denied; worker 2: it could not be made, IOException: There is not enough space on the disk; 2 arm(s): 2 stopped"),
             (neither.Verdict, neither.Detail));
+
+        const string Moved = "local: 'src/fixture.cpp' changed after the tree was read for this command, so that copy cannot be made the tree that was read. Let the tree settle, then run again.";
+
+        using var edited = new Sweep();
+        edited.Copies.SyncFails = worker => worker == edited.Worker(2) ? new HarnessException(LegExit.InputsMoved, Moved) : null;
+
+        var moved = await edited.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Passed, $"2 arm(s): 2 passed; worker 2: {Moved.TrimEnd('.')}, so it drove no arm"), (moved.Verdict, moved.Detail));
+        Assert.All(moved.Arms, arm => Assert.Equal((LegVerdict.Passed, 1), (arm.Verdict, arm.Worker)));
+
+        using var alone = new Sweep { Workers = 1 };
+        alone.Copies.SyncFails = _ => new HarnessException(LegExit.InputsMoved, Moved);
+
+        var unmade = await alone.RunAsync([ChargeBound]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((Verdicts.ForRefusal(LegExit.InputsMoved), $"worker 1: {Moved}; 1 arm(s): 1 stopped"), (unmade.Verdict, unmade.Detail));
     }
 
     /// <summary>
@@ -1487,7 +1521,9 @@ public sealed class MutationLegRunnerTests
 
     /// <summary>
     /// An arm's run starts where the leg's tests start, read for the worker's copy, in the environment they start in: the
-    /// leg's host's, and the test invocation's over it.
+    /// leg's host's, and the test invocation's over it. It and its binary's control both find the programs the leg's
+    /// host found - a compiler's own libraries among them - and are watched as every phase is, for a stall and for a
+    /// clock that stepped.
     /// </summary>
     [Fact]
     public async Task AnArmsRun_StartsWhereTheLegsTestsStart_InTheWorker_WithTheirEnvironment()
@@ -1496,6 +1532,8 @@ public sealed class MutationLegRunnerTests
         {
             Workers = 1,
             Test = new TestConfig { All = new TestInvocation { Runner = "ctest", WorkingDirectory = "{buildDir}/tests", Env = new() { ["FIXTURE_MODE"] = "strict" } } },
+            ProgramDirectories = ["/opt/mingw/bin"],
+            Defaults = new HarnessDefaults { StallSeconds = 77, ClockStepToleranceMilliseconds = 1234 },
         };
         sweep.HostEnv["HOST_SETTING"] = "1";
         sweep.HostEnv["FIXTURE_MODE"] = "loose";
@@ -1507,6 +1545,14 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(Path.GetFullPath(Path.Combine(Variant.DirectoryUnder(sweep.Worker(1)), "tests")), Path.GetFullPath(run.WorkingDirectory));
         Assert.Equal("strict", run.Environment["FIXTURE_MODE"]);
         Assert.Equal("1", run.Environment["HOST_SETTING"]);
+
+        Assert.Equal(["native/arms/charge-bound", "native/controls/fixture_tests"], sweep.Tests.Runs.Select(request => request.Leg).Order(StringComparer.Ordinal));
+        Assert.All(sweep.Tests.Runs, request =>
+        {
+            Assert.Equal(["/opt/mingw/bin"], request.AppendToPath);
+            Assert.Equal(77, request.StallSeconds);
+            Assert.Equal(1234, request.ClockStepToleranceMilliseconds);
+        });
     }
 
     /// <summary>
@@ -1930,16 +1976,262 @@ public sealed class MutationLegRunnerTests
         Assert.DoesNotContain(sweep.Worker(4), sweep.Copies.Abandoned);
     }
 
-    /// <summary>A sweep in a WSL distribution runs one worker, whatever <c>mutations.workers</c> says: it is admitted whole, as one heavy leg.</summary>
-    [Fact]
-    public async Task ASweepInAWslDistribution_RunsOneWorker()
+    /// <summary>
+    /// A sweep in a WSL distribution runs one worker, whatever <c>mutations.workers</c> says: it is admitted whole, as one
+    /// heavy leg. Told by the host the machine that dispatched the leg names - in the distribution, where the sweep runs,
+    /// the host the leg runs on is this one, as it is on any host sent a leg - so a leg sent to an ssh host, or run where
+    /// it was asked for, runs as many workers as it has arms and <c>mutations.workers</c> allows.
+    /// </summary>
+    [Theory]
+    [InlineData("wsl", true, 1)]
+    [InlineData("wsl", false, 1)]
+    [InlineData("ssh", true, 3)]
+    [InlineData("local", true, 3)]
+    public async Task ASweepInAWslDistribution_RunsOneWorker(string dispatchedTo, bool seenWhereItRuns, int workers)
     {
-        using var sweep = new Sweep { Workers = 4, Host = HostId.Wsl("Example-Linux") };
+        var named = dispatchedTo switch
+        {
+            "wsl" => HostId.Wsl("Example-Linux"),
+            "ssh" => HostId.Ssh("example-pi"),
+            _ => HostId.Local,
+        };
+
+        // Where it runs, its host is this one and only its name says where it was sent; to the machine that sent it, the
+        // host is the one it was sent to.
+        using var sweep = seenWhereItRuns
+            ? new Sweep { Workers = 4, Host = HostId.Local, Named = named }
+            : new Sweep { Workers = 4, Host = named };
 
         var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
 
         Assert.Equal(LegVerdict.Passed, entry.Verdict);
-        Assert.Equal([sweep.Worker(1)], sweep.Copies.Synced.Select(sync => sync.Worker));
+        Assert.Equal(Enumerable.Range(1, workers).Select(sweep.Worker), sweep.Copies.Synced.Select(sync => sync.Worker).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// An arm with a coupled site mutates both files before its build - either alone would be another mutation - asks
+    /// what depends on either, and puts both back as the tree held them, each dated behind no build. A coupled site that
+    /// cannot be put back poisons the arm, naming it, while the arm's own site is put back all the same.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWithACoupledSite_MutatesWitnessesAndPutsBackEverySite()
+    {
+        var coupled = ChargeBound with
+        {
+            Id = "charge-coupled",
+            Line = 9,
+            Coupled = [new MutationSite("src/budget.hpp", "texts/depth.control-before", "texts/depth.control-after", 10)],
+        };
+
+        using var sweep = new Sweep { Workers = 1 };
+        (string Own, string Coupled)? built = null;
+
+        sweep.Builder.Before = (request, _) =>
+        {
+            if (request.Leg == "native/arms/charge-coupled")
+            {
+                built = (File.ReadAllText(Path.Combine(request.TreeRoot, "src", "fixture.cpp")), File.ReadAllText(Path.Combine(request.TreeRoot, "src", "budget.hpp")));
+            }
+
+            return Task.CompletedTask;
+        };
+
+        var entry = await sweep.RunAsync([coupled]);
+
+        Assert.Equal(
+            (LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+            (Assert.Single(entry.Arms).Verdict, entry.Arms[0].Detail));
+        Assert.Equal(
+            ("bool within(int c, int b) { return c < b; }\nbool positive(int c) { return c > 0; }\n", "constexpr int depth = 4;\n"),
+            built);
+        Assert.Contains(
+            sweep.Builder.Graph.AskedOfSites,
+            sites => sites.Select(Path.GetFileName).Order(StringComparer.Ordinal).SequenceEqual(["budget.hpp", "fixture.cpp"]));
+        Assert.Empty(sweep.Builder.DatedAhead);
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+
+        using var lost = new Sweep { Workers = 1 };
+        lost.SiteFiles = new FailingRestore(lost.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"]);
+
+        var poisoned = await lost.RunAsync([coupled]);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned,
+                "a site could not be put back as it was, so its worker drives no other arm: writing 'src/budget.hpp' back failed: the disk went away; "
+                + "'src/budget.hpp' does not hold what the tree held when the sweep read it"),
+            (Assert.Single(poisoned.Arms).Verdict, poisoned.Arms[0].Detail));
+        Assert.Equal(TreeFiles["src/fixture.cpp"], File.ReadAllText(Path.Combine(lost.Worker(1), "src", "fixture.cpp")));
+        Assert.Equal("constexpr int depth = 4;\n", File.ReadAllText(Path.Combine(lost.Worker(1), "src", "budget.hpp")));
+    }
+
+    /// <summary>
+    /// Each unit the sweep asks its machine to take is given back: a worker's once the worker is made, with the room its
+    /// making claimed, so nothing it then drives is counted beside it; and an arm's once its site is back as it was,
+    /// never before. With as many slots as workers, a unit kept would leave an arm waiting on its own sweep.
+    /// </summary>
+    [Fact]
+    public async Task EachUnit_IsGivenBack_WorkersOnceMade_ArmsOnceTheirSiteIsBack()
+    {
+        using var state = new TempDirectory();
+        var record = state.Combine("admission.json");
+        var admission = AdmissionKit.Admission(new HarnessFactory(), record, new ScriptedGauge(10), new ManualClock());
+        var rule = AdmissionKit.Rule(heavyLegs: 2);
+        var whileMade = new ConcurrentQueue<(string Build, string[] Held, string[] Claimed)>();
+        var whileDriven = new ConcurrentQueue<(string Build, string Worker, string[] Held, string[] Claimed)>();
+        var whilePutBack = new ConcurrentQueue<(string Site, string[] Held)>();
+
+        // Read as the sweep's own units write them, so under each record's own step.
+        string[] Held() => [.. AdmissionKit.ReadWhileAsked(record).Slots.Select(entry => entry.Leg)];
+        string[] Claimed() => [.. AdmissionKit.ReadWhileAsked(record).Claims.Select(claim => claim.Holder.Leg)];
+
+        using var sweep = new Sweep
+        {
+            Workers = 2,
+            AdmitAsync = async (unit, token) => await admission.AdmitAsync(
+                new AdmissionRequest(rule, "run-1", MutationService.CommandName, $"{LegName}/{unit.Unit}", "local", "/src/tree", Variant.DirectoryName, _ => { }, unit.Room)
+                {
+                    Settle = unit.Settle,
+                },
+                token),
+        };
+        sweep.SiteFiles = new WhenPutBack(
+            sweep.Harness.FileSystem,
+            site => whilePutBack.Enqueue((site, Held())),
+            ("fixture.cpp", TreeFiles["src/fixture.cpp"]),
+            ("budget.hpp", TreeFiles["src/budget.hpp"]));
+        sweep.Builder.Before = (request, _) =>
+        {
+            if (request.Leg.StartsWith("native/workers/", StringComparison.Ordinal))
+            {
+                whileMade.Enqueue((request.Leg, Held(), Claimed()));
+            }
+            else
+            {
+                whileDriven.Enqueue((request.Leg, request.TreeRoot, Held(), Claimed()));
+            }
+
+            return Task.CompletedTask;
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Passed, "2 arm(s): 2 passed"), (entry.Verdict, entry.Detail));
+
+        // While a worker is made, its unit is held, with the room its copy claims.
+        Assert.Equal(["native/workers/1", "native/workers/2"], whileMade.Select(seen => seen.Build).Order(StringComparer.Ordinal));
+        Assert.All(whileMade, seen =>
+        {
+            var unit = $"native/worker-{seen.Build[^1]}";
+
+            Assert.Contains(unit, seen.Held);
+            Assert.Contains(unit, seen.Claimed);
+        });
+
+        // Once it is made, whatever is built in it is built with that unit given back, and its room with it; and an
+        // arm's own build is built under the arm's unit.
+        Assert.Contains(whileDriven, seen => seen.Build == "native/arms/charge-bound");
+        Assert.Contains(whileDriven, seen => seen.Build == "native/arms/depth-type/control");
+        Assert.All(whileDriven, seen =>
+        {
+            var unit = $"native/worker-{(seen.Worker == sweep.Worker(1) ? 1 : 2)}";
+
+            Assert.DoesNotContain(unit, seen.Held);
+            Assert.DoesNotContain(unit, seen.Claimed);
+
+            if (seen.Build.StartsWith("native/arms/", StringComparison.Ordinal))
+            {
+                Assert.Contains($"native/{seen.Build["native/arms/".Length..].Split('/')[0]}", seen.Held);
+            }
+        });
+
+        // An arm's unit is still held as its site is put back, and no unit once the sweep is done.
+        Assert.Equal(["budget.hpp", "fixture.cpp"], whilePutBack.Select(seen => seen.Site).Order(StringComparer.Ordinal));
+        Assert.All(whilePutBack, seen => Assert.Contains(seen.Site == "fixture.cpp" ? "native/charge-bound" : "native/depth-type", seen.Held));
+        Assert.Empty(AdmissionKit.Read(record));
+        Assert.Empty(AdmissionKit.ReadClaims(record));
+    }
+
+    /// <summary>
+    /// Two workers that reach one binary's arms together share its one pristine control: built and run once, in
+    /// whichever worker asked first - never once to each, which would write one record directory over the other.
+    /// </summary>
+    [Fact]
+    public async Task TwoWorkers_ShareOneControlOfTheirBinary()
+    {
+        var together = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var asked = 0;
+
+        using var sweep = new Sweep
+        {
+            Workers = 2,
+            AdmitAsync = async (unit, token) =>
+            {
+                // Each arm's unit is answered only once both have asked, so both workers reach the control at once.
+                if (!unit.Unit.StartsWith("worker-", StringComparison.Ordinal))
+                {
+                    if (Interlocked.Increment(ref asked) == 2)
+                    {
+                        together.SetResult();
+                    }
+
+                    await together.Task.WaitAsync(token);
+                }
+
+                return null;
+            },
+        };
+
+        // The control's build takes long enough to start that the second worker asks for it while the first still does.
+        sweep.Builder.Before = (request, _) =>
+        {
+            if (request.Leg == "native/controls/fixture_tests")
+            {
+                Thread.Sleep(TimeSpan.FromMilliseconds(300));
+            }
+
+            return Task.CompletedTask;
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Passed, "2 arm(s): 2 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal([1, 2], entry.Arms.Select(arm => arm.Worker!.Value).Order());
+        Assert.Single(sweep.Builder.Builds, build => build.Leg == "native/controls/fixture_tests");
+        Assert.Single(sweep.Tests.Runs, run => run.Bound is null);
+    }
+
+    /// <summary>
+    /// A site put back is dated forward as its mutation was: past the clock as the build of its mutation started, by the
+    /// margin a coarse date needs, so the next build in that worker sees it changed and rebuilds what the mutation built -
+    /// never left dated as the write itself dated it, which a clock that stepped back puts before the mutated object.
+    /// </summary>
+    [Fact]
+    public async Task ASitePutBack_IsDatedForward_SoTheNextBuildRebuildsWhatItsMutationBuilt()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var dates = new RecordingDates(sweep.Harness.FileSystem);
+        var started = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+
+        sweep.SiteFiles = dates;
+        sweep.Builder.Before = (request, _) =>
+        {
+            started[request.Leg] = sweep.Now;
+            return Task.CompletedTask;
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
+
+        Assert.Equal((LegVerdict.Passed, "2 arm(s): 2 passed"), (entry.Verdict, entry.Detail));
+
+        var site = Path.Combine(sweep.Worker(1), "src", "fixture.cpp");
+        var dated = dates.Dated.Where(write => write.Path == site).ToList();
+
+        // Mutated and put back, once to each arm: each write dated, and each putting back past its mutation's build.
+        Assert.Equal([false, true, false, true], dated.Select(write => write.Text == TreeFiles["src/fixture.cpp"]));
+        Assert.True(dated[1].Stamp > dated[0].Stamp, $"{dated[1].Stamp:O} is not past {dated[0].Stamp:O}");
+        Assert.True(dated[3].Stamp > dated[2].Stamp, $"{dated[3].Stamp:O} is not past {dated[2].Stamp:O}");
+        Assert.True(dated[1].Stamp >= started["native/arms/charge-bound"] + WorkerSite.Margin, "the first arm's site was put back dated behind its build");
+        Assert.True(dated[3].Stamp >= started["native/arms/charge-floor"] + WorkerSite.Margin, "the second arm's site was put back dated behind its build");
     }
 
     /// <summary>
@@ -1991,6 +2283,18 @@ public sealed class MutationLegRunnerTests
 
         public HostId Host { get; init; } = HostId.Local;
 
+        /// <summary>The host as the machine that dispatched the leg names it, where that is not the host it runs on.</summary>
+        public HostId? Named { get; init; }
+
+        /// <summary>The directories the leg's host found its programs in.</summary>
+        public IReadOnlyList<string> ProgramDirectories { get; init; } = [];
+
+        /// <summary>What the configuration gives every phase unless it says otherwise.</summary>
+        public HarnessDefaults Defaults { get; init; } = new();
+
+        /// <summary>What the sweep's clock says now.</summary>
+        public DateTime Now => _clock.GetUtcNow().UtcDateTime;
+
         public WorktreeSettings Worktrees { get; init; } = new();
 
         public TestConfig? Test { get; init; }
@@ -2036,7 +2340,7 @@ public sealed class MutationLegRunnerTests
         {
             var os = Harness.Platform.PlatformKey;
             var settings = new MutationSettings { Workers = Workers, ReportArgs = ["--gtest_output=xml:{report}"], RunTimeFactor = 10 };
-            var config = new HarnessConfig { Worktrees = Worktrees, Mutations = settings };
+            var config = new HarnessConfig { Worktrees = Worktrees, Mutations = settings, Defaults = Defaults };
             var context = new HarnessContext(new HarnessLayout(Tree, Tree), config);
             var project = new ProjectConfig { Name = "app", Type = "cmake", Test = Test };
 
@@ -2044,7 +2348,7 @@ public sealed class MutationLegRunnerTests
             {
                 project.CacheVars[name] = value;
             }
-            var host = new HostReport { Host = Host, Os = os, Processor = Variant.Processor };
+            var host = new HostReport { Host = Host, Os = os, Processor = Variant.Processor, ProgramDirectories = ProgramDirectories };
             var leg = new PlacedLeg(
                 LegName,
                 new LegConfig { Os = os, Processor = Variant.Processor, Config = "debug" },
@@ -2056,6 +2360,11 @@ public sealed class MutationLegRunnerTests
                 Variant.DirectoryUnder(Tree),
                 new LocalHostConfig { Env = HostEnv },
                 Emulated: false);
+
+            if (Named is { } named)
+            {
+                leg = leg with { Named = named };
+            }
 
             Reader = new Source(Read(context));
 
@@ -2382,6 +2691,9 @@ public sealed class MutationLegRunnerTests
     {
         public ConcurrentQueue<IReadOnlyList<string>> AskedOfTargets { get; } = new();
 
+        /// <summary>The sites each question about what depends on them named, in the order asked.</summary>
+        public ConcurrentQueue<IReadOnlyCollection<string>> AskedOfSites { get; } = new();
+
         public IReadOnlyList<string> OutputsOf(string target) => target switch
         {
             "fixture" => ["bin/fixture"],
@@ -2395,6 +2707,7 @@ public sealed class MutationLegRunnerTests
         public IReadOnlyList<string> DependentObjects(IReadOnlyList<string> targets, IReadOnlyCollection<string> sites)
         {
             AskedOfTargets.Enqueue(targets);
+            AskedOfSites.Enqueue(sites);
 
             return sites.Any(site => Path.GetFileName(site) is "fixture.cpp" or "budget.hpp") ? [SiteObject] : [];
         }
@@ -2505,6 +2818,35 @@ public sealed class MutationLegRunnerTests
 
         public override byte[] ReadAllBytes(string path)
             => _putBack.ContainsKey(path) ? throw new IOException("the disk went away.") : base.ReadAllBytes(path);
+    }
+
+    /// <summary>A file system, recording each date a file was given through it, with what the file held then.</summary>
+    private sealed class RecordingDates(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public ConcurrentQueue<(string Path, string Text, DateTime Stamp)> Dated { get; } = new();
+
+        public override void SetLastWriteTimeUtc(string path, DateTime writtenUtc)
+        {
+            Dated.Enqueue((path, File.ReadAllText(path), writtenUtc));
+            base.SetLastWriteTimeUtc(path, writtenUtc);
+        }
+    }
+
+    /// <summary>
+    /// The real file system, saying each file among <paramref name="sites"/> as its pristine text is about to be written
+    /// back to it.
+    /// </summary>
+    private sealed class WhenPutBack(IFileSystem inner, Action<string> putBack, params (string Name, string Pristine)[] sites) : PassThroughFileSystem(inner)
+    {
+        public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        {
+            if (sites.Any(site => site.Name == Path.GetFileName(path) && site.Pristine == System.Text.Encoding.UTF8.GetString(contents)))
+            {
+                putBack(Path.GetFileName(path));
+            }
+
+            return base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+        }
     }
 
     /// <summary>The real file system, save that writing <paramref name="name"/> back as <paramref name="pristine"/> fails, as a disk that went away fails.</summary>

@@ -23,9 +23,6 @@ namespace RepoHarness.Core.Mutations;
 /// <param name="Json">Whether the ledger is wanted as data rather than as a table.</param>
 /// <param name="UseStaged">Whether to sweep what is already staged on each host, without syncing again.</param>
 /// <param name="Here">The host this machine is to the machine that dispatched the legs here, or <see langword="null"/>.</param>
-/// <param name="RemoteArguments">
-/// The options a host sweeping one of the legs is given, so it sweeps the same arms, or self-tests as this machine does.
-/// </param>
 /// <param name="SelfTest">
 /// Whether to sweep the fixture this tool carries, through each leg's toolchain, holding each arm to the verdict it is
 /// designed to reach - rather than the arms the repository's registry declares.
@@ -38,7 +35,6 @@ public sealed record MutationRequest(
     bool Json = false,
     bool UseStaged = false,
     HostId? Here = null,
-    IReadOnlyList<string>? RemoteArguments = null,
     bool SelfTest = false);
 
 /// <summary>The arms a sweep drives, as the registry declares them and <c>--arms</c> and the S rows select them.</summary>
@@ -169,7 +165,7 @@ public sealed class MutationService(
                     request.UseStaged,
                     Time: false,
                     request.Here,
-                    request.RemoteArguments)
+                    RemoteArguments(request.ArmNames, request.SelfTest))
                 {
                     // A self-test takes the leg's own sweep lock, as a sweep of the leg does: its workers are kept beside
                     // the leg's tree as a sweep's are, in a family of their own, and a clean of the leg takes both under it.
@@ -307,9 +303,10 @@ public sealed class MutationService(
     /// selects the arms <paramref name="armNames"/> names.
     /// </summary>
     /// <exception cref="HarnessException">
-    /// No registry is configured, it or a text it cites cannot be read whole, a scope names no leg, or a selected arm runs
-    /// a binary with no report arguments configured (<see cref="HarnessExit.ConfigInvalid"/>); or <c>--arms</c> names an
-    /// arm it does not declare (<see cref="HarnessExit.UsageError"/>).
+    /// No registry is configured, it or a text it cites cannot be read whole, a text it cites is one a sync withholds
+    /// from every copy of the tree, a scope names no leg, or a selected arm runs a binary with no report arguments
+    /// configured (<see cref="HarnessExit.ConfigInvalid"/>); or <c>--arms</c> names an arm it does not declare
+    /// (<see cref="HarnessExit.UsageError"/>).
     /// </exception>
     internal SweepArms Read(HarnessContext context, IReadOnlyList<string>? armNames)
     {
@@ -340,7 +337,12 @@ public sealed class MutationService(
 
         if (reading.Valid)
         {
-            problems.AddRange(TextProblems(reading.Registry, root));
+            // What a sync withholds is in no copy of the tree, and a worker is such a copy: a text so kept would be
+            // missing to every arm citing it, each read violated for a text nobody carried. The registry and the text
+            // directory are held to the same where their paths are known, as the configuration is read.
+            var carried = new SyncExclusions(context.Config.Sync, context.Config.Worktrees.Root);
+
+            problems.AddRange(TextProblems(reading.Registry, root, carried.IsWithheldFromTransfer));
         }
 
         Refuse(registry, problems);
@@ -420,18 +422,18 @@ public sealed class MutationService(
     /// file, and each before-text, control before-text or diagnostic holding nothing - which occurs everywhere, and which
     /// every run would say.
     /// </summary>
-    private IEnumerable<string> TextProblems(MutationRegistry registry, string root)
+    private IEnumerable<string> TextProblems(MutationRegistry registry, string root, Func<string, bool> withheld)
     {
         foreach (var arm in registry.Arms)
         {
             foreach (var site in arm.Sites)
             {
-                if (TextProblem(root, site.Before, site.Line, empty: true) is { } before)
+                if (TextProblem(root, site.Before, site.Line, empty: true, withheld) is { } before)
                 {
                     yield return before;
                 }
 
-                if (TextProblem(root, site.After, site.Line, empty: false) is { } after)
+                if (TextProblem(root, site.After, site.Line, empty: false, withheld) is { } after)
                 {
                     yield return after;
                 }
@@ -439,32 +441,41 @@ public sealed class MutationService(
 
             if (arm.Control is { } control)
             {
-                if (TextProblem(root, control.Before, control.Line, empty: true) is { } before)
+                if (TextProblem(root, control.Before, control.Line, empty: true, withheld) is { } before)
                 {
                     yield return before;
                 }
 
-                if (TextProblem(root, control.After, control.Line, empty: false) is { } after)
+                if (TextProblem(root, control.After, control.Line, empty: false, withheld) is { } after)
                 {
                     yield return after;
                 }
             }
 
-            if (arm.Kind == RedKind.TestRed && TextProblem(root, arm.Diagnostic, arm.Line, empty: true) is { } diagnostic)
+            if (arm.Kind == RedKind.TestRed && TextProblem(root, arm.Diagnostic, arm.Line, empty: true, withheld) is { } diagnostic)
             {
                 yield return diagnostic;
             }
         }
     }
 
-    /// <summary>What is wrong with the text <paramref name="cited"/> on line <paramref name="line"/>, or <see langword="null"/>.</summary>
-    private string? TextProblem(string root, string cited, int line, bool empty)
+    /// <summary>
+    /// What is wrong with the text <paramref name="cited"/> on line <paramref name="line"/>, or <see langword="null"/>:
+    /// no file of the tree, one <paramref name="withheld"/> says no copy of the tree would hold, or, where
+    /// <paramref name="empty"/> says a text holding nothing cannot be swept, one holding nothing.
+    /// </summary>
+    private string? TextProblem(string root, string cited, int line, bool empty, Func<string, bool> withheld)
     {
         var file = InTree(root, cited);
 
         if (!_fileSystem.FileExists(file))
         {
             return $"line {line}: text '{cited}' is not a file in the tree";
+        }
+
+        if (withheld(cited))
+        {
+            return $"line {line}: text '{cited}' is withheld from every copy of the tree by a sync, so no worker would hold it";
         }
 
         return empty && SiteEdit.Text(_fileSystem.ReadAllBytes(file)).Length == 0

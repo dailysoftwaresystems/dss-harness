@@ -354,6 +354,84 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A leg on another host is swept there by what this machine was asked: a self-test where this is one, and the arms
+    /// <c>--arms</c> named, each value as it was given - so a host never sweeps its own registry where the fixture was
+    /// asked for, nor every arm where some were named - and by nothing more where neither was said.
+    /// </summary>
+    [Fact]
+    public async Task ARemoteLegsSweep_IsDispatchedWithTheSelfTestAndTheArms()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+        var pi = HostId.Ssh("pi");
+
+        config.Hosts.Ssh["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" };
+        config.Legs["pi"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Toolchain = "gcc", Project = "app", Ssh = "pi" };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "pi", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+        var inspector = new RecordingInspector(host => host.Kind == HostKind.Local
+            ? new HostReport { Host = host, Os = "windows", Processor = "x86_64" }
+            : new HostReport { Host = host, Os = "linux", Processor = "arm64", Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness") });
+        var (service, _) = Prepare(temp, config, harness: harness, inspector: inspector, hosts: hosts);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var selfTest = await service.RunAsync(new MutationRequest(temp.Path, ["pi"], ["charge-bound,spare-unseen"], Json: true, SelfTest: true), RunId.New(), cancellationToken);
+        var named = await service.RunAsync(new MutationRequest(temp.Path, ["pi"], ["charge"], Json: true), RunId.New(), cancellationToken);
+        var every = await service.RunAsync(new MutationRequest(temp.Path, ["pi"], null, Json: true), RunId.New(), cancellationToken);
+
+        Assert.All([selfTest, named, every], outcome => Assert.Equal(HarnessExit.Success, outcome.ExitCode));
+
+        var sent = hosts.Calls
+            .Select(call => System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(call.Command.StandardInput!, HostAgentProtocol.JsonOptions)!)
+            .Where(request => request.Kind == HostAgentRequestKind.Run)
+            .Select(request => string.Join(' ', request.Arguments))
+            .ToList();
+
+        Assert.Equal(
+            [
+                $"check-mutations --legs pi --json --here {pi} --self-test --arms charge-bound,spare-unseen",
+                $"check-mutations --legs pi --json --here {pi} --arms charge",
+                $"check-mutations --legs pi --json --here {pi}",
+            ],
+            sent);
+    }
+
+    /// <summary>
+    /// A cited text that a sync withholds from every copy of the tree - never transferred, or excluded - is refused
+    /// before anything starts, with its row's line: a worker is such a copy, so every arm citing it would read violated
+    /// for a text nobody carried. The registry and the text directory are held to the same when the configuration is
+    /// read, which is where their paths are known.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ACitedTextASyncWithholds_IsRefusedBeforeAnythingStarts(bool neverTransferred)
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable();
+
+        (neverTransferred ? config.Sync.NeverTransfer : config.Sync.Exclude).Add("mutations/texts/charge.diag");
+
+        var (service, context) = Prepare(temp, config);
+
+        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "The arms registry 'mutations/arms.txt' cannot be swept: 1 problem(s), each to fix:",
+                "  - line 1: text 'mutations/texts/charge.diag' is withheld from every copy of the tree by a sync, so no worker would hold it"),
+            refusal.Message);
+    }
+
+    /// <summary>
     /// A leg's sweep is given its tree; its project, as the leg builds it; the dependency sources the leg's own build
     /// fetched, which each worker is given its own copy of - none for a leg never built; the test settings its tests
     /// start by; the arms it drives; and what a build of its variant is expected to come to, as the leg's own last build
@@ -595,7 +673,8 @@ public sealed class MutationServiceTests
         string[]? rows = null,
         HarnessFactory? harness = null,
         IHostInspector? inspector = null,
-        IFileSystem? files = null)
+        IFileSystem? files = null,
+        ScriptedHostCommands? hosts = null)
     {
         harness ??= new HarnessFactory();
 
@@ -609,17 +688,23 @@ public sealed class MutationServiceTests
         var loader = HostDoubles.Loader(config, temp.Path, temp.Path);
 
         return (
-            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files),
+            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files, hosts),
             new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config));
     }
 
     /// <summary>
-    /// The service as the command builds it, its hosts measured by <paramref name="inspector"/>, nothing able to reach one,
-    /// every build it starts failing without building, and a self-test's fixture kept in <paramref name="temp"/>, never
-    /// among the data of the user running the tests - reading the repository through <paramref name="files"/>, or the
-    /// harness's own file system.
+    /// The service as the command builds it, its hosts measured by <paramref name="inspector"/> and reached through
+    /// <paramref name="hosts"/> - or nothing able to reach one - every build it starts failing without building, and a
+    /// self-test's fixture kept in <paramref name="temp"/>, never among the data of the user running the tests - reading
+    /// the repository through <paramref name="files"/>, or the harness's own file system.
     /// </summary>
-    private static MutationService Service(HarnessFactory harness, TempDirectory temp, IHarnessContextLoader loader, IHostInspector inspector, IFileSystem? files = null)
+    private static MutationService Service(
+        HarnessFactory harness,
+        TempDirectory temp,
+        IHarnessContextLoader loader,
+        IHostInspector inspector,
+        IFileSystem? files = null,
+        ScriptedHostCommands? hosts = null)
     {
         var processes = Substitute.For<IProcessRunner>();
         var builds = Substitute.For<IBuildService>();
@@ -640,7 +725,7 @@ public sealed class MutationServiceTests
             new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
             Substitute.For<ISyncService>(),
             Substitute.For<ISyncTransportFactory>(),
-            new RemoteLegRunner(new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
+            new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
             AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), new ScriptedGauge(10), new ManualClock()),
             new KeepAwake(new HeldProcesses(), harness.Output),
             new DeveloperEnvironmentProvider(harness.Platform, processes, harness.FileSystem, harness.Output),

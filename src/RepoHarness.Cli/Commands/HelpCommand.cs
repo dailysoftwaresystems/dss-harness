@@ -771,7 +771,8 @@ internal static class HelpCommand
             $"workers is {MutationSettings.DefaultWorkers} and runTimeFactor {MutationSettings.DefaultRunTimeFactor.ToString(CultureInfo.InvariantCulture)} "
             + "where left out. The registry and textDirectory are relative to the repository root, and carried by sync like "
             + "the rest of the tree: one inside the harness's own directory, which sync never carries but for its runner "
-            + $"actions, is refused. reportArgs makes a test binary write a JUnit XML report to {{{MutationReport.Placeholder}}}, "
+            + "actions, is refused, and so is one sync.neverTransfer, sync.exclude or worktrees.root keeps a sync from "
+            + $"carrying - a worker is a copy a sync makes, and a host sweeps its own. reportArgs makes a test binary write a JUnit XML report to {{{MutationReport.Placeholder}}}, "
             + "a new file for every run: [\"--reporter\", \"JUnit::out={report}\"] for Catch2, [\"--reporters=junit\", "
             + "\"--out={report}\"] for doctest, [\"--logger=JUNIT,all,{report}\"] for Boost.Test. It is required where an arm runs "
             + "its binary, and only {report} may stand in braces.");
@@ -814,7 +815,8 @@ internal static class HelpCommand
             + "runner outside [A-Za-z0-9_.+-]; a row naming an arm no A row above it declares; a case both red and green, or "
             + "declared twice; an M row mutating a file its arm already mutates, as the tree's own file system compares their "
             + "names; an S row naming neither a leg nor a leg set; "
-            + "a text no row cites in textDirectory, a mutation nobody drives; a cited text that is not there; and a "
+            + "a text no row cites in textDirectory, a mutation nobody drives; a cited text that is not there, or that a "
+            + "sync withholds from every copy of the tree; and a "
             + "before-text, a control's before-text or a diagnostic holding nothing, which would match everywhere, or be said "
             + "by every run. Rows R, X, I, F and T are refused, each naming what "
             + "took its place: the leg's own tree, project and variant (R); sync's exclusions (X); the variant's configure "
@@ -921,7 +923,8 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "check-mutations --self-test sweeps the fixture this tool carries - a CMake library, a test binary that writes "
-            + "its own JUnit report, and one arm to each verdict an arm's design can reach - in place of the repository's "
+            + "its own JUnit report, and seven arms: one to each verdict an arm's design can reach, a second that passes "
+            + "as the other red kind, and a third whose mutation is coupled across two files - in place of the repository's "
             + "registry, which it does not need. It is built as each selected leg builds, with the leg's toolchain, "
             + "configuration and sanitizer, and each arm is held to the verdict it is designed to reach: one that reaches "
             + "it passed, saying so, and one that reaches another is violated, naming both - a defect of this tool's with "
