@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Sync;
@@ -124,6 +125,38 @@ public static class SyncServe
     /// much its files hold, as listing a repository's worktrees with their hosts asks.
     /// </summary>
     public const string ListCopies = "list-copies";
+
+    /// <summary>
+    /// Removes the mutation workers kept beside the tree its root names, whether that tree is still there or not, as
+    /// removing the tree's copy asks first, and a clean of a leg whose copy is gone: <c>remove-workers &lt;root&gt;</c>,
+    /// and <see cref="MeasureOnly"/> after it to say what would go and remove nothing.
+    /// </summary>
+    public const string RemoveWorkers = "remove-workers";
+
+    /// <summary>What follows the root where <see cref="RemoveWorkers"/> is only to measure.</summary>
+    public const string MeasureOnly = "measure";
+
+    /// <summary>Whether a <see cref="RemoveWorkers"/> request asks only to measure.</summary>
+    /// <param name="arguments">The request's arguments, the tree's root first.</param>
+    /// <exception cref="HarnessException">
+    /// The request carries something else after its root: the two ends are different builds, and one that removed where
+    /// the other asked for something it does not know would remove what nobody asked it to.
+    /// </exception>
+    public static bool MeasuresOnly(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count <= 1)
+        {
+            return false;
+        }
+
+        return string.Equals(arguments[1], MeasureOnly, StringComparison.Ordinal)
+            ? true
+            : throw new HarnessException(
+                HarnessExit.UsageError,
+                $"sync operation '{RemoveWorkers}' takes '{MeasureOnly}' after its root, or nothing; it was given '{arguments[1]}'.");
+    }
 
     /// <summary>
     /// The largest file one request can carry, in bytes.
@@ -370,6 +403,89 @@ public enum CopyRemoval
 
     /// <summary>A directory holding no mark of the harness's: left where it is.</summary>
     NotACopy,
+}
+
+/// <summary>What removing the mutation workers kept beside a tree did.</summary>
+/// <param name="Workers">Each worker removed, and each left.</param>
+public sealed record SyncWorkersAnswer(WorkersRemoval Workers);
+
+/// <summary>
+/// What removing the mutation workers kept beside a tree did or, asked only to measure, would do: each copy of the
+/// family a sync made is removed, with what an unfinished removal of one left aside, and every other directory of the
+/// family is left, saying why.
+/// </summary>
+/// <param name="Removed">Each worker removed, or that would be, with what its files held, in the order of their paths.</param>
+/// <param name="Left">Each directory of the family left where it is, and why.</param>
+public sealed record WorkersRemoval(IReadOnlyList<WorkerRemoved> Removed, IReadOnlyList<WorkerLeft> Left)
+{
+    /// <summary>No worker beside the tree, so nothing removed and nothing left.</summary>
+    public static WorkersRemoval None { get; } = new([], []);
+
+    /// <summary>
+    /// Whether the removal was stopped before every worker had been dealt with: what is here is what it had done by
+    /// then, and a worker it names nowhere was not reached.
+    /// </summary>
+    public bool Interrupted { get; init; }
+
+    /// <summary>What the workers removed held together.</summary>
+    [JsonIgnore]
+    public long Bytes => Removed.Sum(worker => worker.Bytes);
+
+    /// <summary>
+    /// What became of the workers, as the one verdict every command that removes them reads: refused-locked where a
+    /// sweep still running holds one, which ends by waiting; failed where one could not be removed, or told; stopped
+    /// where the removal was stopped before each had been dealt with; and passed where none of that is - the most
+    /// fundamental of them where several are. A command's own code for the first two is the verdict's.
+    /// </summary>
+    [JsonIgnore]
+    public LegVerdict Verdict => Verdicts.Worst([.. Left.Select(worker => Of(worker.As)), Interrupted ? LegVerdict.Stopped : LegVerdict.Passed]);
+
+    /// <summary>
+    /// The worker that keeps its tree from being removed with the others, or <see langword="null"/> where none does:
+    /// the first of the kind <see cref="Verdict"/> ranks first, so what is said of it is what the verdict says.
+    /// </summary>
+    [JsonIgnore]
+    public WorkerLeft? Kept => Left.Where(worker => Of(worker.As) != LegVerdict.Passed).MinBy(worker => Verdicts.Rank(Of(worker.As)));
+
+    // What one worker left says of its tree: held, it is in use; not removed, its removal failed; somebody's, nothing.
+    private static LegVerdict Of(WorkerLeftAs left)
+        => left switch
+        {
+            WorkerLeftAs.Held => LegVerdict.RefusedLocked,
+            WorkerLeftAs.NotRemoved => LegVerdict.Failed,
+            _ => LegVerdict.Passed,
+        };
+}
+
+/// <summary>One mutation worker removed, or that would be.</summary>
+/// <param name="Path">Where it was, spelt from the tree it was asked about.</param>
+/// <param name="Bytes">How many bytes its files held.</param>
+public sealed record WorkerRemoved(string Path, long Bytes);
+
+/// <summary>One directory of a tree's mutation workers left where it is.</summary>
+/// <param name="Path">Where it is.</param>
+/// <param name="Why">Why it was left, as a line says it.</param>
+/// <param name="As">What it was left as, which says what would have it go.</param>
+public sealed record WorkerLeft(string Path, string Why, WorkerLeftAs As)
+{
+    /// <summary>Why it was left, naming it: its path first, where what is said of it does not name it already.</summary>
+    public string Told() => Why.Contains(Path, StringComparison.Ordinal) ? Why : $"'{Path}': {Why}";
+}
+
+/// <summary>What a directory of a tree's mutation workers was left as, which says whether asking again removes it.</summary>
+public enum WorkerLeftAs
+{
+    /// <summary>Somebody's: nothing the harness may remove, and nothing that keeps its tree.</summary>
+    Somebodys,
+
+    /// <summary>Held: a sweep still running holds it, and asking again removes it once the sweep has ended.</summary>
+    Held,
+
+    /// <summary>
+    /// Not removed: its removal failed or was stopped part way, or what it is could not be told - its marker cannot be
+    /// read. Nothing holds it that waiting would end: asking again removes it, or says whose it is, once that is put right.
+    /// </summary>
+    NotRemoved,
 }
 
 /// <summary>The worktree copies a host keeps beside its main copy.</summary>

@@ -833,6 +833,47 @@ public sealed class RunnerRunServiceTests
         Assert.DoesNotContain("<unset>", log, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A failing step's output is read from its log, a line at a time, for the exception it names and for what an expected
+    /// exception recognises: found on the last of thousands of lines, and never held as text.
+    /// </summary>
+    [Fact]
+    public async Task AFailingStepsOutput_IsReadFromItsLog_ForWhatAnExpectedExceptionRecognises()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var printed = temp.WriteFile(
+            "printed.txt",
+            string.Concat(Enumerable.Range(0, 20_000).Select(line => $"case {line} ok\n")) + "Unhandled: System.IO.IOException: fopen: resource busy\n");
+
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("measure", "print-file", [printed], successPattern: "all cases passed")],
+            ExpectedExceptions =
+            [
+                new ExpectedException
+                {
+                    ExceptionType = "IOException",
+                    Messages = ["^Unhandled: .*resource busy$"],
+                    Success = true,
+                    Warning = true,
+                    ResultCode = 0,
+                    Message = "a known confound",
+                    EarnedOn = "lin-gcc-release",
+                    EarnedAt = "2026-09-16",
+                    Mechanism = "the fixture server refuses the seventh connection of a session",
+                    Anchor = "D-TEST-RUNNER-GATE",
+                },
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.ExpectedException);
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal("a known confound", result.Outcome.Message);
+    }
+
     [Fact]
     public async Task AnExpectedExceptionWhoseCheckIsNotConfirmed_LeavesTheFailureGenuine()
     {
@@ -1185,8 +1226,21 @@ public sealed class RunnerRunServiceTests
     [Fact]
     public void AFailureThatNamedNoException_CarriesANameAnEntryCanDeclare()
     {
-        Assert.Equal(RunnerRunService.StepFailureType, RunnerRunService.FailureTypeIn("ctest exited 7"));
-        Assert.Equal("System.IO.IOException", RunnerRunService.FailureTypeIn("Unhandled: System.IO.IOException: gone"));
+        Assert.Equal(RunnerRunService.StepFailureType, RunnerRunService.FailureTypeIn(PhaseOutput.Of("ctest exited 7")));
+        Assert.Equal("System.IO.IOException", RunnerRunService.FailureTypeIn(PhaseOutput.Of("Unhandled: System.IO.IOException: gone")));
+        Assert.Equal(
+            "TimeoutException",
+            RunnerRunService.FailureTypeIn(PhaseOutput.Of("running\r\ncase 4 failed: TimeoutException after 30s\nthen an IOException\n")));
+
+        // Read no further than the first line naming one: a step's output can be larger than any text the harness could hold.
+        Assert.Equal(
+            "TimeoutException",
+            RunnerRunService.FailureTypeIn(
+                new PhaseOutputTests.ReadUpTo(
+                    line => line.Contains("TimeoutException", StringComparison.Ordinal),
+                    "running",
+                    "case 4 failed: TimeoutException after 30s",
+                    "then an IOException")));
     }
 
     /// <summary>
@@ -1217,7 +1271,11 @@ public sealed class RunnerRunServiceTests
 
         Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
         Assert.NotNull(result.Outcome.Output);
-        Assert.Contains(result.Outcome.Output!, result.Outcome.Texts);
+
+        var printed = result.Outcome.Output!.Lines().ToList();
+
+        Assert.NotEmpty(printed);
+        Assert.Equal([result.Outcome.Message, .. printed], result.Outcome.Texts);
     }
 
     /// <summary>
@@ -1630,6 +1688,140 @@ public sealed class RunnerRunServiceTests
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Contains("names step(s) bench more than once", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two steps whose names differ, and are kept as one log - every character a file name cannot carry is kept as a
+    /// hyphen, and a file's name is told apart whatever its case - are refused before any step runs, naming both and the
+    /// log: the second wrote the first's log over, and what the first printed was read from the second's.
+    /// </summary>
+    [Fact]
+    public async Task TwoStepsWhoseNamesAreKeptAsOneLog_AreRefused_NamingBothAndTheLog()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: 'bench: fast'
+                run: |
+                  dotnet --version
+              - name: other
+                run: |
+                  dotnet --version
+              - name: 'Bench/ fast'
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench: fast' and 'Bench/ fast' as 'bench- fast.log'. "
+            + "A character a file name cannot carry is kept as '-', and a file's name is told apart whatever its case, so each would "
+            + "write the other's log over, and what one printed be read as the other's. Rename one.",
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// A runner's own phases are held to the same: the file is read refusing only one name given twice, so two phases
+    /// kept as one log are refused here, where the phases a leg runs are counted, before any of them runs.
+    /// </summary>
+    [Fact]
+    public async Task TwoPhasesOfARunnersOwn_KeptAsOneLog_AreRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runner = new RunnerConfig { Phases = [Phase("bench: fast", "exit", ["0"]), Phase("Bench/ fast", "exit", ["0"])] };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.StartsWith(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench: fast' and 'Bench/ fast' as 'bench- fast.log'. ",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step of several lines is a phase to each, named with its place among them - and one of those names can be kept
+    /// as the log of a step named much like it, which no two steps' names alone would say: refused where the phases are
+    /// counted.
+    /// </summary>
+    [Fact]
+    public async Task ALineOfAStep_KeptAsTheLogOfAnotherStep_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: bench
+                run: |
+                  dotnet --version
+                  dotnet --info
+              - name: 'bench (1-2)'
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.StartsWith(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench (1/2)' and 'bench (1-2)' as 'bench (1-2).log'. ",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two steps of one name that run on different systems are one step to each leg, which runs only its own: the
+    /// Linux leg runs its own, and is not refused for the Windows one's, as a leg is refused for no step it does not run.
+    /// </summary>
+    [Fact]
+    public async Task TwoStepsOfOneName_ForDifferentSystems_AreOneStepToEachLeg()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: measure
+                runOn: [windows]
+                run: |
+                  dotnet --version
+              - name: measure
+                runOn: [linux, macos]
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { Identity = Identity("linux") },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["measure"], result.Entry.SkippedSteps);
     }
 
     /// <summary>
@@ -2229,6 +2421,140 @@ public sealed class RunnerRunServiceTests
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Equal("'late' run line names '{product}', and this leg has no build product.", refusal.Message);
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
+    }
+
+    /// <summary>
+    /// A run line naming one of the leg's compilers is filled in with the program the leg's build identified, in an
+    /// argument and as the line's own program alike: a runner's phase starts it as it starts any program, and its log
+    /// names the whole path that ran.
+    /// </summary>
+    [Fact]
+    public async Task ARunLineNamingTheLegsCompiler_IsFilledInWithWhatItsBuildIdentified()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var gxx = Path.Combine(temp.Path, "toolchain", "bin", "g++");
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("census", "echo-args", ["--cxx", "{compiler_CXX}"], successPattern: System.Text.RegularExpressions.Regex.Escape(gxx)),
+                new RunnerPhase { Name = "version", Command = ["{compiler_C}", "--version"] },
+            ],
+        };
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with
+            {
+                Built = true,
+                BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+                Compilers = LegCompilers.Of(new Dictionary<string, LegCompiler>
+                {
+                    ["C"] = LegCompiler.Of(TestHost.DotnetExecutable),
+                    ["CXX"] = LegCompiler.Of(gxx),
+                }),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["[--cxx]", $"[{gxx}]"], result.Phases[0].Output.Lines());
+        Assert.Contains(
+            $"# command {TestHost.DotnetExecutable} --version",
+            File.ReadAllLines(temp.Combine(".harness-config", "runs", RunId, Leg, "version.log")).Select(line => line.Replace("\"", string.Empty, StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A step of an action written as the leg's compiler alone starts it though nothing declares it under 'tools' - the
+    /// build that identified it ran it - where the run built the leg. Where it did not, the step is refused as any step
+    /// reading the build is, naming it, and nothing a build left there earlier is read to fill the name in.
+    /// </summary>
+    [Fact]
+    public async Task AStepStartingTheLegsCompiler_RunsWhereTheRunBuiltTheLeg_AndIsRefusedWhereItDidNot()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { StallSeconds = 0 } };
+        var reads = 0;
+
+        await WriteActionAsync(
+            factory,
+            temp,
+            """
+            name: corpus
+            steps:
+              - name: census
+                run: '{compiler_C} --version'
+            """);
+
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+        {
+            BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+            Compilers = LegCompilers.ReadBy(() =>
+            {
+                reads++;
+
+                return new Dictionary<string, LegCompiler> { ["C"] = LegCompiler.Of(TestHost.DotnetExecutable) };
+            }),
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal(
+            $"Leg '{Leg}' was not built by this run, and runner 'corpus' reads the build - step 'census' names {{compiler_C}} - so "
+            + "nothing was run: unbuilt, it would read whatever the last build left there.",
+            refusal.Message);
+        Assert.Equal(0, reads);
+
+        var result = await Service(factory).RunAsync(config, request with { Built = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["census"], result.Phases.Select(phase => phase.Phase));
+        Assert.Equal(1, reads);
+    }
+
+    /// <summary>
+    /// A compiler's name nothing fills in - here one the build runs with a launcher's words after it - is refused before
+    /// the first step runs, naming the line and why, as is one nothing was given to read: found when its own step began,
+    /// the steps before it had already run.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "'late' run line names '{compiler_CXX}', and its build runs its CXX compiler as '/usr/bin/ccache' followed by 'g++'.")]
+    [InlineData(false, "'late' run line names '{compiler_CXX}', and nothing here reads which compiler the leg's build identified: only a run line and a test invocation are filled in with one.")]
+    public async Task ACompilersNameNothingFillsIn_IsRefusedBeforeAnythingRuns_SayingWhy(bool read, string said)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var runner = new RunnerConfig
+        {
+            Phases =
+            [
+                Phase("harmless", "echo-args", ["one"]),
+                Phase("late", "echo-args", ["--cxx", "{compiler_CXX}"]),
+            ],
+        };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with
+            {
+                Built = true,
+                BuildDirectory = temp.Combine("build", "x86_64-gcc-release"),
+                Compilers = read
+                    ? LegCompilers.Of(new Dictionary<string, LegCompiler>
+                    {
+                        ["CXX"] = LegCompiler.None("its build runs its CXX compiler as '/usr/bin/ccache' followed by 'g++'"),
+                    })
+                    : null,
+            },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(said, refusal.Message);
         Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs", RunId)));
     }
 

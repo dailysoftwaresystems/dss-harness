@@ -162,9 +162,7 @@ public static class TestInvocationResolver
     {
         ArgumentNullException.ThrowIfNull(invocation);
 
-        var workingDirectory = invocation.WorkingDirectory is { Length: > 0 } declared && paths is not null
-            ? Rooted(LegPathNames.Expand(declared, paths, "test.workingDirectory"), paths.TreeRoot)
-            : null;
+        var workingDirectory = paths is null ? null : WorkingDirectoryFor(invocation, paths);
 
         // A test preset the args name, read from the directory ctest starts in where an option beside it asks.
         var preset = new PresetBeside(invocation, fileSystem, paths, workingDirectory);
@@ -610,6 +608,35 @@ public static class TestInvocationResolver
     /// <param name="treeRoot">The leg's tree root.</param>
     public static string StartDirectory(string? workingDirectory, string treeRoot)
         => Path.GetFullPath(workingDirectory ?? treeRoot, treeRoot);
+
+    /// <summary>
+    /// The working directory <paramref name="invocation"/> declares, its names - <c>{buildDir}</c> and the rest - filled in
+    /// from <paramref name="paths"/>, and read against the tree where it is relative; <see langword="null"/> where it
+    /// declares none, and its runner starts at the tree root. One of the leg's compilers it names stands as written
+    /// ahead of the leg's build: see <see cref="LegCompilers.AheadOfTheBuild"/>.
+    /// </summary>
+    /// <param name="invocation">The test invocation.</param>
+    /// <param name="paths">The directories of the leg - or of a copy of its tree - its tests run against.</param>
+    public static string? WorkingDirectoryFor(ResolvedTestInvocation invocation, LegPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        return invocation.WorkingDirectory is { Length: > 0 } declared
+            ? Rooted(LegPathNames.Expand(declared, paths, "test.workingDirectory"), paths.TreeRoot)
+            : null;
+    }
+
+    /// <summary>
+    /// The environment a leg's test runner starts in: what its host gives the leg - its <c>env</c>, with the developer
+    /// environment its toolchain names set up over it - and the invocation's own over both.
+    /// </summary>
+    /// <param name="hostEnvironment">What the leg's host gives it.</param>
+    /// <param name="invocationEnvironment">What the test invocation sets.</param>
+    public static Dictionary<string, string?> EnvironmentFor(
+        IReadOnlyDictionary<string, string> hostEnvironment,
+        IReadOnlyDictionary<string, string> invocationEnvironment)
+        => PhaseEnvironment.Layered(hostEnvironment, invocationEnvironment);
 
     /// <summary>
     /// <paramref name="path"/> read against <paramref name="treeRoot"/> when it is relative, and as

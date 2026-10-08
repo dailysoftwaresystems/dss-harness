@@ -35,6 +35,11 @@
 /LICENSE       text eol=lf
 /NOTICE        text eol=lf
 
+# The fixture a mutation self-test sweeps - CMake, C++ sources, a registry and the texts
+# its arms replace, whose names end however a text's does - is embedded byte for byte,
+# and every text must occur in its site as it is stored, so all of it is named here.
+/tests/mutation-fixture/** text eol=lf
+
 # Binary types, declared so no text rule above can rewrite their bytes: a CR or LF
 # byte inside an image is data. These lines stay last, because the last matching line
 # wins.

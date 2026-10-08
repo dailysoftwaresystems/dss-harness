@@ -1,4 +1,5 @@
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Runners;
 
@@ -45,7 +46,36 @@ public sealed class ExpectedExceptionMatcherTests
             Matcher().Find(
                 Scope("corpus", ["linux-arm64-qemu"], entry),
                 "linux-arm64-qemu",
-                new RunFailure("IOException", Output: "...\nfopen: resource busy\n...")));
+                new RunFailure("IOException", Output: PhaseOutput.Of("...\nfopen: resource busy\n..."))));
+    }
+
+    /// <summary>
+    /// A message is matched against each line the failing unit printed, as every pattern read from a phase's output is: one
+    /// deep in a long output is found, and one that only matches across a line break is not.
+    /// </summary>
+    [Fact]
+    public void Find_MatchesAMessageAgainstEachLineOfTheOutput()
+    {
+        var output = PhaseOutput.Of(string.Concat(Enumerable.Range(0, 5000).Select(line => $"case {line} ok\n")) + "fopen: resource busy\n");
+        var deep = Entry(messages: ["^fopen: resource busy$"]);
+        var across = Entry(messages: ["ok\nfopen"]);
+
+        Assert.Same(deep, Matcher().Find(Scope("corpus", ["linux-arm64-qemu"], deep), "linux-arm64-qemu", new RunFailure("IOException", Output: output)));
+        Assert.Null(Matcher().Find(Scope("corpus", ["linux-arm64-qemu"], across), "linux-arm64-qemu", new RunFailure("IOException", Output: output)));
+    }
+
+    /// <summary>
+    /// The failing unit's output is read once for an entry, however many messages the entry lists: it is read from the
+    /// unit's log, and a log can run to gigabytes.
+    /// </summary>
+    [Fact]
+    public void Find_ReadsTheOutputOnceForAnEntry_HoweverManyMessagesItLists()
+    {
+        var output = new CountedReads("case 1 ok", "fopen: resource busy");
+        var entry = Entry(messages: ["no such message", "^fopen: resource busy$"]);
+
+        Assert.Same(entry, Matcher().Find(Scope("corpus", ["linux-arm64-qemu"], entry), "linux-arm64-qemu", new RunFailure("IOException", Output: output)));
+        Assert.Equal(1, output.Reads);
     }
 
     [Fact]
@@ -125,6 +155,23 @@ public sealed class ExpectedExceptionMatcherTests
         Assert.Equal("excused: the device was busy", outcome.Message);
     }
 
+    /// <summary>
+    /// A failure whose output cannot be read back from its log is matched against no entry as one that printed nothing,
+    /// and its type is not read as one it named none of: both are said as unread, so the failure is neither excused nor
+    /// called genuine on what is left of a log.
+    /// </summary>
+    [Fact]
+    public void Find_SaysOutputThatCouldNotBeReadBack_NeverAFailureThatPrintedNothing()
+    {
+        var entry = Entry(messages: ["resource busy"]);
+
+        var unread = Assert.Throws<PhaseOutputUnreadException>(
+            () => Matcher().Find(Scope("corpus", ["linux-arm64-qemu"], entry), "linux-arm64-qemu", new RunFailure("IOException", Output: new PhaseOutputTests.Unread())));
+
+        Assert.Equal(PhaseOutputTests.Unread.Said, unread.Message);
+        Assert.Equal(PhaseOutputTests.Unread.Said, Assert.Throws<PhaseOutputUnreadException>(() => RunnerRunService.FailureTypeIn(new PhaseOutputTests.Unread())).Message);
+    }
+
     internal static ExpectedException Entry(
         string exceptionType = "IOException",
         IEnumerable<string>? messages = null,
@@ -153,4 +200,16 @@ public sealed class ExpectedExceptionMatcherTests
 
     private static ExpectedExceptionMatcher Matcher()
         => new(new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false));
+
+    /// <summary>Output that reads as <paramref name="lines"/>, counting how often it is read.</summary>
+    private sealed class CountedReads(params string[] lines) : PhaseOutput
+    {
+        public int Reads { get; private set; }
+
+        public override IEnumerable<string> Lines()
+        {
+            Reads++;
+            return lines;
+        }
+    }
 }

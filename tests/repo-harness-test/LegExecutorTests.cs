@@ -414,6 +414,36 @@ public sealed class LegExecutorTests
         Assert.False(Verdicts.IsFailure(unavailable.Verdict));
     }
 
+    /// <summary>
+    /// A leg whose work was ended by a refusal of the run after it had reached verdicts worth keeping answers with its
+    /// line and the refusal: the line is recorded first, as the leg's, and then the refusal ends the run as one raised
+    /// from a leg's work does. What the ledger holds of the leg says nothing of the refusal, which is the run's.
+    /// </summary>
+    [Fact]
+    public async Task ALegEndedByARefusalOfTheRun_HasItsLineRecorded_BeforeTheRefusalEndsTheRun()
+    {
+        var factory = new HarnessFactory();
+        var ledger = new LegLedger(factory.Output, "test");
+        var refusal = new HarnessException(HarnessExit.Refused, "the record of this machine's slots could not be read");
+
+        var raised = await Assert.ThrowsAsync<HarnessException>(() => Executor(factory).RunAsync(
+            new LegExecutionRequest
+            {
+                Legs = [Leg("swept"), Leg("fine")],
+                RunLeg = (leg, _) => Task.FromResult<LegEntry?>(leg.Name == "swept"
+                    ? Passed(leg) with { Verdict = LegVerdict.Stopped, Detail = "3 arm(s): 2 passed, 1 stopped", EndsTheRun = refusal }
+                    : Passed(leg)),
+            },
+            ledger,
+            TestContext.Current.CancellationToken));
+
+        Assert.Same(refusal, raised);
+        Assert.Equal(
+            [("fine", LegVerdict.Passed, null), ("swept", LegVerdict.Stopped, null)],
+            ledger.Entries.OrderBy(entry => entry.Leg, StringComparer.Ordinal).Select(entry => (entry.Leg, entry.Verdict, entry.EndsTheRun)));
+        Assert.Equal("3 arm(s): 2 passed, 1 stopped", ledger.Entries.Single(entry => entry.Leg == "swept").Detail);
+    }
+
     [Fact]
     public async Task ALegThatThrows_IsPoisoned_AndTheOthersStillReport()
     {
@@ -436,6 +466,39 @@ public sealed class LegExecutorTests
         Assert.Equal(LegVerdict.Poisoned, broken.Verdict);
         Assert.Contains("the build directory vanished", broken.Detail, StringComparison.Ordinal);
         Assert.Equal(LegVerdict.Passed, execution.Entries.Single(entry => entry.Leg == "fine").Verdict);
+    }
+
+    /// <summary>
+    /// A leg poisoned by an exception says how much memory this process held as it gave the leg up, and how much of that
+    /// was its managed heap: an OutOfMemoryException reads the same for one object too large to make as for a machine with
+    /// nothing left, and only what the process held tells the two apart. A leg whose own work reached no verdict, which is
+    /// no exception, says nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task ALegPoisonedByAnException_SaysHowMuchMemoryThisProcessHeld()
+    {
+        var factory = new HarnessFactory();
+        var ledger = new LegLedger(factory.Output, "test");
+
+        var execution = await Executor(factory).RunAsync(
+            new LegExecutionRequest
+            {
+                Legs = [Leg("flooded"), Leg("silent")],
+                RunLeg = (leg, _) => leg.Name == "flooded"
+                    ? throw new OutOfMemoryException("Insufficient memory to continue the execution of the program.")
+                    : Task.FromResult<LegEntry?>(null),
+            },
+            ledger,
+            TestContext.Current.CancellationToken);
+
+        var flooded = execution.Entries.Single(entry => entry.Leg == "flooded");
+
+        Assert.Equal(LegVerdict.Poisoned, flooded.Verdict);
+        Assert.Matches(
+            @"^OutOfMemoryException: Insufficient memory to continue the execution of the program\. "
+            + @"\(this process held [0-9.]+ (bytes|KiB|MiB|GiB|TiB) as it gave the leg up, [0-9.]+ (bytes|KiB|MiB|GiB|TiB) of it its managed heap\)$",
+            flooded.Detail);
+        Assert.DoesNotContain("this process held", execution.Entries.Single(entry => entry.Leg == "silent").Detail, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -477,6 +540,34 @@ public sealed class LegExecutorTests
         Assert.Equal(LegVerdict.Passed, execution.Entries.Single(entry => entry.Leg == "fine").Verdict);
     }
 
+    /// <summary>
+    /// A leg whose work needed what a phase printed, and could not read it back from its log, is unmeasured, saying
+    /// which log and why: nothing was decided on what was left of it, and it is no defect of this tool's. The other
+    /// legs still report.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseOutputCouldNotBeReadBack_IsUnmeasured_NeverPoisoned()
+    {
+        var factory = new HarnessFactory();
+        var ledger = new LegLedger(factory.Output, "test");
+
+        var execution = await Executor(factory).RunAsync(
+            new LegExecutionRequest
+            {
+                Legs = [Leg("unread"), Leg("fine")],
+                RunLeg = (leg, _) => leg.Name == "unread"
+                    ? throw new PhaseOutputUnreadException("build.log", "it was written again since")
+                    : Task.FromResult<LegEntry?>(Passed(leg)),
+            },
+            ledger,
+            TestContext.Current.CancellationToken);
+
+        var unread = execution.Entries.Single(entry => entry.Leg == "unread");
+
+        Assert.Equal((LegVerdict.Unmeasured, PhaseOutputTests.Unread.Said), (unread.Verdict, unread.Detail));
+        Assert.Equal(LegVerdict.Passed, execution.Entries.Single(entry => entry.Leg == "fine").Verdict);
+    }
+
     [Fact]
     public async Task AnInterruptedRun_ReportsWhatWasLeft()
     {
@@ -513,6 +604,49 @@ public sealed class LegExecutorTests
         Assert.Equal(["endless"], execution.Unfinished);
         Assert.Equal(["quick"], execution.Entries.Select(entry => entry.Leg));
         Assert.Contains("reached no verdict", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A leg whose work answers with its line as the run is interrupted - a sweep saying the arms it had judged, and the
+    /// rest stopped - has that line: it is none of the legs left without a verdict, and the run still ends as interrupted.
+    /// </summary>
+    [Fact]
+    public async Task ALegAnsweringAsTheRunIsInterrupted_HasItsLine()
+    {
+        var factory = new HarnessFactory();
+        var ledger = new LegLedger(factory.Output, "test");
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var sweeping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var run = Executor(factory).RunAsync(
+            new LegExecutionRequest
+            {
+                Legs = [Leg("swept"), Leg("endless")],
+                RunLeg = async (leg, token) =>
+                {
+                    if (leg.Name == "endless")
+                    {
+                        await Task.Delay(Timeout.Infinite, token);
+                    }
+
+                    sweeping.TrySetResult();
+                    await Task.Delay(Timeout.Infinite, token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+                    return Passed(leg) with { Verdict = LegVerdict.Stopped, Detail = "2 arm(s): 1 stopped, 1 passed" };
+                },
+            },
+            ledger,
+            cancellation.Token);
+
+        await sweeping.Task;
+        await cancellation.CancelAsync();
+
+        var execution = await run;
+
+        Assert.True(execution.Cancelled);
+        Assert.Equal(["endless"], execution.Unfinished);
+        Assert.Equal([("swept", LegVerdict.Stopped, "2 arm(s): 1 stopped, 1 passed")], ledger.Entries.Select(entry => (entry.Leg, entry.Verdict, entry.Detail)));
+        Assert.Equal(HarnessExit.Cancelled, ledger.Build(0).ExitCodeGiven(execution.Cancelled, execution.Unfinished));
     }
 
     [Fact]

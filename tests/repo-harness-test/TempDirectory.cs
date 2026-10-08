@@ -14,8 +14,17 @@ public sealed class TempDirectory : IDisposable
         new PhysicalFileSystem(FilePermissionsFactory.Create());
 
     public TempDirectory()
+        : this(TestHost.TemporaryRoot, string.Empty)
     {
-        Path = System.IO.Path.Combine(TestHost.TemporaryRoot, Guid.NewGuid().ToString("N")[..12]);
+    }
+
+    /// <summary>
+    /// A directory of its own under <paramref name="root"/>, named from <paramref name="prefix"/>, rather than under the
+    /// suite's temporary root: for a test of what is read from one place alone, as a path from the account's home is.
+    /// </summary>
+    public TempDirectory(string root, string prefix)
+    {
+        Path = System.IO.Path.Combine(root, prefix + Guid.NewGuid().ToString("N")[..12]);
         Directory.CreateDirectory(Path);
     }
 

@@ -63,6 +63,8 @@ public sealed class NinjaManifest
     /// <summary>The build lines read, each with what it is evaluated with once every file is read.</summary>
     private readonly List<(BuildStatement Line, Rule? Rule, Dictionary<string, string> Bindings, Scope Scope)> _read = [];
 
+    private readonly List<(string File, string Why)> _passedOver = [];
+
     private NinjaManifest()
     {
     }
@@ -73,6 +75,7 @@ public sealed class NinjaManifest
     /// <remarks>
     /// A file the manifest names that is not there, or cannot be read, is passed over: what it would
     /// have declared is simply not known, and no object it would have said how to build is excused.
+    /// Each is named in <see cref="PassedOver"/>.
     /// </remarks>
     public static NinjaManifest Read(IFileSystem fileSystem, string buildDirectory)
     {
@@ -109,6 +112,75 @@ public sealed class NinjaManifest
 
         return _edges.GetValueOrDefault(Normalize(output));
     }
+
+    /// <summary>
+    /// Each file the manifest was to be read from and was not, as the manifest names it, with why: <c>build.ninja</c>
+    /// itself, or a file it includes, that is not there or could not be read. What such a file would have declared is not
+    /// known, so a reader to whom not knowing is no answer - one that reads what a build builds, and would take a rule
+    /// never read for a target never built - asks here first.
+    /// </summary>
+    public IReadOnlyList<(string File, string Why)> PassedOver => _passedOver;
+
+    /// <summary>Every path a build line produces, as ninja canonicalizes it, the implicit outputs too.</summary>
+    public IReadOnlyCollection<string> Outputs => _edges.Keys;
+
+    /// <summary>
+    /// The build lines that build <paramref name="outputs"/>, and every build line building what they read, however far
+    /// back - what a change reaching any of them can rebuild on the way to those outputs - each once, in the order first
+    /// reached. What a line is only ordered after is not followed: it never rebuilds the line, as <see cref="NinjaEdge.Inputs"/>
+    /// says.
+    /// </summary>
+    /// <param name="outputs">The outputs, each relative to the build directory, a target's phony name among them.</param>
+    public IReadOnlyList<NinjaEdge> Closure(IEnumerable<string> outputs)
+    {
+        ArgumentNullException.ThrowIfNull(outputs);
+
+        var seen = new HashSet<NinjaEdge>(ReferenceEqualityComparer.Instance);
+        var closure = new List<NinjaEdge>();
+        var pending = new Stack<string>(outputs.Reverse());
+
+        while (pending.TryPop(out var output))
+        {
+            if (EdgeFor(output) is not { } edge || !seen.Add(edge))
+            {
+                continue;
+            }
+
+            closure.Add(edge);
+
+            for (var index = edge.Inputs.Count - 1; index >= 0; index--)
+            {
+                pending.Push(edge.Inputs[index]);
+            }
+        }
+
+        return closure;
+    }
+
+    /// <summary>
+    /// The file <paramref name="target"/> builds: the first output of the build line that builds it, reached through each
+    /// phony line standing for exactly one other path - as CMake names a target by its own name and builds its file
+    /// elsewhere, <c>build fixture: phony bin/fixture.exe</c>. <see langword="null"/> where no build line produces it, or a
+    /// phony line stands for several paths, or for one nothing builds.
+    /// </summary>
+    /// <param name="target">The target, as <c>--target</c> names it, or a path relative to the build directory.</param>
+    public string? ArtifactOf(string target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        var edge = EdgeFor(target);
+
+        // Bounded, so phony lines naming each other - which ninja refuses as a cycle - lead nowhere.
+        for (var hops = 0; edge is { Rule: PhonyRule } && hops <= _edges.Count; hops++)
+        {
+            edge = edge.Inputs.Count == 1 ? EdgeFor(edge.Inputs[0]) : null;
+        }
+
+        return edge is { Rule: not PhonyRule, Outputs.Count: > 0 } ? edge.Outputs[0] : null;
+    }
+
+    /// <summary>The rule ninja builds nothing by: a line under it only stands for what it reads.</summary>
+    public const string PhonyRule = "phony";
 
     /// <summary>
     /// A path as ninja canonicalizes it: one kind of separator - <c>ninja -t deps</c> spells with
@@ -266,8 +338,14 @@ public sealed class NinjaManifest
     {
         var path = Path.GetFullPath(Path.Combine(buildDirectory, name));
 
-        if (!read.Add(path) || !fileSystem.FileExists(path))
+        if (!read.Add(path))
         {
+            return;
+        }
+
+        if (!fileSystem.FileExists(path))
+        {
+            _passedOver.Add((name, "is not there"));
             return;
         }
 
@@ -283,6 +361,7 @@ public sealed class NinjaManifest
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            _passedOver.Add((name, $"could not be read: {ex.Message}"));
             return;
         }
 

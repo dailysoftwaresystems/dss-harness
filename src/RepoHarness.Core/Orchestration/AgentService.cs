@@ -5,6 +5,7 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
@@ -1264,7 +1265,9 @@ public sealed class AgentService(
         WorktreeOutcome? removal = null;
 
         // Nothing is asked of delete-worktree where nothing is left for it: it would answer that no such worktree exists.
-        if (target.Standing.Kind != Standing.Gone || (await LeftAsync(target).ConfigureAwait(false)).Count > 0)
+        // A mutation worker a sweep left beside where the worktree was is something left for it, which it removes as it
+        // removes one beside a worktree still there - or leaves, saying what holds it, which keeps the agent undeleted.
+        if (target.Standing.Kind != Standing.Gone || WorkersLeft(target) || (await LeftAsync(target).ConfigureAwait(false)).Count > 0)
         {
             removal = await _worktrees
                 .DeleteAsync(target.Context.Layout.MainCheckoutRoot, target.Address.Name, force: false, deleteEvidence: false, discardUncommitted: true, CancellationToken.None)
@@ -1313,6 +1316,26 @@ public sealed class AgentService(
             + $", and it is closed, so nothing folds it again. Deal with what is named, then run {OrchestrationReports.DeleteAgentLine(record.Orchestrator, record.Name)} "
             + "again: it folds nothing, and finishes the removal or names what stops it.",
             [.. lines, .. Records(target.Layout, record)]);
+    }
+
+    /// <summary>
+    /// Whether a mutation worker is kept beside where the agent's worktree is, or was: told by its name, as deleting its
+    /// orchestrator tells one. One may be where the directory cannot be looked in - nothing else of a worktree that is
+    /// gone looks there - so delete-worktree is asked, and it is the one that says it could not look.
+    /// </summary>
+    private bool WorkersLeft(Target target)
+    {
+        var path = Path.TrimEndingDirectorySeparator(target.Path);
+
+        try
+        {
+            return Path.GetDirectoryName(path) is { Length: > 0 } beside
+                && MutationWorkers.TreesWithWorkersIn(_fileSystem, beside).Contains(Path.GetFileName(path), StringComparer.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     /// <summary>

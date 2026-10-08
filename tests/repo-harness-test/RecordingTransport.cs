@@ -192,4 +192,7 @@ internal sealed class RecordingTransport(
 
     public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default)
         => inner.ListCopiesAsync(repositoryPath, cancellationToken);
+
+    public Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
+        => inner.RemoveWorkersAsync(root, measureOnly, cancellationToken);
 }

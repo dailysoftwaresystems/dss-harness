@@ -112,7 +112,19 @@ internal sealed record BuildRecord(
     /// </summary>
     /// <param name="fileSystem">Reads the record.</param>
     /// <param name="buildDirectory">The build directory.</param>
-    public static long? BytesIn(IFileSystem fileSystem, string buildDirectory)
+    public static long? BytesIn(IFileSystem fileSystem, string buildDirectory) => In(fileSystem, buildDirectory)?.Bytes;
+
+    /// <summary>
+    /// When the newest file the build that last finished in <paramref name="buildDirectory"/> left was written, as it
+    /// recorded it, or <see langword="null"/> where nothing did: what a file dated forward must be dated past, so no
+    /// output of that build is dated after it.
+    /// </summary>
+    /// <param name="fileSystem">Reads the record.</param>
+    /// <param name="buildDirectory">The build directory.</param>
+    public static DateTime? NewestIn(IFileSystem fileSystem, string buildDirectory) => In(fileSystem, buildDirectory)?.Newest?.LastWriteTimeUtc;
+
+    /// <summary>The record in <paramref name="buildDirectory"/>, or <see langword="null"/> where there is none, or it cannot be read.</summary>
+    private static BuildRecord? In(IFileSystem fileSystem, string buildDirectory)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
 
@@ -120,7 +132,7 @@ internal sealed record BuildRecord(
 
         try
         {
-            return fileSystem.FileExists(record) ? Parse(fileSystem.ReadAllText(record)).Bytes : null;
+            return fileSystem.FileExists(record) ? Parse(fileSystem.ReadAllText(record)) : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

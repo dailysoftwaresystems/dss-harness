@@ -106,6 +106,12 @@ public sealed class HarnessConfig
     public AnchorSettings Anchors { get; init; } = new();
 
     /// <summary>
+    /// Mutation testing: the arms registry <c>check-mutations</c> drives, its texts, the worker copies a leg sweeps
+    /// with, and how a test binary writes the report each arm is judged by.
+    /// </summary>
+    public MutationSettings Mutations { get; init; } = new();
+
+    /// <summary>
     /// The directories under <c>.harness-config/sshItems</c> holding each ssh host's connection data,
     /// named here rather than described here: an address, a user and a key are not the repository's
     /// business, and the tracked configuration must never carry them.
@@ -119,17 +125,17 @@ public sealed class HarnessConfig
     public List<string> WslDistros { get; init; } = [];
 
     /// <summary>
-    /// Patterns whose every match is pulled out of a build's output when <c>build --time</c> runs, so
-    /// timings come from what the build itself reported rather than from the harness guessing which
-    /// part of the wall clock was the build. Configured with none, <c>--time</c> measures the phases
-    /// itself.
+    /// Patterns whose every match on a line is pulled out of a build's output when <c>build --time</c>
+    /// runs - a line at a time, the first 10,000 marks of a phase - so timings come from what the build
+    /// itself reported rather than from the harness guessing which part of the wall clock was the
+    /// build. Configured with none, <c>--time</c> measures the phases itself.
     /// </summary>
     public List<string> BuildTimingRegex { get; init; } = [];
 
-    /// <summary>Patterns whose every match is pulled out of a predefined run's output under <c>--time</c>.</summary>
+    /// <summary>Patterns whose every match on a line is pulled out of a predefined run's output under <c>--time</c>, as a build's are.</summary>
     public List<string> RunTimingRegex { get; init; } = [];
 
-    /// <summary>Patterns whose every match is pulled out of a test's output under <c>--time</c>.</summary>
+    /// <summary>Patterns whose every match on a line is pulled out of a test's output under <c>--time</c>, as a build's are.</summary>
     /// <remarks>
     /// Separate from <see cref="BuildTimingRegex"/> because <c>test</c> builds first and then tests:
     /// one pattern list covering both would attribute a build's marks to the test phase, and the

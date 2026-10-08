@@ -4,9 +4,11 @@ using NSubstitute;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
@@ -469,22 +471,146 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
-    /// A file listed in the tree and gone when it is opened, while the tree is read, is a tree that moved, said so:
-    /// raised raw, it read as a defect in this tool.
+    /// A file listed in the tree and gone when it is opened, while the tree is read - itself, or with the directory it
+    /// was in - is a tree that moved, said so: raised raw, it read as a defect in this tool.
     /// </summary>
-    [Fact]
-    public async Task AFileGoneBetweenBeingListedAndOpened_IsATreeThatMovedWhileItWasRead()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileGoneBetweenBeingListedAndOpened_IsATreeThatMovedWhileItWasRead(bool withItsDirectory)
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, _) = await PrepareAsync(temp, cancellationToken);
-        var service = SyncKit.Service(harness, fileSystem: new GoneWhenOpened(harness.FileSystem, Path.Combine(temp.Path, "src", "a.c")));
+        var service = SyncKit.Service(harness, fileSystem: new GoneWhenOpened(harness.FileSystem, Path.Combine(temp.Path, "src", "a.c"), withItsDirectory));
 
         var moved = await Assert.ThrowsAsync<HarnessException>(() => service.ReadSourceAsync(temp.Path, cancellationToken));
 
         Assert.Equal(LegExit.InputsMoved, moved.ExitCode);
         Assert.Contains("changed while it was read", moved.Message, StringComparison.Ordinal);
         Assert.Contains("a.c", moved.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A directory that is no tree of its own is read and carried as a tree's files are: by content, a file the copy
+    /// holds as it was read never rewritten, one changed written, and one the reading has none of deleted with the
+    /// directory it leaves empty - and never a repository's own .git. A directory named build is carried as any other:
+    /// only a tree's configuration withholds one. The copy is given no marker and no repository of its own.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryThatIsNoTree_IsCarriedByContent_ButForARepositorysOwnGit()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var service = SyncKit.Service(harness);
+        var source = temp.Combine("deps", "json-src");
+        var copy = temp.Combine("worker", ".harness-config", "deps", "json");
+
+        temp.WriteFile(Path.Combine("deps", "json-src", "CMakeLists.txt"), "project(json)\n");
+        temp.WriteFile(Path.Combine("deps", "json-src", "build", "cmake", "config.cmake"), "set(X 1)\n");
+        temp.WriteFile(Path.Combine("deps", "json-src", "include", "json.hpp"), "#pragma once\n");
+        temp.WriteFile(Path.Combine("deps", "json-src", ".git", "HEAD"), "ref: refs/heads/main\n");
+
+        var reading = await service.ReadDirectoryAsync(source, cancellationToken);
+
+        Assert.Equal(source, reading.Root);
+        Assert.Equal(["CMakeLists.txt", "build/cmake/config.cmake", "include/json.hpp"], reading.Paths);
+
+        await service.SyncDirectoryAsync(reading, SyncKit.Transport(harness), copy, cancellationToken);
+
+        Assert.Equal("project(json)\n", File.ReadAllText(Path.Combine(copy, "CMakeLists.txt")));
+        Assert.Equal("set(X 1)\n", File.ReadAllText(Path.Combine(copy, "build", "cmake", "config.cmake")));
+        Assert.Equal(["CMakeLists.txt", "build", "include"], Directory.EnumerateFileSystemEntries(copy).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+
+        // Synced again from a later reading.
+        var kept = Path.Combine(copy, "CMakeLists.txt");
+        var written = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
+        File.SetLastWriteTimeUtc(kept, written);
+        File.WriteAllText(Path.Combine(source, "include", "json.hpp"), "#pragma once\n#define JSON 2\n");
+        Directory.Delete(Path.Combine(source, "build"), recursive: true);
+        File.WriteAllText(Path.Combine(copy, "stray.txt"), "nobody's");
+
+        await service.SyncDirectoryAsync(await service.ReadDirectoryAsync(source, cancellationToken), SyncKit.Transport(harness), copy, cancellationToken);
+
+        Assert.Equal(written, File.GetLastWriteTimeUtc(kept));
+        Assert.Equal("#pragma once\n#define JSON 2\n", File.ReadAllText(Path.Combine(copy, "include", "json.hpp")));
+        Assert.Equal(["CMakeLists.txt", "include"], Directory.EnumerateFileSystemEntries(copy).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A file of such a directory that no longer holds what was read of it stops its sync, naming it, as a tree that
+    /// moved stops a tree's; a file gone as the directory is read is a directory that moved; and a directory that is
+    /// gone is never read as an empty one, which every copy made of it would be emptied to match.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryThatMovedSinceItWasRead_StopsItsSync_AndOneThatIsGoneIsNotReadAsEmpty()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var service = SyncKit.Service(harness);
+        var source = temp.Combine("deps", "json-src");
+        var copy = temp.Combine("worker", ".harness-config", "deps", "json");
+        var file = temp.WriteFile(Path.Combine("deps", "json-src", "CMakeLists.txt"), "project(json)\n");
+
+        var reading = await service.ReadDirectoryAsync(source, cancellationToken);
+
+        // An edit of the same size: its size alone would not tell it.
+        File.WriteAllText(file, "project(JSON)\n");
+
+        var moved = await Assert.ThrowsAsync<HarnessException>(() => service.SyncDirectoryAsync(reading, SyncKit.Transport(harness), copy, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, moved.ExitCode);
+        Assert.Equal(
+            $"{HostId.Local}: 'CMakeLists.txt' changed after '{source}' was read for this command, before it was carried to '{copy}', so "
+            + "that copy cannot be made what was read. It is left part made, until it is synced again. Let it settle, then run again.",
+            moved.Message);
+
+        var opened = await Assert.ThrowsAsync<HarnessException>(
+            () => SyncKit.Service(harness, fileSystem: new GoneWhenOpened(harness.FileSystem, file)).ReadDirectoryAsync(source, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, opened.ExitCode);
+        Assert.Contains("changed while it was read", opened.Message, StringComparison.Ordinal);
+
+        Directory.Delete(source, recursive: true);
+
+        var gone = await Assert.ThrowsAsync<HarnessException>(() => service.ReadDirectoryAsync(source, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, gone.ExitCode);
+        Assert.Equal($"'{source}' is no longer there to be read. Let it settle, then run again.", gone.Message);
+    }
+
+    /// <summary>
+    /// A copy of such a directory that does not hold what was read, once its sync has written it, fails the sync, as
+    /// a tree's copy does - saying the directory it was to be a copy of, which is no tree.
+    /// </summary>
+    [Fact]
+    public async Task ACopyOfADirectoryThatDoesNotHoldWhatWasRead_FailsItsSync()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var service = SyncKit.Service(harness);
+        var source = temp.Combine("deps", "json-src");
+        var copy = temp.Combine("worker", ".harness-config", "deps", "json");
+
+        temp.WriteFile(Path.Combine("deps", "json-src", "CMakeLists.txt"), "project(json)\n");
+        temp.WriteFile(Path.Combine("deps", "json-src", "include", "json.hpp"), "#pragma once\n");
+
+        var reading = await service.ReadDirectoryAsync(source, cancellationToken);
+
+        // Everything the real transport does, except that the reading its verification compares comes back a file short.
+        var transport = new RecordingTransport(SyncKit.Transport(harness), losesAFileWhenVerifying: true);
+
+        var unmatched = await Assert.ThrowsAsync<HarnessException>(() => service.SyncDirectoryAsync(reading, transport, copy, cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, unmatched.ExitCode);
+        Assert.Equal(
+            $"The copy at '{copy}' on {HostId.Local} does not match what was read of '{source}' after the sync: 1 file(s) still differ: "
+            + "CMakeLists.txt. Nothing should be run against it.",
+            unmatched.Message);
     }
 
     /// <summary>
@@ -562,13 +688,16 @@ public sealed class SyncServiceTests
         }
     }
 
-    /// <summary>The real file system, save that one file, listed as ever, is gone when it is opened.</summary>
-    private sealed class GoneWhenOpened(Core.FileSystem.IFileSystem inner, string gone) : PassThroughFileSystem(inner)
+    /// <summary>
+    /// The real file system, save that one file, listed as ever, is gone when it is opened - or, where
+    /// <paramref name="withItsDirectory"/>, the directory it was in is, which is raised as no kind of the other.
+    /// </summary>
+    private sealed class GoneWhenOpened(Core.FileSystem.IFileSystem inner, string gone, bool withItsDirectory = false) : PassThroughFileSystem(inner)
     {
         public override Stream OpenRead(string path)
-            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(gone), StringComparison.OrdinalIgnoreCase)
-                ? throw new FileNotFoundException($"Could not find file '{path}'.", path)
-                : base.OpenRead(path);
+            => !string.Equals(Path.GetFullPath(path), Path.GetFullPath(gone), StringComparison.OrdinalIgnoreCase) ? base.OpenRead(path)
+                : withItsDirectory ? throw new DirectoryNotFoundException($"Could not find a part of the path '{path}'.")
+                : throw new FileNotFoundException($"Could not find file '{path}'.", path);
     }
 
     [Fact]
@@ -1966,6 +2095,11 @@ public sealed class SyncServiceTests
 
         Assert.Equal(HarnessExit.HostUnavailable, refusal.ExitCode);
         Assert.Contains("did not answer with what", refusal.Message, StringComparison.Ordinal);
+
+        // The answer is one line, which can be a whole file's content, and is read whole; what the host says on standard
+        // error is shown as it comes, and only its end is kept.
+        var (_, command) = Assert.Single(commands.Calls);
+        Assert.Equal((StreamKept.Whole, StreamKept.Tail), (command.OutputKept, command.ErrorKept));
     }
 
     /// <summary>
@@ -3092,6 +3226,81 @@ public sealed class SyncServiceTests
         Assert.Equal(
             [".harness-config/runner/actions/probe/probe.yml", "src/a.c"],
             manifest.Entries.Keys.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A sync that cannot ask git what it ignores in the tree is refused, as a failure, before anything is carried: read
+    /// as a tree git ignores nothing in, every build directory and local file in it would be copied to a host.
+    /// </summary>
+    [Fact]
+    public async Task ASyncWhereGitCannotSayWhatItIgnores_IsRefused_CarryingNothing()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, _) = await PrepareAsync(temp, cancellationToken);
+        var copy = SyncKit.CopyPath(temp);
+        var git = new InterceptingGitClient(harness.GitClient)
+        {
+            InsteadOfRun = arguments => arguments is ["ls-files", "--others", "--ignored", ..] ? new GitCommandResult(128, string.Empty, "fatal: the index is locked") : null,
+        };
+
+        try
+        {
+            var refusal = await Assert.ThrowsAsync<HarnessException>(
+                () => SyncKit.Service(harness, git: git).SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken));
+
+            Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+            Assert.StartsWith("What git ignores in '", refusal.Message, StringComparison.Ordinal);
+            Assert.EndsWith(
+                "' could not be listed, so a sync cannot tell which files are local to this machine: fatal: the index is locked",
+                refusal.Message,
+                StringComparison.Ordinal);
+            Assert.False(Directory.Exists(copy));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// What git ignores is asked of the tree being synced, never of the main checkout it is a worktree of: a worktree
+    /// whose rules differ leaves behind what its own rules ignore, and carries what only the main checkout's would.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeSync_LeavesBehindWhatTheWorktreesOwnRulesIgnore_NotTheMainCheckouts()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
+        var copy = Path.GetFullPath(SyncKit.CopyPath(temp));
+
+        try
+        {
+            await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", worktree], cancellationToken);
+
+            // The main checkout ignores a directory of drafts, which holds something there.
+            temp.WriteFile(".gitignore", "build/\ndrafts/\n");
+            temp.WriteFile(Path.Combine("drafts", "main.txt"), "the main checkout's\n");
+
+            // The worktree's own rules say otherwise: its notes are local to it, and its drafts are not.
+            File.WriteAllText(Path.Combine(worktree, ".gitignore"), "build/\n*.local\n");
+            File.WriteAllText(Path.Combine(worktree, "notes.local"), "mine\n");
+            Directory.CreateDirectory(Path.Combine(worktree, "drafts"));
+            File.WriteAllText(Path.Combine(worktree, "drafts", "kept.txt"), "carried\n");
+
+            await service.SyncAsync(worktree, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
+
+            Assert.True(File.Exists(Path.Combine(copy, "src", "a.c")));
+            Assert.False(File.Exists(Path.Combine(copy, "notes.local")), "what the worktree's own rules ignore was carried");
+            Assert.True(File.Exists(Path.Combine(copy, "drafts", "kept.txt")), "what only the main checkout's rules ignore was left behind");
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(worktree);
+        }
     }
 
     private static async Task<(HarnessFactory Harness, ISyncService Service)> PrepareAsync(

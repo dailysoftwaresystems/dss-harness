@@ -3,6 +3,7 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
@@ -592,6 +593,49 @@ public sealed class LegsServiceTests
         Assert.Equal(
             "/home/pi/repo/build/arm64-none-debug",
             Assert.Single(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds));
+    }
+
+    /// <summary>
+    /// A sweep of a leg's mutation arms fills its first worker's build directory, never the leg's own: the host is asked
+    /// about that one too, and the leg is placed by the room its build still needs - the least a sweep runs with - where
+    /// the leg's own build, which needs it all, is turned away.
+    /// </summary>
+    [Fact]
+    public async Task ASweep_IsPlacedByTheRoomItsFirstWorkersBuildStillNeeds()
+    {
+        const string Worker = "/home/pi/repo.mutation-aa1fa54w-1/build/arm64-none-debug";
+
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },
+            rooms: (_, path) => path == Worker ? Room(path, exists: true, recorded: 4L << 30, free: 3) : Room(path, exists: false, recorded: null, free: 3));
+
+        var sweeping = await fixture.Service.CheckAsync(Root, null, MutationService.Workload, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Contains(Worker, fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
+        Assert.True(Assert.Single(sweeping.Placements).Runnable, Assert.Single(sweeping.Placements).Reason);
+
+        var building = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(Worker, fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
+        Assert.False(Assert.Single(building.Placements).Runnable);
+    }
+
+    /// <summary>
+    /// A self-test of the sweep builds the fixture this tool carries, never the leg's tree: no host is asked about a build
+    /// directory of the leg's, and a leg whose own build would not fit is placed, with no room carried to its admission.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTest_IsPlacedByNoRoomABuildOfTheLegsTreeNeeds()
+    {
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },
+            rooms: (_, path) => Room(path, exists: false, recorded: null, free: 3));
+
+        var testing = await fixture.Service.CheckAsync(Root, null, MutationService.SelfTestWorkload, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Empty(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
+        Assert.True(Assert.Single(testing.Placements).Runnable, testing.Placements[0].Reason);
+        Assert.Null(testing.Placements[0].Need);
     }
 
     /// <summary>What a host answers about a build directory: whether it is there, what it recorded, the room on '/'.</summary>

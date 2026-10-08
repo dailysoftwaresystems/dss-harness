@@ -1,3 +1,4 @@
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Testing;
 
 namespace RepoHarness.Tests;
@@ -23,7 +24,34 @@ public sealed class CtestTests
     [InlineData("ctest", "", false)]
     [InlineData("dart", "No tests were found!!!", false)]
     public void FoundNone_ReadsCtestsOwnLine(string runner, string output, bool foundNone)
-        => Assert.Equal(foundNone, Ctest.FoundNone(runner, output));
+        => Assert.Equal(foundNone, Ctest.FoundNone(runner, PhaseOutput.Of(output)));
+
+    /// <summary>
+    /// Output that could not be read back says nothing of ctest having found no test: the phase's own verdict stands,
+    /// unexplained, and never ends as a defect of this tool's over a sentence that only explains it. Nor does output
+    /// that said so and then could not be read on: a summary after that line would have said tests ran.
+    /// </summary>
+    [Fact]
+    public void FoundNone_IsNotSaidOfOutputThatCouldNotBeReadBack()
+    {
+        Assert.False(Ctest.FoundNone("ctest", new PhaseOutputTests.Unread()));
+        Assert.False(Ctest.FoundNone("ctest", new PhaseOutputTests.UnreadAfter("No tests were found!!!")));
+    }
+
+    /// <summary>
+    /// ctest's summary settles that tests ran, and nothing after it is read: a suite's output can be larger than any text
+    /// the harness could hold.
+    /// </summary>
+    [Fact]
+    public void FoundNone_ReadsNoFurtherThanCtestsSummary()
+        => Assert.False(
+            Ctest.FoundNone(
+                "ctest",
+                new PhaseOutputTests.ReadUpTo(
+                    line => line.Contains("tests passed", StringComparison.Ordinal),
+                    "No tests were found!!!",
+                    "50% tests passed, 1 tests failed out of 2",
+                    "Total Test time (real) =   0.02 sec")));
 
     /// <summary>
     /// One pattern leaves out every test another chooses, as far as their spelling tells, where the two are spelled the

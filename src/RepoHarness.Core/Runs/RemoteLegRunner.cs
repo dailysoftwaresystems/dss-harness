@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Runs;
@@ -35,6 +36,14 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// </remarks>
     public const string HereOption = "--here";
 
+    /// <summary>
+    /// The most lines a host's failure line is held with, until its command has said whether it ended there. A failure is
+    /// the last thing a command says, and no failure of this tool's runs to this many lines; one followed by more was
+    /// printed by the command's own work - a run of this tool inside a test suite prints one - and holding everything after
+    /// it would hold the rest of what the run prints, which under --verbose is every line of every step.
+    /// </summary>
+    public const int MostHeldLines = 200;
+
     private static readonly JsonSerializerOptions LedgerOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -52,8 +61,10 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <exception cref="HarnessException">
     /// The host could not be reached - its transport would not start - or never reported how the
     /// command finished, or reported a ledger this build cannot read. None is a verdict about the
-    /// code, so none is reported as one. Or the command refused the whole run there, which is raised
-    /// as that refusal, with what the host said.
+    /// code, so none is reported as one. Or the command refused the whole run there with no line for
+    /// the leg, which is raised as that refusal, with what the host said; one that came with the
+    /// leg's line is carried on it (<see cref="LegEntry.EndsTheRun"/>), and ends the run once the
+    /// line is recorded.
     /// </exception>
     public async Task<LegEntry> RunAsync(
         string commandName,
@@ -108,6 +119,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                     StandardInput = request + "\n",
                     HoldStandardInputOpen = true,
 
+                    // What the host's command prints is relayed line by line, under --verbose every line of
+                    // every step, and the end of it is all the result keeps; its ledger arrives whole, a
+                    // line at a time, and is kept below.
+                    ErrorKept = StreamKept.Tail,
+
                     // Kept rather than echoed: the host writes its ledger to standard output, and
                     // this end reports one ledger for the whole run rather than one per machine.
                     OnOutputLine = line =>
@@ -148,6 +164,14 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                         {
                             failure.Add(line);
                             held.Add(line);
+
+                            // Past what any conclusion runs to, it is known to be none: shown after all, in
+                            // order, and what follows is shown as it comes.
+                            if (held.Count > MostHeldLines)
+                            {
+                                Show(held);
+                                failure.Clear();
+                            }
                         }
                         else
                         {
@@ -160,8 +184,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
         // A command that ended badly ends on its failure line, with what follows it, and that is the host's conclusion:
         // this machine says how the leg ended itself - by the leg's own line where the host's ledger has an entry for
-        // it, and otherwise in the refusal raised from what the host said - so it is never shown. Shown as well, it was
-        // said twice, and a host's summary of its one leg read as this run's. Anything else held is shown, late.
+        // it, and in the refusal raised from what the host said where the host refused the run, with a line or with
+        // none - so it is never shown. Shown as well, it was said twice, and a host's summary of its one leg read as
+        // this run's. Anything else held is shown, late.
         if (lines.Finished is null or HarnessExit.Success)
         {
             Show(held);
@@ -206,7 +231,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="failure">What its failure line said, and every line after it, when it wrote one.</param>
     /// <exception cref="HarnessException">
     /// The host wrote no entry for the leg. A refusal of the whole run there is raised as that same
-    /// refusal; anything else as a host that said nothing about the leg.
+    /// refusal; anything else as a host that said nothing about the leg. A refusal that came with an
+    /// entry is no exception here: the entry carries it.
     /// </exception>
     private static LegEntry Read(string output, PlacedLeg leg, HostConnection connection, string commandName, int exitCode, string? failure)
     {
@@ -239,10 +265,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             // behind on the host's error stream.
             if (HarnessExit.RefusesTheRun(exitCode))
             {
-                throw new HarnessException(
-                    exitCode,
-                    $"{leg.Host.Host} refused '{commandName}' for leg '{leg.Name}': "
-                    + (failure ?? $"it exited {exitCode} and said nothing more"));
+                throw Refusal(leg, commandName, exitCode, failure);
             }
 
             // The exit code is named because it may be the only thing the host did say. A copy with
@@ -267,6 +290,14 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         {
             Leg = leg.Name,
             Verdict = verdict,
+
+            // A refusal of the run the host made once the leg had its line - a sweep that had judged arms by then - is
+            // this run's refusal as one with no line is: the line is this leg's, and the refusal ends the run after it,
+            // in the host's own words. The host's document says which it is - written where something other than its
+            // legs ended the run, it names no verdict of its own - and the code it ended with is then the refusal's. A
+            // run that reported on its legs names its verdict, and a refusal's code there is that verdict's own: a leg
+            // left for a lock held there, which is this leg's line and ends no run.
+            EndsTheRun = ledger!.Verdict is null && HarnessExit.RefusesTheRun(exitCode) ? Refusal(leg, commandName, exitCode, failure) : null,
 
             // Why a leg did not run there is that host's reason, and is named by the host this
             // machine knows: the host places the leg on itself, and has no name for itself but
@@ -306,15 +337,42 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
             // Relative to the tree, which is the same path in this machine's tree: what sync --pull takes.
             KeptOutputs = [.. entry.KeptOutputs ?? []],
+
+            // Each arm the host's sweep was asked about, as it judged it there: its records stay on that host, named as
+            // the host names them, and its detail named by the host this machine knows, as the leg's is.
+            Arms = [.. (entry.Arms ?? []).Select(arm => new ArmEntry
+            {
+                Arm = arm.Arm ?? string.Empty,
+                Verdict = Verdicts.Parse(arm.Verdict) ?? LegVerdict.Poisoned,
+                Detail = HostProbes.AsConfigured(arm.Detail ?? string.Empty, connection),
+                Duration = TimeSpan.FromSeconds(arm.DurationSeconds),
+                Worker = arm.Worker,
+                Cases = arm.Cases,
+                DeclaredCases = arm.DeclaredCases,
+                Reds = arm.Reds,
+                DeclaredReds = [.. arm.DeclaredReds ?? []],
+                Records = arm.Records,
+            })],
         };
     }
+
+    /// <summary>A host's refusal of the whole run, as this run's: the code it ended with, and what it said.</summary>
+    private static HarnessException Refusal(PlacedLeg leg, string commandName, int exitCode, string? failure)
+        => new(
+            exitCode,
+            $"{leg.Host.Host} refused '{commandName}' for leg '{leg.Name}': " + (failure ?? $"it exited {exitCode} and said nothing more"));
 
     /// <summary>The shape a host's ledger arrives in, read back by name rather than by position.</summary>
     /// <param name="Legs">Each leg's line.</param>
     /// <param name="RunDirectory">Where the host's own run keeps its records, when it got that far.</param>
+    /// <param name="Verdict">
+    /// The verdict of the host's run, which a run that reported on its legs names; <see langword="null"/> where
+    /// something other than its legs ended it, as <see cref="LedgerReport"/> writes such a run.
+    /// </param>
     private sealed record RemoteLedger(
         [property: JsonPropertyName("legs")] IReadOnlyList<RemoteLedgerLeg>? Legs,
-        [property: JsonPropertyName("runDirectory")] string? RunDirectory = null);
+        [property: JsonPropertyName("runDirectory")] string? RunDirectory = null,
+        [property: JsonPropertyName("verdict")] string? Verdict = null);
 
     /// <summary>One leg's line of a host's ledger.</summary>
     private sealed record RemoteLedgerLeg(
@@ -335,5 +393,19 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<string>? RanSteps = null,
         BuildSpace? Space = null,
         IReadOnlyList<string>? KeptOutputs = null,
-        AdmissionFact? Admission = null);
+        AdmissionFact? Admission = null,
+        IReadOnlyList<RemoteLedgerArm>? Arms = null);
+
+    /// <summary>One arm's line of a host's sweep, beneath its leg's.</summary>
+    private sealed record RemoteLedgerArm(
+        string? Arm,
+        string? Verdict,
+        string? Detail,
+        double DurationSeconds,
+        int? Worker,
+        int? Cases,
+        int DeclaredCases,
+        IReadOnlyList<string>? Reds,
+        IReadOnlyList<string>? DeclaredReds,
+        string? Records);
 }

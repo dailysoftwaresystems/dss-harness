@@ -136,6 +136,204 @@ public sealed class LegAdmissionTests
     }
 
     /// <summary>
+    /// A long wait says where it stands again at least every five minutes - with the memory in use as read now, and how
+    /// long of the time it may wait it has waited - so a wait never goes silent for long: measured, a reader's pipe
+    /// passed a line on only once the next one came, and a leg's one line of a 39-minute wait arrived with its admission.
+    /// </summary>
+    [Fact]
+    public async Task ALongWaitForTheMemory_SaysWhereItStandsAgain_EveryFiveMinutes()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        // Read every 30 seconds: 84.1% at first, 83% for the next 21 reads, then 75.9%.
+        double?[] readings = [84.1, .. Enumerable.Repeat<double?>(83, 21), 75.9];
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(readings), clock)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said), TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(
+            [
+                "holds a heavy-leg slot, and waits for the memory 84.1% in use (84.1 of 100 by the test) to fall below 76%",
+                "holds a heavy-leg slot, and still waits for the memory 83.0% in use (83 of 100 by the test) to fall below 76%, after 5m00s of the 1h00m it may wait",
+                "holds a heavy-leg slot, and still waits for the memory 83.0% in use (83 of 100 by the test) to fall below 76%, after 10m00s of the 1h00m it may wait",
+                "admitted after 11m00s, memory 75.9% in use (75.9 of 100 by the test)",
+            ],
+            said);
+    }
+
+    /// <summary>
+    /// A wait for a slot whose holders stay the same says so again at least every five minutes too, naming them, as it
+    /// does whenever they change.
+    /// </summary>
+    [Fact]
+    public async Task ALongWaitForASlot_SaysWhoHoldsThemAgain_EveryFiveMinutes()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"));
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, pollSeconds: 60, maxWaitMinutes: 12), said), TestContext.Current.CancellationToken);
+
+        Assert.False(admitted.Fact.Admitted);
+        Assert.Collection(
+            said,
+            line => Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
+            line => Assert.StartsWith("still waits for one of this machine's 1 heavy-leg slot(s), after 5m00s of the 12m00s it may wait, 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
+            line => Assert.StartsWith("still waits for one of this machine's 1 heavy-leg slot(s), after 10m00s of the 12m00s it may wait, 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A machine that looks rarely - a poll of an hour - still has a waiting leg say where it stands every five minutes,
+    /// whatever it waits for: a slot, the memory, a count of the memory that stopped reading, room, or room where the
+    /// memory was never read. Each wait before a look is cut at when the wait is next due to say so; cut only at what is
+    /// left of the wait, a leg's one line of a 22-minute wait came with its refusal.
+    /// </summary>
+    [Theory]
+    [InlineData("a slot", "still waits for one of this machine's 1 heavy-leg slot(s)")]
+    [InlineData("the memory", "holds a heavy-leg slot, and still waits for the memory 83.0% in use (83 of 100 by the test) to fall below 76%")]
+    [InlineData("a reading lost", "holds a heavy-leg slot, and still could not read the memory in use again")]
+    [InlineData("room", "holds a heavy-leg slot, and still waits for room")]
+    [InlineData("room, the memory unread", "holds a heavy-leg slot, and still waits for room")]
+    public async Task AMachineThatLooksRarely_StillSaysWhereAWaitStands_EveryFiveMinutes(string waitingFor, string saidAgain)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<(TimeSpan At, string Line)>();
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        var forRoom = waitingFor.StartsWith("room", StringComparison.Ordinal);
+
+        if (waitingFor == "a slot")
+        {
+            AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"));
+        }
+
+        if (forRoom)
+        {
+            AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
+        }
+
+        var gauge = waitingFor switch
+        {
+            "the memory" => new ScriptedGauge(83),
+            "a reading lost" => new ScriptedGauge(90, null),
+            "room, the memory unread" => new ScriptedGauge([null]),
+            _ => new ScriptedGauge(30),
+        };
+        var rule = AdmissionKit.Rule(heavyLegs: waitingFor == "a slot" ? 1 : 2, settleLeast: 0, settleMost: 0, pollSeconds: 3600, maxWaitMinutes: 22);
+        var request = AdmissionKit.Request(rule, [], room: forRoom ? AdmissionKit.Room(10) : null) with { Progress = line => said.Add((clock.Moved, line)) };
+
+        using var refused = await AdmissionKit.Admission(harness, record, gauge, clock, fileSystem: room).AdmitAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Fact.Admitted);
+        Assert.Equal(TimeSpan.FromMinutes(22), clock.Moved);
+
+        // Said as the wait began, and then every five minutes - a reading lost, first as the memory it read, then as lost.
+        Assert.Equal([.. Enumerable.Range(0, 5).Select(line => TimeSpan.FromMinutes(5 * line))], said.Select(line => line.At));
+        Assert.All(
+            said.Skip(waitingFor == "a reading lost" ? 2 : 1),
+            line =>
+            {
+                Assert.StartsWith(saidAgain, line.Line, StringComparison.Ordinal);
+                Assert.Contains($", after {line.At.TotalMinutes:0}m00s of the 22m00s it may wait", line.Line, StringComparison.Ordinal);
+            });
+    }
+
+    /// <summary>
+    /// A wait before a look is the machine's poll, cut at what is left of the wait and at when the wait is next due to
+    /// say where it stands, counted from when it last did - and nothing where that line is due already, as the time
+    /// that passes between a look and its wait can make it: a poll waited out then would hold the line back for as long
+    /// as the machine's poll is.
+    /// </summary>
+    [Theory]
+    [InlineData(30, 600, 0, 30)]
+    [InlineData(3600, 600, 0, 300)]
+    [InlineData(240, 600, 240, 60)]
+    [InlineData(240, 600, 60, 240)]
+    [InlineData(3600, 120, 0, 120)]
+    [InlineData(3600, 120, 240, 60)]
+    [InlineData(3600, 600, 300, 0)]
+    [InlineData(3600, 600, 301, 0)]
+    [InlineData(30, 600, 3600, 0)]
+    [InlineData(3600, 0, 0, 0)]
+    [InlineData(3600, -1, 0, 0)]
+    public void AWaitBeforeALook_IsThePoll_CutAtWhatIsLeft_AndAtWhenItsLineIsDue(int poll, int left, int sinceSaid, int waited)
+        => Assert.Equal(
+            TimeSpan.FromSeconds(waited),
+            LegAdmission.Pause(TimeSpan.FromSeconds(poll), TimeSpan.FromSeconds(left), TimeSpan.FromSeconds(sinceSaid)));
+
+    /// <summary>
+    /// A poll that five minutes is no multiple of is cut at when the line is due, counted from the leg's last line and
+    /// not from the look before: looking every four minutes, a leg looks at four and again at five, where it says so.
+    /// </summary>
+    [Fact]
+    public async Task APollFiveMinutesIsNoMultipleOf_IsCutAtWhenTheLineIsDue_CountedFromTheLastLine()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<TimeSpan>();
+        var looked = new List<TimeSpan>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "first"));
+
+        var rule = AdmissionKit.Rule(heavyLegs: 1, pollSeconds: 240, maxWaitMinutes: 12);
+        var request = AdmissionKit.Request(rule, []) with { Progress = _ => said.Add(clock.Moved) };
+
+        using var refused = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock, onWait: () => looked.Add(clock.Moved))
+            .AdmitAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.False(refused.Fact.Admitted);
+        Assert.Equal([.. new[] { 4, 5, 9, 10, 12 }.Select(minute => TimeSpan.FromMinutes(minute))], looked);
+        Assert.Equal([.. new[] { 0, 5, 10 }.Select(minute => TimeSpan.FromMinutes(minute))], said);
+    }
+
+    /// <summary>
+    /// A settle longer than five minutes is waited whole - the memory is read again only once all of it has passed - and
+    /// in pieces of at most five, the leg saying between them that it still waits to look, and how long it has waited.
+    /// </summary>
+    [Fact]
+    public async Task ASettleLongerThanFiveMinutes_IsWaitedWhole_SayingSoEveryFiveMinutes()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<(TimeSpan At, string Line)>();
+        var gauge = new ScriptedGauge(60, 70);
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "neighbour"));
+
+        var rule = AdmissionKit.Rule(settleLeast: 720, settleMost: 720, pollSeconds: 3600, maxWaitMinutes: 120);
+        var request = AdmissionKit.Request(rule, []) with { Progress = line => said.Add((clock.Moved, line)) };
+
+        using var admitted = await AdmissionKit.Admission(harness, record, gauge, clock).AdmitAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(2, gauge.Reads);
+        Assert.Equal(
+            [
+                (TimeSpan.Zero, "memory 60.0% in use (60 of 100 by the test); another leg holds a slot, so it looks again in 12m00s"),
+                (TimeSpan.FromMinutes(5), "another leg holds a slot, so it still looks again in 7m00s, after 5m00s of the 2h00m it may wait"),
+                (TimeSpan.FromMinutes(10), "another leg holds a slot, so it still looks again in 2m00s, after 10m00s of the 2h00m it may wait"),
+                (TimeSpan.FromMinutes(12), "admitted after 12m00s, memory 70.0% in use (70 of 100 by the test)"),
+            ],
+            said);
+    }
+
+    /// <summary>
     /// Where another leg holds a slot, a reading below the limit is read again after a settle, and the leg starts only
     /// if it still is: two legs taking their slots together would otherwise both start on one reading. One whose
     /// reading rose during the settle goes on waiting.
@@ -164,6 +362,34 @@ public sealed class LegAdmissionTests
         // Settled twice, and polled once between: the first settle's second reading was above the limit.
         Assert.Equal(TimeSpan.FromSeconds(20 + 30 + 20), clock.Moved);
         Assert.Equal(2, said.Count(line => line.Contains("another leg holds a slot, so it looks again in 20s", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A unit asking not to settle - an arm of a sweep its machine already took once - starts on its first reading below
+    /// the limit, whoever holds a slot beside it: the slots it would wait out are its own sweep's. One above the limit
+    /// still waits for the memory, as any leg does.
+    /// </summary>
+    [Fact]
+    public async Task AUnitAskingNotToSettle_StartsOnItsFirstReadingBelowTheLimit()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "mine/first-arm"));
+
+        var gauge = new ScriptedGauge(79, 60);
+
+        using var admitted = await AdmissionKit.Admission(harness, record, gauge, clock, settle: TimeSpan.FromSeconds(20))
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 2, pollSeconds: 30), said) with { Settle = false }, TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(60, admitted.Fact.MemoryPercent);
+        Assert.Equal(2, gauge.Reads);
+        Assert.Equal(TimeSpan.FromSeconds(30), clock.Moved);
+        Assert.DoesNotContain(said, line => line.Contains("looks again in", StringComparison.Ordinal));
     }
 
     /// <summary>A leg whose memory never falls below the limit is not taken, naming the reading and the limit.</summary>
@@ -421,6 +647,34 @@ public sealed class LegAdmissionTests
         });
 
         Assert.Equal(["first"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
+    /// A leg stopped while it settles stops at the piece of the settle it was waiting out, and gives its slot back: it
+    /// does not wait the rest of it first.
+    /// </summary>
+    [Fact]
+    public async Task ALegStoppedWhileItSettles_StopsThere_AndGivesItsSlotBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        using var stop = new CancellationTokenSource();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "neighbour"));
+
+        // A settle of twelve minutes, waited in pieces of five: stopped as the first of them has passed.
+        var rule = AdmissionKit.Rule(settleLeast: 720, settleMost: 720, pollSeconds: 3600, maxWaitMinutes: 120);
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(60), clock, onWait: stop.Cancel);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            using var admitted = await admission.AdmitAsync(AdmissionKit.Request(rule, []), stop.Token);
+        });
+
+        Assert.Equal(TimeSpan.FromMinutes(5), clock.Moved);
+        Assert.Equal(["neighbour"], AdmissionKit.Read(record).Select(entry => entry.Leg));
     }
 
     /// <summary>

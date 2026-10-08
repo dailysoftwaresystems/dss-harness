@@ -41,6 +41,7 @@ root.Subcommands.Add(SyncCommand.Create());
 root.Subcommands.Add(BuildCommand.Create());
 root.Subcommands.Add(TestCommand.Create());
 root.Subcommands.Add(RunCommand.Create());
+root.Subcommands.Add(CheckMutationsCommand.Create());
 root.Subcommands.Add(CleanCommand.Create());
 root.Subcommands.Add(HostExecCommand.Create());
 root.Subcommands.Add(HelpCommand.Create());

@@ -64,12 +64,33 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual DateTime CreationTimeUtc(string path) => inner.CreationTimeUtc(path);
 
+    public virtual void SetLastWriteTimeUtc(string path, DateTime writtenUtc) => inner.SetLastWriteTimeUtc(path, writtenUtc);
+
     public virtual Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
         => inner.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
 
     public virtual void WriteAllTextAtomic(string path, string contents) => inner.WriteAllTextAtomic(path, contents);
 
     public virtual void ProtectSecretFile(string path) => inner.ProtectSecretFile(path);
+}
+
+/// <summary>
+/// The real file system, save that <paramref name="path"/> is there and cannot be read, as a file another process holds
+/// cannot - or, where <paramref name="denied"/>, as one this user may not read cannot, which is raised as no kind of
+/// the other.
+/// </summary>
+/// <param name="inner">The file system every member passes through to.</param>
+/// <param name="path">The file that cannot be read.</param>
+/// <param name="denied">Whether it is this user's not to read, rather than another process's to hold.</param>
+internal sealed class Held(IFileSystem inner, string path, bool denied = false) : PassThroughFileSystem(inner)
+{
+    /// <summary>Why it cannot be read, as whatever reads it says.</summary>
+    public const string Why = "it is held by another process";
+
+    public override string ReadAllText(string read)
+        => Path.GetFullPath(read) != Path.GetFullPath(path) ? base.ReadAllText(read)
+            : denied ? throw new UnauthorizedAccessException(Why)
+            : throw new IOException(Why);
 }
 
 /// <summary>The real file system, whose atomic writes fail while <see cref="Full"/> says so, as a full disk's do.</summary>
@@ -87,5 +108,41 @@ internal sealed class FullDiskFileSystem(IFileSystem inner) : PassThroughFileSys
         }
 
         base.WriteAllTextAtomic(path, contents);
+    }
+}
+
+/// <summary>A disk that will not say what one directory holds: something holds it, or it is not this user's to read.</summary>
+internal sealed class CannotList(IFileSystem inner, string directory, bool denied) : PassThroughFileSystem(inner)
+{
+    public override IEnumerable<string> EnumerateDirectories(string path)
+        => !string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase) ? base.EnumerateDirectories(path)
+            : denied ? throw new UnauthorizedAccessException("the disk would not say.")
+            : throw new IOException("the disk would not say.");
+}
+
+/// <summary>A disk that says what one directory holds once, and never again.</summary>
+internal sealed class ListsOnce(IFileSystem inner, string directory) : PassThroughFileSystem(inner)
+{
+    private int _asked;
+
+    public override IEnumerable<string> EnumerateDirectories(string path)
+        => string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase) && _asked++ > 0
+            ? throw new IOException("the disk would not say.")
+            : base.EnumerateDirectories(path);
+}
+
+/// <summary>A disk on which the command is interrupted the second time one directory is weighed.</summary>
+internal sealed class InterruptsOnceWeighedAgain(IFileSystem inner, string directory, CancellationTokenSource interruption) : PassThroughFileSystem(inner)
+{
+    private int _weighed;
+
+    public override long DirectorySize(string path)
+    {
+        if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase) && ++_weighed == 2)
+        {
+            interruption.Cancel();
+        }
+
+        return base.DirectorySize(path);
     }
 }

@@ -6,6 +6,7 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
@@ -133,7 +134,7 @@ public sealed partial class HelpTests
             + "only ninja's lines are read.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
-        Assert.Contains($" {HarnessExit.Incomplete}  stopped                    Find out what stopped the build, then run again", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($" {HarnessExit.Incomplete}  stopped                    Find out what stopped its work, then run again", result.StandardOutput, StringComparison.Ordinal);
 
         // Each verdict a leg reaches without one of its own shows the code its run exits with, and a remedy.
         Assert.All(
@@ -142,10 +143,179 @@ public sealed partial class HelpTests
         Assert.Contains($" {HarnessExit.Incomplete}  skipped-unavailable        Make what its line names available, then run again", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains($" {HarnessExit.Incomplete}  skipped-tool-missing       Install the tool its line names, then run again", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
-            "A run killed, or stopped with its machine, before it finished says nothing more: the next build, test or run in its "
-            + "tree on that machine to own its run directory says it was abandoned - its run id, process and start, and where its "
-            + "records are - and releases its claim on them.",
+            "A run killed, or stopped with its machine, before it finished says nothing more: the next build, test, run or "
+            + "check-mutations in its tree on that machine to own its run directory says it was abandoned - its run id, process "
+            + "and start, and where its records are - and releases its claim on them.",
             Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The verdicts topic names the three verdicts only a mutation arm reaches, each with the code its run exits with and
+    /// its remedy, and says an arm that was due and never driven is stopped, saying why, rather than any of them.
+    /// </summary>
+    [Fact]
+    public async Task VerdictsTopic_NamesWhatAMutationArmReaches_WithItsCodeAndRemedy()
+    {
+        var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Contains($"{LegExit.Violated,3}  violated                   Fix the arm's declaration, or the code it guards", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"{LegExit.Survived,3}  survived                   Strengthen the test that should have failed", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"{LegExit.Unattributed,3}  unattributed               Contain the crash or hang in the case, or make", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(new string(' ', 32) + "the runner write its report", result.StandardOutput, StringComparison.Ordinal);
+        Assert.All(
+            ["violated", "survived", "unattributed"],
+            verdict => Assert.Contains($"  {verdict,-22} counts as failure ", result.StandardOutput, StringComparison.Ordinal));
+        Assert.Contains(
+            "An arm not driven to a verdict - its sweep stopped, or ended by a refusal of the run, while it was driven or before; its "
+            + "own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test "
+            + "binary not passing - is stopped, saying why ('help mutations').",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The mutations topic, under each of its names, lists every key the section takes, read from the code with the
+    /// defaults the code gives, every row the registry reads, and the codes a sweep moving from a mutation harness of a
+    /// repository's own reads in place of that harness's - each verdict's code read from the verdict table.
+    /// </summary>
+    [Theory]
+    [InlineData("mutations")]
+    [InlineData("check-mutations")]
+    [InlineData("arms")]
+    public async Task TheMutationsTopic_NamesEveryKey_EveryRow_AndTheCodesItMapsOnto(string topic)
+    {
+        var result = await CliRunner.RunAsync(["help", topic], TestContext.Current.CancellationToken);
+        var keys = ConfigKeys.Of<MutationSettings>();
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Equal(["registry", "textDirectory", "workers", "reportArgs", "runTimeFactor"], keys.Select(key => key.Name));
+        Assert.All(keys, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
+        Assert.Contains(
+            string.Create(CultureInfo.InvariantCulture, $"workers is {MutationSettings.DefaultWorkers} and runTimeFactor {MutationSettings.DefaultRunTimeFactor} where left out."),
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+
+        foreach (var row in new[]
+        {
+            "  A | arm | site | before | after | red kind | target | runner | cases | diag | why",
+            "  C | arm | case | why ",
+            "  G | arm | case | why ",
+            "  B | arm | control before | control after | why",
+            "  M | arm | site | before | after | why ",
+            "  S | arm | legs | why ",
+        })
+        {
+            Assert.Contains(row, result.StandardOutput, StringComparison.Ordinal);
+        }
+
+        foreach (var (theirs, verdict) in new[]
+        {
+            ("0  as declared", LegVerdict.Passed),
+            ("1  a violation, a missing diagnostic included", LegVerdict.Violated),
+            ("5  nothing reddened", LegVerdict.Survived),
+            ("6  a red no case name could be read for", LegVerdict.Unattributed),
+            ("7  a build that passed missed a declared unit", LegVerdict.Unwitnessed),
+            ("8  the build failed upstream of the unit", LegVerdict.Failed),
+            ("4  the harness broke", LegVerdict.Poisoned),
+        })
+        {
+            Assert.Matches(
+                $@"(?m)^  {Regex.Escape(theirs)} +{Verdicts.ExitCodeFor(verdict)}  {Regex.Escape(Verdicts.Display(verdict))}\r?$",
+                result.StandardOutput);
+        }
+
+        Assert.Contains($"4  an arm not driven                               stopped: the run exits {HarnessExit.Incomplete}", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains($"a live owner                               {HarnessExit.Refused,3}  refused-locked", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The mutations topic says what the code does where a reader would otherwise guess: where a failed build makes an
+    /// arm failed, every verdict an arm can reach beside those its own judge decides, what a control that does not pass
+    /// is, which arms the ARMS block names, what a worker's build is reckoned to come to, how a text is read, and which
+    /// verdicts the fixture's arms are designed to.
+    /// </summary>
+    [Fact]
+    public async Task TheMutationsTopic_SaysWhatTheCodeDoes_WhereAReaderWouldGuess()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "mutations"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "failed its build failed at a step that is no object depending on its site - a link, another object - or named no step that failed",
+            "violated its declaration did not hold: a site or a cited text that is not there, or a site spelt otherwise than the tree "
+            + "spells it, or that is no file the sweep's reading of the tree holds; its before-text not in its site exactly once, or "
+            + "replaced by itself; its target or its runner not built, or no object they build depending on a site;",
+            "stopped not driven to a verdict: the sweep was stopped, or ended by a refusal of the run, while it was driven or before; "
+            + "its own build, or its paired control's, was stopped from outside; no worker was left to run it; or the unmutated run of "
+            + "its binary did not pass",
+            "a cited text that is not there, or that a sync withholds from every copy of the tree - one sync.neverTransfer, sync.exclude "
+            + "or worktrees.root covers, or git ignores - as the registry itself is refused where git ignores it;",
+            "An arm reaches others where nothing of its own decides: skipped-not-selected where --arms or its S row leaves it out of a "
+            + "leg; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the path limit; unmeasured "
+            + "where ninja's log could not be read around its build, or the report its run wrote could not be read from its file, "
+            + "which is no finding about the binary; whatever a guard of its build reaches, as a leg's build does - "
+            + "inputs-moved, contended; and whatever a failure that ends its driving comes to, as a leg's does - skipped-tool-missing "
+            + "for a tool that is not there, failed for a program that will not start.",
+            "one that does not pass - a build that does not pass, a red case, no report, a failing exit, a hang - decides the leg's own verdict",
+            "unattributed the run failed and nothing ties that to a case: no report, one that is no JUnit report - its line says why - a "
+            + "failing exit whose report names no failing case, or a run past its bound, or silent for defaults.stallSeconds, stopped as hung",
+            "ARMS, below the table, names each arm selected that did not pass, and why;",
+            "a worker a sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended, and one that "
+            + "cannot be removed keeps it as a failure until that is put right - or --force deletes the worktree and leaves that worker,",
+            "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
+            + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
+            + "of its own - a worker's rebuilt from clean with it.",
+            "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build, or the "
+            + "main checkout's, last recorded",
+            "each read as its file holds it, less a UTF-8 byte order mark at its start and one line ending at its end,",
+            "seven arms, one to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
+            + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two files",
+        })
+        {
+            Assert.Contains(text, said, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("upstream of every object", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Help says what a command exits with where no selected leg can run, wherever it speaks of it: 1 of a build, a test
+    /// and a run, and of a sweep incomplete, whose 1 is an arm violated - each code read from the code.
+    /// </summary>
+    [Fact]
+    public async Task Help_SaysWhatASweepGives_WhereNoSelectedLegCanRun()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var mutations = Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+        var tools = Words((await CliRunner.RunAsync(["help", "tools"], cancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            $"A sweep none of whose selected legs can run is incomplete, exit {MutationService.NothingRuns}, saying why each cannot - never the "
+            + $"{LegsExit.Unavailable} a build, a test and a run give there, which of a sweep is an arm violated.",
+            mutations,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"and the run is incomplete, exit {HarnessExit.Incomplete} - or exit {LegsExit.Unavailable} when no selected leg can run at all, save of "
+            + $"check-mutations, which stays {MutationService.NothingRuns}: its {LegsExit.Unavailable} is an arm violated.",
+            tools,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The admission topic says a waiting leg says where it stands at least every five minutes, the minutes read from
+    /// the code, and that a poll or a settle longer than that keeps to it.
+    /// </summary>
+    [Fact]
+    public async Task TheAdmissionTopic_SaysAWaitNeverGoesSilent_WhateverThePollAndTheSettle()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "admission"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            $"It says so again, as it reads then and with how long it has waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - "
+            + "a poll longer than that is cut at it, and a settle longer than that waited whole in pieces of it - so a long wait never goes silent.",
+            said,
             StringComparison.Ordinal);
     }
 
@@ -274,8 +444,8 @@ public sealed partial class HelpTests
         foreach (var text in new[]
         {
             "successPattern: <regular expression> what its last run line must print, besides exiting 0",
-            "matched with ^ and $ at each line - whether a line ends in CRLF or LF, as its log keeps it - against that "
-                + "line's standard output and standard error read together, after secrets are redacted.",
+            "matched against what that line printed on standard output and standard error, a line of output at a time - "
+                + "^ and $ its start and end, whether it ends in CRLF or LF, as its log keeps it - after secrets are redacted.",
         })
         {
             Assert.Contains(text, words, StringComparison.Ordinal);
@@ -485,6 +655,55 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The runners topic names the two compiler names with what each is filled in with; says a line may start with one,
+    /// that a step naming one builds its leg first, when one is refused - before anything starts, and once the leg is
+    /// built - and that a test invocation may name one too. The tools and admission topics count a step naming one among
+    /// those that build their leg.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysWhatACompilersNameIs_WhereItMayStand_AndWhenItIsRefused()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var written = (await CliRunner.RunAsync(["help", "runners"], token)).StandardOutput;
+        var runners = Words(written);
+
+        foreach (var text in new[]
+        {
+            $"{{{LegPathNames.CompilerC}}} {{{LegPathNames.CompilerCxx}}} the C and the C++ compiler the leg's build identified: the whole path of the program CMake built with, as this machine spells it",
+            "The first token must be a program declared under tools, a path in the repository, or the name of one of the leg's compilers alone ({compiler_C}, below); anything else is refused before a single step runs.",
+            "starts it, a step naming {product}, {buildDir} or a compiler has its leg built first (below).",
+            "A step whose run line or workingDirectory names {buildDir}, {product}, {compiler_C} or {compiler_CXX} reads what the build made or identified, so every leg of a run that runs it is built first",
+            "{compiler_C} and {compiler_CXX} name what built the leg, never what a toolchain declares: the program CMake's own record in the leg's build directory names for that language - gcc on one leg and cl on another, from one run line.",
+            "A line may start with one, written alone: the leg's own compiler may run though nothing declares it under tools.",
+            "A leg whose project CMake does not build is refused before anything starts, naming each leg and step, since no build of it identifies a compiler;",
+            "a name the leg's build has nothing for is refused once the leg is built, before its first step, saying which case it is - no compiler identified for that language, a record of one that could not be read or that names no program, or one the build runs with words after it, a launcher such as ccache given its compiler or a compiler given options: the name is a program alone, so the program and the words are named and neither is filled in.",
+            "A test invocation's args, coresArgs and workingDirectory may name one too: the check made before the build lets the name stand, and it is filled in, or refused, once the leg is built - under test --no-build, from what the build already in its directory identified.",
+        })
+        {
+            Assert.Contains(text, runners, StringComparison.Ordinal);
+        }
+
+        // The rows of its tables of names are headed by the names this tool fills in, each of them and no other: one
+        // added to the code cannot be left out, and one the code dropped cannot stay.
+        var rows = written
+            .Split('\n')
+            .Select(line => Regex.Match(line, @"^  ((?:\{[A-Za-z_]+\} ?)+) +\S"))
+            .Where(row => row.Success)
+            .SelectMany(row => Regex.Matches(row.Groups[1].Value, @"\{([A-Za-z_]+)\}").Select(name => name.Groups[1].Value));
+
+        Assert.Equal(LegPathNames.All.Order(StringComparer.Ordinal), rows.Order(StringComparer.Ordinal));
+
+        Assert.Contains(
+            "runs a step or phase naming {product}, {buildDir} or a compiler on that leg's system",
+            Words((await CliRunner.RunAsync(["help", "tools"], token)).StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "requires the build or runs a step or phase naming {product}, {buildDir} or a compiler, and is heavy, too,",
+            Words((await CliRunner.RunAsync(["help", "admission"], token)).StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The tools topic says what --dry-run does, that init installs only when asked, how a tool
     /// narrows the legs that need it, and that a leg in a developer environment is told about a tool
     /// as the PATH it sets up holds it; the layout topic says init writes the tree it runs in and
@@ -507,6 +726,8 @@ public sealed partial class HelpTests
             "a developer environment, on the PATH that environment sets up for its processor -",
             "own PATH lacks is unknown for a leg in a developer environment, which this command",
             "covering no declared leg, is refused.",
+            "  check-mutations",
+            "          what build starts: each worker, and each arm, is built as the leg builds",
         })
         {
             Assert.Contains(text, tools.StandardOutput, StringComparison.Ordinal);
@@ -566,7 +787,14 @@ public sealed partial class HelpTests
         Assert.Contains("\"compilerId\": { \"C\": \"MSVC\", \"CXX\": \"MSVC\" }", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("A build CMake configured with another compiler fails before anything is built with", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("loaded: CMakeFiles/<version>/CMake<language>Compiler.cmake - where the record names", result.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains("the compiler the answer names and is no newer than the answer", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "where the record names the compiler the answer names and no configure has failed since that answer - which the error "
+            + "index CMake 4 writes in an answer's place says - since a configure that identified the compiler again and then failed "
+            + "leaves a record of one nothing built with. Never by when either was written, which a clock that steps gets wrong; "
+            + "before CMake 4 a failed configure leaves nothing of itself, and the record is read as it names it.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("no newer than the answer", Words(result.StandardOutput), StringComparison.Ordinal);
 
         // And which ssh reaches a host, what it is given, and when it is given nothing.
         Assert.Contains("The ssh that runs is the first on the PATH. It is asked first what it would do, with", result.StandardOutput, StringComparison.Ordinal);
@@ -584,6 +812,30 @@ public sealed partial class HelpTests
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The worktrees topic says what becomes of the mutation workers kept beside a worktree that is deleted: asked about
+    /// before any goes, so a worktree kept for one removes nothing; which code each one kept leaves it with; what an
+    /// interruption says; what --force leaves; and that a host's copy is treated as the worktree is.
+    /// </summary>
+    [Fact]
+    public async Task WorktreesTopic_SaysWhatBecomesOfTheMutationWorkersBesideAWorktree()
+    {
+        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "The mutation workers kept beside a worktree ('help mutations') go before it, once every check has passed. They are asked "
+            + $"about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), and one that cannot be "
+            + $"removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as workers that cannot be looked for "
+            + "do, with nothing removed. A sweep that takes one meanwhile keeps the worktree as well, and so does one whose removal then "
+            + "fails, the others gone by then, which is said. An interruption as they go says which went, and that the worktree is whole "
+            + $"({HarnessExit.Cancelled}). --force deletes the worktree and leaves a worker that is held or could not be removed, saying "
+            + "so; deleting the worktree again removes it once nothing keeps it. A worktree whose own removal then fails, or is stopped, "
+            + "says which workers went before it. Beside a host's copy they are asked about first as well, and a copy kept once some had "
+            + "gone says which went.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -879,6 +1131,17 @@ public sealed partial class HelpTests
         Assert.Contains("A leg is placed only where its host has the room its build still needs", text, StringComparison.Ordinal);
         Assert.Contains("the leg's buildSpaceGiB", text, StringComparison.Ordinal);
         Assert.Contains("Commands that build nothing - sync, clean - need no room.", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "with its mutation workers' as 'workerBytes': what was removed of them - 0 where every one there was kept - or, in a dry "
+            + "run, what is there. A leg whose build directory was not measured - a link, locked, not removable, or on a host holding "
+            + "no copy of the tree - carries a space saying its workers alone, where any is there.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "one a live sweep claims is kept, one that cannot be removed fails the leg, which still says what went, and a directory "
+            + "under a worker's name that no sync made is said and left",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("legs -v' says the room on each host it measured", text, StringComparison.Ordinal);
     }
 

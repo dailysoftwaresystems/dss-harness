@@ -921,7 +921,8 @@ public sealed class ToolResolutionTests
     /// <summary>
     /// When no selected leg can run, the command says why for each, under the verdict the run would
     /// have recorded - and a leg turned away by a defect in this tool keeps the defect's exit code,
-    /// where "no selected leg can run" alone would send the reader to the hosts.
+    /// where "no selected leg can run" alone would send the reader to the hosts. A command whose legs
+    /// reach a verdict that already means 1 gives the code it says instead, and a defect keeps its code there too.
     /// </summary>
     [Fact]
     public void WhenNothingCanRun_EachLegIsNamedWithItsVerdict_AndADefectKeepsItsCode()
@@ -939,6 +940,13 @@ public sealed class ToolResolutionTests
             unavailable.Details);
 
         Assert.Equal(HarnessExit.InternalError, RepoHarness.Core.Runs.LegRunPlan.NothingRuns([missing, defect]).ExitCode);
+
+        var ofASweep = RepoHarness.Core.Runs.LegRunPlan.NothingRuns([missing, off], HarnessExit.Incomplete);
+
+        Assert.Equal(HarnessExit.Incomplete, ofASweep.ExitCode);
+        Assert.Equal(unavailable.Message, ofASweep.Message);
+        Assert.Equal(unavailable.Details, ofASweep.Details);
+        Assert.Equal(HarnessExit.InternalError, RepoHarness.Core.Runs.LegRunPlan.NothingRuns([missing, defect], HarnessExit.Incomplete).ExitCode);
     }
 
     /// <summary>Every program there, found on the PATH or off it, and the leg runs.</summary>

@@ -17,7 +17,7 @@ namespace RepoHarness.Core.Runs;
 /// <summary>What a leg-running command was asked to do.</summary>
 /// <param name="Directory">The directory the command was invoked in.</param>
 /// <param name="LegNames">The legs named with <c>--legs</c>, or null when it was left out.</param>
-/// <param name="ForceLock">Whether to take a lock a run on another host holds.</param>
+/// <param name="ForceLock">Whether to take a lock another run holds, on this host or another.</param>
 /// <param name="Json">Whether the ledger is wanted as data rather than as a table.</param>
 /// <param name="UseStaged">Whether to act on what is already staged on a host, without syncing again.</param>
 /// <param name="Time">Whether to report the profile timing.</param>
@@ -47,7 +47,29 @@ public sealed record LegRunRequest(
     /// one. Said by every command, because what one needs is not what another does.
     /// </summary>
     public required LegWorkload Workload { get; init; }
+
+    /// <summary>
+    /// The lock each leg's work takes, by the leg, the run and the command; <see langword="null"/> for the one a build of
+    /// it takes - its tree shared and its variant its own (<see cref="PlacedLeg.BuildLock(RunId, string)"/>). A command whose work never
+    /// touches the leg's tree or its build directory - a sweep of mutation arms, which works in copies of its own - takes
+    /// a key of its own instead, so it never holds a build of the leg off for hours, nor waits for one.
+    /// </summary>
+    public Func<PlacedLeg, RunId, string, LockRequest>? Lock { get; init; }
+
+    /// <summary>
+    /// What the command exits with where no selected leg can run and no failure turned one away:
+    /// <see cref="LegsExit.Unavailable"/>, as <c>legs</c> answers. A command whose legs reach a verdict that already
+    /// decides that code says another, so that within the command no code has two meanings: a sweep's arms reach
+    /// <c>violated</c>, which is 1.
+    /// </summary>
+    public int NothingRunsExit { get; init; } = LegsExit.Unavailable;
 }
+
+/// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
+/// <param name="Unit">The unit, as the machine's record of its heavy legs names it after its leg: <c>leg/unit</c>.</param>
+/// <param name="Room">What the unit needs of the machine's room, where something says; <see langword="null"/> where nothing does.</param>
+/// <param name="Settle">Whether it settles before it starts where another leg holds a slot (<see cref="AdmissionRequest.Settle"/>).</param>
+public sealed record UnitAdmission(string Unit, RoomNeed? Room = null, bool Settle = true);
 
 /// <summary>What one leg is asked to do once its tree is ready.</summary>
 /// <param name="Leg">The placed leg.</param>
@@ -60,15 +82,27 @@ public sealed record LegWork(
     HarnessContext Context,
     RunId RunId,
     string RunDirectory,
-    bool Time);
+    bool Time)
+{
+    /// <summary>
+    /// Asks the machine the leg's work runs on to take one unit of it, by the admission a heavy leg is taken by - where
+    /// this process is on that machine and the machine declares admission - holding its slot, and any room it claimed,
+    /// until the answer is disposed; <see langword="null"/> where nothing is asked. Asked by a command whose workload
+    /// admits each unit (<see cref="LegWorkload.AdmitsEachUnit"/>), which holds no slot for the leg.
+    /// </summary>
+    public Func<UnitAdmission, CancellationToken, Task<Admission?>> AdmitUnit { get; init; } = (_, _) => Task.FromResult<Admission?>(null);
+
+    /// <summary>Says what the leg is doing now, under its own name.</summary>
+    public Action<string> Progress { get; init; } = _ => { };
+}
 
 /// <summary>
 /// What every leg-running command shares: selecting legs, measuring the hosts, refusing what cannot
 /// run, taking the locks, syncing each tree once, running the legs together, and reporting a ledger.
 /// </summary>
 /// <remarks>
-/// One implementation for <c>build</c>, <c>test</c> and <c>run</c>, so the isolation rules cannot
-/// hold for one command and not another. Each command supplies only what a leg actually does.
+/// One implementation for <c>build</c>, <c>test</c>, <c>run</c> and <c>check-mutations</c>, so the isolation
+/// rules cannot hold for one command and not another. Each command supplies only what a leg actually does.
 /// </remarks>
 public sealed class LegRunService(
     IHarnessContextLoader contextLoader,
@@ -141,7 +175,7 @@ public sealed class LegRunService(
 
         if (placed.Count == 0)
         {
-            var nothing = LegRunPlan.NothingRuns(skipped);
+            var nothing = LegRunPlan.NothingRuns(skipped, request.NothingRunsExit);
 
             // Before the run has a directory: there is none to name.
             return Stopped(request, runId, nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? [], runDirectory: null);
@@ -485,11 +519,11 @@ public sealed class LegRunService(
         }
 
         // The tree shared and this variant exclusive: variants build side by side, but never while
-        // their sources are being replaced.
+        // their sources are being replaced. A command keyed apart takes its own.
         var attempt = await _runLock
             .TryAcquireAsync(
                 context.Layout,
-                leg.BuildLock(runId, ledger.CommandName) with { Force = request.ForceLock },
+                (request.Lock?.Invoke(leg, runId, ledger.CommandName) ?? leg.BuildLock(runId, ledger.CommandName)) with { Force = request.ForceLock },
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -525,8 +559,10 @@ public sealed class LegRunService(
     }
 
     /// <summary>
-    /// Asks the machine <paramref name="leg"/>'s work runs on to take it, where this process is on that machine,
-    /// the leg is heavy and the machine declares admission; <see langword="null"/> where any of those is not so.
+    /// Asks the machine <paramref name="leg"/>'s work runs on to take it, where this process is on that machine, the
+    /// machine declares admission, and the leg is heavy - or runs in a WSL distribution under a workload admitting each
+    /// unit of its work, which this machine takes whole, its units asking nothing there; <see langword="null"/> where
+    /// any of those is not so.
     /// </summary>
     /// <remarks>
     /// Asked by a process on the machine the work runs on, which outlives that work: this one, for a leg of this machine
@@ -535,7 +571,7 @@ public sealed class LegRunService(
     /// nothing: this machine's process took it before dispatching it, and the distribution's own figures do not show this
     /// machine's memory.
     /// </remarks>
-    private async Task<Admission?> AdmitAsync(
+    private Task<Admission?> AdmitAsync(
         HarnessContext context,
         PlacedLeg leg,
         LegRunRequest request,
@@ -544,10 +580,33 @@ public sealed class LegRunService(
         CancellationToken cancellationToken)
     {
         // Heavy as it is on this leg's system: a heavy step limited by runOn, or one that builds, makes the legs of those
-        // systems alone heavy.
-        if (!request.Workload.On(leg.Leg.Os).Heavy
-            || (request.Here is null && leg.Host.Host.Kind == HostKind.Ssh)
-            || request.Here is { Kind: HostKind.Wsl })
+        // systems alone heavy. A workload admitting each unit of its work holds no slot for the leg - but for a leg in a
+        // WSL distribution, which this machine takes whole, its units asking nothing there.
+        var workload = request.Workload.On(leg.Leg.Os);
+
+        return workload.Heavy || (workload.AdmitsEachUnit && leg.Named.Kind == HostKind.Wsl)
+            ? AskAsync(context, leg, request, runId, ledger, leg.Name, leg.Need, settle: true, cancellationToken)
+            : Task.FromResult<Admission?>(null);
+    }
+
+    /// <summary>
+    /// Asks the machine <paramref name="leg"/>'s work runs on to take <paramref name="asking"/> - the leg, or a unit of its
+    /// work - where this process is on that machine and the machine declares admission; <see langword="null"/> where either
+    /// is not so.
+    /// </summary>
+    /// <remarks>See <see cref="AdmitAsync"/> for which process asks, on which machine.</remarks>
+    private async Task<Admission?> AskAsync(
+        HarnessContext context,
+        PlacedLeg leg,
+        LegRunRequest request,
+        RunId runId,
+        LegLedger ledger,
+        string asking,
+        RoomNeed? room,
+        bool settle,
+        CancellationToken cancellationToken)
+    {
+        if ((request.Here is null && leg.Host.Host.Kind == HostKind.Ssh) || request.Here is { Kind: HostKind.Wsl })
         {
             return null;
         }
@@ -565,12 +624,15 @@ public sealed class LegRunService(
                     rule,
                     runId.Value,
                     ledger.CommandName,
-                    leg.Name,
+                    asking,
                     leg.Host.Host.ToString(),
                     leg.HostTreeRoot,
                     leg.Variant.DirectoryName,
                     message => ledger.Transition(leg.Name, message),
-                    leg.Need),
+                    room)
+                {
+                    Settle = settle,
+                },
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -637,7 +699,15 @@ public sealed class LegRunService(
             leg = leg with { DeveloperEnvironment = setUp.Environment };
         }
 
-        var entry = await work(new LegWork(leg, context, runId, runDirectory, request.Time), cancellationToken).ConfigureAwait(false);
+        var working = leg;
+        var entry = await work(
+                new LegWork(working, context, runId, runDirectory, request.Time)
+                {
+                    AdmitUnit = (unit, token) => AskAsync(context, working, request, runId, ledger, $"{working.Name}/{unit.Unit}", unit.Room, unit.Settle, token),
+                    Progress = message => ledger.Transition(working.Name, message),
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
 
         return setUp is null ? entry : entry with { DeveloperEnvironment = setUp.Fact };
     }

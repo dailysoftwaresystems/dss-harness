@@ -1,0 +1,423 @@
+using RepoHarness.Core.Execution;
+using RepoHarness.Core.Mutations;
+
+namespace RepoHarness.Tests;
+
+/// <summary>
+/// The judge of one arm: each row of its table reaching its own verdict, in the order the rows are read, the first that
+/// applies deciding - a finding before what follows from it, and nothing about the mutation read from a build or a run
+/// that says nothing about it.
+/// </summary>
+public sealed class ArmJudgeTests
+{
+    private const string Object = "CMakeFiles/fixture.dir/src/fixture.cpp.o";
+    private const string HeaderObject = "CMakeFiles/fixture.dir/src/budget.cpp.o";
+    private const string Upstream = "CMakeFiles/upstream.dir/src/support.cpp.o";
+
+    /// <summary>A TEST-RED arm: three cases, one of them red, one a neighbour that must stay green.</summary>
+    private static readonly MutationArm TestRed = new()
+    {
+        Id = "charge-bound",
+        Line = 3,
+        Own = new MutationSite("src/fixture.cpp", "texts/charge.before", "texts/charge.after", 3),
+        Kind = RedKind.TestRed,
+        Target = "fixture",
+        Runner = "fixture_tests",
+        Cases = 3,
+        Diagnostic = "texts/charge.diag",
+        Why = "the charge is pinned",
+        Reds = ["Fixture.Charge"],
+        Greens = ["Fixture.Depth"],
+    };
+
+    /// <summary>A BUILD-RED arm, with its paired positive control.</summary>
+    private static readonly MutationArm BuildRed = new()
+    {
+        Id = "depth-type",
+        Line = 7,
+        Own = new MutationSite("src/budget.hpp", "texts/depth.before", "texts/depth.after", 7),
+        Kind = RedKind.BuildRed,
+        Target = "fixture",
+        Runner = MutationRegistryParser.NoRunner,
+        Cases = 0,
+        Diagnostic = MutationRegistryParser.PairedControlToken,
+        Why = "a depth that is no integer does not compile",
+        Control = new PairedControl("texts/depth.control-before", "texts/depth.control-after", 8),
+    };
+
+    /// <summary>A pre-flight that finds nothing wrong: the site there, its text once, two objects depending on it.</summary>
+    private static readonly ArmPreflight Ready = new()
+    {
+        Counts = [new TextCount("texts/charge.before", "src/fixture.cpp", 1)],
+        Dependents = [Object, HeaderObject],
+    };
+
+    /// <summary>Each refusal of the pre-flight, by its row and what it found.</summary>
+    private static readonly Dictionary<string, (ArmPreflight Preflight, string Detail)> PreflightRefusals = new()
+    {
+        ["1 a site spelt otherwise than the tree spells it"] = (
+            Ready with { MisspeltSites = [new SiteSpelling("src/Fixture.cpp", "src/fixture.cpp")] },
+            "site 'src/Fixture.cpp' is spelt 'src/fixture.cpp' in the tree, and a row names a file as the tree spells it"),
+        ["1 a missing site"] = (
+            Ready with { MissingSites = ["src/fixture.cpp"] },
+            "site 'src/fixture.cpp' is not a file in the worker's copy of the tree"),
+        ["1 a site the reading of the tree does not hold"] = (
+            Ready with { UnreadSites = ["src/gen/fixture.cpp"] },
+            "site 'src/gen/fixture.cpp' is no file the sweep's reading of the tree holds - one a build makes there, or one sync leaves out - "
+            + "so nothing vouches for what it holds"),
+        ["1 a text the copy does not hold"] = (
+            Ready with { TextProblems = ["text 'texts/charge.after' is not a file in the worker's copy of the tree"] },
+            "text 'texts/charge.after' is not a file in the worker's copy of the tree"),
+        ["2 a text not there"] = (
+            Ready with { Counts = [new TextCount("texts/charge.before", "src/fixture.cpp", 1), new TextCount("texts/m.before", "src/budget.hpp", 0)] },
+            "the text in 'texts/m.before' occurs 0 time(s) in 'src/budget.hpp', where it must occur exactly once"),
+        ["2 a text there twice"] = (
+            Ready with { Counts = [new TextCount("texts/charge.before", "src/fixture.cpp", 2)] },
+            "the text in 'texts/charge.before' occurs 2 time(s) in 'src/fixture.cpp', where it must occur exactly once"),
+        ["2 a mutation that changes nothing"] = (
+            Ready with { Unchanged = [new UnchangedSite("texts/charge.before", "texts/charge.after", "src/fixture.cpp")] },
+            "the text in 'texts/charge.after' is the text in 'texts/charge.before', so replacing one with the other changes nothing in 'src/fixture.cpp'"),
+        ["3 a target not built"] = (
+            Ready with { TargetBuilt = false },
+            "target 'fixture' is built by no line of the leg's build"),
+        ["3 a runner building no program"] = (
+            Ready with { RunnerProblem = "runner 'fixture_tests' builds no program" },
+            "runner 'fixture_tests' builds no program"),
+        ["4 no object depending on the site"] = (
+            Ready with { Dependents = [] },
+            "no object target 'fixture' or runner 'fixture_tests' builds depends on 'src/fixture.cpp'"),
+    };
+
+    /// <summary>Each row of a TEST-RED arm's run, by its row: the run, and the verdict it reaches saying what it found.</summary>
+    private static readonly Dictionary<string, (ArmRun Run, LegVerdict Verdict, string Detail)> RunRows = new()
+    {
+        ["11 past its bound"] = (
+            ArmRun.StoppedAt(new RunBound(TimeSpan.FromSeconds(100), "10x the unmutated run")),
+            LegVerdict.Unattributed,
+            "ran past 10x the unmutated run, 1m40s, and was stopped"),
+        ["11 past a bound the factor did not set"] = (
+            ArmRun.StoppedAt(PristineJudge.Bound(TimeSpan.FromSeconds(1), 10)),
+            LegVerdict.Unattributed,
+            "ran past the unmutated run and 1m00s more, 1m01s, and was stopped"),
+        ["11 silent until it was stopped as hung"] = (
+            ArmRun.Hung(45),
+            LegVerdict.Unattributed,
+            "printed nothing for 45s, and was stopped as hung"),
+        ["12 no report"] = (
+            ArmRun.Exited(-1073741819, RunReport.None, diagnosticSaid: true),
+            LegVerdict.Unattributed,
+            "exited -1073741819 and wrote no report"),
+        ["12 a report this could not read from its file"] = (
+            ArmRun.Exited(1, RunReport.NotRead("'report.xml' is held by another process"), diagnosticSaid: true),
+            LegVerdict.Unmeasured,
+            "its report was written and could not be read, after it exited 1, so nothing says which cases failed: 'report.xml' is held by another process"),
+        ["12 a report that is no report"] = (
+            ArmRun.Exited(1, RunReport.NoReport("its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'"), diagnosticSaid: true),
+            LegVerdict.Unattributed,
+            "its report is no JUnit report this reads, after it exited 1: its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'"),
+        ["12 a report that is none, nothing said of why"] = (
+            ArmRun.Exited(1, RunReport.NoReport(null), diagnosticSaid: true),
+            LegVerdict.Unattributed,
+            "its report is no JUnit report this reads, after it exited 1"),
+        ["13 a failing exit and no failing case"] = (
+            Ran(1, Report([], ["Fixture.Charge", "Fixture.Depth", "Fixture.Other"])),
+            LegVerdict.Unattributed,
+            "exited 1, and its report names no failing case"),
+        ["14 another number of cases"] = (
+            Ran(1, Report(["Fixture.Charge"], ["Fixture.Depth"], notRun: ["Fixture.Other"])),
+            LegVerdict.Violated,
+            "ran 2 case(s), and the arm declares 3"),
+        ["15 no case red"] = (
+            Ran(0, Report([], ["Fixture.Charge", "Fixture.Depth", "Fixture.Other"])),
+            LegVerdict.Survived,
+            "ran 3 case(s), and none failed"),
+        ["16 a declared red that is not, and a red not declared"] = (
+            Ran(1, Report(["Fixture.Other"], ["Fixture.Charge", "Fixture.Depth"])),
+            LegVerdict.Violated,
+            "the cases that failed are not those declared: declared red and not, Fixture.Charge; red and not declared, Fixture.Other"),
+        ["16 a red not declared beside the declared one"] = (
+            Ran(1, Report(["Fixture.Charge", "Fixture.Other"], ["Fixture.Depth"])),
+            LegVerdict.Violated,
+            "the cases that failed are not those declared: red and not declared, Fixture.Other"),
+        ["17 a neighbour that did not run"] = (
+            Ran(1, Report(["Fixture.Charge"], ["Fixture.Other", "Fixture.Third"], notRun: ["Fixture.Depth"])),
+            LegVerdict.Violated,
+            "neighbour 'Fixture.Depth' did not run, so it is no neighbour that stayed green"),
+        ["18 the diagnostic not said"] = (
+            Ran(1, Report(["Fixture.Charge"], ["Fixture.Depth", "Fixture.Other"]), said: false),
+            LegVerdict.Violated,
+            "the run did not say its diagnostic, the text in 'texts/charge.diag'"),
+        ["19 as declared"] = (
+            Ran(1, Report(["Fixture.Charge"], ["Fixture.Depth", "Fixture.Other"])),
+            LegVerdict.Passed,
+            "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+        ["19 as declared, the binary exiting 0 all the same"] = (
+            Ran(0, Report(["Fixture.Charge"], ["Fixture.Depth", "Fixture.Other"])),
+            LegVerdict.Passed,
+            "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+    };
+
+    /// <summary>Each row of the pre-flight's, by name.</summary>
+    public static TheoryData<string> PreflightRows() => new(PreflightRefusals.Keys);
+
+    /// <summary>Each row of the run's, by name.</summary>
+    public static TheoryData<string> RunRowNames() => new(RunRows.Keys);
+
+    /// <summary>Each refusal of the pre-flight is <c>violated</c>, saying what it found, whatever was built after it.</summary>
+    [Theory]
+    [MemberData(nameof(PreflightRows))]
+    public void EachRefusalOfThePreflight_IsViolated(string row)
+    {
+        var (preflight, detail) = PreflightRefusals[row];
+
+        var verdict = ArmJudge.Judge(TestRed, new ArmObservation(preflight) { Build = Built() });
+
+        Assert.Equal((LegVerdict.Violated, detail), (verdict?.Verdict, verdict?.Detail));
+    }
+
+    /// <summary>
+    /// The pre-flight's rows are read in order: a site spelt otherwise than the tree spells it - which is missing too where
+    /// names are compared exactly - before a missing one, before one the reading does not hold, before a text the copy
+    /// cannot give, before a miscount, before a replacement that changes nothing, before the target, before the dependents.
+    /// </summary>
+    [Fact]
+    public void ThePreflightsRows_AreReadInOrder()
+    {
+        var everything = new ArmPreflight
+        {
+            MisspeltSites = [new SiteSpelling("src/Gone.cpp", "src/gone.cpp")],
+            MissingSites = ["src/gone.cpp"],
+            UnreadSites = ["src/made.cpp"],
+            TextProblems = ["the text in 'texts/charge.before' holds nothing, and a text holding nothing occurs everywhere"],
+            Counts = [new TextCount("texts/charge.before", "src/fixture.cpp", 0)],
+            Unchanged = [new UnchangedSite("texts/m.before", "texts/m.after", "src/budget.hpp")],
+            TargetBuilt = false,
+            RunnerProblem = "runner 'fixture_tests' builds no program",
+        };
+        var spelt = everything with { MisspeltSites = [] };
+        var held = spelt with { MissingSites = [] };
+        var read = held with { UnreadSites = [] };
+        var cited = read with { TextProblems = [] };
+        var counted = cited with { Counts = [] };
+        var changed = counted with { Unchanged = [] };
+
+        Assert.StartsWith("site 'src/Gone.cpp' is spelt", Detail(TestRed, everything), StringComparison.Ordinal);
+        Assert.Equal("site 'src/gone.cpp' is not a file in the worker's copy of the tree", Detail(TestRed, spelt));
+        Assert.StartsWith("site 'src/made.cpp' is no file the sweep's reading", Detail(TestRed, held), StringComparison.Ordinal);
+        Assert.EndsWith("holds nothing, and a text holding nothing occurs everywhere", Detail(TestRed, read), StringComparison.Ordinal);
+        Assert.EndsWith("where it must occur exactly once", Detail(TestRed, cited), StringComparison.Ordinal);
+        Assert.EndsWith("changes nothing in 'src/budget.hpp'", Detail(TestRed, counted), StringComparison.Ordinal);
+        Assert.StartsWith("target 'fixture'", Detail(TestRed, changed), StringComparison.Ordinal);
+        Assert.StartsWith("runner", Detail(TestRed, changed with { TargetBuilt = true }), StringComparison.Ordinal);
+        Assert.Equal(
+            "no object target 'fixture' or runner 'fixture_tests' builds depends on 'src/fixture.cpp', 'src/budget.hpp'",
+            Detail(TestRed with { Coupled = [new MutationSite("src/budget.hpp", "texts/m.before", "texts/m.after", 4)] }, new ArmPreflight()));
+
+        static string Detail(MutationArm arm, ArmPreflight preflight) => ArmJudge.Judge(arm, new ArmObservation(preflight))!.Detail;
+    }
+
+    /// <summary>
+    /// An arm's build builds its target, and a TEST-RED arm's runner where that is another target: a test binary linking
+    /// what the target builds is linked again only where a build asks for it, and one an earlier build left would run
+    /// without the mutation. Its pre-flight looks for objects depending on a site in what that build builds, and says so.
+    /// </summary>
+    [Fact]
+    public void AnArmsBuild_BuildsItsTarget_AndATestRedArmsRunnerBeside_WhichItsPreflightNames()
+    {
+        var runsItsTarget = TestRed with { Runner = TestRed.Target };
+
+        Assert.Equal(["fixture", "fixture_tests"], ArmJudge.Builds(TestRed));
+        Assert.Equal(["fixture"], ArmJudge.Builds(runsItsTarget));
+        Assert.Equal(["fixture"], ArmJudge.Builds(BuildRed));
+        Assert.Equal(
+            "no object target 'fixture' builds depends on 'src/fixture.cpp'",
+            ArmJudge.Judge(runsItsTarget, new ArmObservation(Ready with { Dependents = [] }))!.Detail);
+        Assert.Equal(
+            "no object target 'fixture' builds depends on 'src/budget.hpp'",
+            ArmJudge.Judge(BuildRed, new ArmObservation(Ready with { Counts = [], Dependents = [] }))!.Detail);
+    }
+
+    /// <summary>
+    /// Nothing is reached before what decides it is observed - the build, then a TEST-RED arm's run or a BUILD-RED arm's
+    /// paired control - and each time the judge says which to observe next.
+    /// </summary>
+    [Fact]
+    public void NothingIsReached_BeforeWhatDecidesItIsObserved()
+    {
+        var nothing = new ArmObservation(Ready);
+        var built = nothing with { Build = Built() };
+        var negative = nothing with { Build = FailedAt(Object) };
+
+        Assert.Null(ArmJudge.Judge(TestRed, nothing));
+        Assert.Equal(ArmStep.Build, ArmJudge.Next(TestRed, nothing));
+        Assert.Null(ArmJudge.Judge(TestRed, built));
+        Assert.Equal(ArmStep.Run, ArmJudge.Next(TestRed, built));
+        Assert.Null(ArmJudge.Judge(BuildRed, negative));
+        Assert.Equal(ArmStep.Control, ArmJudge.Next(BuildRed, negative));
+        Assert.Equal(ArmStep.Build, ArmJudge.Next(BuildRed, nothing));
+    }
+
+    /// <summary>
+    /// A build that was stopped, or reached a guard's verdict, decides the arm with that verdict - the mutated build's or
+    /// the paired control's - whatever it says failed or was not rebuilt, which a build that did not finish never proves.
+    /// </summary>
+    [Theory]
+    [InlineData(LegVerdict.Stopped)]
+    [InlineData(LegVerdict.InputsMoved)]
+    [InlineData(LegVerdict.Contended)]
+    [InlineData(LegVerdict.Unmeasured)]
+    [InlineData(LegVerdict.Unwitnessed)]
+    public void ABuildThatDidNotFinish_DecidesWithItsOwnVerdict(LegVerdict verdict)
+    {
+        var unfinished = new ArmBuild(ReachedVerdict.Of(verdict, "why it did not finish"), [Upstream], [Object]);
+
+        var mutated = ArmJudge.Judge(TestRed, new ArmObservation(Ready) { Build = unfinished });
+        var control = ArmJudge.Judge(BuildRed, new ArmObservation(Ready) { Build = FailedAt(Object), Control = unfinished });
+
+        Assert.Equal((verdict, "the mutated build: why it did not finish"), (mutated?.Verdict, mutated?.Detail));
+        Assert.Equal((verdict, "the paired control's build: why it did not finish"), (control?.Verdict, control?.Detail));
+    }
+
+    /// <summary>
+    /// A mutated build that failed at a step no object depending on the site is - or named no step - is failed, for
+    /// either kind of arm, wherever in the build that step is; one that failed only at such objects is the mutation not
+    /// compiling, which a TEST-RED arm never declares.
+    /// </summary>
+    [Fact]
+    public void AFailedBuild_IsJudgedByWhereItFailed()
+    {
+        Assert.Equal(
+            (LegVerdict.Failed, $"the mutated build failed at {Upstream}, which is no object that depends on the site"),
+            Reached(TestRed, FailedAt(Object, Upstream)));
+        Assert.Equal(
+            (LegVerdict.Failed, $"the mutated build failed at {Upstream}, which is no object that depends on the site"),
+            Reached(BuildRed, FailedAt(Upstream)));
+        Assert.Equal(
+            (LegVerdict.Failed, "the mutated build failed, and named no step that failed: exited 1"),
+            Reached(BuildRed, FailedAt()));
+        Assert.Equal(
+            (LegVerdict.Violated, $"declared TEST-RED, and the mutation does not compile: {Object}, {HeaderObject}"),
+            Reached(TestRed, FailedAt(Object, HeaderObject)));
+
+        static (LegVerdict?, string?) Reached(MutationArm arm, ArmBuild build)
+        {
+            var verdict = ArmJudge.Judge(arm, new ArmObservation(Ready) { Build = build });
+
+            return (verdict?.Verdict, verdict?.Detail);
+        }
+    }
+
+    /// <summary>
+    /// A mutated build that built, with an object depending on the site ninja's log shows it did not rebuild, is
+    /// unwitnessed, for either kind of arm: what it built is no evidence of the mutation.
+    /// </summary>
+    [Fact]
+    public void ABuildThatDidNotRebuildADependent_IsUnwitnessed()
+    {
+        var one = ArmJudge.Judge(TestRed, new ArmObservation(Ready) { Build = Built(notRebuilt: [Object]) });
+        var two = ArmJudge.Judge(BuildRed, new ArmObservation(Ready) { Build = Built(notRebuilt: [Object, HeaderObject]) });
+
+        Assert.Equal((LegVerdict.Unwitnessed, $"{Object} depends on the site, and the mutated build did not rebuild it"), (one?.Verdict, one?.Detail));
+        Assert.Equal(
+            (LegVerdict.Unwitnessed, $"{Object}, {HeaderObject} depend on the site, and the mutated build did not rebuild them"),
+            (two?.Verdict, two?.Detail));
+    }
+
+    /// <summary>
+    /// A BUILD-RED arm: its mutation building is a violation; its paired control is judged once the mutation failed where
+    /// it should - not building a violation, not rebuilding a dependent unwitnessed, and building passed.
+    /// </summary>
+    [Fact]
+    public void ABuildRedArm_IsJudgedByItsMutationAndItsPairedControl()
+    {
+        var negative = FailedAt(Object);
+
+        Assert.Equal(
+            (LegVerdict.Violated, "declared BUILD-RED, and the mutation built"),
+            Reached(new ArmObservation(Ready) { Build = Built() }));
+        Assert.Equal(
+            (LegVerdict.Violated, $"the paired positive control did not build: {Object}"),
+            Reached(new ArmObservation(Ready) { Build = negative, Control = FailedAt(Object) }));
+        Assert.Equal(
+            (LegVerdict.Violated, "the paired positive control did not build"),
+            Reached(new ArmObservation(Ready) { Build = negative, Control = FailedAt() }));
+        Assert.Equal(
+            (LegVerdict.Unwitnessed, $"{HeaderObject} depends on the site, and the paired control's build did not rebuild it"),
+            Reached(new ArmObservation(Ready) { Build = negative, Control = Built(notRebuilt: [HeaderObject]) }));
+        Assert.Equal(
+            (LegVerdict.Passed, $"the mutation stops the build at {Object}, and its paired control builds"),
+            Reached(new ArmObservation(Ready) { Build = negative, Control = Built() }));
+
+        static (LegVerdict?, string?) Reached(ArmObservation observation)
+        {
+            var verdict = ArmJudge.Judge(BuildRed, observation);
+
+            return (verdict?.Verdict, verdict?.Detail);
+        }
+    }
+
+    /// <summary>Each row of a TEST-RED arm's run reaches its own verdict, saying what it found.</summary>
+    [Theory]
+    [MemberData(nameof(RunRowNames))]
+    public void EachRowOfTheRun_ReachesItsVerdict(string row)
+    {
+        var (run, verdict, detail) = RunRows[row];
+
+        var reached = ArmJudge.Judge(TestRed, new ArmObservation(Ready) { Build = Built(), Run = run });
+
+        Assert.Equal((verdict, detail), (reached?.Verdict, reached?.Detail));
+    }
+
+    /// <summary>
+    /// The run's rows are read in order: a hang - past its bound, or silent - which leaves no report anybody reads; a
+    /// failing exit with no failing case before the count; a count that differs before no case red, so a run that
+    /// skipped the guarded case never reads as one that survived; the red set before the neighbours, and the neighbours
+    /// before the diagnostic.
+    /// </summary>
+    [Fact]
+    public void TheRunsRows_AreReadInOrder()
+    {
+        Assert.StartsWith("ran past", Detail(ArmRun.StoppedAt(new RunBound(TimeSpan.FromMinutes(2), "10x the unmutated run"))), StringComparison.Ordinal);
+        Assert.StartsWith("printed nothing for 30s", Detail(ArmRun.Hung(30)), StringComparison.Ordinal);
+        Assert.StartsWith("exited 1, and", Detail(Ran(1, Report([], ["Fixture.Depth"]))), StringComparison.Ordinal);
+        Assert.StartsWith("ran 1 case(s), and the arm declares", Detail(Ran(0, Report([], ["Fixture.Depth"]))), StringComparison.Ordinal);
+        Assert.StartsWith(
+            "the cases that failed",
+            Detail(Ran(1, Report(["Fixture.Other"], ["Fixture.Charge", "Fixture.Third"], notRun: ["Fixture.Depth"]), said: false)),
+            StringComparison.Ordinal);
+        Assert.StartsWith(
+            "neighbour",
+            Detail(Ran(1, Report(["Fixture.Charge"], ["Fixture.Other", "Fixture.Third"], notRun: ["Fixture.Depth"]), said: false)),
+            StringComparison.Ordinal);
+
+        static string? Detail(ArmRun run) => ArmJudge.Judge(TestRed, new ArmObservation(Ready) { Build = Built(), Run = run })?.Detail;
+    }
+
+    /// <summary>A build that passed, with every dependent rebuilt where <paramref name="notRebuilt"/> names none.</summary>
+    private static ArmBuild Built(IReadOnlyList<string>? notRebuilt = null) => new(ReachedVerdict.Of(LegVerdict.Passed, "built"), [], notRebuilt ?? []);
+
+    /// <summary>A build that failed, saying <paramref name="steps"/> failed.</summary>
+    private static ArmBuild FailedAt(params string[] steps) => new(ReachedVerdict.Of(LegVerdict.Failed, "exited 1"), steps, []);
+
+    /// <summary>A run that exited <paramref name="exitCode"/> and wrote <paramref name="report"/>.</summary>
+    private static ArmRun Ran(int exitCode, JUnitReport report, bool said = true) => ArmRun.Exited(exitCode, RunReport.Of(report), said);
+
+    /// <summary>A report as GoogleTest writes one: the red cases, the green ones, and those it did not run.</summary>
+    private static JUnitReport Report(string[] reds, string[] greens, string[]? notRun = null)
+    {
+        static string Case(string id, string status, string body)
+        {
+            var dot = id.IndexOf('.', StringComparison.Ordinal);
+
+            return $"<testcase classname=\"{id[..dot]}\" name=\"{id[(dot + 1)..]}\" status=\"{status}\">{body}</testcase>";
+        }
+
+        var xml = "<testsuites><testsuite name=\"Fixture\">"
+            + string.Concat(reds.Select(id => Case(id, "run", "<failure message=\"red\"/>")))
+            + string.Concat(greens.Select(id => Case(id, "run", string.Empty)))
+            + string.Concat((notRun ?? []).Select(id => Case(id, "notrun", string.Empty)))
+            + "</testsuite></testsuites>";
+
+        return JUnitReport.Read(xml) ?? throw new InvalidOperationException($"No report: {xml}");
+    }
+}

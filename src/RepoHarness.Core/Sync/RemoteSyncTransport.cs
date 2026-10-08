@@ -2,6 +2,7 @@ using System.Text.Json;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Sync;
@@ -90,6 +91,22 @@ public sealed class RemoteSyncTransport(
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
                 $"{Host} did not answer which copies it keeps beside '{repositoryPath}'.");
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Asked from the home directory, as a copy's removal is: the tree the workers copy, and the directory it was kept
+    /// in, may be gone, and a host with none there answers that it removed none.
+    /// </remarks>
+    public async Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
+        => (await AskAsync<SyncWorkersAnswer>(
+                    root,
+                    measureOnly ? [SyncServe.RemoveWorkers, root, SyncServe.MeasureOnly] : [SyncServe.RemoveWorkers, root],
+                    cancellationToken,
+                    HomeDirectory)
+                .ConfigureAwait(false))?.Workers
+            ?? throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{Host} did not answer which mutation workers beside '{root}' it removed.");
 
     /// <inheritdoc/>
     public async Task<SyncManifest> ReadManifestAsync(
@@ -345,6 +362,11 @@ public sealed class RemoteSyncTransport(
                     Arguments = [HostAgentProtocol.CommandName],
                     StandardInput = request + "\n",
                     HoldStandardInputOpen = true,
+
+                    // The answer arrives on standard output as one line, which can be a whole file's
+                    // content and is read whole; standard error is shown line by line as it comes, and
+                    // only its end is kept, for the message that says how the operation ended.
+                    ErrorKept = StreamKept.Tail,
                     OnOutputLine = line =>
                     {
                         if (lines.Output(line))

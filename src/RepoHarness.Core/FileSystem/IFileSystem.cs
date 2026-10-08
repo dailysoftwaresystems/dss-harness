@@ -201,6 +201,20 @@ public interface IFileSystem
     /// <remarks>Raised and dated as <see cref="LastWriteTimeUtc"/> is, and for the same reasons.</remarks>
     DateTime CreationTimeUtc(string path);
 
+    /// <summary>Dates the file at <paramref name="path"/> as last written at <paramref name="writtenUtc"/>.</summary>
+    /// <param name="path">The file to date.</param>
+    /// <param name="writtenUtc">When it is to read as last written, in UTC.</param>
+    /// <exception cref="FileNotFoundException">Nothing, or a directory, is at the path.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not date the file.</exception>
+    /// <remarks>
+    /// For a file whose bytes the harness itself just wrote into a tree it builds, so that an incremental build, which
+    /// orders timestamps, cannot read the file as older than an object built from what it held before: a mutation
+    /// sweep writes a site and puts it back within seconds - inside the resolution some file systems date a file to,
+    /// and on a machine whose clock steps - and each write is dated past everything the build made. Only a file:
+    /// nothing here dates a directory, and a directory's date is no file's.
+    /// </remarks>
+    void SetLastWriteTimeUtc(string path, DateTime writtenUtc);
+
     /// <summary>
     /// Writes bytes to a sibling temporary file and renames it over the target, so a reader never
     /// observes a half-written file and an interruption never truncates one.

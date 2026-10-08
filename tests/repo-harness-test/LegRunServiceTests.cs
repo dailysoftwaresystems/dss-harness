@@ -2,11 +2,13 @@ using System.Globalization;
 using System.Text.Json;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
@@ -1338,6 +1340,256 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A command admitting each unit of its legs' work - a sweep of mutation arms - holds no slot for the leg: each unit
+    /// asks its machine as it starts, named after its leg, holds its slot until it is disposed, and gives it back; a unit
+    /// asking not to settle is taken on one reading beside its sweep's other units. Every unit's line of progress is its
+    /// leg's.
+    /// </summary>
+    [Fact]
+    public async Task AWorkloadAdmittingEachUnit_HoldsNoSlotForTheLeg_AndAdmitsEachUnitByName()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var clock = new ManualClock();
+        IReadOnlyList<SlotEntry>? beforeAnyUnit = null;
+        IReadOnlyList<SlotEntry>? withBoth = null;
+        IReadOnlyList<SlotEntry>? afterTheFirst = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), local: new AdmissionSettings { HeavyLegs = 2, SettleSeconds = [90, 90] }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Sweep },
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), clock, settle: TimeSpan.FromSeconds(90)),
+            workAsync: async (work, token) =>
+            {
+                beforeAnyUnit = AdmissionKit.Read(record);
+
+                using (var first = await work.AdmitUnit(new UnitAdmission("first-arm"), token))
+                {
+                    using var second = await work.AdmitUnit(new UnitAdmission("second-arm", Settle: false), token);
+
+                    withBoth = AdmissionKit.Read(record);
+                    Assert.True(first?.Fact.Admitted);
+                    Assert.True(second?.Fact.Admitted);
+                }
+
+                afterTheFirst = AdmissionKit.Read(record);
+                work.Progress("swept");
+
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Empty(beforeAnyUnit!);
+        Assert.Equal(["native/first-arm", "native/second-arm"], withBoth!.Select(entry => entry.Leg));
+        Assert.Empty(afterTheFirst!);
+        Assert.Empty(AdmissionKit.Read(record));
+        Assert.Equal(TimeSpan.Zero, clock.Moved);
+        Assert.Contains("native: swept", harness.StandardOutput.ToString() + harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A unit whose work needs room - a worker's copy made, and its first build - claims it as it is taken, by its own
+    /// name, and gives it back as it is disposed.
+    /// </summary>
+    [Fact]
+    public async Task AUnitNeedingRoom_ClaimsItAsItIsTaken_AndGivesItBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
+        IReadOnlyList<RoomClaim>? during = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), local: new AdmissionSettings { HeavyLegs = 2 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Sweep },
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock(), fileSystem: room),
+            workAsync: async (work, token) =>
+            {
+                using (await work.AdmitUnit(new UnitAdmission("worker-1", AdmissionKit.Room(3)), token))
+                {
+                    during = AdmissionKit.ReadClaims(record);
+                }
+
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        var claim = Assert.Single(during!);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(("native/worker-1", 3 * AdmissionKit.Gibibyte), (claim.Holder.Leg, claim.Bytes));
+        Assert.Empty(AdmissionKit.ReadClaims(record));
+    }
+
+    /// <summary>
+    /// A WSL leg of a command admitting each unit is taken whole by this machine, which the distribution's memory figures
+    /// cannot show, and holds its slot while the distribution sweeps it; a distribution sent such a leg asks nothing for
+    /// its units, which this machine's slot already covers.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AWslLegOfAWorkloadAdmittingEachUnit_IsTakenWholeByThisMachine_AndItsUnitsAskNothingThere(bool inTheDistribution)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        IReadOnlyList<SlotEntry>? during = null;
+        Admission? unit = null;
+        var asked = false;
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = new AdmissionSettings { HeavyLegs = 2 } },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+            },
+            Legs = inTheDistribution
+                ? new(StringComparer.OrdinalIgnoreCase) { ["native"] = HostDoubles.Leg(harness.Platform.PlatformKey, harness.Platform.Processor) }
+                : new(StringComparer.OrdinalIgnoreCase) { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            during = AdmissionKit.Read(record);
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = host.Kind == HostKind.Local ? harness.Platform.Processor : "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true, Here: inTheDistribution ? HostId.Wsl("Ubuntu") : null) { Workload = Sweep },
+            hosts: hosts,
+            workAsync: async (work, token) =>
+            {
+                asked = true;
+                unit = await work.AdmitUnit(new UnitAdmission("arm"), token);
+                during = AdmissionKit.Read(record);
+
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(inTheDistribution ? [] : ["remote"], during!.Select(entry => entry.Leg));
+
+        // The leg's work runs where the leg is: in the distribution its unit asks, and nothing there takes it; the machine
+        // that sent the leg runs none of its work, so no unit of it asks here at all.
+        Assert.Equal(inTheDistribution, asked);
+        Assert.Null(unit);
+        Assert.Empty(AdmissionKit.Read(record));
+    }
+
+    /// <summary>
+    /// A host sent a leg of such a command admits each unit by the admission its own entry among the hosts declares:
+    /// what the machine that typed the command declares for itself says nothing of this one's memory, so a host whose
+    /// entry declares none asks nothing, whatever that machine declares.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AHostSentALegOfAWorkloadAdmittingEachUnit_AdmitsEachByItsOwnSettings(bool declared)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        var admission = new AdmissionSettings { HeavyLegs = 2 };
+        IReadOnlyList<SlotEntry>? withBoth = null;
+        var taken = new List<bool>();
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = declared ? null : admission },
+                Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree, Admission = declared ? admission : null } },
+            },
+            Legs = { ["arm"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", Ssh = HostName } },
+        };
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, Here: HostId.Ssh(HostName)) { Workload = Sweep },
+            workAsync: async (work, token) =>
+            {
+                using var first = await work.AdmitUnit(new UnitAdmission("first-arm"), token);
+                using var second = await work.AdmitUnit(new UnitAdmission("second-arm", Settle: false), token);
+
+                taken.AddRange([first is not null, second is not null]);
+                withBoth = AdmissionKit.Read(record);
+
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal([declared, declared], taken);
+        Assert.Equal(declared ? ["arm/first-arm", "arm/second-arm"] : [], withBoth!.Select(entry => entry.Leg));
+        Assert.Empty(AdmissionKit.Read(record));
+    }
+
+    /// <summary>
+    /// A command keyed apart - a sweep, whose work never touches the leg's tree - takes the lock its request chooses
+    /// instead of the build's: a build of the same leg holding its variant never keeps it off, and another run holding
+    /// the chosen key does, naming it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARequestsOwnLock_ReplacesTheBuildsLock(bool sweepHeld)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var config = OneLeg(harness);
+        var variant = VariantKey.For(config, config.Legs["native"], harness.Platform.PlatformKey);
+
+        var build = PlacedLeg.BuildLock(HostId.Local, temp.Path, variant, RunId.New(), "build");
+        var sweep = MutationWorkers.SweepLock(HostId.Local, temp.Path, variant, RunId.New(), "check-mutations");
+
+        await using var held = await runLock.AcquireAsync(layout, sweepHeld ? sweep : build, TestContext.Current.CancellationToken);
+
+        var verdicts = await RunAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Sweep, Lock = MutationWorkers.SweepLock },
+            runLock);
+
+        Assert.Equal(sweepHeld ? "refused-locked" : "passed", verdicts["native"].Verdict);
+
+        if (sweepHeld)
+        {
+            Assert.Contains(held.Entry.Holder.RunId, verdicts["native"].Detail, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// A record of the machine's heavy legs that cannot be read refuses the run, naming it: never a leg reported
     /// not-admitted as though the machine were busy, and never one started as though it were free.
     /// </summary>
@@ -1555,6 +1807,9 @@ public sealed class LegRunServiceTests
     /// <summary>A leg that builds and tests nothing but is heavy all the same, as a runner saying so makes it.</summary>
     private static LegWorkload Heavy => new(Build: false, Test: false, []) { DeclaredHeavy = true };
 
+    /// <summary>What a sweep of mutation arms has each leg do: build, in workers of its own, admitting each arm alone.</summary>
+    private static LegWorkload Sweep => LegWorkload.BuildOnly with { AdmitsEachUnit = true };
+
     /// <summary>The record of the heavy legs a test's admission keeps: never this machine's own.</summary>
     private static string AdmissionRecord(TempDirectory temp) => temp.Combine("state", "admission.json");
 
@@ -1726,7 +1981,8 @@ public sealed class LegRunServiceTests
         ScriptedHostCommands? hosts = null,
         DeveloperEnvironmentProvider? developerEnvironments = null,
         LegAdmission? admission = null,
-        ISyncTransportFactory? transports = null)
+        ISyncTransportFactory? transports = null,
+        Func<LegWork, CancellationToken, Task<LegEntry>>? workAsync = null)
     {
         var loader = HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
 
@@ -1753,10 +2009,11 @@ public sealed class LegRunServiceTests
             "test",
             RunId.New(),
             request,
-            (leg, _) =>
+            (leg, token) =>
             {
                 ran?.Invoke(leg.Leg);
-                return Task.FromResult(work?.Invoke(leg) ?? new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed });
+                return workAsync?.Invoke(leg, token)
+                    ?? Task.FromResult(work?.Invoke(leg) ?? new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed });
             },
             TestContext.Current.CancellationToken);
     }

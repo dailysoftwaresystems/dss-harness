@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using RepoHarness.Core.Execution;
 
 namespace RepoHarness.Core.Testing;
 
@@ -121,11 +122,11 @@ internal static class Ctest
     /// Whether <paramref name="runner"/> is ctest and <paramref name="output"/> says it had no test to run: a line of
     /// its own saying so, and no summary of tests that ran. Measured with ctest 4.3.2, a test that fails having printed
     /// the same line - one running ctest itself - leaves it in the output beside the summary, which ctest prints only
-    /// where tests ran.
+    /// where tests ran. Never said of output that could not be read back from its log.
     /// </summary>
     /// <param name="runner">The test runner an invocation starts, by name or path.</param>
-    /// <param name="output">What it printed.</param>
-    public static bool FoundNone(string runner, string output)
+    /// <param name="output">What it printed, read a line at a time: a suite's output can be larger than any text the harness could hold.</param>
+    public static bool FoundNone(string runner, PhaseOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
 
@@ -134,9 +135,27 @@ internal static class Ctest
             return false;
         }
 
-        var lines = output.ReplaceLineEndings("\n").Split('\n').Select(line => line.Trim()).ToList();
+        var none = false;
 
-        return lines.Any(line => line is NoTestsLine or NoConfigurationLine) && !lines.Any(Summary.IsMatch);
+        try
+        {
+            foreach (var line in output.Lines().SelectMany(line => line.ReplaceLineEndings("\n").Split('\n')).Select(line => line.Trim()))
+            {
+                if (Summary.IsMatch(line))
+                {
+                    return false;
+                }
+
+                none |= line is NoTestsLine or NoConfigurationLine;
+            }
+        }
+        catch (PhaseOutputUnreadException)
+        {
+            // It only explains a verdict the phase already reached: unread, nothing says ctest found none.
+            return false;
+        }
+
+        return none;
     }
 
     /// <summary>

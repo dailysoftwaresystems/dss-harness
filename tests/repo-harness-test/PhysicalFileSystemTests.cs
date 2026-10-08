@@ -698,6 +698,28 @@ public sealed class PhysicalFileSystemTests
     }
 
     /// <summary>
+    /// A file dated is read back with the date it was given, ahead of now as a mutation sweep dates a site it wrote, and
+    /// its bytes stay as they were; a path holding no file - nothing there, or a directory - is raised as not found,
+    /// as asking its date is, rather than dating a directory or answering that access was denied.
+    /// </summary>
+    [Fact]
+    public void SetLastWriteTimeUtc_DatesAFile_AndRaisesForAPathHoldingNone()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.WriteFile("site.cpp", "int x;");
+        var ahead = new DateTime(2099, 1, 2, 3, 4, 6, DateTimeKind.Utc);
+
+        Directory.CreateDirectory(temp.Combine("folder"));
+        Create().SetLastWriteTimeUtc(file, ahead);
+
+        Assert.Equal(ahead, Create().LastWriteTimeUtc(file));
+        Assert.Equal("int x;", File.ReadAllText(file));
+        Assert.Throws<FileNotFoundException>(() => Create().SetLastWriteTimeUtc(temp.Combine("absent.txt"), ahead));
+        Assert.Throws<FileNotFoundException>(() => Create().SetLastWriteTimeUtc(temp.Combine("folder"), ahead));
+        Assert.False(File.Exists(temp.Combine("absent.txt")), "dating a path holding nothing made a file there");
+    }
+
+    /// <summary>
     /// A file that is there, and whose time cannot be read - in a directory that can be listed but not
     /// searched, or read not at all - raises rather than being left out as gone: nothing says it is. A name
     /// starting with '.', hidden on Linux and macOS as a build directory's .ninja_log is, is no different.

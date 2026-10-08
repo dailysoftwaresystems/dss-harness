@@ -72,6 +72,9 @@ public sealed record LedgerLine(
     /// <summary>Each file the leg's steps kept, as <see cref="LegEntry.KeptOutputs"/> says.</summary>
     public IReadOnlyList<string> KeptOutputs { get; init; } = [];
 
+    /// <summary>Each mutation arm the leg was asked about, as <see cref="LegEntry.Arms"/> says.</summary>
+    public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
+
     /// <summary>
     /// The project whose tests the leg counted, as the test that reached its runner recorded it;
     /// <see langword="null"/> where no test counted any, or the leg resolves no project.
@@ -295,6 +298,7 @@ public sealed class LedgerReport
                     Admission = entry.Admission,
                     Space = entry.Space,
                     KeptOutputs = entry.KeptOutputs,
+                    Arms = entry.Arms,
                     Project = entry.Project,
                     TestSet = entry.TestSet,
                     TestCountNote = counts.GetValueOrDefault(entry.Leg),
@@ -365,10 +369,47 @@ public sealed class LedgerReport
             verdict,
             duration)));
 
+        rows.AddRange(RenderArms());
         rows.AddRange(RenderTimings());
         rows.AddRange(RenderTails());
 
         return rows;
+    }
+
+    /// <summary>
+    /// Each mutation arm that reached a verdict other than passed, as a block below the table: the arm and why, under the
+    /// leg it ran on, so a sweep of a hundred arms shows the ones to act on. An arm the sweep did not select is left out,
+    /// as it was asked; each arm is in the data form whatever it reached.
+    /// </summary>
+    /// <remarks>
+    /// Below rather than in the table, as the timings are: a leg's line says the worst its arms reached and how many
+    /// reached what, and the arms behind it would push every other leg's line apart.
+    /// </remarks>
+    private IReadOnlyList<string> RenderArms()
+    {
+        var arms = Lines
+            .SelectMany(line => line.Arms
+                .Where(arm => arm.Verdict is not (LegVerdict.Passed or LegVerdict.SkippedNotSelected))
+                .Select(arm => (line.Leg, Arm: arm)))
+            .ToList();
+
+        if (arms.Count == 0)
+        {
+            return [];
+        }
+
+        var leg = Width(Headings[0], arms.Select(item => item.Leg));
+        var arm = Width("ARM", arms.Select(item => item.Arm.Arm));
+        var verdict = Width(Headings[1], arms.Select(item => Verdicts.Display(item.Arm.Verdict)));
+
+        return
+        [
+            string.Empty,
+            "ARMS",
+            $"  {Headings[0].PadRight(leg)}  {"ARM".PadRight(arm)}  {Headings[1].PadRight(verdict)}  {Headings[3]}",
+            .. arms.Select(item =>
+                $"  {item.Leg.PadRight(leg)}  {item.Arm.Arm.PadRight(arm)}  {Verdicts.Display(item.Arm.Verdict).PadRight(verdict)}  {item.Arm.Detail}".TrimEnd()),
+        ];
     }
 
     /// <summary>
@@ -601,6 +642,10 @@ public sealed class LedgerReport
 
                 // Only where a step kept something, each as sync --pull takes it.
                 KeptOutputs = line.KeptOutputs.Count > 0 ? line.KeptOutputs : null,
+
+                // Only for a leg a sweep asked about arms: each arm, whatever it reached, an arm not selected among them, with
+                // what its run measured beside what it declares, and where its records are.
+                Arms = line.Arms.Count > 0 ? line.Arms.Select(arm => ArmDocument(arm, show)) : null,
                 Timings = line.Timings.Select(timing => new
                 {
                     timing.Phase,
@@ -610,6 +655,37 @@ public sealed class LedgerReport
             }),
         },
         JsonOptions);
+
+    /// <summary>
+    /// An arm's line as the record it leaves among its records holds it: the very shape it has beneath its leg in the
+    /// ledger's data, so one reader reads both.
+    /// </summary>
+    /// <param name="arm">The arm's line.</param>
+    internal static string ArmJson(ArmEntry arm)
+    {
+        ArgumentNullException.ThrowIfNull(arm);
+
+        return JsonSerializer.Serialize(ArmDocument(arm, AsWritten), JsonOptions);
+    }
+
+    /// <summary>
+    /// An arm's line as data: what it reached and why, with what its run measured beside what it declares, and where its
+    /// records are - each path and line of the harness's own told as <paramref name="show"/> tells it.
+    /// </summary>
+    private static object ArmDocument(ArmEntry arm, Func<string, string> show) => new
+    {
+        arm.Arm,
+        Verdict = Verdicts.Display(arm.Verdict),
+        Failure = Verdicts.IsFailure(arm.Verdict),
+        Detail = show(arm.Detail),
+        DurationSeconds = Seconds(arm.Duration),
+        arm.Worker,
+        arm.Cases,
+        arm.DeclaredCases,
+        arm.Reds,
+        arm.DeclaredReds,
+        Records = arm.Records is { } records ? show(records) : null,
+    };
 
     /// <summary>
     /// Which legs ran a different number of tests from the rest of their project and test set, and

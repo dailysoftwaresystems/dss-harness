@@ -23,7 +23,18 @@ public sealed record BuildDirectoryRecord(
     string? MakeProgram = null,
     string? CCompilerArguments = null,
     string? CxxCompilerArguments = null,
-    string? Generator = null);
+    string? Generator = null)
+{
+    /// <summary>
+    /// Each dependency FetchContent declared in it, by the name its <c>FETCHCONTENT_SOURCE_DIR_&lt;NAME&gt;</c> entry
+    /// gives it, with the source directory that entry names - empty where it names none, and the dependency was fetched
+    /// into <see cref="FetchContentBaseDirectory"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> FetchContentSources { get; init; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>Where FetchContent puts what it fetches, <c>&lt;name&gt;-src</c> for each source, or null where it did not say.</summary>
+    public string? FetchContentBaseDirectory { get; init; }
+}
 
 /// <summary>
 /// Refuses a build directory that was configured for something other than this leg.
@@ -64,10 +75,23 @@ public sealed class BuildDirectoryGuard(IFileSystem fileSystem, IHostPlatform pl
         string? cArguments = null;
         string? cxxArguments = null;
         string? generator = null;
+        string? fetchBase = null;
+        var fetched = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var line in _fileSystem.ReadAllText(cache).Split('\n'))
         {
             var text = line.Trim();
+
+            fetchBase ??= ValueOf(text, FetchContentBase);
+
+            // FETCHCONTENT_SOURCE_DIR_<NAME>:PATH=<directory>, one to each dependency FetchContent declared - and by its type
+            // alone, since CMake marks each advanced with an entry of the same name and -ADVANCED:INTERNAL after it.
+            if (text.StartsWith(FetchContentSource, StringComparison.Ordinal)
+                && text.IndexOf(PathEntry, StringComparison.Ordinal) is var end
+                && end > FetchContentSource.Length)
+            {
+                fetched[text[FetchContentSource.Length..end]] = text[(end + PathEntry.Length)..].Trim();
+            }
 
             home ??= ValueOf(text, "CMAKE_HOME_DIRECTORY");
             cCompiler ??= ValueOf(text, "CMAKE_C_COMPILER");
@@ -82,8 +106,21 @@ public sealed class BuildDirectoryGuard(IFileSystem fileSystem, IHostPlatform pl
             generator ??= ValueOf(text, "CMAKE_GENERATOR");
         }
 
-        return new BuildDirectoryRecord(home, cCompiler, cxxCompiler, buildType, makeProgram, cArguments, cxxArguments, generator);
+        return new BuildDirectoryRecord(home, cCompiler, cxxCompiler, buildType, makeProgram, cArguments, cxxArguments, generator)
+        {
+            FetchContentSources = fetched,
+            FetchContentBaseDirectory = fetchBase,
+        };
     }
+
+    /// <summary>What every cache entry naming the source of a dependency FetchContent declared starts with.</summary>
+    public const string FetchContentSource = "FETCHCONTENT_SOURCE_DIR_";
+
+    /// <summary>The cache entry naming where FetchContent puts what it fetches.</summary>
+    public const string FetchContentBase = "FETCHCONTENT_BASE_DIR";
+
+    /// <summary>What follows a cache entry's name where its value is a directory.</summary>
+    private const string PathEntry = ":PATH=";
 
     /// <summary>
     /// Refuses when the directory was configured from another tree, with another compiler, or for

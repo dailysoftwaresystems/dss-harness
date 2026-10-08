@@ -1,18 +1,36 @@
 namespace RepoHarness.Core.Execution;
 
 /// <summary>
-/// The exit codes the commands that run legs — <c>build</c>, <c>test</c> and <c>run</c> — add to the
-/// shared ones. Each stands for a verdict whose remedy differs from every other verdict's, which is
-/// the whole reason it is not reported as a plain failure.
+/// The exit codes the commands that run legs — <c>build</c>, <c>test</c>, <c>run</c> and
+/// <c>check-mutations</c> — add to the shared ones. Each stands for a verdict whose remedy differs from
+/// every other verdict's, which is the whole reason it is not reported as a plain failure.
 /// </summary>
 /// <remarks>
 /// These live in the range 1-9, reserved for a command's own contract, like
 /// <see cref="Git.VerifyGitStatus"/> and <see cref="Legs.LegsExit"/>. A shared code landing in that
 /// range collides with a command contract without anyone deciding it should, which
-/// <c>ExitCodeContractTests</c> exists to catch.
+/// <c>ExitCodeContractTests</c> exists to catch. <see cref="Violated"/>, <see cref="Survived"/> and
+/// <see cref="Unattributed"/> are reached only by a mutation arm, so only <c>check-mutations</c> exits
+/// with them.
 /// </remarks>
 public static class LegExit
 {
+    /// <summary>
+    /// A mutation arm's declaration did not hold: its sites or its texts, its target or its runner, the cases its
+    /// mutation reddened or ran, a neighbour it declares green, or its diagnostic; a mutation declared to redden a test
+    /// did not compile; or one declared to stop the build built, or its paired control did not. Remedy: fix the arm's
+    /// declaration, or the code it guards. Reported apart from a plain failure because the code under test may well be right: what is wrong is
+    /// what the registry says about it, or the code the arm guards moved from under the declaration.
+    /// </summary>
+    public const int Violated = 1;
+
+    /// <summary>
+    /// A mutation arm's mutation built and ran, and no case failed. Remedy: strengthen the test that should have
+    /// failed. The one verdict that says the tests themselves are too weak, where every other says the code, the
+    /// declaration or the machine is at fault.
+    /// </summary>
+    public const int Survived = 2;
+
     /// <summary>
     /// Files the tests read changed while they ran, or whether they held still could not be
     /// established; or, for a leg on another machine, a file its copy needed changed, or was
@@ -33,7 +51,8 @@ public static class LegExit
     /// <summary>
     /// The command exited zero, but the pattern that proves it ran never matched its output.
     /// Remedy: find out what actually ran. A wrapper that reports success without evidence is
-    /// indistinguishable from one that never ran.
+    /// indistinguishable from one that never ran. Of a mutation arm: its build passed with an object
+    /// that depends on a site not rebuilt, so nothing shows the binary held the mutation.
     /// </summary>
     public const int Unwitnessed = 5;
 
@@ -50,7 +69,16 @@ public static class LegExit
     /// use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of
     /// it ran. Remedy: wait for the heavy legs its line names, free memory or room on the filesystem it names, or raise
     /// the machine's limits. Distinct from a held lock, which is about one tree and one variant: this is about the whole
-    /// machine.
+    /// machine. A unit of a sweep - a worker, an arm - is admitted the same way, and ends so.
     /// </summary>
     public const int NotAdmitted = 7;
+
+    /// <summary>
+    /// A mutation arm's run failed, and nothing ties the failure to a case: the runner wrote no report, or one that is
+    /// no JUnit report, or exited failing with a report naming no failing case, or ran past its bound, or printed nothing for as long
+    /// as a phase may, and was stopped. Remedy:
+    /// contain the crash or hang in the case, or make the runner write its report. Distinct from a survived arm, whose
+    /// run passed: here something failed, and the evidence of what is missing.
+    /// </summary>
+    public const int Unattributed = 8;
 }

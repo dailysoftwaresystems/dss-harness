@@ -500,6 +500,20 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         throw new FileNotFoundException($"'{path}' is not there to be asked when it was created.", path);
     }
 
+    public void SetLastWriteTimeUtc(string path, DateTime writtenUtc)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        // The runtime would date a directory as readily, on Linux and macOS, and on Windows raise that access was denied:
+        // either way not what a caller dating a file it wrote should be told about a path holding none.
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException($"'{path}' is not there to be dated.", path);
+        }
+
+        File.SetLastWriteTimeUtc(path, writtenUtc);
+    }
+
     public Stream OpenRead(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

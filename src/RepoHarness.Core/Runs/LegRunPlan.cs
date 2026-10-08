@@ -64,8 +64,10 @@ public sealed record PlacedLeg(
     /// <remarks>
     /// What the leg is called wherever a reader sees its host - a <c>{host}</c> a label records, the
     /// progress a dispatching machine shows - and what its settings were read under. Never what it
-    /// is locked or scheduled by: that is the machine the work physically runs on, which to itself
-    /// is always this one.
+    /// is locked by: that is the machine the work physically runs on, which to itself is always this
+    /// one. It is what says the leg runs in a WSL distribution, there as on the machine that sent it:
+    /// that machine takes such a leg whole, its units asking nothing in the distribution, and a sweep
+    /// of it runs one worker - none of which the host it runs on, this one, could tell.
     /// </remarks>
     public HostId Named
     {
@@ -110,13 +112,25 @@ public sealed record PlacedLeg(
     /// </remarks>
     /// <exception cref="HarnessException">The leg builds nothing; see <see cref="BuildableProject"/>.</exception>
     public BuildRequest BuildRequestFor(HarnessConfig config, string runDirectory, bool time = false)
+        => BuildRequestFor(config, runDirectory, BuildableProject(), time);
+
+    /// <summary>
+    /// A build of <paramref name="project"/> as this leg builds, with what its host declares for it: its variant, its
+    /// cores, its host's programs and environment.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="runDirectory">Where this run's logs go.</param>
+    /// <param name="project">The project built: the leg's own, as a sweep's workers build it, or another one built the leg's way.</param>
+    /// <param name="time">Whether to report the profile timing.</param>
+    public BuildRequest BuildRequestFor(HarnessConfig config, string runDirectory, ProjectConfig project, bool time = false)
     {
         ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(project);
 
         return new BuildRequest(
             Name,
             TreeRoot,
-            BuildableProject(),
+            project,
             Variant,
             Host.Os ?? string.Empty,
             CoreCounts.Resolve(null, HostSettings.BuildCores, config.Defaults.BuildCores).Value,
@@ -303,18 +317,21 @@ public static class LegRunPlan
     /// run would have recorded for it.
     /// </summary>
     /// <param name="skipped">The line each leg would have had.</param>
+    /// <param name="unavailable">
+    /// What the command exits with where no failure turned a leg away (<see cref="LegRunRequest.NothingRunsExit"/>).
+    /// </param>
     /// <remarks>
     /// A leg turned away by a defect in this tool keeps that defect's exit code even though nothing
     /// ran: "no selected leg can run" and nothing else would send the reader to the hosts.
     /// </remarks>
-    public static CommandOutcome NothingRuns(IReadOnlyList<LegEntry> skipped)
+    public static CommandOutcome NothingRuns(IReadOnlyList<LegEntry> skipped, int unavailable = LegsExit.Unavailable)
     {
         ArgumentNullException.ThrowIfNull(skipped);
 
         var worst = Verdicts.Describe(Verdicts.Worst(skipped.Select(entry => entry.Verdict)));
 
         return CommandOutcome.Failed(
-            worst.IsFailure ? worst.ExitCode : LegsExit.Unavailable,
+            worst.IsFailure ? worst.ExitCode : unavailable,
             "no selected leg can run",
             [.. skipped.Select(entry => $"{entry.Leg}: {Verdicts.Display(entry.Verdict)}: {entry.Detail}")]);
     }
@@ -325,7 +342,7 @@ public static class LegRunPlan
         var leg = selected.Leg;
 
         // Neither is required here. A leg whose run builds nothing - its runner neither requires the
-        // build nor runs a step or phase naming {product} or {buildDir} - compiles nothing, and making
+        // build nor runs a step or phase naming {product}, {buildDir} or a compiler - compiles nothing, and making
         // it declare a project it has no use for would be a demand the tool invents. The commands that
         // do build refuse a leg with no project, naming what is missing: a run before any host is
         // measured, a build and a test as the build starts.

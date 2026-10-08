@@ -58,7 +58,10 @@ public sealed record RunStep(DateTimeOffset At, TimeSpan Duration, string Detail
 /// <param name="Unit">The failing unit the window belongs to.</param>
 /// <param name="Start">When the unit started.</param>
 /// <param name="End">When it reached its verdict.</param>
-/// <param name="Lines">The unit's own output, the start and verdict lines included.</param>
+/// <param name="Lines">
+/// The unit's own lines as the run recorded them, the start and verdict lines included: of a step's output, the last
+/// lines it printed, the rest being in its log.
+/// </param>
 public sealed record FailureWindow(
     string Unit,
     DateTimeOffset Start,

@@ -34,6 +34,13 @@ public sealed record BuildRequest(
     /// declares under <c>env</c>, with the developer environment the toolchain names set up over it.
     /// </summary>
     public IReadOnlyDictionary<string, string> HostEnvironment { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
+    /// The cache entries the configure removes before it sets its own, each a pattern as the build system matches one:
+    /// what whoever asks for this build gave an earlier configure of the directory and may no longer give, which the
+    /// cache would otherwise go on holding. Removed, each is the project's own default again.
+    /// </summary>
+    public IReadOnlyList<string> UnsetFirst { get; init; } = [];
 }
 
 /// <summary>What one leg's build did.</summary>

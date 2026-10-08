@@ -28,6 +28,16 @@
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The workflows that run this suite, as written: a test holds each to setting the variable the suite reads to
+         fail, rather than skip, a real build on a runner lacking a tool (see BuildTools). The one that promotes a
+         release is here too: a test holds it, and the one it starts, to what lets a release be published without the
+         suite running a second time (see PackagePipelineTests). -->
+    <EmbeddedResource Include="../../.github/workflows/test.yml" LogicalName="workflows/test.yml" />
+    <EmbeddedResource Include="../../.github/workflows/pipeline-pkg.yml" LogicalName="workflows/pipeline-pkg.yml" />
+    <EmbeddedResource Include="../../.github/workflows/deploy.yml" LogicalName="workflows/deploy.yml" />
+  </ItemGroup>
+
   <!-- Hands the tests the path of the CLI assembly, as the CLI project itself reports it.
        Guessing it from directory names breaks as soon as an output layout differs from
        the default one. -->

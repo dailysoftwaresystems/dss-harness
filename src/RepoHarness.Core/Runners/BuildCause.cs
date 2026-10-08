@@ -35,8 +35,9 @@ public sealed record BuildCause
     public string? Step { get; }
 
     /// <summary>
-    /// What the step or phase names that the build makes - <c>product</c>, <c>buildDir</c> - in the order it names them;
-    /// never empty for one, and empty where the runner requires the build.
+    /// What the step or phase names that the build makes - <c>product</c>, <c>buildDir</c>, <c>compiler_C</c>,
+    /// <c>compiler_CXX</c> - in the order it names them; never empty for one, and empty where the runner requires the
+    /// build.
     /// </summary>
     public IReadOnlyList<string> Names { get; }
 

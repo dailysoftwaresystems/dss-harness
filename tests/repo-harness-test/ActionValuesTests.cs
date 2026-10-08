@@ -9,6 +9,39 @@ namespace RepoHarness.Tests;
 /// <summary>The values an action reads, and what keeps a secret out of everything that prints.</summary>
 public sealed class ActionValuesTests
 {
+    /// <summary>
+    /// A line too long to keep whole is cut where no secret is parted: before the last characters that could still be the
+    /// start of one - as many as the longest, less one - and then before every secret the text holds that would still span
+    /// the cut, until none does; with no secret, where it is full. Each side masked alone then masks what the whole would.
+    /// </summary>
+    [Theory]
+    [InlineData("xxxxxxxxxxxxxxxxxxxx", 12)]
+    [InlineData("xxxxxxxxxxxxxxxxxxTOP", 13)]
+    [InlineData("xxxxxxxxxxxxxTOPSECRETxx", 13)]
+    [InlineData("xxxxxxxxxxxxxxTOPSECRET", 14)]
+    [InlineData("xxxxxxxxxTOPSECRETxxxxx", 9)]
+    [InlineData("xxxxxxxTOPSECRETxxKEY12x", 16)]
+    [InlineData("xxxxxxxxxxxxKEY12xxxxxxx", 12)]
+    [InlineData("xxxxxxxxxxxxxKEY12xxxxxx", 13)]
+    [InlineData("xxxxxxxTOPSECRETKEYxxxxx", 7)]
+    [InlineData("TOPSECRET", 0)]
+    public void Cut_PartsNoSecret(string text, int cut)
+    {
+        // RETKEY begins inside TOPSECRET: moved before the one, the cut is spanned by the other.
+        var values = new ActionValues(
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["A"] = "TOPSECRET", ["B"] = "KEY12", ["C"] = "RETKEY" });
+
+        Assert.Equal(cut, values.Cut(text));
+
+        if (cut > 0)
+        {
+            Assert.Equal(values.Redact(text), values.Redact(text[..cut]) + values.Redact(text[cut..]));
+        }
+
+        Assert.Equal(20, ActionValues.Empty.Cut("xxxxxxxxxxxxxxxxxxxx"));
+    }
+
     [Fact]
     public async Task ReadAsync_MergesEveryFileInADirectory()
     {
@@ -75,6 +108,8 @@ public sealed class ActionValuesTests
     [InlineData("product")]
     [InlineData("buildDir")]
     [InlineData("config")]
+    [InlineData("compiler_C")]
+    [InlineData("compiler_CXX")]
     public async Task ReadAsync_Refuses_APlainValueNamedLikeANameThisToolFillsIn(string name)
     {
         using var temp = new TempDirectory();

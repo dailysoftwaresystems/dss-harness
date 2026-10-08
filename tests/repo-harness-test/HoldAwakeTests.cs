@@ -255,6 +255,9 @@ public sealed class HoldAwakeTests
         var request = Assert.Single(sent);
         Assert.Equal(HostAgentRequestKind.Hold, request.Kind);
         Assert.Equal(600, request.HoldAwakeSeconds);
+
+        // Its standard error is read line by line for the hold's refusal, and only its end is kept.
+        Assert.All(hosts.Calls, call => Assert.Equal(StreamKept.Tail, call.Command.ErrorKept));
         Assert.Equal(Caffeinate, request.KeepAwake);
         Assert.Equal("mac", request.KeepAwakeEnvironment["RH_HOST"]);
         Assert.Equal(["/opt/homebrew/bin"], request.KeepAwakeDirectories);

@@ -108,7 +108,7 @@ public sealed class ProjectConfig : VariantOverlay
     /// </summary>
     /// <remarks>
     /// An entry is a path, or a mapping of platform to path where the platforms disagree about what
-    /// the same target is called — a program is <c>dsscp</c> on one and <c>dsscp.exe</c> on another.
+    /// the same target is called — a program is <c>app</c> on one and <c>app.exe</c> on another.
     /// A bare path applies everywhere, so a list written before this still means what it did.
     /// </remarks>
     public List<BuildOutput> BuildOutputs { get; init; } = [];
@@ -173,4 +173,68 @@ public sealed class ProjectConfig : VariantOverlay
 
     /// <summary>How to run this project's tests, unless a leg overrides it.</summary>
     public TestConfig? Test { get; init; }
+
+    /// <summary>
+    /// This project building <paramref name="targets"/> alone, its build witnessed by <paramref name="outputs"/> - what
+    /// those targets make, relative to the build directory - and in every other way the project it is.
+    /// </summary>
+    /// <param name="targets">The targets to build.</param>
+    /// <param name="outputs">The files a build of them must leave, as the leg's own build manifest names them.</param>
+    /// <remarks>
+    /// What a mutation arm builds: its own target, in the leg's own project and variant. Its outputs are what those
+    /// targets make, never the project's own, which a build of one target need not touch: a build that made none of
+    /// them would read as one that passed by witnessing the files an earlier build left.
+    /// </remarks>
+    public ProjectConfig Retargeted(IReadOnlyList<string> targets, IReadOnlyList<string> outputs)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        ArgumentNullException.ThrowIfNull(outputs);
+
+        if (targets.Count == 0)
+        {
+            throw new ArgumentException("A build retargeted builds some target: one with none builds the project's default.", nameof(targets));
+        }
+
+        return Copy([.. targets], [.. outputs.Select(BuildOutput.Everywhere)], CacheVars);
+    }
+
+    /// <summary>
+    /// This project configured with <paramref name="cacheVars"/> beneath its own cache variables - each it sets itself
+    /// outranks one given here, its spelling with its value - and in every other way the project it is.
+    /// </summary>
+    /// <param name="cacheVars">What its configure is given where it sets nothing of its own.</param>
+    /// <remarks>
+    /// What a mutation worker configures with: the dependency sources the leg's own build fetched, so every worker builds
+    /// the very sources the leg does, and a worker the network cannot reach still configures. Names compare ignoring
+    /// case, as every name in the file does, so the project's own spelling is the one its configure is given.
+    /// </remarks>
+    public ProjectConfig WithCacheVarsBeneath(IReadOnlyDictionary<string, string> cacheVars)
+    {
+        ArgumentNullException.ThrowIfNull(cacheVars);
+
+        var merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, value) in cacheVars.Concat(CacheVars))
+        {
+            merged.Remove(name);
+            merged[name] = value;
+        }
+
+        return Copy(Targets, BuildOutputs, merged);
+    }
+
+    /// <summary>This project with <paramref name="targets"/>, <paramref name="outputs"/> and <paramref name="cacheVars"/>, and every other setting its own.</summary>
+    private ProjectConfig Copy(List<string>? targets, List<BuildOutput> outputs, Dictionary<string, string> cacheVars) => new()
+    {
+        Name = Name,
+        Type = Type,
+        Path = Path,
+        Env = Env,
+        CacheVars = cacheVars,
+        DefaultToolchain = DefaultToolchain,
+        RebuildableFormats = RebuildableFormats,
+        Test = Test,
+        Targets = targets,
+        BuildOutputs = outputs,
+    };
 }

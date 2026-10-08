@@ -1,0 +1,28 @@
+# The fixture's arms: one to each verdict an arm's design can reach on any machine - passed once to each red kind, and
+# once to a mutation coupled across two files - each named first in its why. The self-test holds each arm to that
+# verdict, so an arm judged otherwise is a defect of the harness, never of the fixture.
+#
+# A | arm | site | before | after | red-kind | target | runner | cases | diag | why
+A | charge-bound | src/fixture.cpp | texts/charge.before | texts/charge.after | TEST-RED | fixture | fixture_tests | 3 | texts/charge.diag | passed: the charge's bound is pinned by the one case that reads it, which says what it found
+C | charge-bound | Fixture.Charge | reads the bound
+G | charge-bound | Fixture.Depth | reads another constant, and stays green
+
+A | depth-type | src/budget.hpp | texts/depth.before | texts/depth.after | BUILD-RED | fixture | - | 0 | PAIRED-CONTROL | passed: a depth that is no integer does not compile, where another integer does
+B | depth-type | texts/depth.control-before | texts/depth.control-after | another integer builds
+
+A | depth-coupled | src/budget.hpp | texts/depth.before | texts/coupled.after | TEST-RED | fixture | fixture_tests | 3 | texts/coupled.diag | passed: the depth is renamed and changed where it is defined and renamed where it is read, either alone building nothing, and the one case that reads it says what it found
+M | depth-coupled | src/fixture.cpp | texts/coupled-use.before | texts/coupled-use.after | the library reads the depth by the name its header gives it
+C | depth-coupled | Fixture.Depth | reads the depth
+G | depth-coupled | Fixture.Charge | reads another constant, and stays green
+
+A | floor-misdeclared | src/fixture.cpp | texts/floor.before | texts/floor.after | TEST-RED | fixture | fixture_tests | 3 | texts/floor.diag | violated: its C row names a case the mutation leaves green, and not the one it reddens
+C | floor-misdeclared | Fixture.Charge | not the case the mutation reddens
+
+A | spare-unseen | src/fixture.cpp | texts/spare.before | texts/spare.after | TEST-RED | fixture | fixture_tests | 3 | texts/charge.diag | survived: no case reads what it mutates
+C | spare-unseen | Fixture.Charge | declared, and never red
+
+A | sanity-lost | src/fixture.cpp | texts/sanity.before | texts/sanity.after | TEST-RED | fixture | fixture_tests | 3 | texts/charge.diag | unattributed: the binary stops before it writes its report
+C | sanity-lost | Fixture.Charge | never reached: no report names it
+
+A | depth-unlinked | src/fixture.cpp | texts/unlinked.before | texts/unlinked.after | TEST-RED | fixture | fixture_tests | 3 | texts/charge.diag | failed: the test binary no longer links, which is no object built from the site
+C | depth-unlinked | Fixture.Charge | never reached: nothing is run

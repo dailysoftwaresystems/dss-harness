@@ -148,11 +148,11 @@ public sealed record ActionStep
 
     /// <summary>
     /// Whether the step needs its leg built first: a run line or its working directory names what the build makes -
-    /// <c>{product}</c> or <c>{buildDir}</c>, the names <see cref="NamesOfTheBuild"/> lists. Every leg of a run that runs
-    /// it - however the run comes to run it: by default, named with <c>run --manual-step</c> or under a runner's
-    /// <c>steps</c>, or needed by one that is - through whichever runner, is built before its steps start, whatever
-    /// that runner says of <c>requireBuild</c>. Limited by <see cref="RunOn"/>, it builds the legs of those systems
-    /// alone.
+    /// <c>{product}</c>, <c>{buildDir}</c> or one of the leg's compilers, the names <see cref="NamesOfTheBuild"/> lists.
+    /// Every leg of a run that runs it - however the run comes to run it: by default, named with
+    /// <c>run --manual-step</c> or under a runner's <c>steps</c>, or needed by one that is - through whichever runner,
+    /// is built before its steps start, whatever that runner says of <c>requireBuild</c>. Limited by
+    /// <see cref="RunOn"/>, it builds the legs of those systems alone.
     /// </summary>
     /// <remarks>
     /// Read from the lines, because the work is the step's, as its weight is. When the build was declared only on
@@ -164,7 +164,8 @@ public sealed record ActionStep
 
     /// <summary>
     /// What a run line or the working directory of this step names that the build makes - <c>product</c>,
-    /// <c>buildDir</c> - each once, in the order it first names them; empty where it names neither.
+    /// <c>buildDir</c>, <c>compiler_C</c>, <c>compiler_CXX</c> - each once, in the order it first names them; empty
+    /// where it names none.
     /// </summary>
     public IReadOnlyList<string> NamesOfTheBuild => LegPathNames.BuiltNamesIn(Written.Select(written => written.Text));
 

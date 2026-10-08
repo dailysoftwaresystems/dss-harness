@@ -49,7 +49,7 @@ internal static class TestCommand
 
     private static readonly Option<bool> ForceLockOption = new("--force-lock")
     {
-        Description = "Take a lock a run on another host holds. Always a human decision.",
+        Description = "Take a lock another run holds, on this host or another. Always a human decision.",
     };
 
     private static readonly Option<bool> UseStagedOption = DispatchOptions.UseStaged("Test");
@@ -157,6 +157,10 @@ internal static class TestCommand
             Identity = leg.IdentityFor(work.RunId.Value),
             Product = testProduct,
             ProductProblem = testProductProblem,
+
+            // Read only once the leg is built, and only where the invocation names a compiler: under --no-build, from
+            // the build already in its directory, which is what made the binaries it tests.
+            Compilers = toolchains.NamedFor(leg.Project, leg.BuildDirectory),
             HostTestCores = leg.HostSettings.TestCores,
             HostEnvironment = leg.Environment,
             Filter = filter,

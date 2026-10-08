@@ -1,3 +1,5 @@
+using System.Runtime.ExceptionServices;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -353,32 +355,28 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             // released by the finally below, as on every other path out.
             throw;
         }
-        catch (HarnessException ex)
+        catch (Exception ex) when (Verdicts.ForFailure(ex) is { } reached)
         {
-            // A refusal that is genuinely about this leg keeps its own verdict: a host that is
-            // switched off, or a tree git cannot answer in, is skipped-unavailable, neither of them
-            // a defect in the tool. The other legs still report.
-            entry = Entry(leg, ReachedVerdict.Of(Verdicts.ForRefusal(ex.ExitCode), ex.Message));
-        }
-        catch (Exception ex) when (KnownCauses.Names(ex))
-        {
-            // A cause this build can name, read from the table the command runner reads too, is not
-            // a defect in this tool: recorded as poisoned, a program that would not start read as
-            // exit 70 and sent the reader looking for a bug that was not there. Nor is it a skip. The
+            // What the failure comes to, read where every unit of work reads it. A refusal that is
+            // genuinely about this leg keeps its own verdict: a host that is switched off, or a tree
+            // git cannot answer in, is skipped-unavailable, neither of them a defect in the tool. What
+            // a phase printed that could not be read back from its log decides nothing, and says so.
+            // And a cause this build can name, read from the table the command runner reads too, is
+            // not a defect either: recorded as poisoned, a program that would not start read as exit
+            // 70 and sent the reader looking for a bug that was not there. Nor is it a skip. The
             // survey turned away, before anything started, every leg whose host lacks a program it
             // requires there; a program that still will not start once the leg is running is one it
             // could not require - a file the build was to make, a script in the tree, one a phase's
             // own PATH finds, a binary for another processor - and a leg that cannot start its own
-            // program has failed. Read
-            // as a skip, a build that never produced what its next step runs would pass a gate
-            // that accepts an incomplete run.
-            entry = Entry(leg, ReachedVerdict.Of(LegVerdict.Failed, ex.Message));
+            // program has failed. Read as a skip, a build that never produced what its next step runs
+            // would pass a gate that accepts an incomplete run. The other legs still report.
+            entry = Entry(leg, reached);
         }
         catch (Exception ex)
         {
             // The harness could not produce a verdict, which is what poisoned means. Recorded
             // rather than rethrown, so one broken leg does not take the other legs' results with it.
-            entry = Entry(leg, ReachedVerdict.Of(LegVerdict.Poisoned, $"{ex.GetType().Name}: {ex.Message}"));
+            entry = Entry(leg, ReachedVerdict.Of(LegVerdict.Poisoned, $"{ex.GetType().Name}: {ex.Message}{Held()}"));
         }
         finally
         {
@@ -386,6 +384,15 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             // slot while waiting on anything else.
             machine?.Release();
             overall?.Release();
+        }
+
+        // A leg whose work a refusal of the run ended after it had reached verdicts worth keeping answers with both: its
+        // line is the leg's, recorded as any line is, and the refusal is the run's, raised once the line is safe - so what
+        // the leg had measured is reported before the refusal, as a leg that finished before it is.
+        if (entry.EndsTheRun is { } refusal)
+        {
+            ledger.Record(entry with { EndsTheRun = null });
+            ExceptionDispatchInfo.Throw(refusal);
         }
 
         ledger.Record(entry);
@@ -415,6 +422,20 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             return running;
         }
     }
+
+    /// <summary>
+    /// How much memory this process held as a leg's exception reached here, said after the exception's own words: the
+    /// memory the system has given it, and how much of that is its managed heap.
+    /// </summary>
+    /// <remarks>
+    /// Said of every leg poisoned by an exception, because the exception's words alone send the reader the wrong way. A
+    /// consumer's leg ended "OutOfMemoryException: Insufficient memory to continue the execution of the program." with 34 GB
+    /// of the machine free: the runtime raises it for one object too large to make - a string past a billion characters - as
+    /// readily as for a machine with nothing left, and only what the process held tells the two apart.
+    /// </remarks>
+    private static string Held()
+        => $" (this process held {DiskSpace.Size(Environment.WorkingSet)} as it gave the leg up, "
+            + $"{DiskSpace.Size(GC.GetTotalMemory(forceFullCollection: false))} of it its managed heap)";
 
     /// <summary>The line a leg gets when the executor, rather than the leg's own work, decided its verdict.</summary>
     private static LegEntry Entry(LegPlan leg, ReachedVerdict reached)

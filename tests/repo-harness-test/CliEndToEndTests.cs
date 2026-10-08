@@ -949,10 +949,15 @@ public sealed partial class CliEndToEndTests
 
         Assert.Equal(HarnessExit.Success, served.ExitCode);
 
-        // The agent has answered and ended; the hold it started holds the machine on.
-        await EventuallyAsync(() => File.Exists(watched) && File.ReadAllText(watched).StartsWith("started ", StringComparison.Ordinal), token);
+        // The agent has answered and ended; the hold it started holds the machine on. Waited for as a whole line: the
+        // keepAwake writes the file while this reads it, and a read caught part way saw it held, or half written.
+        string? started = null;
 
-        var holder = int.Parse(File.ReadAllText(watched)["started ".Length..].Trim(), CultureInfo.InvariantCulture);
+        await EventuallyAsync(
+            () => (started = Written(watched)) is { } text && text.StartsWith("started ", StringComparison.Ordinal) && text.EndsWith('\n'),
+            token);
+
+        var holder = int.Parse(started!["started ".Length..].Trim(), CultureInfo.InvariantCulture);
         Assert.NotEqual(Environment.ProcessId, holder);
 
         await Task.Delay(TimeSpan.FromSeconds(1), token);
@@ -973,6 +978,22 @@ public sealed partial class CliEndToEndTests
             catch (ArgumentException)
             {
                 return false;
+            }
+        }
+
+        // What another process has written to the file so far, read as its writer allows; nothing where it is not there
+        // yet, or is held as it is written.
+        static string? Written(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (IOException)
+            {
+                return null;
             }
         }
     }
@@ -1557,7 +1578,7 @@ public sealed partial class CliEndToEndTests
                         {
                             Runner = TestHost.DotnetExecutable,
                             Args = ["exec", TestHost.AssemblyPath],
-                            Env = new Dictionary<string, string>(StringComparer.Ordinal) { [TestHost.ChildModeVariable] = "echo-args" },
+                            Env = new Dictionary<string, string>(StringComparer.Ordinal) { [TestHost.ChildModeVariable] = "echo-command-line" },
                             LabelArg = labelArg,
                             SuccessPattern = @"\[-L\]\s+\[unit\]",
                         },
@@ -1609,7 +1630,7 @@ public sealed partial class CliEndToEndTests
                         {
                             Runner = TestHost.DotnetExecutable,
                             Args = ["exec", TestHost.AssemblyPath],
-                            Env = new Dictionary<string, string>(StringComparer.Ordinal) { [TestHost.ChildModeVariable] = "echo-args" },
+                            Env = new Dictionary<string, string>(StringComparer.Ordinal) { [TestHost.ChildModeVariable] = "echo-command-line" },
                             ExcludeArg = "-LE",
                             RemoteExcludes = ["git-state"],
                             SuccessPattern = @"\[-LE\]\s+\[git-state\]",
@@ -2020,7 +2041,8 @@ public sealed partial class CliEndToEndTests
     /// <summary>
     /// A real configure, by the CMake on this machine: the compiler it resolved is named on the leg's
     /// line by build and by a runner that builds, read back from what CMake itself wrote. Skipped
-    /// where this machine has no CMake, no Ninja or no C compiler.
+    /// where this machine has no CMake, no Ninja or no C compiler - and failed there instead, where it
+    /// says it is meant to hold every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task ARealConfigure_IsNamedOnTheLegsLine_ByBuildAndByARunnerThatBuilds()
@@ -2029,11 +2051,7 @@ public sealed partial class CliEndToEndTests
         var platform = harness.Platform;
         var compiler = OperatingSystem.IsWindows() ? "gcc" : "cc";
 
-        Assert.SkipUnless(
-            harness.ProcessRunner.FindExecutable("cmake") is not null
-                && harness.ProcessRunner.FindExecutable("ninja") is not null
-                && harness.ProcessRunner.FindExecutable(compiler) is not null,
-            $"This machine lacks cmake, ninja or {compiler}, which a real configure needs.");
+        BuildTools.Need(harness.ProcessRunner, "a real configure", "cmake", "ninja", compiler);
 
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
@@ -2100,7 +2118,7 @@ public sealed partial class CliEndToEndTests
                 Assert.Contains("compiler: ", result.StandardError, StringComparison.Ordinal);
             }
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }
@@ -2111,7 +2129,8 @@ public sealed partial class CliEndToEndTests
     /// was renamed away since its last build: that target's object is still in the build directory, deeper than the
     /// path budget's reserve, and ninja says no target produces it any more. It is left out of the check and noted,
     /// naming what removes it, and the warning a consumer's builds gave every time is not given. Skipped where this
-    /// machine has no CMake, no Ninja, or no C compiler.
+    /// machine has no CMake, no Ninja, or no C compiler - and failed there instead, where it says it is meant to hold
+    /// every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task ARealIncrementalBuild_LeavesATargetRenamedAwayOutOfThePathBudget()
@@ -2122,11 +2141,7 @@ public sealed partial class CliEndToEndTests
         var platform = harness.Platform;
         var compiler = OperatingSystem.IsWindows() ? "gcc" : "cc";
 
-        Assert.SkipUnless(
-            harness.ProcessRunner.FindExecutable("cmake") is not null
-                && harness.ProcessRunner.FindExecutable("ninja") is not null
-                && harness.ProcessRunner.FindExecutable(compiler) is not null,
-            $"This machine lacks cmake, ninja or {compiler}, which a real build needs.");
+        BuildTools.Need(harness.ProcessRunner, "a real build", "cmake", "ninja", compiler);
 
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
@@ -2178,7 +2193,7 @@ public sealed partial class CliEndToEndTests
             Assert.Contains(Renamed, second.StandardError, StringComparison.Ordinal);
             Assert.DoesNotContain("WARN - native: the deepest path below this build directory", second.StandardError, StringComparison.Ordinal);
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }
@@ -2189,10 +2204,14 @@ public sealed partial class CliEndToEndTests
     /// does, by the CMake on this machine: its answer names C's compiler with no id, and C is identified
     /// from CMake's own record of it - named on the leg's line, and held to the toolchain's compilerId,
     /// a matching one building and another failing the leg, never leaving it unwitnessed. A test of the
-    /// build it did not make identifies C the same way, from a record the answer ties to it; after a
-    /// configure since that identified C again and failed - writing no answer, and leaving a record newer
-    /// than the last - nothing ties that record to the build, and C is unwitnessed rather than named
-    /// from it. Skipped where this machine has no CMake, no Ninja, or no C or C++ compiler.
+    /// build it did not make identifies C the same way, from a record the answer ties to it. After a
+    /// configure since that identified C again and failed - writing no answer, and leaving a record dated
+    /// after the last - C is unwitnessed where CMake's error index says a configure failed since, and
+    /// named from the record where CMake before 4 leaves nothing to say so, the record naming the
+    /// compiler the answer names; after one that identified another program for C, nothing ties the
+    /// record to the build, and C is unwitnessed rather than named from it. Never by the record's date.
+    /// Skipped where this machine has no CMake, no Ninja, or no C or C++ compiler - and failed there instead, where it
+    /// says it is meant to hold every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task ALanguageOnlyADependencyEnables_IsIdentified_AndHeldToTheToolchain()
@@ -2200,18 +2219,15 @@ public sealed partial class CliEndToEndTests
         var harness = new HarnessFactory();
         var platform = harness.Platform;
         var (c, cxx) = OperatingSystem.IsWindows() ? ("gcc", "g++") : ("cc", "c++");
-        var programs = new[] { "cmake", "ninja", c, cxx }.ToDictionary(program => program, harness.ProcessRunner.FindExecutable);
+        BuildTools.Need(harness.ProcessRunner, "a real configure", "cmake", "ninja", c, cxx);
 
-        Assert.SkipUnless(
-            programs.Values.All(found => found is not null),
-            $"This machine lacks cmake, ninja, {c} or {cxx}, which a real configure needs.");
+        var programs = new[] { "cmake", "ninja", c, cxx }.ToDictionary(program => program, harness.ProcessRunner.FindExecutable);
 
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
 
-        // Real builds, which a build system orders by the times of the files they write, and records
-        // held to answers by theirs: on a clock that steps, what they do proves nothing here. Watched
-        // from before the files they build from are written.
+        // Real builds, which a build system orders by the times of the files they write: on a clock that
+        // steps, what they do proves nothing here. Watched from before the files they build from are written.
         using var clock = new ClockWatch();
 
         HarnessConfig Config(params (string Language, string Id)[] declared)
@@ -2252,6 +2268,30 @@ public sealed partial class CliEndToEndTests
         }
 
         Task<(JsonElement Leg, string Said, string Records)> BuildAsync() => RunAsync("build");
+
+        // A configure of the leg's directory from outside the harness, run with --fresh so it identifies C
+        // again - with cCompiler - and failing after the dependency enabled C. Returns the error index CMake
+        // left in place of an answer, by file name, as CMake 4 does; or null where it left none.
+        async Task<string?> FailedConfigureAsync(string cCompiler)
+        {
+            var directory = temp.Combine("build", $"{platform.Processor}-cc-debug");
+            var failed = await harness.ProcessRunner.RunAsync(
+                new ProcessRequest
+                {
+                    FileName = programs["cmake"]!,
+                    Arguments = ["--fresh", "-S", temp.Path, "-B", directory, "-G", "Ninja", $"-DCMAKE_MAKE_PROGRAM={programs["ninja"]}", "-DFAIL=ON"],
+                    Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["CC"] = cCompiler, ["CXX"] = cxx },
+                    AppendToPath = [.. programs.Values.Select(found => Path.GetDirectoryName(found)!).Distinct(StringComparer.Ordinal)],
+                },
+                token);
+
+            Assert.True(failed.ExitCode != 0, $"the configure meant to fail passed: {failed.StandardOutput}");
+
+            return Directory.EnumerateFiles(Path.Combine(directory, ".cmake", "api", "v1", "reply"), "error-*.json")
+                .Select(Path.GetFileName)
+                .Order(StringComparer.Ordinal)
+                .LastOrDefault();
+        }
 
         await harness.InitializeHarnessAsync(temp.Path, token, Config());
 
@@ -2316,25 +2356,30 @@ public sealed partial class CliEndToEndTests
                 tested.GetProperty("compilers").EnumerateArray(),
                 compiler => compiler.GetProperty("language").GetString() == "C" && compiler.GetProperty("id").GetString() == ids["C"]);
 
-            var failed = await harness.ProcessRunner.RunAsync(
-                new ProcessRequest
-                {
-                    FileName = programs["cmake"]!,
-                    Arguments = ["--fresh", "-S", temp.Path, "-B", temp.Combine("build", $"{platform.Processor}-cc-debug"), "-G", "Ninja", $"-DCMAKE_MAKE_PROGRAM={programs["ninja"]}", "-DFAIL=ON"],
-                    Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["CC"] = c, ["CXX"] = cxx },
-                    AppendToPath = [.. programs.Values.Select(found => Path.GetDirectoryName(found)!).Distinct(StringComparer.Ordinal)],
-                },
-                token);
+            // The same compiler identified again by a configure that failed: from CMake 4 its error index says one
+            // failed since the answer, and before it nothing does, so the record is read as it names that compiler.
+            var failedSince = await FailedConfigureAsync(c);
+            var (again, againSaid, _) = await RunAsync("test", "--no-build");
 
-            Assert.True(failed.ExitCode != 0, $"the configure meant to fail passed: {failed.StandardOutput}");
+            if (failedSince is { } errorIndex)
+            {
+                Assert.True(again.GetProperty("verdict").GetString() == "unwitnessed", againSaid);
+                Assert.Contains($"CMake's '{errorIndex}' says one failed since that answer", again.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.True(again.GetProperty("verdict").GetString() == "passed", againSaid);
+            }
+
+            // Another program identified for C by one: whatever CMake leaves of the configure, nothing ties the record to the answer.
+            await FailedConfigureAsync(cxx);
 
             var (untied, untiedSaid, _) = await RunAsync("test", "--no-build");
 
             Assert.True(untied.GetProperty("verdict").GetString() == "unwitnessed", untiedSaid);
             Assert.Contains("CMake identified none for it", untied.GetProperty("detail").GetString(), StringComparison.Ordinal);
-            Assert.Contains("was written after that answer", untied.GetProperty("detail").GetString(), StringComparison.Ordinal);
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }
@@ -2351,7 +2396,8 @@ public sealed partial class CliEndToEndTests
     /// the object compiling the precompiled header, which records what it holds. The check reads every
     /// object and excuses exactly those that include nothing ninja keeps or are rebuilt that way. Skipped
     /// where this machine has no Visual Studio with the C++ build tools, or no CMake or Ninja in the
-    /// environment it sets up.
+    /// environment it sets up - and failed there instead, where a Windows machine says it is meant to
+    /// hold every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task AnMsvcLeg_BuildsFromAPlainShell_InTheEnvironmentVisualStudioSetsUp()
@@ -2364,7 +2410,10 @@ public sealed partial class CliEndToEndTests
 
         var found = await probe.CheckAsync(visualStudio, token);
 
-        Assert.SkipUnless(found.CanSetUp, $"This machine has no Visual Studio with the C++ build tools: {found.Reason}");
+        if (!found.CanSetUp)
+        {
+            BuildTools.Lacks($"This machine has no Visual Studio with the C++ build tools: {found.Reason}", couldHold: OperatingSystem.IsWindows());
+        }
 
         var setUp = await new DeveloperEnvironmentProvider(platform, harness.ProcessRunner, harness.FileSystem, harness.Output)
             .SetUpAsync("visualStudio", found, platform.Processor, new Dictionary<string, string>(), token);
@@ -2374,9 +2423,10 @@ public sealed partial class CliEndToEndTests
         var path = setUp.Environment.TryGetValue("PATH", out var set) ? set : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         var reachable = path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
 
-        Assert.SkipUnless(
-            new[] { "cmake.exe", "ninja.exe" }.All(program => reachable.Any(directory => File.Exists(Path.Combine(directory, program)))),
-            "This machine has no CMake or no Ninja in the environment Visual Studio sets up.");
+        if (!new[] { "cmake.exe", "ninja.exe" }.All(program => reachable.Any(directory => File.Exists(Path.Combine(directory, program)))))
+        {
+            BuildTools.Lacks("This machine has no CMake or no Ninja in the environment Visual Studio sets up.");
+        }
 
         using var temp = new TempDirectory();
 
@@ -2490,7 +2540,7 @@ public sealed partial class CliEndToEndTests
                 Assert.Equal("visualStudio", line.GetProperty("developerEnvironment").GetProperty("name").GetString());
             }
         }
-        catch (Exception ex) when (!clock.Held)
+        catch (Exception ex) when (clock.Explains(ex))
         {
             Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
         }

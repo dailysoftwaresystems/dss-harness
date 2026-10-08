@@ -13,10 +13,12 @@ If a behaviour cannot be expressed in `config.json`, that is a defect.
 ## Status
 
 Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
-`list-worktree`, `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
+`list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `fold-agent`,
+`delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
-`sync`, `build`, `test`, `run` and `help`.
+`sync`, `build`, `test`, `run`, `check-mutations`, `clean` and `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
 the present tense it is enforced, and a gap between the two is a defect in the tool rather
@@ -164,20 +166,26 @@ at once, with the line it concerns where the parser knows it:
   given another, or run with `--fresh` - rewrites it, and one that then fails writes no answer,
   which leaves the last one's beside a record of a compiler that built nothing there. Read that
   way, `test --no-build` named a compiler its binaries were not built with. So the record must name
-  the compiler the answer names, where the answer names one, and must have been written no later
-  than the answer, which a configure writes after every record it writes; a record nothing ties to
-  the answer identifies nothing, and the language is `unwitnessed`, with why. The answer keeps a
-  toolchain file's value as written, where the record holds what CMake's
+  the compiler the answer names, where the answer names one; a record nothing ties to the answer
+  identifies nothing, and the language is `unwitnessed`, with why. The answer keeps a toolchain
+  file's value as written, where the record holds what CMake's
   `Modules/CMakeDetermineCompiler.cmake` made of it, so the two are compared as that: a list's
   first item - `gcc.exe;-m64` names `gcc.exe` - a path tidied of `.`, `..` and doubled separators,
   with forward slashes, and a name alone found as a program, with `.com` or `.exe` after it on
-  Windows. Each tie leaves a case to the other: the time alone tells a later record apart where the
-  answer names no compiler, as under Visual Studio, where it names one by its name alone, which a
-  program of that name elsewhere answers to, and where the same file was replaced in place; the
-  compiler alone does where a clock stepped back since the answer was written. Measured with CMake
-  3.29 and 4.3: MSVC through Ninja and through Visual Studio 18 2026, gcc on Windows and on Linux,
-  toolchain files naming the compiler each of those ways, and a configure that failed after
-  identifying the compiler again. A language
+  Windows. Measured with CMake 3.29 and 4.3: MSVC through Ninja and through Visual Studio 18 2026,
+  gcc on Windows and on Linux, toolchain files naming the compiler each of those ways, and a
+  configure that failed after identifying the compiler again. Never by when either was written: a
+  host whose clock steps forward for a moment stamps a file ahead of one written after it - on a
+  consumer's WSL host, two files written a fraction of a second apart came out 24 seconds apart, and
+  a configure's own record came out dated after its answer, failing a leg as `unwitnessed` - and a
+  phase that starts and ends outside the step measures no drift. Read for the configure that wrote
+  it, the record can be no later configure's: only what that configure answered is read, and nothing
+  configures between it and the reading. Read for a directory a leg did not configure, a configure
+  since is told apart by what CMake leaves of it: one that identified another program by the
+  program the record names, and one that failed, whatever it identified, by the error index CMake 4
+  writes in place of an answer - kept beside the last answer, where a configure that answers
+  removes every one before it, measured with CMake 4.3. Before CMake 4 a configure that failed
+  leaves nothing of itself there, and the record is read as it names it. A language
   CMake identified nowhere, such as the resource compiler it lists on Windows, is left out of the
   compilers, and a toolchain declaring one is told what CMake's answer named for it and why that
   is no id, never that CMake named none. `test --no-build` names what its build
@@ -389,8 +397,8 @@ repositories are its own contents, and do not make it such a directory.
 
 ### What deleting one refuses
 
-Without `--force`, every check runs before anything is touched. A refusal deletes nothing,
-names everything it found on one line, each with its remedy, and exits 13:
+Without `--force`, every check runs before anything is touched. A refusal deletes nothing of the
+worktree, names everything it found on one line, each with its remedy, and exits 13:
 
 - **Uncommitted changes.** A modified, staged or untracked file git does not ignore, or a
   changed submodule. Status runs with `--untracked-files=normal` and
@@ -438,6 +446,15 @@ names everything it found on one line, each with its remedy, and exits 13:
 - **Held, on Windows.** Looked at last, once every check above has passed: a worktree something
   holds part of is refused on its own, since git's removal would stop part way on it.
   [Removal](#removal) says what holds one.
+- **A mutation worker kept.** The workers kept beside the worktree (see *Mutation testing*) go
+  before it, once every check above has passed, and are asked about before any goes: one a sweep
+  still running holds keeps the worktree, exit 13, and one that cannot be removed, or told for the
+  harness's - its marker cannot be read - keeps it as a failure, exit 20, as workers that cannot be
+  looked for do; nothing is removed. A sweep that takes one between the asking and the removal keeps
+  the worktree as well, and so does one whose removal then fails, the others gone by then, which is
+  said. An interruption as they go says which went and that the worktree is whole, exit 130.
+  `--force` deletes the worktree and leaves a worker that is held or could not be removed, saying
+  so, and deleting the worktree again removes it once nothing keeps it.
 
 Without `--force`, when the check cannot be finished, because git cannot answer, a record cannot
 be read or its directory found, or, on Windows, a directory in it cannot be looked through for
@@ -526,7 +543,8 @@ An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orc
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
 orchestrator under the root is shared with plain worktrees' names, so create-worktree refuses an orchestrator's
 name and create-orchestrator a worktree's, and delete-worktree never deletes a directory holding worktrees below
-it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own counts,
+it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own counts
+- but for a mutation worker kept beside an agent's worktree, a copy of it, which goes with its agent -
 and below any other directory with none of its own only what git records - a husk's submodules are its own contents,
 which `--force` deletes with it. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
 every record last - each agent's after the rest of that agent, the orchestrator's after its agents - so a removal that
@@ -1010,6 +1028,17 @@ Both ends must be the same build, so before anything runs on a host:
 - The version and the SHA-256 of the tool's assembly are both compared. A build from source
   reports the same version as the published package, while the assembly installed from one
   package is the same bytes on every operating system.
+- An install or update is said with whether the host then answered as this build - the
+  DssHarness it now runs read back, not the installer's word - and what stopped the host
+  answering after one is said as coming after it: `updated DssHarness 0.6.8 to 0.6.9, then the
+  host could not be reached: ssh said Connection timed out during banner exchange`. Said alone,
+  an update beside a warning for every leg on that host that DssHarness there did not answer left
+  a consumer unable to tell which version the host ran.
+- A host that takes the connection and never says it is an ssh server within the connect
+  timeout - asleep behind whatever took the connection, or still waking - could not be reached,
+  as one whose name did not resolve could not: ssh's "Connection timed out during banner
+  exchange" means no session began, so nothing ran there, and a host's `wakeWaitSeconds` waits
+  it out as a connection opens, as it waits out a name that did not resolve.
 
 `host-exec` returns the exit code of the command it ran on the host, unchanged, and 15 when
 nothing could run there: the host is unreachable, has no SDK, could not be brought to this
@@ -1180,19 +1209,22 @@ from the report.
 | Verdict | Meaning | Counts as failure |
 |---|---|---|
 | `passed` | Ran to completion, succeeded, and its success pattern matched | no |
-| `failed` | Ran to completion and reported failure | **yes** |
-| `unwitnessed` | Exited 0, but its success pattern never matched | **yes** |
+| `failed` | Ran to completion and reported failure; or a mutation arm's build failed at a step that is no object depending on its site - a link, another object - or named no step that failed | **yes** |
+| `unwitnessed` | Exited 0, but its success pattern never matched; or a mutation arm's build, or its paired control's, passed with an object that depends on a site not rebuilt | **yes** |
 | `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, a file its host's copy needed changed or was removed after the run began, before it was carried there, and nothing of the leg ran | **yes** |
-| `unmeasured` | Whether those files held still could not be established | **yes** |
+| `unmeasured` | Whether those files held still could not be established; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
-| `skipped-not-selected` | Filtered out by `--legs` | no |
-| `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; or git could not answer in its tree | warning |
+| `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, and a leg whose sweep drives no arm | no |
+| `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; git could not answer in its tree; or no worker of its sweep fits the room left or the path limit, and every arm of the leg with it | warning |
 | `skipped-tool-missing` | A required tool is not installed | warning |
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
-| `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran | **yes** |
+| `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran; or a unit of a sweep - a worker, an arm - waited so, and each arm the sweep had left once its machine refused one | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
-| `poisoned` | The harness could not produce a verdict | **yes** |
-| `stopped` | Something stopped its build from outside before it finished: ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build | no: incomplete |
+| `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up. A mutation arm whose site could not be put back as it was, or whose driving ended in a failure nobody named | **yes** |
+| `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a mutation arm was not driven to a verdict: its sweep stopped, or ended by a refusal of the run, while it was driven or before; its own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test binary not passing | no: incomplete |
+| `violated` | A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than the tree spells it or is no file the sweep's reading of the tree holds; its before-text is not in its site exactly once, or is replaced by itself; its target or its runner is not built, or no object they build depends on a site; its mutation reddened other cases than its C rows, ran another number of cases, left a G row's case unrun or left out its diagnostic; a mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired control did not | **yes** |
+| `survived` | A mutation arm's mutation built and ran, and no case reddened | **yes** |
+| `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, one that is no JUnit report, a failing exit whose report names no failing case, or a run stopped for passing its bound, or as hung for printing nothing for `defaults.stallSeconds` | **yes** |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
 "the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
@@ -1219,11 +1251,20 @@ write one file and each would read the other's output as its own. The remedies d
 waiting for the lock, against finding out which run still holds a finished run's logs - and a
 reader who cannot tell which fired cannot pick either.
 
+`violated`, `survived` and `unattributed` are reached only by an arm of `check-mutations`
+(see *Mutation testing*), and a leg's verdict there is the worst of its own and its arms'. They
+are three findings with three remedies: a declaration that does not hold is fixed in the
+registry or in the code it guards; a mutation no test noticed calls for a stronger test; and a
+failure nothing ties to a case calls for containing the crash or hang, or for a runner that
+writes its report.
+
 When several apply, the more fundamental one is reported: `poisoned`, then
 `unmeasured`, `inputs-moved`, `contended`, `log-held`, `refused-locked`, `not-admitted`,
-`failed`, and `unwitnessed`, with `stopped` before the skips, whose legs' work never began, and
-before `passed`, since it reached no verdict of its own. A leg whose inputs moved is not reported
-as failed even if its tests failed, because what failed was a tree that never existed.
+`failed`, `violated`, `survived`, `unattributed` and `unwitnessed`, with `stopped` before the
+skips, whose legs' work never began, and before `passed`, since it reached no verdict of its own.
+A finding about the code outranks the absence of evidence, so the three a mutation arm reaches
+come before `unwitnessed`, as `failed` does. A leg whose inputs moved is not reported as failed
+even if its tests failed, because what failed was a tree that never existed.
 
 **A leg that reached no verdict is never counted among the legs that passed.** A skip is not a
 failure — a switched-off machine is normal — and nor is a stopped build, but neither is a pass,
@@ -1258,7 +1299,9 @@ starting and across how many machines; each leg announces the steps it is about 
 step as it starts and finishes; and a child's own output under `--verbose` is tagged
 `<leg>/<phase>:`. Output is written a whole line at a time under one lock, so lines from legs
 running at once never interleave within a line. The log files keep each line as the child wrote it:
-the tag is for the terminal, so nothing that reads a log has to know about it.
+the tag is for the terminal, so nothing that reads a log has to know about it. Only a line longer
+than 32,768 characters is kept otherwise, in pieces of at most that many, each a line of its own,
+since no line is held whole on its way there (see Reporting).
 
 Within a leg the order is fixed:
 
@@ -1342,6 +1385,24 @@ only while it is fewer legs from the front than the fewest any leg up to it allo
 slots are always the front of the line, no leg runs beside more legs than its own configuration
 allows, and none passes a leg that asked before it.
 
+A waiting leg says where it stands as it starts each wait - who holds the slots, the memory in use, or
+the room and who claims it - again whenever the holders or the claimants change, and again, as it reads
+then and with how long it has waited of `maxWaitMinutes`, at least every 5 minutes: a consumer's leg
+waited 39 minutes for the memory with one line, which its reader's pipe - passing each line on only
+once the next came - delivered with the leg's admission, so the wait read as a hang. No wait
+before a look runs past those five minutes, though `pollSeconds` and the settle may each be an
+hour: a poll is cut at when the next line is due, and a settle is waited whole - the memory is read
+again only once all of it has passed - in pieces of at most five minutes, the leg saying between
+them that it still waits to look.
+
+**A sweep is admitted unit by unit.** A `check-mutations` leg can run for hours, and held whole it
+would keep a slot through every arm. So no slot is held for the leg: each worker is admitted as it
+is made, claiming the room its copy and build still need, and each arm as it starts, each unit
+holding a slot only while it runs and named `<leg>/<unit>` among the slots' holders. Only the
+sweep's first unit settles: settling every arm would add up to a minute and a half to each. A
+sweep in a WSL distribution is taken whole by this machine, which sends it there, as any heavy WSL
+leg is, and runs one worker.
+
 A leg holds its slot until its work ends - a runner's steps after its build, and a WSL leg's whole
 run there, included - and keeps its lock while it waits, so another run of its variant is
 `refused-locked` meanwhile, as it would be while the leg ran. A waiting leg counts against its
@@ -1358,8 +1419,8 @@ it, and never read as free: that is the one reading that would start every waiti
 
 **Heavy** is what builds or tests: a `build` or `test` leg, and a `run` leg whose runner - or a
 runner its expected exceptions' run checks name, which run within its legs - builds, requiring the
-build or running a step or phase that names `{product}` or `{buildDir}`, or says `"heavy": true`, or
-runs a step whose action says `heavy: true`. A step's `heavy: true` holds whichever runner starts it,
+build or running a step or phase that names `{product}`, `{buildDir}` or one of the leg's compilers,
+or says `"heavy": true`, or runs a step whose action says `heavy: true`. A step's `heavy: true` holds whichever runner starts it,
 one saying `"heavy": false` included: when weight was declared only on runners, a manual step that
 rebuilds, kept in an action a light runner also runs, was started through that runner with
 `--manual-step` and built with no slot at all. A heavy step limited by `runOn` makes heavy the legs
@@ -1368,7 +1429,7 @@ it. A run check's runner whose action cannot be read counts as heavy, said as th
 nothing - not even where it declares `requireBuild` - and is refused by the check that runs it, as
 before. A runner that only reads the tree - a repository guard - is light and starts at once. A
 runner saying `"heavy": false` while it requires the build, or while a phase of its own names
-`{product}` or `{buildDir}`, is refused, naming all of them at once: its build is heavy.
+`{product}`, `{buildDir}` or a compiler, is refused, naming all of them at once: its build is heavy.
 
 **Room is claimed as a leg is admitted.** Where its build's need is known - its `buildSpaceGiB`, or
 what a build recorded - and is more than its build directory already holds, a heavy leg is let start
@@ -1716,7 +1777,11 @@ while a gate ran turned a green suite red, with four test processes live at once
   so a first sync that stops part way is recorded too, and is refused one another worktree of the
   same name - made by hand, or by another tool, outside the worktrees root - still holds: synced by
   both, each would replace the tree the other put there. Deleting a worktree asks each host that
-  holds one of its copies to remove it, only where the harness made it, and no other host. A host is
+  holds one of its copies to remove it, only where the harness made it, and no other host - and
+  first the mutation workers kept beside it, asked about before any goes, as beside the worktree
+  itself: one a sweep still running there holds keeps the copy, still recorded, as does one that
+  cannot be removed or told, and a copy kept once some had gone says which went (see *Mutation
+  testing*). A host is
   reached through the worktree's own configuration, read before it goes - its branch may declare a
   host the configuration the command runs in does not - or else through that one; a host neither
   declares is not asked, and its copy is forgotten, named. Each copy is removed under the lock a leg
@@ -1814,6 +1879,10 @@ Two granularities, because two kinds of work share a tree. Syncing a tree takes 
 tree exclusively, since it rewrites files every variant reads. Building or testing takes
 the tree shared and its own variant exclusively, so variants build side by side but never
 while their sources are being replaced. A lock is released only by the run that took it.
+A sweep of a leg's mutation arms builds in workers of its own, never in the tree, and takes
+their key exclusively instead - spelt as one more copy beside the tree, which no copy is - so
+it meets another sweep of the leg's variant and a `clean` of its workers, and never a build,
+test or sync of the leg (see *Mutation testing*).
 
 - A held lock **refuses immediately**. It never waits: silently blocking for
   hours is worse than a refusal that names the holder.
@@ -1865,8 +1934,9 @@ worktree of a branch that predates the harness holds no rule for it, and its rec
 by the next `git add -A` and made `delete-worktree` refuse over the harness's own logs. No sync
 carries them, as none carries any of the harness's own state; deleting a worktree deletes its runs
 with it; and a run is resumed from the tree it was started in. A caller never works the directory out:
-`build`, `test` and `run` name it on every exit that created one, as `logs: <directory>` and as
-`runDirectory` in `--json`. Each names its run from its first line, `run <id>`, and as `runId` in
+`build`, `test`, `run` and `check-mutations` name it on every exit that created one, as
+`logs: <directory>` and as `runDirectory` in `--json`, and a sweep's records of each arm are in it
+too (see *Mutation testing*). Each names its run from its first line, `run <id>`, and as `runId` in
 `--json`, on every exit: the run is begun before anything can refuse it, so a run refused before
 it had a directory - a leg nobody declared, a selection no host could take - is named too. It
 keeps no records, and its id is all there is to cite it by. A command line the parser itself
@@ -1902,6 +1972,22 @@ removes from before it has removed - no sync, no lock entry, no run records.
   or, with `--dry-run`, what it holds, removing nothing; `--json` carries both as the leg's
   `space`. A leg on a host is asked of the DssHarness there, in the copy - once the copy is known
   to be there, so a tree never synced to a host has nothing removed rather than a host refusing it.
+- **A leg's mutation workers go with it.** The workers its sweeps keep beside its tree are removed
+  the same way, and first, so the room its line says is the room once they are gone: its own
+  variant's, its self-test's, and those of a variant no leg of that host and tree builds any more,
+  which nothing else would ever remove - another leg's are that leg's. Each variant's go under the
+  lock a sweep of it takes rather than its build's, and are said on the leg's line with what they
+  held, which `--json` carries as `space.workerBytes` - what was removed of them, 0 where every one
+  there was kept, or in a dry run what is there - wherever anything named as a worker of the leg's
+  was found: a leg whose build directory was not measured, a link, locked, not removable or on a
+  host holding no copy of the tree, carries a `space` saying its workers alone. A worker a live
+  sweep still claims is kept, the leg `refused-locked`, as is one whose claim cannot be read; one
+  that cannot be removed fails the leg, whose line still says what went, and counts it; one whose
+  sweep died holding it is released first, and said; and a directory under a worker's name that no
+  sync made is said and left. Where a host holds no copy of the tree, nothing there can run a
+  clean, and the host is asked instead to remove the workers left beside where the copy was (see
+  *Mutation testing*): one a sweep holds there leaves the leg `refused-locked`, one that could not
+  be removed `failed`, and a removal that was stopped `stopped`.
 
 A host whose DssHarness is older than this machine's is brought to this build first, as it is by
 every command that asks it anything, and that write needs room. A host that is both full and
@@ -1935,6 +2021,10 @@ heavy leg also claims its room as it is let start, held against every other comm
 - **Only a leg its command builds.** `sync`, `clean` and a run's leg it does not build need no
   room: clean is how room is made. A run builds a leg as its runner, its steps and its run checks
   need, on that leg's system: a step limited by `runOn` asks only about the legs of its systems.
+- **A sweep fills its first worker.** A sweep of a leg's mutation arms builds in workers beside
+  its tree, never in the leg's own build directory, and is placed by the room its first worker's
+  build still needs - the least it runs with; each worker is then measured as it is planned. A
+  self-test builds no tree of the leg's at all, and no host is asked about its room.
 - **A WSL distribution's disk grows on this machine's drive.** WSL 2 keeps a distribution's
   filesystem in a virtual disk file, and what the distribution measures is that disk's own room -
   a terabyte by default - whatever the drive holding it has left: measured, a distribution said
@@ -2100,7 +2190,7 @@ directory here cannot drift apart.
   compared with the reading of the tree the sync was made from. A tree that still differs fails,
   names what differs, and says nothing should be run against it.
 - **Staging is the two commands, not a flag.** `sync` transfers and stops — that is all it ever
-  does — and `build`, `test` and `run` take `--use-staged` to act on what is already there without
+  does — and `build`, `test`, `run` and `check-mutations` take `--use-staged` to act on what is already there without
   syncing again. A `--stage-only` on `sync` would name a mode `sync` is always in.
 - **Artefacts come home** with `--pull`, each file hashed on the far side and checked again on
   arrival. Evidence that a binary built here runs there is not evidence if nobody checked it
@@ -2117,11 +2207,11 @@ leg-running command gets. A runner that declares `requireBuild` has its leg buil
 a runner that calls a program the build produces otherwise runs against whatever was left there.
 
 **A step naming what the build makes builds its leg first, whichever runner starts it.** A run that
-runs a step whose run line or `workingDirectory` names `{product}` or `{buildDir}` - however the
-run comes to run it: by default, named with `--manual-step` or under a runner's `steps`, or needed
-by one that is, through a runner that declares `requireBuild` or not - builds each leg before its
-steps start; one limited by `runOn` builds the legs of those systems alone, and a runner's own
-phase naming either builds as a step does. Read from the line rather than declared
+runs a step whose run line or `workingDirectory` names `{product}`, `{buildDir}`, `{compiler_C}` or
+`{compiler_CXX}` - however the run comes to run it: by default, named with `--manual-step` or under
+a runner's `steps`, or needed by one that is, through a runner that declares `requireBuild` or not -
+builds each leg before its steps start; one limited by `runOn` builds the legs of those systems
+alone, and a runner's own phase naming one builds as a step does. Read from the line rather than declared
 beside it, because a line naming the product reads the product whoever starts it: when the build
 was declared only on runners, a manual step naming `{product}`, kept in an action a runner that
 builds nothing also runs, was started through that runner and read whatever the last build left -
@@ -2133,19 +2223,52 @@ explains came from. A leg that builds asks its host for the build's programs and
 A leg a run would build that cannot be built - it names no project, or no toolchain for its
 system - is refused before any host is measured, naming the leg and what builds it, and so is a
 step or phase of the run's own runner naming `{product}` on a leg whose project declares no one
-file for its system; one refusal names every such leg, of both kinds. For a runner requiring the
-build, the first was found only where the leg's build began: it ended the whole run once its hosts
-were measured and its slots taken, without saying what built the leg; and the second was refused
-only after the build it had just cost. A product a run check's step names is refused by the check
-that runs it, when it runs: refused before the run, it would refuse a run whose checks may never
-run. The build a check needs is made before the run whether or not the check runs, so a leg it
-cannot build is refused then.
+file for its system, or naming a compiler on a leg whose project CMake does not build; one refusal
+names every such leg, of each kind. For a runner requiring the build, the first was found only
+where the leg's build began: it ended the whole run once its hosts were measured and its slots
+taken, without saying what built the leg; and the second was refused only after the build it had
+just cost, as the third would be. A product or a compiler a run check's step names is refused by
+the check that runs it, when it runs: refused before the run, it would refuse a run whose checks
+may never run. The build a check needs is made before the run whether or not the check runs, so a
+leg it cannot build is refused then.
+
+**A leg's own compiler is named, never typed.** `{compiler_C}` and `{compiler_CXX}` are filled in
+with the program the leg's build identified for that language: the whole path CMake's record of
+identifying it names, in the leg's build directory, as that machine spells a path. It is the
+record every configure of the directory after the first loads, and the one the build's own
+`compilerId` witness is held to - so the name is what built the leg, and never what a toolchain
+declares, which may be a bare `gcc` that `PATH` resolves differently for the next process, or
+nothing at all where CMake chose. A runner that must judge each leg through that leg's compiler
+says so in one run line, which is gcc on one leg and cl on another; an `--input` reaches every leg
+of a run alike and could not. A line may start with one, written alone: the tool policy allows the
+leg's own compiler as it allows a declared tool, since the build ran it. Anything beside the name
+makes the line another program, judged as what it starts; so does a path that merely equals the
+compiler's, from an input or a value, which nothing says a build identified.
+
+The name is known only once the leg is built, so a step naming one builds its leg first, and what
+fills it in is read then, once, for the check before the first step and the step itself. A name
+nothing fills in is refused before the first step runs, saying which case it is: no compiler
+identified for that language, a record that could not be read or that names no program, or a
+compiler the build runs with words after it - a launcher such as ccache given its compiler, a compiler given options. The name
+is a program alone, and the program alone is not what built the leg, so the refusal names the
+program and the words and hands over neither. Which legs have a compiler at all is the
+configuration's to say - only a build CMake configures identifies one - so that is refused before
+any host is measured, and never after a build it would have cost.
+
+A test invocation names one too, in its `args`, `coresArgs` and `workingDirectory`. Its command is
+checked before the leg's build, where no compiler is identified yet: there the name stands as
+written, and is filled in - or refused, as above - once the leg is built and before its runner
+starts. Under `test --no-build` it is filled in from what the build already in the leg's directory
+identified, which is what built the binaries it tests. A sweep of mutation arms fills it in from each worker's own build, which is what the
+worker's tests run against.
 
 **A runner is refused on a leg the run did not build, where what it runs reads the build.** The run
 decides the build, and says to each runner it starts - its own and each a run check starts - whether
-it built the leg; a runner requiring the build, or a step or phase naming `{product}` or
-`{buildDir}` among those that leg runs, is refused there before anything changes the tree, naming
-each. It is the rule above asked again of what will run, so a file edited between the run's reading
+it built the leg; a runner requiring the build, or a step or phase naming `{product}`,
+`{buildDir}` or a compiler among those that leg runs, is refused there before anything changes the
+tree, naming each. Nothing an earlier build left there is read to fill a compiler's name in
+meanwhile - a runner's; `test --no-build` tests what an earlier build left, and reads its compiler
+with it. It is the rule above asked again of what will run, so a file edited between the run's reading
 it and the leg's is refused rather than started on whatever the last build left.
 
 **`cleanDirectories` never reaches what the run stands on.** Each is deleted, with all it holds,
@@ -2154,7 +2277,9 @@ lies outside it, or is, holds or is inside `build` (where every leg's build is k
 incremental), `.harness-config`, `.git`, what orchestrators keep or the worktrees root is refused
 when the file is read, compared ignoring case. So are a phase with a blank name and two phases of
 one runner sharing a name: each writes the log its name names, and a resumed run skips the ones its
-name says were done.
+name says were done. Two steps a leg runs whose names differ and are kept as one log are refused
+before any runs, naming both and the log: a character a file name cannot carry is kept as `-`, so
+`a/b` and `a:b` are one file's, as are two names differing only in case.
 
 **`requireBuild` gates the build, never the sync.** A leg on an ssh host or a WSL distribution runs
 from that host's own copy of the tree — the host reads `config.json` and the runner's action file
@@ -2250,7 +2375,7 @@ sibling directory whose name merely starts the same way is outside, not inside.
   is not manual, a runner naming a step its action lacks, and a leg on whose system none of the
   steps a run names runs - it would run only what they need, and pass, with the step named run
   nowhere - are refused before any host is measured, naming the steps there are. Whichever runner
-  starts it, a step that names `{product}` or `{buildDir}` has its leg built first.
+  starts it, a step that names `{product}`, `{buildDir}` or a compiler has its leg built first.
 - **An input's value comes from `run --input name=value` first**, the runner's `.env` directory
   second and the input's own `default` last; `.secrets` never gives an input a value. A step may
   declare inputs of its own beside the action's, resolved the same way and read by that step
@@ -2273,9 +2398,11 @@ sibling directory whose name merely starts the same way is outside, not inside.
   alternative is a command that runs with arguments nobody can see are missing. An argument that
   must keep a quote, or that uses single quotes, is carried as its own list item rather than
   inside a `run` line.
-- The first token must be a program the configuration declares under `tools`, or a path inside
-  the repository. An undeclared program is refused before anything runs — the same list
-  `install-missing-tools` guarantees is installed. It is judged as it will start: its names
+- The first token must be a program the configuration declares under `tools`, a path inside
+  the repository, or the name of one of the leg's compilers alone - `{compiler_C}` or
+  `{compiler_CXX}`, which starts what the leg's build identified and built with. An undeclared
+  program is refused before anything runs — the same list `install-missing-tools` guarantees is
+  installed. It is judged as it will start: its names
   filled in, and a relative path read from the directory its step runs in, both worked out by the
   one function the run starts it with. Read as written, `{dir}/tool` was inside the repository
   while the step started a program wherever `{dir}` pointed. A refusal says what a line was
@@ -2309,7 +2436,9 @@ sibling directory whose name merely starts the same way is outside, not inside.
 A runner may declare failures it is allowed to produce, each with the outcome to report instead
 of an unexplained one. An entry has two halves that must not be confused: what it **matches** —
 an exception type and a list of messages, each plain text or a regular expression, any one
-matching being a match — and the **outcome** the match produces.
+matching being a match — and the **outcome** the match produces. A message is matched against
+what the failure said and against each line the failing step printed, a line at a time as its
+log keeps it, so one written across two lines matches nothing.
 
 **An entry must show its work.** Every entry carries when it was earned, where, the mechanism
 measured, and the anchor holding the evidence, and the file is refused without them. The lint
@@ -2329,7 +2458,9 @@ An expected exception may carry `runChecks`, and until every one passes it excus
 
 - Each check invokes **another** predefined runner by name and compares its outcome with what the
   check expects. A field left out is not a requirement. `sameException` requires the same success,
-  warning, result code and message as the entry it gates.
+  warning, result code and message as the entry it gates. An expected message is looked for in
+  what the run said and in each line its passing steps printed, a line at a time, read from
+  their logs.
 - The runner a check names is never the one carrying it, and a runner reached that way may carry
   no checks of its own, so a check is one level deep and cannot recurse.
 - **Unconfirmed, the failure stays genuine.** That is the whole point of the gate.
@@ -2338,6 +2469,271 @@ An expected exception may carry `runChecks`, and until every one passes it excus
   at least `minStepSeconds` fall inside that window. A once-per-run sample was measured charging
   genuine-looking failures to the tool under test on a loaded machine and excusing them on a quiet
   one, on the same day; a sample taken before a run says only what the machine was doing then.
+
+## Mutation testing
+
+`check-mutations` is the mechanical proof that a repository's tests can fail. For every selected
+leg and every arm its registry declares, it mutates exactly the text the arm names, builds the
+arm's target, proves every object that depends on the site was rebuilt, runs the arm's test binary
+whole, judges what reddened against the declaration as an exact set, and puts the site back,
+checked by its hash. A BUILD-RED arm must instead stop the build at an object that depends on its
+site, and its paired positive control must build. All of it happens in worker copies of the leg's
+tree, never in the tree itself, which is only ever read. A leg's verdict is the worst of its own -
+its workers' builds and its test binaries' controls - and its arms' (see *Verdict vocabulary*).
+
+### The registry
+
+`mutations.registry` names the repository's own file, one row to a line, its fields separated by
+`|` and trimmed, a line whose first character that is not blank is `#` a comment, nothing escaped
+and the last field taking the rest of the line. An A row declares an arm - its site, the files
+holding its before- and after-text, its red kind, its target and runner, its case count and its
+diagnostic - and C, G, B, M and S rows, each following the A row of its arm, add a case that must
+redden, a neighbour that must run and stay green, a BUILD-RED arm's paired control, another site
+mutated with it - another file, as the tree's own file system compares names - and the legs it
+runs on. A
+text is a file in `mutations.textDirectory`, read as it is held, less a UTF-8 byte order mark at
+its start and one line ending at its end, and given the site's line endings where the site ends its
+lines otherwise, so one registry serves a checkout with either. Every file directly in that
+directory must be cited by some row; what lies below it is not listed, and a file there that a sync
+withholds - one git ignores, as a desktop's or an editor's leftover is, or one the configuration
+keeps from a sync - is no text: no copy of the tree holds it, so nobody could drive it.
+
+The whole registry is read, with every text it cites, before any host is touched, and every
+problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once
+its hosts were measured and its slots taken. What a sync withholds is in no copy of the tree, and a
+worker is such a copy, as a host's is: so a registry or a text directory under `sync.neverTransfer`,
+`sync.exclude` or the worktrees root is refused when the configuration is read, as one inside the
+harness's own directory is, and a cited text so withheld is a problem of its row - never every arm
+read `violated` for a text nobody carried. What git ignores a sync leaves behind as well, and only
+the tree says which that is: so git is asked as the registry is read, and a registry or a cited
+text it ignores is refused the same way - one it tracks is carried, whatever rule would ignore it.
+The rows a mutation harness of a repository's own once
+needed and this one derives - R, X, I, F and T - are refused, each naming what took its place: the
+leg's own tree, project and variant; sync's exclusions; the variant's configure; the dependency
+sources the leg's own build fetched; and ninja's records. A leg built by anything but CMake with the
+Ninja generator is refused too, naming the fix: only ninja's records say, for one configuration
+alone, which objects a mutation rebuilt. `--arms` selects arms as `--legs` selects legs, and an arm
+it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg. An arm
+selected whose S row names no selected leg is warned of before the sweep starts; and a selection
+whose every arm is such a one is refused, exit 10, naming each and where it runs, before any host
+is touched: every leg would be skipped, and the run would pass having swept nothing. A host sweeping
+one leg of a run refuses nothing of the kind, since only the machine that selected the legs sees
+them all.
+
+### Workers
+
+A leg's workers are copies of its tree kept beside it, `<tree>.mutation-<key>w-<n>`, a family
+of copies of their own. The key is the first 7 hexadecimal digits of the SHA-256 of the leg's
+variant, as its build directory is named, so the machine that dispatches a leg and the host that
+sweeps it name its workers alike - and a key, never the variant's name. A worker is a second tree,
+built as deep as the first, so where paths are bounded every character its name adds is one the
+tree's own path must leave free; spelt out, a variant's name stood in a worker's path twice, in
+its name and in the build directory within it, and a repository whose path budget is reckoned to
+the character had room for neither. A worker's name adds twenty characters whatever its variant is
+called, and the lines of a sweep and of a `clean` say which leg a worker is. Two variants of one
+tree whose names came to one key would share their workers and their lock, and neither would be
+judged on the other's: each sweep syncs a worker again by content and builds in its own variant's
+directory within it. No worktree's copy is named into the family, since a copy's name holds no dot; and
+a worker kept beside a worktree's copy on a host, `<repositoryPath>.worktree-<name>.mutation-...`,
+is spelt as no copy's name, so a listing of the host's worktree copies never holds it. Nor is a
+worker kept beside a worktree taken for a worktree, though it holds a repository of its own:
+`list-worktree` passes over it, and it is no worktree below an orchestrator's directory. A sweep
+runs `mutations.workers` of them (2),
+never more than the leg has arms to drive, and one in a WSL distribution, whose sweep this machine
+admits whole. The tree is read once, as a sync reads it, and every worker is synced from that one
+reading, so every arm measures the same tree however long the sweep takes, and an edit made
+meanwhile reaches none of them. A worker stays between sweeps and is synced again by content - so
+its build directory stays warm, and a site a killed sweep left mutated is put back - and built
+whole as the leg builds before it drives an arm. A worker is claimed while
+a sweep uses it, in `<worker>.claim.json` beside it, by the claim a run takes on its log directory,
+which never makes the copy it claims: the sync that makes a copy refuses a directory it did not
+make. A claim whose sweep died is released and said; the copy it held is synced again, as every
+worker is before it drives an arm.
+
+A worker needs its copy of the tree and what a build of the variant comes to - the leg's
+`buildSpaceGiB` where it declares one, else what the leg's own build directory, or the main
+checkout's copy of it, last recorded - less what it already holds. The
+sweep runs the workers that fit the room, in order, saying it runs fewer; where not even the first
+does, the leg is `skipped-unavailable`, as a leg whose build does not fit is. A worker's build is
+kept within this machine's path limit as a worktree's is - the worker, its build directory, and
+`worktrees.pathBudgetReserve` below that, with the margin to spare - since a build past it fails as
+compile errors in files nobody touched. A sweep that runs fewer says how many of those it wanted -
+`mutations.workers`, no more than its arms - and what keeps each of the rest out, the room, the path
+limit, or both. Workers an earlier sweep left beyond `mutations.workers` are
+removed before a sweep plans, so lowering it frees the room they held; a directory under a worker's
+name that no sync made is said and left.
+
+The workers go with their tree, since nothing would remove them once it is gone. `clean` removes a
+leg's with its build directory (see *Disk space*). `delete-worktree`, and so `delete-agent`,
+removes the workers kept beside the worktree before the worktree itself, and each host removes
+those kept beside its copy before the copy (`remove-workers`, served as every sync operation is):
+each worker a sync made, of whichever variant, with what an unfinished removal left aside - only
+what is named as a worker's, since a name is all that is left to tell one by. Each worker answers
+for itself: one that cannot be removed is left, saying why, and the others still go; one gone by
+the time it is reached was somebody else's to count; and a removal that is stopped answers with
+what it had done. A worker a sweep still running holds says its tree is in use: the worktree is
+not deleted, nothing of it removed, and a host's copy stays, still recorded - and one that cannot
+be removed, or told for the harness's, keeps its tree as well, as a failure rather than a tree in
+use - or `--force` deletes the worktree and leaves that worker, said, which deleting the worktree
+again removes once nothing keeps it, as it removes whatever a worktree already gone left. A claim a
+sweep took while its worker was being removed is that sweep's, and stays. A worktree whose own
+removal then fails, or is stopped, says which workers went before it. `list-worktree` says a
+worker whose worktree is gone, with the `delete-worktree` that removes it; `delete-agent` removes
+those left beside an agent whose worktree is gone already, and leaves the agent undeleted where
+they cannot be looked for; and `delete-orchestrator` takes those left beside agents that are gone,
+refusing where they cannot be looked for and, once the orchestrator is deleted, saying beside the
+deletion whatever kept any - interrupted as they go, it names each agent whose workers are still
+to be removed.
+
+### Fetched sources
+
+A worker builds the dependency sources the leg's own build fetched: each `FETCHCONTENT_SOURCE_DIR_<NAME>`
+entry of the leg's CMake cache whose sources are there - in `<FETCHCONTENT_BASE_DIR>/<name>-src`,
+or where the entry names - and with every declared dependency found, fetching is turned off, so a
+worker the network cannot reach still configures. One not found is fetched by the worker as the leg
+would fetch it.
+
+They are carried into each worker rather than pointed at where they are. They sit in the leg's own
+build directory, which the sweep's lock deliberately leaves to a `clean` or a `build` of the leg:
+pointed at in place, a clean mid-sweep failed every later arm's build, and a build that fetched
+again measured later arms against other sources than the arms before them - each blamed on the arm.
+So they are read once, as the tree is, by size and hash, and each worker is given its own copy by
+content, in `<worker>/.harness-config/deps/<name>`: the harness's own directory, which no sync of
+the tree carries or deletes and no build from clean removes, under no longer a path than a build
+directory keeps them under. A file that moved since the reading stops that worker being made, as a
+tree that moved stops its copy, and the other workers go on. What a worker keeps of a dependency it
+is no longer given is removed. Their files are carried, never a clone's own `.git`, as no copy of a
+tree carries one; a link among them is carried by no copy, and is said on the leg's line.
+
+Sources the tree itself holds - a directory of it the leg was pointed at - are the worker's own
+copy of that directory, which its sites are mutated in; and a dependency the project's own
+`cacheVars` point at is the project's to say, in a worker as in the leg. Named there in another case
+than FetchContent reads - a name of the configuration compares ignoring case, a cache variable's
+does not - it is left to the project still, and fetching stays on, so the worker fetches it as the
+leg's build did.
+
+Every configure of a worker first removes each dependency's source directory, and what turns
+fetching off, from its cache (`-U`), then sets what this sweep gives: a build directory kept between
+sweeps would otherwise go on holding what an earlier sweep's configure gave it - a directory the
+worker no longer keeps.
+
+### An arm's turn
+
+Each test binary's arms wait for its pristine control, built and run once on the leg in whichever
+worker first needs it: a control whose build does not pass, or with a red case, no report, a
+failing exit or a hang, decides the leg's own verdict and stops every arm of that binary, saying
+why, since no mutation of it could prove anything. Its run bounds theirs (see *Timeouts*). Workers drain one queue of arms. Each arm:
+
+1. is admitted as a unit of its own, where its machine declares admission (see *Heavy legs share
+   a machine*);
+2. is pre-flighted against the worker's copy, the sweep's reading of the tree and the ninja records
+   of the worker's whole build, before anything is written: its sites there, each spelt as the tree
+   spells it - a file system that folds case would find one spelt otherwise, and nothing could then
+   vouch for it once put back - and held by the reading, never a file a build made in the worker;
+   its texts there; each before-text occurring exactly once - its own, an M row's, and a paired
+   control's in the site as it was - and each replacement changing something, since a mutation of
+   nothing reddens no test and would read as one that survived; its target and runner built; and
+   some object its build builds depending on a site, through ninja's dependency records, so headers
+   and precompiled headers count;
+3. is mutated, each site written dated past the newest file the worker's last build wrote, and the
+   build waits until the clock is past that, so no object is dated before its source - save where
+   that file is dated more than a minute ahead of the clock, which went back from it: waiting it
+   out could take hours, so the site is dated by the clock, and the build's own rule, finding an
+   input dated no later than what its last build left, starts from clean, saying so;
+4. is built - its target, and a TEST-RED arm's runner beside it, so the binary run links the
+   mutation - through the build every leg builds by, every guard included;
+5. is witnessed: a build that failed is read for the steps ninja said failed, and one that passed
+   is held to ninja's log, read before and after, for every object depending on a site;
+6. is run whole with `mutations.reportArgs`, its JUnit report a new file for every run, or for a
+   BUILD-RED arm, has its paired control applied to the site as it was and built;
+7. has every site put back and checked against the reading of the tree by its hash, whatever
+   happened - never stopped, so a sweep stopped part way still puts its sites back, and each site
+   on its own, so one that cannot be written keeps no other from it. A site that cannot be put
+   back, or read back, makes the arm `poisoned` and retires its worker; the other workers go on,
+   and what no worker drove is `stopped`, saying why.
+
+The judge is a pure function of the declaration and what was observed, the first row that applies
+deciding, in the order the steps above observe it; `help mutations` lists what each verdict means.
+
+A report is the runner's own record, and what is wrong with one is said as what it is. One that
+is no report - no XML, a root that is no `testsuites` or `testsuite`, a document type declared,
+which is never read - is `unattributed`, its line saying which: a runner writing another format
+and a report a crash cut short read differently. One that is there and cannot be read from its
+file - another process still holding it as the run ends - is read again, five times in a second,
+and then `unmeasured`, saying why: that is this tool's failure to read, and what the file holds
+may name every case. The same holds of a binary's unmutated run, whose arms are then stopped.
+
+Whatever fails is kept to what it failed in, so one failure never costs the arms already judged. A
+worker that cannot be made - its copy, its whole build - is retired alone, saying why, and the
+workers beside it drive every arm; only where none could be made are their failures the leg's own.
+An arm whose driving ends in a failure is given the verdict that failure comes to, as a leg whose
+work ends so is: the verdict a refusal names, `failed` for a program that will not start, and
+`poisoned` where nobody named it - its worker then retired, since nothing vouches for its copy,
+unless the failure was a file its pre-flight could not read, before anything was written. A binary
+whose control cannot be built and run stops its own arms and no other.
+
+A machine that does not admit one arm has kept it waiting as long as it allows, and would keep the
+next as long: so the sweep asks it for no other, and every arm left - one still waiting among
+them - is `not-admitted` at once, naming the arm that was refused. A worker's own unit refused ends
+that worker alone: it claims room, which no arm does.
+
+A sweep stopped part way puts every site back, gives its workers up, and still answers with the
+leg's line: each arm judged by then with its verdict, and the arms it was driving and those no
+worker reached `stopped`, each saying which. The run ends interrupted, exit 130, as any run does. A
+refusal of the run raised inside a sweep - a setting that cannot be satisfied, a record of the
+machine's that cannot be read - ends the sweep the same way and then the run, with the refusal's
+own exit code, once the leg's line is recorded: what the sweep had measured is reported before the
+refusal, as a leg that finished before it is.
+
+### Locks, records and hosts
+
+A sweep of a leg takes a lock of its own: its workers' key, whole, on the leg's host. It refuses
+another sweep of the leg's variant, `refused-locked`, and a `clean` of its workers, and never meets
+a build, test or sync of the leg, keyed by its tree, which a sweep of hours must never hold off.
+`--force-lock` takes it, and a worker a live sweep claims.
+
+Each arm's records are written as it ends, in `<run>/<leg>/arms/<arm>/`: `arm.json`, its line as
+the ledger carries it, beside the logs of its build and its run, and of a paired control's build in
+`control/`. Each control's are in `<run>/<leg>/controls/<runner>/`, and each worker's whole build in
+`<run>/<leg>/workers/<n>/`. A leg's line counts its arms by verdict; below the table an ARMS block
+names each selected arm that did not pass, and why; `--json` carries every arm beneath its leg - `arm`,
+`verdict`, `failure`, `detail`, `durationSeconds`, `worker`, `cases`, `declaredCases`, `reds`,
+`declaredReds`, `records` - a skipped one included.
+
+A leg on a host is swept there, by the DssHarness there, on its own copy - with its own workers,
+its own admission and the arms `--arms` named - and its arms travel back beneath its line, their
+records staying on that host and its home written as `~`, as a leg's are (see "A host's home is
+`~`"); the answer changed shape, so the host-agent protocol is 6.
+
+### Self-test
+
+`check-mutations --self-test` sweeps the fixture this tool carries, in place of the repository's
+registry, which it does not need. The fixture is `tests/mutation-fixture/`, embedded whole into the
+tool so every build carries the very fixture its own tests swept: a CMake library, a test binary
+that writes its own JUnit report - nothing is fetched to build it - and a registry of seven arms,
+one to each verdict an arm's design can reach on any machine: passed, as a TEST-RED arm, as a
+BUILD-RED arm, and as an arm whose mutation is coupled across two files, neither edit building
+without the other; violated; survived; unattributed; and failed. It is built as each selected leg builds - its
+toolchain, configuration and sanitizer, its developer environment - and each arm is held to the
+verdict it is designed to reach: one that reaches it passed, saying so; one that reaches another
+verdict an arm's design decides is `violated`, naming both, which is this tool's defect with that
+compiler, never the fixture's; and one that reaches no verdict of the judge's - stopped, not
+admitted, poisoned - keeps it. The repository's end-to-end tests sweep the same fixture as a
+repository's own project, and hold each arm to the same design.
+
+The fixture is written where this tool keeps its own data (see *Heavy legs share a machine*), as
+`<user data>/dssharness/mutation-fixture`, each file only where it differs and under a lock every
+process on the machine takes: one fixture for every repository on the machine. Its workers are
+kept apart from it, beside the tree of the leg self-tested, in a family of their own -
+`<tree>.mutation-<key>s-<n>`, a few megabytes each. Kept beside the fixture they were
+every repository's at once, one's toolchain refusing the build directory another's had made, with
+nothing to remove them; beside the leg's tree they are that repository's, counted by its room,
+removed by a `clean` of the leg, and with its worktree or its host's copy. A self-test asks no
+host about the room a build of the leg's tree needs, and is placed by none; its workers are
+measured where they are planned, and their paths reckoned by the fixture's own longest, in place of
+the leg's reserve. It takes the leg's sweep lock, as a sweep of the leg does, and its binary runs
+in its worker with what the leg's host gives it, nothing of the leg's tests. A leg on a host is
+self-tested there, with the fixture that host's DssHarness carries.
 
 ## Reporting
 
@@ -2348,7 +2744,39 @@ says for itself - that the legs are starting, where each starts, and each one's 
 said on both, each read twice. So the dispatcher keeps, rather than relays, the line a host's
 command ends on where it ended badly, with what follows it: it says how the leg ended itself, by
 the leg's line, or in the refusal it raises from what the host said, and a host's summary of its
-one leg would otherwise read as the run's own.
+one leg would otherwise read as the run's own. Such a line is kept with at most 200 lines after
+it: a command's failure is the last thing it says and never runs that long, so a line shaped as
+one with more after it was printed by the command's own work, and is shown, with what followed
+it, as it comes.
+
+**A child's output lives in its log, and nothing else holds it whole.** A consumer's test
+started an interpreter with no script to run, which printed the same traceback over and over;
+ctest printed all two gigabytes of it, and the harness, which kept every character of a phase's
+output in memory, more than once, ended the leg `poisoned` by an `OutOfMemoryException` with 34 GB
+of the machine free: no string holds more than about a billion characters. So each line is read
+once, as it arrives, for what the phase establishes - whether its success pattern matched, its
+timing marks, its last 50 lines, kept in a ring of that many - and written to the log; whatever
+reads more of the output reads it back from the log, a line at a time: ninja's last word on a
+build, the count a `countPattern` reads, ctest's word that it found no tests, the exception a
+failing step printed, the message a run check expects. Of a stream whose caller takes its lines
+as they come and asks only for its end - a phase's output, what a host's steps print - the
+process runner keeps the last 65,536 characters, for the messages that quote it, and a
+line longer than 32,768 characters - a child writing gigabytes with no line feed - is kept in
+pieces of at most that many, each a line of the log, cut where no secret the run masks is
+parted; a stream its caller reads whole is kept whole, as git's answers are, and a host's
+answer, though that too is read a line at a time. The same holds on a machine
+that dispatched a leg to a host, whose `--verbose` relays every line the host's steps print: the
+dispatcher keeps the end of what it relayed, and the ledger the host answers with.
+
+What is read back is read only from a log that still holds it. A phase closes its child's lines
+with an exit line saying how it ended and, to the tick, how long it ran; whatever reads the lines
+back first holds the log to its length and to that line, so a log that is gone, cut short or
+written again since is said as unread, naming it and why, before any line is handed on - never
+read as what is there, which made a build ninja failed read as one stopped from outside, and one
+step's lines as another's. Nothing is decided on what is left of such a log: work a verdict hangs
+on ends `unmeasured`, saying so - a leg's, or an arm's of a sweep, whose worker goes on - and a
+reader that only measures or explains, a test count or ctest having found no test, leaves that
+out and keeps the verdict the phase reached.
 
 Every run ends with a per-leg ledger:
 
@@ -2406,9 +2834,11 @@ with "the harness could not run", because the remedies differ.
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 
 `verify-git` keeps its own contract: `0` success, `1` git not installed,
-`2` not a git repository. `legs` exits `1` when a leg named with `--legs` cannot run,
+`2` not a git repository. `legs` and `sync` exit `1` when a leg named with `--legs` cannot run,
 or when no selected leg can, and `70` when whether a leg can run was never established, through
-a defect in this tool. `install-missing-tools` exits `1` when a tool is missing, out of
+a defect in this tool. `build`, `test`, `run` and `clean` exit `1` too when no selected leg can
+run and no failure turned one away, each leg's line saying why it cannot; `check-mutations`
+exits `21` there (see below). `install-missing-tools` exits `1` when a tool is missing, out of
 date or could not be installed, and `15` when a host could not be reached: a tool that is not
 there and a host that did not answer call for different things. `check-anchor-balance` and
 `check-anchor-citations` exit `1` on a finding, which is what they were asked to look for rather
@@ -2419,24 +2849,34 @@ unchanged, or 15 when that command never reported how it finished.
 `dssharness help exit-codes` prints the shared table from the code itself; this copy, and the
 per-command codes above, are maintained by hand.
 
-Commands that run legs (`build`, `run`, `test`) use five codes from the range reserved for
-command contracts, because each calls for a different remedy:
+Commands that run legs (`build`, `run`, `test`, `check-mutations`) use eight codes from the
+range reserved for command contracts, because each calls for a different remedy; 1, 2 and 8
+are reached only by a mutation arm, so only `check-mutations` exits with them:
 
 | Code | Verdict | Remedy |
 |---|---|---|
+| 1 | `violated` | Fix the arm's declaration, or the code it guards |
+| 2 | `survived` | Strengthen the test that should have failed |
 | 3 | `inputs-moved` or `unmeasured` | Let the tree settle, then run again |
 | 4 | `contended` | Wait for the other run |
 | 5 | `unwitnessed` | Find out what actually ran |
 | 6 | `log-held` | Find out which run still owns this leg's logs |
 | 7 | `not-admitted` | Wait for the heavy legs its line names, free memory or room on the filesystem it names, or raise the machine's limits |
+| 8 | `unattributed` | Contain the crash or hang in the case, or make the runner write its report |
 
 `failed` reports 20, `refused-locked` 13 and `poisoned` 70; `stopped`, `skipped-unavailable`
 and `skipped-tool-missing`, where nothing failed, 21 (`Incomplete`). When legs disagree, the
 more fundamental verdict decides the code, in the order given under *Verdict vocabulary*.
 Six outcomes therefore carry six codes — refused before starting, the tree moved under the
 run, another run in the build directory, another run holding the logs, a machine with no room
-for another heavy leg, and a zero exit code with no witness — because a reader who cannot tell
-which fired cannot pick the remedy.
+for another heavy leg, and a zero exit code with no witness — and a mutation sweep's three
+findings three more, because a reader who cannot tell which fired cannot pick the remedy.
+
+Within one command no code has two meanings. A sweep none of whose selected legs can run
+therefore exits `21`, incomplete - which is what such a run is, nothing having failed and no leg
+having reached a verdict - and never the `1` a build, a test and a run give there: of a sweep `1`
+is an arm `violated`, and a caller sorting by exit code would be sent to fix an arm's declaration
+by a sweep that drove none. A test holds every leg-running command to it.
 
 ## Success witnesses
 
@@ -2447,17 +2887,41 @@ exists because a wrapper that reports success without evidence is indistinguisha
 from one that never ran, and it was measured happening three separate ways: a suite
 that printed `failed=0` while exiting 2, an exit code read after a pipe, and a test
 command that exited 0 having run no tests at all. An emulator's witness applies the same
-rule to the emulator itself. A pattern is matched against each line as the log keeps it,
+rule to the emulator itself, read its own way: the witness must exit 0 within 60 seconds, and
+its pattern is matched against all it printed at once, each line as it reads whatever ended
+it, within one second - an emulator whose witness fails any of that is unavailable, saying
+which. A phase's pattern is matched against each line as the log keeps it,
 whatever ended the line: a Windows program ends its lines with CRLF, and a `$` that matched
 before the line feed left the carriage return between the text and the end, so a pattern that
-passed on Linux and macOS never matched on a Windows leg.
+passed on Linux and macOS never matched on a Windows leg. It is matched against one line at a
+time, as each arrives, so one reaching across a line break - `\s+` between what two lines
+print - matches nothing, and a line longer than 32,768 characters is matched in the pieces its
+log keeps it in. A timing pattern is read the same way, and keeps its first 10,000 marks in a
+phase, saying so where there were more: a child printing a mark on every line of a flood would
+otherwise have the flood held again, as marks. A phase's pattern that cannot be evaluated
+against a line in five seconds is not evidence either way: a success pattern that cannot is
+refused, naming the pattern, once its command has ended, and a timing pattern that cannot leaves
+the phase unmeasured by it, saying so.
 
 ## Timeouts
 
-Wall-clock timeouts are not used **for phases and legs**: a time budget is a guess
-about workload size, and honest runs exceeding it get killed. Where a bound is
+Wall-clock timeouts are not used **for phases and legs**, save the one below: a time budget is a
+guess about workload size, and honest runs exceeding it get killed. Where a bound is
 needed, a phase declares a **stall** bound instead — no output for N seconds means
 hung — because output cadence stays stable even when total duration is not.
 
 `IProcessRunner` does support a per-process budget, for a probe that must not hang: the
 probes that measure a host, and an emulator's witness, each have one.
+
+A mutation arm's run is the one whole-duration bound a phase gets, and it is not a guess: a
+mutation that turns a loop endless can go on printing for ever, which no stall bound catches, and
+the unmutated run of the very same binary, measured minutes before on the same machine, says how
+long it takes when nothing is wrong. So a mutated run may take `mutations.runTimeFactor` (10) times that run, never less than it
+and a minute, and one stopped past that is `unattributed`, saying so and which of the two set its
+bound: a binary whose unmutated run is short is stopped at that run and a minute, never said to have
+run past ten times it. A stall bound applies to it as
+to every phase. Each such run, and the unmutated one that bounds it, is timed on both clocks as
+every phase is, by the sweep itself: one that spanned a clock step or a host sleep is said on the
+leg's line, among why its timings are suspect, however it ended - stopped past its bound included,
+which no phase is left to say - with what each of the sweep's builds says of its own, a worker's
+rebuilt from clean among them. A timing mark changes no verdict.

@@ -169,6 +169,19 @@ public sealed record LegEntry
     /// </summary>
     public IReadOnlyList<string> KeptOutputs { get; init; } = [];
 
+    /// <summary>
+    /// Each mutation arm the leg was asked about, in the registry's order, with the verdict it reached there: empty for
+    /// every command but <c>check-mutations</c>. The leg's own verdict is the worst of its own and these.
+    /// </summary>
+    public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
+
+    /// <summary>
+    /// The refusal of the run this leg's work was ended by, where the leg had reached verdicts worth keeping by then - the
+    /// arms a sweep had judged: this line is recorded, and then the refusal ends the run, as one raised from a leg's work
+    /// does. <see langword="null"/> on every line a ledger holds, and nothing a ledger writes: the refusal is the run's.
+    /// </summary>
+    public Results.HarnessException? EndsTheRun { get; init; }
+
     /// <summary>What the harness spent outside the leg's own commands.</summary>
     public TimeSpan Overhead => Duration > CommandTime ? Duration - CommandTime : TimeSpan.Zero;
 }

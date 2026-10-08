@@ -1,5 +1,7 @@
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Tests;
 
@@ -20,6 +22,7 @@ public sealed class NinjaTests
     [InlineData(2, false, "[3/9] Building CXX object a.o\r\nninja: build stopped: interrupted by user.\r\n", "build exited 2: ninja says it was interrupted before it finished")]
     [InlineData(1, false, "FAILED: a.o \nmain.cpp:1: error: expected ';'\nninja: build stopped: subcommand failed.\n", null)]
     [InlineData(1, false, "\u001b[31mFAILED: \u001b[0ma.o\r\n", null)]
+    [InlineData(1, false, "[1/9] Building CXX object a.o\rFAILED: a.o\r\n", null)]
     [InlineData(1, false, "ninja: error: loading 'build.ninja': The system cannot find the file specified.", null)]
     [InlineData(1, false, "ninja: fatal: ReadFile: Access is denied.", null)]
     [InlineData(1, false, "ninja: build stopped: cannot make progress due to previous errors.", null)]
@@ -59,7 +62,7 @@ public sealed class NinjaTests
         ClockStepped: false,
         Timings: [],
         LogFile: "build.log",
-        Output: output);
+        Output: PhaseOutput.Of(output));
 
     /// <summary>That <paramref name="stopped"/> is no verdict where <paramref name="detail"/> is none, and otherwise stopped with a detail it begins.</summary>
     private static void AssertStopped(string? detail, ReachedVerdict? stopped)
@@ -85,4 +88,89 @@ public sealed class NinjaTests
     [InlineData(null, false)]
     public void Generates_NamesNinjasGeneratorsAlone(string? generator, bool ninja)
         => Assert.Equal(ninja, Ninja.Generates(generator));
+
+    /// <summary>
+    /// The steps a build's lines say failed, each named by its first output as ninja canonicalizes it: ninja 1.12's
+    /// <c>FAILED:</c> line and 1.13's, which writes the step's exit code first, in colour or not, its lines ending either
+    /// way; each step once, in the order said; and nothing where nothing failed.
+    /// </summary>
+    [Theory]
+    [InlineData("[1/4] Building CXX object a.o\nFAILED: CMakeFiles/upstream.dir/src/support.cpp.obj \nninja: build stopped: subcommand failed.\n", new[] { "CMakeFiles/upstream.dir/src/support.cpp.obj" })]
+    [InlineData("FAILED: [code=2] CMakeFiles\\a.dir\\a.cpp.obj \r\n", new[] { "CMakeFiles/a.dir/a.cpp.obj" })]
+    [InlineData("\u001b[31mFAILED: \u001b[0ma.o \r\nFAILED: b.o \nFAILED: a.o \n", new[] { "a.o", "b.o" })]
+    [InlineData("[1/2] Building CXX object a.o\n[2/2] Linking CXX executable fx\n", new string[0])]
+    [InlineData("ninja: build stopped: interrupted by user.\n", new string[0])]
+    public void FailedOutputs_AreTheStepsTheBuildSaysFailed(string output, string[] expected)
+        => Assert.Equal(expected, Ninja.FailedOutputs(output.Split('\n'), program: null, manifest: null));
+
+    /// <summary>
+    /// With the manifest, a failed step's outputs are told apart however their paths are spelt: the first output of a
+    /// step whose paths hold spaces, which ninja does not escape, is the shortest start of what it wrote that names one;
+    /// and the command samurai says failed, under its own name or ninja's, is the step that runs it - its response file's
+    /// content after it or not - or, where no step runs it, the command as samurai said it.
+    /// </summary>
+    [Fact]
+    public void FailedOutputs_AreToldApartThroughTheManifest()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(
+            Path.Combine("build", NinjaDependencyCheck.ManifestFileName),
+            "rule cc\n  command = cc -c $in -o $out\n"
+            + "rule link\n  command = cc @$out.rsp -o $out\n  rspfile = $out.rsp\n  rspfile_content = $in\n"
+            + "build my$ dir/a.o | my$ dir/a.o.d: cc a.c\n"
+            + "build my: cc my.c\n"
+            + "build app: link my$ dir/a.o\n");
+        var manifest = NinjaManifest.Read(new PhysicalFileSystem(FilePermissionsFactory.Create()), temp.Combine("build"));
+
+        Assert.Equal(["my dir/a.o"], Ninja.FailedOutputs(["FAILED: my dir/a.o my dir/a.o.d "], program: null, manifest));
+        Assert.Equal(["my"], Ninja.FailedOutputs(["FAILED: my "], program: null, manifest));
+        Assert.Equal(
+            ["my dir/a.o", "app", "cc -c gone.c -o gone.o"],
+            Ninja.FailedOutputs(
+                [
+                    "samu: job failed with status 1: cc -c a.c -o \"my dir/a.o\"",
+                    "ninja: job failed with status 1: cc @app.rsp -o app",
+                    "samu: job failed with status 1: cc -c gone.c -o gone.o",
+                    "samu: subcommand failed",
+                ],
+                "/usr/bin/samu",
+                manifest));
+    }
+
+    /// <summary>
+    /// A build that did not pass, whose log no longer holds what it printed, is unmeasured: nothing says whether ninja
+    /// failed it or something stopped it from outside. Read as a log with nothing in it, it was stopped - no failure at
+    /// all, and one running again would finish.
+    /// </summary>
+    [Fact]
+    public void ABuildWhoseOutputCouldNotBeReadBack_IsUnmeasured_NeverStopped()
+    {
+        var unread = Ninja.Stopped(Phase(1, stalled: false, "unused") with { Output = new PhaseOutputTests.Unread() }, "/usr/bin/samu");
+
+        Assert.Equal(
+            ReachedVerdict.Of(
+                LegVerdict.Unmeasured,
+                $"build exited 1, and whether samu failed it or something stopped it from outside could not be read: {PhaseOutputTests.Unread.Said}"),
+            unread);
+        Assert.Null(Ninja.Stopped(Phase(0, stalled: false, "unused") with { Output = new PhaseOutputTests.Unread() }, program: null));
+    }
+
+    /// <summary>
+    /// What ninja said is read from the build's log a line at a time, and no further than the line that decides: a build's
+    /// output can be larger than any text the harness could hold, and the line naming a failed step settles it.
+    /// </summary>
+    [Fact]
+    public void Stopped_ReadsNoFurtherThanTheLineThatDecides()
+    {
+        var failed = Phase(1, stalled: false, "unused") with
+        {
+            Output = new PhaseOutputTests.ReadUpTo(
+                line => line.StartsWith("FAILED: ", StringComparison.Ordinal),
+                "[1/9] Building CXX object a.o",
+                "FAILED: a.o",
+                "main.cpp:1: error: expected ';'"),
+        };
+
+        Assert.Null(Ninja.Stopped(failed, program: null));
+    }
 }

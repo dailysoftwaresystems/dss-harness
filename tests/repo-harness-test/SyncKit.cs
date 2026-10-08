@@ -1,7 +1,9 @@
 using NSubstitute;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Sync;
 
@@ -71,14 +73,20 @@ internal static class SyncKit
     {
         var files = fileSystem ?? harness.FileSystem;
 
-        return new LocalSyncTransport(files, new ManifestBuilder(files, harness.Platform), harness.GitClient, harness.Platform);
+        return new LocalSyncTransport(
+            files,
+            new ManifestBuilder(files, harness.Platform),
+            harness.GitClient,
+            harness.Platform,
+            MutationWorkers.CopyClaims(files, harness.Output, harness.Identity));
     }
 
     /// <summary>
     /// A sync service over this machine's side, read through <paramref name="fileSystem"/> or the real one: its
     /// configuration read by <paramref name="loader"/>, its hosts surveyed by <paramref name="inspector"/> and reached
     /// through <paramref name="transports"/> - by default, nothing that could reach a host by accident - and its own
-    /// tree's files read for carrying through <paramref name="local"/> where the test gives one.
+    /// tree's files read for carrying through <paramref name="local"/> where the test gives one; asking
+    /// <paramref name="git"/> of the tree, or the harness's own.
     /// </summary>
     public static SyncService Service(
         HarnessFactory harness,
@@ -86,7 +94,8 @@ internal static class SyncKit
         IHostInspector? inspector = null,
         ISyncTransportFactory? transports = null,
         ISyncTransport? local = null,
-        IFileSystem? fileSystem = null)
+        IFileSystem? fileSystem = null,
+        IGitClient? git = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var contexts = loader ?? harness.ContextLoader;
@@ -97,7 +106,7 @@ internal static class SyncKit
             local ?? Transport(harness, files),
             transports ?? Substitute.For<ISyncTransportFactory>(),
             new LegsService(contexts, inspector ?? Substitute.For<IHostInspector>(), harness.Platform, harness.Output),
-            harness.GitClient,
+            git ?? harness.GitClient,
             files,
             harness.Platform,
             harness.Output);

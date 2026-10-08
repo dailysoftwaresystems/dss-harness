@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Enumeration;
 using System.Text.RegularExpressions;
+using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
@@ -59,6 +60,13 @@ public sealed record TestRequest
 
     /// <summary>Why there is no product, for a refusal that can say which case it is.</summary>
     public string? ProductProblem { get; init; }
+
+    /// <summary>
+    /// What a test invocation naming one of the leg's compilers - <c>{compiler_C}</c>, <c>{compiler_CXX}</c> - is filled
+    /// in with once the leg is built: what its build identified, read where the invocation first names one - the build
+    /// already in its directory, where the run tests without building. Left out, an invocation naming one is refused.
+    /// </summary>
+    public Execution.LegCompilers? Compilers { get; init; }
 
     /// <summary>
     /// The host's <c>testCores</c>, when it declares one. A remote host rarely has the same core
@@ -281,7 +289,7 @@ public sealed class TestService(
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(request);
 
-        var (settings, invocation, cores, command, counter) = Command(config, request);
+        var (settings, invocation, cores, command, counter) = Command(config, request, built: true);
 
         var logFile = Path.Combine(request.RunDirectory, request.Leg, request.PhaseName + ".log");
         var (inputs, unmeasurable) = await ResolveInputsAsync(settings, request, cancellationToken).ConfigureAwait(false);
@@ -331,7 +339,7 @@ public sealed class TestService(
                     LogFile = logFile,
                     AppendToPath = request.ProgramDirectories,
                     WorkingDirectory = working,
-                    Environment = PhaseEnvironment.Layered(request.HostEnvironment, command.Environment),
+                    Environment = TestInvocationResolver.EnvironmentFor(request.HostEnvironment, command.Environment),
                     SuccessPattern = invocation.SuccessPattern,
                     StallSeconds = config.Defaults.StallSeconds,
                     TimingPatterns = TimingPatterns(config, request),
@@ -376,17 +384,25 @@ public sealed class TestService(
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(request);
 
-        _ = Command(config, request);
+        _ = Command(config, request, built: false);
     }
 
     /// <summary>
     /// The settings, invocation, core count, command and count pattern <paramref name="request"/> runs its
     /// tests with, refused wherever the run could not start as asked.
     /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="request">The leg, and what was asked of its tests.</param>
+    /// <param name="built">
+    /// Whether the leg's build is done, so the compilers it identified can fill their names in. Ahead of it - the check
+    /// before the build - a compiler's name stands as written where a build of the leg's project will identify one, and
+    /// is refused where none ever does; the command made then is never started.
+    /// </param>
     /// <exception cref="HarnessException">The tests could not be run as asked.</exception>
     private (TestConfig Settings, ResolvedTestInvocation Invocation, CoreCount Cores, TestCommand Command, Regex? Counter) Command(
         HarnessConfig config,
-        TestRequest request)
+        TestRequest request,
+        bool built)
     {
         var settings = TestInvocationResolver.SettingsFor(config, request.LegSettings, request.Project)
             ?? throw new HarnessException(
@@ -401,6 +417,7 @@ public sealed class TestService(
             Identity = request.Identity,
             Product = request.Product,
             ProductProblem = request.ProductProblem,
+            Compilers = built ? request.Compilers : CMakeToolchainReader.BeforeTheBuild(request.Project),
         };
         IReadOnlyList<string> remote = request.Remote ? invocation.RemoteExcludes ?? [] : [];
 
@@ -510,10 +527,13 @@ public sealed class TestService(
     /// it does not, and the whole match otherwise. Legs of the same project and test set are compared
     /// by this number, and one reporting a different count is marked on its line: a platform that
     /// quietly skips a group of tests passes on less evidence than its siblings and looks exactly as green.
+    /// The pattern is matched against each line as the log keeps it, as every pattern read from a
+    /// phase's output is, and the first line it matches says the count: read from the log a line at a
+    /// time, since a suite's output can be larger than any text the harness could hold.
     /// </remarks>
     /// <param name="countPattern">The compiled pattern, or null when the invocation declares none.</param>
     /// <param name="output">The runner's own output, never anything the harness wrote.</param>
-    public static int? CountFrom(Regex? countPattern, string output)
+    public static int? CountFrom(Regex? countPattern, PhaseOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
 
@@ -524,9 +544,9 @@ public sealed class TestService(
 
         try
         {
-            var match = countPattern.Match(output);
+            var match = output.Lines().Select(line => countPattern.Match(line)).FirstOrDefault(found => found.Success);
 
-            if (!match.Success)
+            if (match is null)
             {
                 return null;
             }
@@ -541,10 +561,11 @@ public sealed class TestService(
                 ? total
                 : null;
         }
-        catch (RegexMatchTimeoutException)
+        catch (Exception ex) when (ex is RegexMatchTimeoutException or PhaseOutputUnreadException)
         {
-            // A count never changes a verdict, so a pattern that could not be evaluated leaves the
-            // count unknown rather than failing the leg it was only ever measuring.
+            // A count never changes a verdict, so a pattern that could not be evaluated, or output that
+            // could not be read back, leaves the count unknown rather than failing the leg it was only
+            // ever measuring.
             return null;
         }
     }

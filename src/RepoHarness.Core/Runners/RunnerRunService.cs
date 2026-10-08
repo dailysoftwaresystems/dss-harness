@@ -96,7 +96,8 @@ public sealed record RunnerRunRequest
 
     /// <summary>
     /// Whether this run built the leg before starting the runner: where it did not, a runner requiring the build, and a
-    /// step or phase naming <c>{product}</c> or <c>{buildDir}</c>, are refused before the first step starts. The caller
+    /// step or phase naming <c>{product}</c>, <c>{buildDir}</c> or one of the leg's compilers, are refused before the
+    /// first step starts. The caller
     /// decides the build - <c>run</c>, from what the runner, the steps it runs and its run checks need - and says here
     /// what it decided, for the runner it names and for each a run check starts.
     /// </summary>
@@ -112,6 +113,12 @@ public sealed record RunnerRunRequest
 
     /// <summary>Why there is no product, for a refusal that can say which case it is.</summary>
     public string? ProductProblem { get; init; }
+
+    /// <summary>
+    /// What a run line naming one of the leg's compilers - <c>{compiler_C}</c>, <c>{compiler_CXX}</c> - is filled in
+    /// with: what the leg's build identified, read where a line first names one. Left out, a line naming one is refused.
+    /// </summary>
+    public Execution.LegCompilers? Compilers { get; init; }
 
     /// <summary>Whether the leg runs under emulation, which decides what its timings are compared with.</summary>
     public bool Emulated { get; init; }
@@ -498,7 +505,9 @@ public sealed class RunnerRunService(
     /// <remarks>
     /// A step whose <c>run</c> block holds several lines is named <c>step (1/2)</c>, and that slash
     /// is a directory separator on every platform this tool runs on. Replaced rather than stripped,
-    /// so two steps whose names differ only in such a character still name two different files.
+    /// so a name keeps its length and its shape. Two names that differ only in such characters are
+    /// then one file's, as are two that differ only in case where a file system folds it: steps
+    /// named so are refused before any of them runs.
     /// </remarks>
     /// <param name="phase">The step's name, as the ledger shows it.</param>
     public static string LogNameFor(string phase) => FileNames.SafeFor(phase);
@@ -542,17 +551,18 @@ public sealed class RunnerRunService(
     /// <remarks>
     /// A step is a child process, not a call, so the only type a failure can carry is one the child
     /// printed. Reading it out of the output is what lets an entry earned against a typed failure
-    /// keep matching the day the same failure arrives from a wrapper that only prints it.
+    /// keep matching the day the same failure arrives from a wrapper that only prints it. The first
+    /// line naming one says it, read from the step's log a line at a time.
     /// </remarks>
     /// <param name="output">The failing step's own output.</param>
-    public static string FailureTypeIn(string output)
+    public static string FailureTypeIn(PhaseOutput output)
     {
         ArgumentNullException.ThrowIfNull(output);
 
         try
         {
-            var match = ExceptionType.Match(output);
-            return match.Success ? match.Groups[1].Value : StepFailureType;
+            var match = output.Lines().Select(line => ExceptionType.Match(line)).FirstOrDefault(found => found.Success);
+            return match is null ? StepFailureType : match.Groups[1].Value;
         }
         catch (RegexMatchTimeoutException)
         {
@@ -737,13 +747,17 @@ public sealed class RunnerRunService(
         };
     }
 
-    /// <summary>Refuses <paramref name="names"/> where two of them are one step's name.</summary>
+    /// <summary>
+    /// Refuses <paramref name="names"/> where two of them are one step's name, or are kept as one log
+    /// (<see cref="LogNameFor"/>).
+    /// </summary>
     /// <param name="runnerName">The runner, as the refusal names it.</param>
     /// <param name="names">The names of the steps one leg runs.</param>
-    /// <exception cref="HarnessException">A name is given more than once.</exception>
+    /// <exception cref="HarnessException">A name is given more than once, or two names are one file's.</exception>
     private static void RefuseRepeatedNames(string runnerName, IEnumerable<string> names)
     {
-        var repeated = names
+        var given = names.ToList();
+        var repeated = given
             .GroupBy(name => name, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
             .Select(group => group.Key)
@@ -756,6 +770,21 @@ public sealed class RunnerRunService(
                 $"Runner '{runnerName}' names step(s) {string.Join(", ", repeated)} more than "
                 + "once. Two steps sharing a name write one log, and a resumed run cannot tell which "
                 + "of them it already did.");
+        }
+
+        var sharing = given
+            .GroupBy(LogNameFor, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => $"{string.Join(" and ", group.Select(name => $"'{name}'"))} as '{group.Key}.log'")
+            .ToList();
+
+        if (sharing.Count > 0)
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"Runner '{runnerName}' names steps that would keep one log between them: {string.Join("; ", sharing)}. "
+                + "A character a file name cannot carry is kept as '-', and a file's name is told apart whatever its case, "
+                + "so each would write the other's log over, and what one printed be read as the other's. Rename one.");
         }
     }
 
@@ -997,8 +1026,9 @@ public sealed class RunnerRunService(
                     // Masked as each line arrives, not once the phase has finished. The verbose echo
                     // reaches the terminal while the child is still writing, so a secret a step
                     // prints would be in front of the reader long before a finished log could be
-                    // rewritten.
-                    RedactLine = values.Redact,
+                    // rewritten. And a line too long to keep whole is cut where the values say no
+                    // secret is parted.
+                    Mask = values,
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -1038,12 +1068,14 @@ public sealed class RunnerRunService(
         // and charging the same failure on the same day.
         state.Lines.Add(new RunOutputLine(startedAt, phase.Name, RunOutputKind.Start, $"{phase.Name} started"));
 
-        foreach (var line in result.Output.Split('\n'))
+        foreach (var line in result.LastLines)
         {
             // The runner does not stamp a child's lines one by one, so they carry the step's own end
             // time. Only the two edges decide the window; these are here so a reader of the window
-            // sees what the step said inside it.
-            state.Lines.Add(new RunOutputLine(finishedAt, phase.Name, RunOutputKind.Output, values.Redact(line.TrimEnd('\r'))));
+            // sees how the step ended inside it. Its last lines and no more: kept for every step of
+            // the run, the whole of what each printed would be the whole run's output held at once,
+            // and that is in each step's log.
+            state.Lines.Add(new RunOutputLine(finishedAt, phase.Name, RunOutputKind.Output, values.Redact(line)));
         }
 
         state.Lines.Add(new RunOutputLine(
@@ -1072,7 +1104,9 @@ public sealed class RunnerRunService(
             return;
         }
 
-        state.Failure = new FailedStep(phase.Name, verdict, values.Redact(result.Output));
+        // Its output as its log keeps it, masked as each line was kept: read from there by whatever looks
+        // for an exception in it, never held.
+        state.Failure = new FailedStep(phase.Name, verdict, result.Output);
         state.Stopped = true;
     }
 
@@ -1081,8 +1115,10 @@ public sealed class RunnerRunService(
     /// </summary>
     /// <remarks>
     /// Carried on the outcome so a run check can be satisfied by a marker a step emits, which is
-    /// what an author asking for one plainly means. Redacted here rather than where it is compared:
-    /// the outcome reaches a ledger and a report, and a value that escaped once has escaped.
+    /// what an author asking for one plainly means. Masked as each step's lines were kept, by the
+    /// values this run masks with, rather than where it is compared: the outcome reaches a ledger
+    /// and a report, and a value that escaped once has escaped. Read from the steps' logs a line at
+    /// a time, never held: what a run's steps print together can be larger than any text could be.
     /// <para>
     /// Only what passed. A step that failed and was passed over under <c>continueOnError</c> still
     /// printed, and a run check confirming an excused failure would otherwise be satisfiable by
@@ -1091,9 +1127,8 @@ public sealed class RunnerRunService(
     /// </para>
     /// </remarks>
     /// <param name="state">The run so far.</param>
-    /// <param name="values">Supplies the mask.</param>
-    private static string StepOutput(RunState state, ActionValues values)
-        => values.Redact(string.Join("\n", state.Phases.Where(phase => phase.Passed).Select(phase => phase.Output)));
+    private static PhaseOutput StepOutput(RunState state)
+        => PhaseOutput.Joined(state.Phases.Where(phase => phase.Passed).Select(phase => phase.Output));
 
     /// <summary>
     /// The verdict and the outcome the leg reached, an expected exception applied only where its
@@ -1116,7 +1151,7 @@ public sealed class RunnerRunService(
                 ReachedVerdict.Of(LegVerdict.Passed, detail),
                 RunOutcome.Ok(
                     detail.Length > 0 ? detail : $"{state.Phases.Count} step(s) passed",
-                    StepOutput(state, values)),
+                    StepOutput(state)),
                 null,
                 null);
         }
@@ -1703,6 +1738,10 @@ public sealed class RunnerRunService(
         Identity = request.Identity,
         Product = request.Product,
         ProductProblem = request.ProductProblem,
+
+        // Read only on a leg this run built: on any other, a step naming one of them is refused as every step reading
+        // the build is (RefuseUnbuilt), and nothing an earlier build left there is read to fill the name in meanwhile.
+        Compilers = request.Built ? request.Compilers : LegCompilers.AheadOfTheBuild,
         ActionBuild = scratch?.Build,
         ActionArtifacts = scratch?.Artifacts,
         RunArtifacts = scratch is null ? null : Path.GetDirectoryName(scratch.Artifacts),
@@ -1922,7 +1961,7 @@ public sealed class RunnerRunService(
     }
 
     /// <summary>The step whose failure ended the run, with what it reported.</summary>
-    private sealed record FailedStep(string Phase, ReachedVerdict Verdict, string Output);
+    private sealed record FailedStep(string Phase, ReachedVerdict Verdict, PhaseOutput Output);
 
     /// <summary>The verdict and outcome one attempt reached, with the entry and the gate behind it.</summary>
     private sealed record Decision(

@@ -1,0 +1,536 @@
+using System.Globalization;
+using RepoHarness.Core.Build;
+using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
+
+namespace RepoHarness.Tests;
+
+/// <summary>
+/// The copies a leg's sweep keeps its workers in, against a real tree and real copies beside it: made and synced again by
+/// the sync that makes a host's copy, listed as a family of their own, claimed for one sweep at a time without being
+/// made, and removed only where a sync made them, their claims with them.
+/// </summary>
+public sealed class WorkerCopiesTests
+{
+    private static readonly VariantKey Variant = new("x86_64", "gcc", "debug", null);
+
+    /// <summary>
+    /// A worker is made the tree as the sweep read it, a repository of its own; synced again from a later reading, it puts
+    /// back a site a sweep killed part way left mutated, and keeps its build directory warm.
+    /// </summary>
+    [Fact]
+    public async Task AWorker_IsMadeTheTreeAsRead_AndSyncedAgainPutsBackAMutatedSite_KeepingItsBuild()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
+        Assert.True(Directory.Exists(Path.Combine(worker, ".git")), "The worker is not a repository of its own.");
+
+        var built = Path.Combine(Variant.DirectoryUnder(worker), "a.o");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(built)!);
+        await File.WriteAllTextAsync(built, "object", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(worker, "src", "a.c"), "mutant\n", cancellationToken);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
+        Assert.Equal("object", await File.ReadAllTextAsync(built, cancellationToken));
+    }
+
+    /// <summary>A directory where a worker would be that no sync made is somebody's: the sync refuses to make a worker of it.</summary>
+    [Fact]
+    public async Task ADirectoryNoSyncMade_IsNeverMadeAWorker()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        Directory.CreateDirectory(worker);
+        await File.WriteAllTextAsync(Path.Combine(worker, "notes.txt"), "mine", cancellationToken);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            async () => await Copies(harness).SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal("mine", await File.ReadAllTextAsync(Path.Combine(worker, "notes.txt"), cancellationToken));
+    }
+
+    /// <summary>
+    /// The workers of a family are listed by number, each saying what it holds and whether a sync made it: another
+    /// variant's, the variant's self-test's, a name that is no worker's, and the tree's other copies are none of them -
+    /// and the self-test's family lists its own alone.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkersOfAFamily_AreListedByNumber_SayingWhetherASyncMadeEach()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var reading = await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken);
+        var selfTest = MutationWorkers.Of(tree, Variant, selfTest: true);
+
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 2), cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 1), cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant with { Sanitizer = "asan" }, 1), cancellationToken);
+        await copies.SyncAsync(reading, selfTest.PathOf(1), cancellationToken);
+        temp.WriteFile(Path.Combine(Path.GetFileName(MutationWorkers.PathOf(tree, Variant, 3)), "notes.txt"), "mine");
+        Directory.CreateDirectory(MutationWorkers.PathOf(tree, Variant, 10));
+        Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-spare");
+        Directory.CreateDirectory(tree + ".worktree-other");
+
+        var workers = await copies.ListAsync(MutationWorkers.Of(tree, Variant), cancellationToken);
+
+        // By number, as it counts: the tenth after the third, where its name sorts it after the first.
+        Assert.Equal([1, 2, 3, 10], workers.Select(worker => worker.Number));
+        Assert.All(workers, worker => Assert.Equal(MutationWorkers.Of(tree, Variant), worker.Family));
+        Assert.Equal([true, true, false, false], workers.Select(worker => worker.Made));
+        Assert.Equal(MutationWorkers.PathOf(tree, Variant, 1), workers[0].Path);
+        Assert.True(workers[0].Bytes > 0);
+        Assert.Equal(4, workers[2].Bytes);
+
+        var own = Assert.Single(await copies.ListAsync(selfTest, cancellationToken));
+
+        Assert.Equal((selfTest, 1, selfTest.PathOf(1)), (own.Family, own.Number, own.Path));
+    }
+
+    /// <summary>
+    /// Every worker kept beside a tree is listed by its family and then its number, of whichever variant and a
+    /// self-test's among them - or those of the families asked for alone, no other weighed; a name spelt as no worker's
+    /// is none.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkersBesideATree_AreListedByFamilyThenNumber_OfTheFamiliesAskedFor()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var weighed = new Weighs(harness.FileSystem);
+        var copies = new WorkerCopies(SyncKit.Service(harness), SyncKit.Transport(harness, weighed), harness.FileSystem, harness.Output, harness.Identity, MutationService.CommandName);
+        var reading = await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken);
+        var sanitized = Variant with { Sanitizer = "asan" };
+        var selfTest = MutationWorkers.Of(tree, Variant, selfTest: true);
+
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 2), cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 1), cancellationToken);
+        await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, sanitized, 1), cancellationToken);
+        await copies.SyncAsync(reading, selfTest.PathOf(1), cancellationToken);
+        Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-spare");
+        Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-01");
+        weighed.Weighed.Clear();
+
+        var every = await copies.ListBesideAsync(tree, _ => true, cancellationToken);
+        var own = MutationWorkers.Of(tree, Variant).Name;
+        var others = MutationWorkers.Of(tree, sanitized).Name;
+
+        // By the name each family's workers are kept under, as the disk sorts them, and then by number.
+        Assert.Equal(
+            new[] { (selfTest.Name, 1), (own, 2), (own, 1), (others, 1) }.OrderBy(worker => worker.Item1, StringComparer.Ordinal).ThenBy(worker => worker.Item2),
+            every.Select(worker => (worker.Family.Name, worker.Number)));
+        Assert.Equal(3, every.Select(worker => worker.Family).Distinct().Count());
+        Assert.Equal(4, weighed.Weighed.Count);
+
+        weighed.Weighed.Clear();
+
+        var asked = await copies.ListBesideAsync(tree, family => family == others, cancellationToken);
+
+        Assert.Equal([MutationWorkers.PathOf(tree, sanitized, 1)], asked.Select(worker => worker.Path));
+        Assert.Equal([Path.GetFileName(MutationWorkers.PathOf(tree, sanitized, 1))], weighed.Weighed.Select(Path.GetFileName));
+    }
+
+    /// <summary>
+    /// A claim that cannot be read holds its worker, naming its file: whatever asks - a clean of the leg, a sweep removing
+    /// a worker it no longer runs - is told the worker is held, and is never ended by the asking.
+    /// </summary>
+    [Fact]
+    public async Task AClaimThatCannotBeRead_HoldsItsWorker_NamingItsFile()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var claim = worker + MutationWorkers.ClaimSuffix;
+
+        await File.WriteAllTextAsync(claim, "{ this is no claim", cancellationToken);
+
+        var held = copies.HeldBy(worker);
+
+        Assert.NotNull(held);
+        Assert.StartsWith($"The mutation worker's claim file '{claim}' could not be read: ", held, StringComparison.Ordinal);
+        Assert.EndsWith("Remove it once no sweep is using that worker.", held, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A worker is claimed for one sweep at a time, without being made: another sweep is refused while the first holds it,
+    /// naming it, and takes it once the first gives it up.
+    /// </summary>
+    [Fact]
+    public async Task AWorker_IsClaimedForOneSweepAtATime_WithoutBeingMade()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var first = RunId.New();
+        var second = RunId.New();
+
+        Assert.True(copies.Claim(worker, first, force: false).Taken);
+        Assert.False(Directory.Exists(worker));
+        Assert.Contains(first.Value, copies.HeldBy(worker), StringComparison.Ordinal);
+
+        var refused = copies.Claim(worker, second, force: false);
+
+        Assert.False(refused.Taken);
+        Assert.Contains(first.Value, refused.HeldBy, StringComparison.Ordinal);
+
+        copies.Release(worker, first);
+
+        Assert.Null(copies.HeldBy(worker));
+        Assert.True(copies.Claim(worker, second, force: false).Taken);
+    }
+
+    /// <summary>A worker a sweep on this machine died holding is released and said; one nobody claimed releases nothing.</summary>
+    [Fact]
+    public async Task AWorkerASweepDiedHolding_IsReleased_AndOneNobodyClaimedReleasesNothing()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        File.WriteAllText(
+            worker + MutationWorkers.ClaimSuffix,
+            "{ \"machine\": \"" + Environment.MachineName + "\", \"processId\": " + (int.MaxValue - 1).ToString(CultureInfo.InvariantCulture)
+            + ", \"processStamp\": \"gone\", \"runId\": \"20250101-120000-deadbeef\", \"takenUtc\": \"2025-01-01T12:00:00Z\" }");
+
+        // A claim whose sweep is gone holds the worker from nobody, released or not.
+        Assert.Null(copies.HeldBy(worker));
+        Assert.Equal("20250101-120000-deadbeef", copies.ReleaseAbandoned(worker)?.RunId);
+        Assert.False(File.Exists(worker + MutationWorkers.ClaimSuffix));
+        Assert.Null(copies.ReleaseAbandoned(MutationWorkers.PathOf(tree, Variant, 2)));
+        Assert.Contains("An earlier run was abandoned", harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What a removal left aside is told by its name alone, as nothing else is left of it: one spelt as a worker - its
+    /// family's key and mark, a hyphen and its number - is a worker's, and a directory named any other way is nobody's.
+    /// </summary>
+    [Theory]
+    [InlineData("357e24cw-1", true)]
+    [InlineData("357e24cs-12", true)]
+    [InlineData("notes", false)]
+    [InlineData("357e24cw", false)]
+    [InlineData("357e24cw-01", false)]
+    [InlineData("", false)]
+    public void OnlyWhatIsSpeltAsAWorker_IsOneARemovalLeftAside(string name, bool worker)
+    {
+        var harness = new HarnessFactory();
+
+        Assert.Equal(worker, MutationWorkers.CopyClaims(harness.FileSystem, harness.Output, harness.Identity).Names(name));
+    }
+
+    /// <summary>
+    /// A claim a sweep took while its worker was being removed - a sweep claims before it makes the copy again - is that
+    /// sweep's, and stays when whatever removed the copy forgets the claim on it; a claim nobody still running holds
+    /// goes, as does one that cannot be read, which says nothing of anybody.
+    /// </summary>
+    [Fact]
+    public async Task AClaimTakenWhileItsWorkerWasRemoved_IsKept_WhereItsSweepStillRuns()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var claims = MutationWorkers.CopyClaims(harness.FileSystem, harness.Output, harness.Identity);
+        var taken = MutationWorkers.PathOf(tree, Variant, 1);
+        var abandoned = MutationWorkers.PathOf(tree, Variant, 2);
+        var unread = MutationWorkers.PathOf(tree, Variant, 3);
+        var sweep = RunId.New();
+
+        Assert.True(copies.Claim(taken, sweep, force: false).Taken);
+        File.WriteAllText(
+            abandoned + MutationWorkers.ClaimSuffix,
+            "{ \"machine\": \"" + Environment.MachineName + "\", \"processId\": " + (int.MaxValue - 1).ToString(CultureInfo.InvariantCulture)
+            + ", \"processStamp\": \"gone\", \"runId\": \"20250101-120000-deadbeef\", \"takenUtc\": \"2025-01-01T12:00:00Z\" }");
+        File.WriteAllText(unread + MutationWorkers.ClaimSuffix, "{}");
+
+        foreach (var worker in new[] { taken, abandoned, unread })
+        {
+            claims.Forget(worker);
+        }
+
+        Assert.True(File.Exists(taken + MutationWorkers.ClaimSuffix));
+        Assert.Contains(sweep.Value, claims.HeldBy(taken), StringComparison.Ordinal);
+        Assert.False(File.Exists(abandoned + MutationWorkers.ClaimSuffix));
+        Assert.False(File.Exists(unread + MutationWorkers.ClaimSuffix));
+    }
+
+    /// <summary>
+    /// A worker a sync made is removed with its claim; one gone already is absent, its claim removed with it; a directory
+    /// no sync made is no copy, and is left with any claim beside it.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerIsRemovedWithItsClaim_OnlyWhereASyncMadeIt()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var made = MutationWorkers.PathOf(tree, Variant, 1);
+        var gone = MutationWorkers.PathOf(tree, Variant, 2);
+        var somebodys = MutationWorkers.PathOf(tree, Variant, 3);
+
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), made, cancellationToken);
+        Directory.CreateDirectory(somebodys);
+        await File.WriteAllTextAsync(Path.Combine(somebodys, "notes.txt"), "mine", cancellationToken);
+
+        foreach (var worker in new[] { made, gone, somebodys })
+        {
+            await File.WriteAllTextAsync(worker + MutationWorkers.ClaimSuffix, "{}", cancellationToken);
+        }
+
+        Assert.Equal(CopyRemoval.Removed, await copies.RemoveAsync(made, cancellationToken));
+        Assert.Equal(CopyRemoval.Absent, await copies.RemoveAsync(gone, cancellationToken));
+        Assert.Equal(CopyRemoval.NotACopy, await copies.RemoveAsync(somebodys, cancellationToken));
+
+        Assert.False(Directory.Exists(made));
+        Assert.False(File.Exists(made + MutationWorkers.ClaimSuffix));
+        Assert.False(File.Exists(gone + MutationWorkers.ClaimSuffix));
+        Assert.True(File.Exists(Path.Combine(somebodys, "notes.txt")));
+        Assert.True(File.Exists(somebodys + MutationWorkers.ClaimSuffix));
+    }
+
+    /// <summary>
+    /// A worker is given the dependency sources the sweep read, each by content under its dependency's name and never
+    /// the clone's own .git, so the leg's own going - cleaned from under it - takes nothing of the worker's. A sync of
+    /// the tree into the worker neither carries nor deletes them; what it keeps of a dependency no longer given is
+    /// removed, down to none, while one given again is left as it is; and sources holding no file a copy carries are
+    /// still a directory the worker is configured with.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerIsGivenTheDependencySourcesRead_ByContent_AndKeepsNoneNoLongerGiven()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var googletest = temp.Combine("legs-build", "_deps", "googletest-src");
+        var json = temp.Combine("opt", "json");
+
+        temp.WriteFile(Path.Combine("legs-build", "_deps", "googletest-src", "CMakeLists.txt"), "project(googletest)\n");
+        temp.WriteFile(Path.Combine("legs-build", "_deps", "googletest-src", "src", "gtest.cc"), "int gtest;\n");
+        temp.WriteFile(Path.Combine("legs-build", "_deps", "googletest-src", ".git", "HEAD"), "ref: refs/heads/main\n");
+        temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        IReadOnlyList<FetchedReading> read =
+        [
+            new(new FetchedSource("GOOGLETEST", googletest), await copies.ReadFetchedAsync(googletest, cancellationToken)),
+            new(new FetchedSource("JSON", json), await copies.ReadFetchedAsync(json, cancellationToken)),
+        ];
+
+        Assert.Equal(["CMakeLists.txt", "src/gtest.cc"], read[0].Files.Paths);
+        Assert.Equal("project(googletest)\n".Length + "int gtest;\n".Length, read[0].Bytes);
+
+        await copies.SyncFetchedAsync(read, worker, cancellationToken);
+
+        var kept = FetchedSources.KeptIn(worker, "GOOGLETEST");
+
+        Assert.Equal("project(googletest)\n", File.ReadAllText(Path.Combine(kept, "CMakeLists.txt")));
+        Assert.Equal("int gtest;\n", File.ReadAllText(Path.Combine(kept, "src", "gtest.cc")));
+        Assert.False(Directory.Exists(Path.Combine(kept, ".git")));
+        Assert.Equal("#pragma once\n", File.ReadAllText(Path.Combine(FetchedSources.KeptIn(worker, "JSON"), "json.hpp")));
+
+        // The leg's own are gone, as a clean of the leg takes them: the worker's stay, and a sync of the tree leaves them.
+        Directory.Delete(googletest, recursive: true);
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        Assert.Equal("int gtest;\n", File.ReadAllText(Path.Combine(kept, "src", "gtest.cc")));
+
+        // Given one of the two again: what it keeps of the other goes, and what it keeps of this one is left as it
+        // is, never removed to be made again.
+        var header = Path.Combine(FetchedSources.KeptIn(worker, "JSON"), "json.hpp");
+        var written = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
+        File.SetLastWriteTimeUtc(header, written);
+        await copies.SyncFetchedAsync([read[1]], worker, cancellationToken);
+
+        Assert.False(Directory.Exists(kept));
+        Assert.Equal(written, File.GetLastWriteTimeUtc(header));
+
+        // Given none, it keeps none: the directory it kept them in goes with them.
+        await copies.SyncFetchedAsync([], worker, cancellationToken);
+
+        Assert.False(Directory.Exists(FetchedSources.KeptIn(worker)));
+
+        // A worker that keeps none is given none, and nothing is made in it.
+        var other = MutationWorkers.PathOf(tree, Variant, 2);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), other, cancellationToken);
+        await copies.SyncFetchedAsync([], other, cancellationToken);
+
+        Assert.False(Directory.Exists(FetchedSources.KeptIn(other)));
+
+        // Sources that hold no file a copy carries - a clone's own .git alone - are a directory the leg's build has all
+        // the same, and the worker is configured with its own: so it is made, empty.
+        var bare = temp.Combine("opt", "bare");
+
+        temp.WriteFile(Path.Combine("opt", "bare", ".git", "HEAD"), "ref: refs/heads/main\n");
+        await copies.SyncFetchedAsync([new(new FetchedSource("BARE", bare), await copies.ReadFetchedAsync(bare, cancellationToken))], other, cancellationToken);
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(FetchedSources.KeptIn(other, "BARE")));
+    }
+
+    /// <summary>
+    /// Dependency sources that moved since the sweep read them stop the worker being given them, as a tree that moved
+    /// stops its copy; and ones that are gone are never read as none.
+    /// </summary>
+    [Fact]
+    public async Task DependencySourcesThatMovedSinceTheyWereRead_AreNotGiven_AndOnesGoneAreNotReadAsNone()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var json = temp.Combine("opt", "json");
+        var header = temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
+
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        var read = new FetchedReading(new FetchedSource("JSON", json), await copies.ReadFetchedAsync(json, cancellationToken));
+
+        File.WriteAllText(header, "#pragma twice\n");
+
+        var moved = await Assert.ThrowsAsync<HarnessException>(() => copies.SyncFetchedAsync([read], worker, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, moved.ExitCode);
+        Assert.Contains($"'json.hpp' changed after '{json}' was read for this command", moved.Message, StringComparison.Ordinal);
+
+        Directory.Delete(json, recursive: true);
+
+        Assert.Equal(LegExit.InputsMoved, (await Assert.ThrowsAsync<HarnessException>(() => copies.ReadFetchedAsync(json, cancellationToken))).ExitCode);
+    }
+
+    /// <summary>
+    /// A sweep stopped stops the reading of a dependency's sources, and the giving of them to a worker - before any is
+    /// carried, and before anything the worker kept of one no longer given is removed. Each is asked with the token a
+    /// stop cancels, never left to run on.
+    /// </summary>
+    [Fact]
+    public async Task ASweepStopped_StopsTheReadingAndTheGivingOfDependencySources()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var json = temp.Combine("opt", "json");
+        var kept = Path.Combine(FetchedSources.KeptIn(worker, "JSON"), "json.hpp");
+        var stopped = new CancellationToken(canceled: true);
+
+        temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        var read = new FetchedReading(new FetchedSource("JSON", json), await copies.ReadFetchedAsync(json, cancellationToken));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => copies.ReadFetchedAsync(json, stopped));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => copies.SyncFetchedAsync([read], worker, stopped));
+        Assert.False(File.Exists(kept), "the worker was given them though the sweep was stopped");
+
+        await copies.SyncFetchedAsync([read], worker, cancellationToken);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => copies.SyncFetchedAsync([], worker, stopped));
+        Assert.True(File.Exists(kept), "what the worker kept was removed though the sweep was stopped");
+    }
+
+    /// <summary>
+    /// A claim that cannot be removed with its worker claims nothing once the worker is gone: it is said, with its
+    /// file, and the removal that went through is still the answer.
+    /// </summary>
+    [Fact]
+    public async Task AClaimThatCannotBeRemovedWithItsWorker_IsSaid_AndTheWorkerIsStillRemoved()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var claim = worker + MutationWorkers.ClaimSuffix;
+
+        await Copies(harness).SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await File.WriteAllTextAsync(claim, "{}", cancellationToken);
+
+        var stuck = new KeepsFile(harness.FileSystem, claim);
+        var copies = new WorkerCopies(SyncKit.Service(harness), SyncKit.Transport(harness), stuck, harness.Output, harness.Identity, MutationService.CommandName);
+
+        Assert.Equal(CopyRemoval.Removed, await copies.RemoveAsync(worker, cancellationToken));
+        Assert.False(Directory.Exists(worker));
+        Assert.Contains(
+            $"check-mutations: WARN - The claim file '{claim}' of a mutation worker that was removed could not be removed, and is yours to remove: it is held.",
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>A disk that will not delete one file.</summary>
+    private sealed class KeepsFile(IFileSystem inner, string kept) : PassThroughFileSystem(inner)
+    {
+        public override void DeleteFile(string path)
+        {
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(kept), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("it is held.");
+            }
+
+            base.DeleteFile(path);
+        }
+    }
+
+    private static WorkerCopies Copies(HarnessFactory harness)
+        => new(SyncKit.Service(harness), SyncKit.Transport(harness), harness.FileSystem, harness.Output, harness.Identity, MutationService.CommandName);
+
+    /// <summary>A disk that keeps which directories were weighed.</summary>
+    private sealed class Weighs(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public List<string> Weighed { get; } = [];
+
+        public override long DirectorySize(string path)
+        {
+            Weighed.Add(path);
+            return base.DirectorySize(path);
+        }
+    }
+
+    /// <summary>A tree in a repository of its own, in <paramref name="temp"/>, so the workers beside it are in it too.</summary>
+    private static async Task<(HarnessFactory Harness, string Tree)> PrepareAsync(TempDirectory temp, CancellationToken cancellationToken)
+    {
+        var harness = new HarnessFactory();
+        var tree = temp.Combine("tree");
+
+        temp.WriteFile(Path.Combine("tree", "src", "a.c"), "a\n");
+        temp.WriteFile(Path.Combine("tree", "src", "b.c"), "b\n");
+        temp.WriteFile(Path.Combine("tree", ".gitignore"), "build/\n");
+
+        await harness.InitializeHarnessAsync(tree, cancellationToken, new HarnessConfig());
+        await harness.CommitAllAsync(tree, "initial", cancellationToken);
+
+        return (harness, tree);
+    }
+}

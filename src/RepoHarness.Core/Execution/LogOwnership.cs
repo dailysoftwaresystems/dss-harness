@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
@@ -41,7 +40,11 @@ public sealed record LogOwner(
         => ProcessHolders.Describe(Machine, ProcessId, RunId, TakenUtc) + ProcessHolders.OlderBuildNote(ProcessStamp);
 }
 
-/// <summary>What claiming a log directory found.</summary>
+/// <summary>
+/// What claiming a directory a run owns found: its log directory, or a mutation worker's copy. What a claim not taken
+/// means is its claimer's to say - a run that cannot own its log path is <c>log-held</c>, a sweep that cannot own a
+/// worker leaves it for the sweep that does - so the claim itself names no verdict.
+/// </summary>
 /// <param name="Taken">Whether this run now owns it.</param>
 /// <param name="Holder">The live run that owns it instead, when one does.</param>
 /// <param name="OwnerFile">Where the ownership is recorded.</param>
@@ -49,18 +52,6 @@ public sealed record LogClaim(bool Taken, LogOwner? Holder, string OwnerFile)
 {
     /// <summary>The run that owns it instead, as a refusal names it, where one does.</summary>
     public string? HeldBy { get; init; }
-
-    /// <summary>
-    /// The verdict this forces on the leg, or <see langword="null"/> when the claim succeeded. A run
-    /// that cannot own its log path cannot keep the evidence for its own verdict, and a verdict with
-    /// no evidence behind it is the thing this tool exists to stop reporting.
-    /// </summary>
-    public ReachedVerdict? Verdict()
-        => Taken
-            ? null
-            : ReachedVerdict.Of(
-                LegVerdict.LogHeld,
-                HeldBy is null ? "another run owns this log path" : $"another run owns this log path: {HeldBy}");
 }
 
 /// <summary>
@@ -71,12 +62,11 @@ public sealed record LogClaim(bool Taken, LogOwner? Holder, string OwnerFile)
 /// both chose their own id. A run told to write somewhere already owned — a rerun pointed at a
 /// previous run's directory, or two runs given the same one — is refused as <c>log-held</c> rather
 /// than allowed to interleave its output with another run's, since one leg's result read as
-/// another's is exactly the failure the ids exist to prevent.
+/// another's is exactly the failure the ids exist to prevent. Claimed as every directory a run owns
+/// is, in the log directory's own terms.
 /// </remarks>
 public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity)
 {
-    private readonly IProcessIdentity _identity = identity;
-
     /// <summary>The command name this reports under.</summary>
     public const string CommandName = "logs";
 
@@ -86,17 +76,28 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
     /// </summary>
     public const string OwnerSuffix = ".owner.json";
 
-    private readonly IFileSystem _fileSystem = fileSystem;
-    private readonly IHarnessOutput _output = output;
+    private readonly DirectoryClaims _claims = new(
+        fileSystem,
+        output,
+        identity,
+        new ClaimTerms
+        {
+            CommandName = CommandName,
+            OwnerSuffix = OwnerSuffix,
+            Directory = directory => $"the log path '{directory}'",
+            OwnerFile = "The log owner file",
+            Unwritten = "Until it can be, two runs could write one set of logs.",
+            Unreadable = "Remove it once no run is using that path.",
+            Made = directory => $"The log directory '{directory}'",
+            Unmade = "Until it can be, the run has nowhere to keep its records.",
+            Beside = "The runs beside",
+            Held = directory => $"its records at '{directory}'",
+            Abandoned = "so its verdict may never have been reported.",
+        });
 
     /// <summary>Where a log directory's ownership is recorded.</summary>
     /// <param name="logDirectory">The directory a run writes its logs to.</param>
-    public static string OwnerFile(string logDirectory)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
-
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(logDirectory)) + OwnerSuffix;
-    }
+    public static string OwnerFile(string logDirectory) => DirectoryClaims.OwnerFile(logDirectory, OwnerSuffix);
 
     /// <summary>
     /// Claims <paramref name="logDirectory"/> for <paramref name="runId"/>. An owner whose process
@@ -120,52 +121,7 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
         ArgumentNullException.ThrowIfNull(runId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var file = OwnerFile(logDirectory);
-
-        // Claimed before anything else a run writes, so a directory this user cannot write - one an
-        // earlier run under sudo left to root - is refused here, naming it, rather than escaping as
-        // an error that reads as a defect in this tool.
-        Written(file, () => _fileSystem.CreateDirectory(Path.GetDirectoryName(file)!));
-
-        var claim = MachineWideFile.Update(file, MachineWideFile.Window, afterwards =>
-        {
-            if (Read(file) is { } existing && !Mine(existing, runId))
-            {
-                var held = _identity.Stands(existing.Machine, existing.ProcessId, existing.ProcessStamp);
-
-                if (held && !force)
-                {
-                    // A holder on another machine cannot be asked whether it is still running, so
-                    // it stands. Liveness, never a timeout, is what decides for one on this machine.
-                    return new LogClaim(false, existing, file) { HeldBy = existing.Describe() + _identity.ElsewhereNote(existing.Machine) };
-                }
-
-                // Said once the owner file is let go, as every line about a machine-wide file is.
-                afterwards(held
-                    ? () => _output.Warn(CommandName, ProcessHolders.TakenByForce($"the log path '{logDirectory}'", existing.Describe()))
-                    : () => _output.Info(CommandName, ProcessHolders.Reclaimed($"the log path '{logDirectory}'", existing.Describe())));
-            }
-
-            var owner = new LogOwner(
-                _identity.CurrentMachine,
-                _identity.CurrentId,
-                runId.Value,
-                DateTimeOffset.UtcNow,
-                _identity.Current);
-
-            Written(file, () => _fileSystem.WriteAllTextAtomic(file, JsonSerializer.Serialize(owner, JsonStateFile.Options) + "\n"));
-
-            // Made as it is claimed: a run names this directory as where its records are, and one
-            // whose legs wrote nothing would otherwise have named a directory that did not exist.
-            MachineWideFile.Written(
-                $"The log directory '{logDirectory}'",
-                "Until it can be, the run has nowhere to keep its records.",
-                () => _fileSystem.CreateDirectory(logDirectory));
-
-            return new LogClaim(true, owner, file);
-        });
-
-        return Task.FromResult(claim);
+        return Task.FromResult(_claims.Claim(logDirectory, runId, force));
     }
 
     /// <summary>
@@ -181,27 +137,10 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
         ArgumentNullException.ThrowIfNull(runId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var file = OwnerFile(logDirectory);
-
         // Given up once the run is over, so a failure here is said and never stands in for what the
         // run found: the record names this process, and is reclaimed as a dead owner's is once it
         // has ended.
-        try
-        {
-            MachineWideFile.Update<object?>(file, MachineWideFile.Window, () =>
-            {
-                if (Read(file) is { } existing && Mine(existing, runId))
-                {
-                    _fileSystem.DeleteFile(file);
-                }
-
-                return null;
-            });
-        }
-        catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
-        {
-            _output.Warn(CommandName, $"'{logDirectory}' could not be given up: {ex.Message} It is reclaimed once this run has ended.");
-        }
+        _claims.Release(logDirectory, runId);
 
         return Task.CompletedTask;
     }
@@ -221,110 +160,11 @@ public sealed class LogOwnership(IFileSystem fileSystem, IHarnessOutput output, 
     /// a run whose machine left its record unreadable would never be said, nor its record removed. No failure expected
     /// here fails the run that found them: a directory that cannot be listed is said, and nothing in it is released.
     /// </remarks>
-    public IReadOnlyList<LogOwner> ReleaseAbandoned(string logDirectory)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
-
-        var own = OwnerFile(logDirectory);
-        IReadOnlyList<string> files;
-
-        try
-        {
-            files = [.. _fileSystem.EnumerateFiles(Path.GetDirectoryName(own)!, recursive: false)
-                .Where(file => file.EndsWith(OwnerSuffix, StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(Path.GetFullPath(file), own, StringComparison.OrdinalIgnoreCase))
-                .Order(StringComparer.Ordinal)];
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _output.Warn(
-                CommandName,
-                $"The runs beside '{logDirectory}' could not be listed: {ex.Message.TrimEnd('.')}. Any of them that was abandoned is said, and released, by a later run.");
-            return [];
-        }
-
-        var abandoned = new List<LogOwner>();
-
-        foreach (var file in files)
-        {
-            try
-            {
-                if (MachineWideFile.Update(file, MachineWideFile.Window, afterwards => Abandoned(file, afterwards)) is { } owner)
-                {
-                    abandoned.Add(owner);
-                }
-            }
-            catch (Exception ex) when (ex is HarnessException or IOException or UnauthorizedAccessException)
-            {
-                // Unreadable, held past the window by another process, or its mutex could not be opened: see the remarks.
-                // Said once the file is let go, as everything said here is.
-                _output.Warn(
-                    CommandName,
-                    $"Whether the run that claimed '{file[..^OwnerSuffix.Length]}' was abandoned could not be judged, so its claim is left as it is: {ex.Message}");
-            }
-        }
-
-        return abandoned;
-    }
-
-    /// <summary>
-    /// The owner <paramref name="file"/> records, released and said once the file is let go, where it is a run on this
-    /// machine that has ended; <see langword="null"/>, and nothing done, otherwise.
-    /// </summary>
-    private LogOwner? Abandoned(string file, Action<Action> afterwards)
-    {
-        // A holder on another machine stands, since nothing here can ask that machine; one on this machine, this run
-        // among them, while its process runs.
-        if (Read(file) is not { } owner || _identity.Stands(owner.Machine, owner.ProcessId, owner.ProcessStamp))
-        {
-            return null;
-        }
-
-        var directory = file[..^OwnerSuffix.Length];
-        var records = _fileSystem.DirectoryExists(directory) ? $"its records at '{directory}'" : $"'{directory}', which is gone";
-        var holder = ProcessHolders.Describe(owner.Machine, owner.ProcessId, owner.RunId, owner.TakenUtc);
-        var abandoned = $"An earlier run was abandoned: {holder}, is no longer running, and never gave up {records} - "
-            + "most likely it was killed, or stopped with its machine, before it finished, unless it said as it ended that its "
-            + "claim could not be given up - so its verdict may never have been reported.";
-
-        try
-        {
-            _fileSystem.DeleteFile(file);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            afterwards(() => _output.Warn(CommandName, $"{abandoned} Its owner file '{file}' could not be removed: {ex.Message}"));
-            return owner;
-        }
-
-        afterwards(() => _output.Warn(CommandName, $"{abandoned} Its claim is released."));
-        return owner;
-    }
-
-    /// <summary>Does <paramref name="write"/>, and refuses, naming the owner file, when it could not be done.</summary>
-    private static void Written(string file, Action write)
-        => MachineWideFile.Written($"The log owner file '{file}'", "Until it can be, two runs could write one set of logs.", write);
+    public IReadOnlyList<LogOwner> ReleaseAbandoned(string logDirectory) => _claims.ReleaseAbandonedBeside(logDirectory);
 
     /// <summary>
     /// The run that owns <paramref name="logDirectory"/>, or <see langword="null"/> when none does.
     /// </summary>
     /// <param name="logDirectory">The directory a run writes its logs to.</param>
-    public LogOwner? Owner(string logDirectory) => Read(OwnerFile(logDirectory));
-
-    private bool Mine(LogOwner owner, RunId runId)
-        => string.Equals(owner.RunId, runId.Value, StringComparison.Ordinal)
-            && owner.ProcessId == _identity.CurrentId
-            && _identity.IsHere(owner.Machine);
-
-    /// <summary>
-    /// The owner <paramref name="file"/> records, by every state file's rules: an owner file that cannot be read says a
-    /// run claimed this path and nothing more, so the claim is refused rather than granted - never read as free, the one
-    /// reading that lets two runs write one set of logs. The one field an older build wrote is declared, so upgrading
-    /// reads its own owner file rather than refusing it.
-    /// </summary>
-    private LogOwner? Read(string file)
-        => MachineWideFile.Read<LogOwner>(
-            _fileSystem,
-            file,
-            ex => $"The log owner file '{file}' could not be read: {ex.Message.TrimEnd('.')}. Remove it once no run is using that path.");
+    public LogOwner? Owner(string logDirectory) => _claims.Owner(logDirectory);
 }

@@ -139,7 +139,8 @@ public sealed class LegsService(IHarnessContextLoader contextLoader, IHostInspec
             context,
             [.. selection.Legs.Select(leg => LegPlacement.Place(config, leg, workload, reports, here))],
             here,
-            _platform.PathComparison);
+            _platform.PathComparison,
+            workload);
 
         foreach (var note in roomUnchecked)
         {

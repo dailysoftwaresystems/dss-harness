@@ -212,8 +212,9 @@ public sealed class SyncExclusionsReachTests
     }
 
     /// <summary>
-    /// What the harness writes as it works - an action's own build and artifacts, each run's records - is the run
-    /// state of whichever machine made it: a name there neither counts nor is looked for below. Measured: in a
+    /// What the harness writes as it works - an action's own build and artifacts, each run's records, the dependency
+    /// sources a mutation worker is given - is the run state of whichever machine made it: a name there neither counts
+    /// nor is looked for below. Measured: in a
     /// fresh worktree, its own build not made yet, a run's sync said the build entry init writes protected
     /// nothing, having found an action's working space, and advised **/build, which would withhold every source
     /// directory of that name. An action's own file of such a name, which a sync carries, still counts.
@@ -231,6 +232,8 @@ public sealed class SyncExclusionsReachTests
             Directory.CreateDirectory(temp.Combine(".harness-config", "runs", $"r{index}", "build"));
         }
 
+        // A dependency's own sources, as a mutation worker keeps them: whatever they name is the dependency's.
+        Directory.CreateDirectory(temp.Combine(".harness-config", "deps", "googletest", "build", "artifacts"));
         Directory.CreateDirectory(Path.Combine(actions, "census", "artifacts", ".secrets"));
         Directory.CreateDirectory(Path.Combine(actions, "probe", "build", "step", ".env"));
         temp.WriteFile(Path.Combine(".harness-config", "runner", "actions", "probe", "node_modules"), "kept\n");

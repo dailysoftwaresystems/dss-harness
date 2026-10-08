@@ -42,6 +42,9 @@ public sealed class LegVerdictTests
         Assert.Equal("not-admitted", Verdicts.Display(LegVerdict.NotAdmitted));
         Assert.Equal("poisoned", Verdicts.Display(LegVerdict.Poisoned));
         Assert.Equal("stopped", Verdicts.Display(LegVerdict.Stopped));
+        Assert.Equal("violated", Verdicts.Display(LegVerdict.Violated));
+        Assert.Equal("survived", Verdicts.Display(LegVerdict.Survived));
+        Assert.Equal("unattributed", Verdicts.Display(LegVerdict.Unattributed));
     }
 
     [Fact]
@@ -57,6 +60,9 @@ public sealed class LegVerdictTests
             LegVerdict.RefusedLocked,
             LegVerdict.NotAdmitted,
             LegVerdict.Failed,
+            LegVerdict.Violated,
+            LegVerdict.Survived,
+            LegVerdict.Unattributed,
             LegVerdict.Unwitnessed,
         ];
 
@@ -100,6 +106,9 @@ public sealed class LegVerdictTests
         Assert.Equal(LegExit.Unwitnessed, Verdicts.ExitCodeFor(LegVerdict.Unwitnessed));
         Assert.Equal(LegExit.LogHeld, Verdicts.ExitCodeFor(LegVerdict.LogHeld));
         Assert.Equal(LegExit.NotAdmitted, Verdicts.ExitCodeFor(LegVerdict.NotAdmitted));
+        Assert.Equal(LegExit.Violated, Verdicts.ExitCodeFor(LegVerdict.Violated));
+        Assert.Equal(LegExit.Survived, Verdicts.ExitCodeFor(LegVerdict.Survived));
+        Assert.Equal(LegExit.Unattributed, Verdicts.ExitCodeFor(LegVerdict.Unattributed));
 
         // A warning is not a failure - a switched-off machine is normal - and nor is a stopped build,
         // but a run whose worst verdict is one of them is incomplete, never a pass. A leg nobody asked
@@ -132,6 +141,19 @@ public sealed class LegVerdictTests
             other => Assert.True(Verdicts.Rank(none) < Verdicts.Rank(other), $"{none} must outrank {other}")));
     }
 
+    /// <summary>
+    /// The codes a mutation arm's verdicts exit with are the ones docs/architecture.md and help map a mutation
+    /// harness's own exit codes onto, and a repository moving its sweep to check-mutations adapts its callers to them:
+    /// renumbered here, every such caller would read another verdict than the one reported.
+    /// </summary>
+    [Fact]
+    public void MutationCodes_AreTheOnesTheDocumentMapsOnto()
+    {
+        Assert.Equal(1, LegExit.Violated);
+        Assert.Equal(2, LegExit.Survived);
+        Assert.Equal(8, LegExit.Unattributed);
+    }
+
     [Fact]
     public void LegCodes_StayInsideThePerCommandRange()
     {
@@ -142,8 +164,15 @@ public sealed class LegVerdictTests
         Assert.InRange(LegExit.Unwitnessed, 1, 9);
         Assert.InRange(LegExit.LogHeld, 1, 9);
         Assert.InRange(LegExit.NotAdmitted, 1, 9);
+        Assert.InRange(LegExit.Violated, 1, 9);
+        Assert.InRange(LegExit.Survived, 1, 9);
+        Assert.InRange(LegExit.Unattributed, 1, 9);
 
-        int[] codes = [LegExit.InputsMoved, LegExit.Contended, LegExit.Unwitnessed, LegExit.LogHeld, LegExit.NotAdmitted];
+        int[] codes =
+        [
+            LegExit.InputsMoved, LegExit.Contended, LegExit.Unwitnessed, LegExit.LogHeld, LegExit.NotAdmitted,
+            LegExit.Violated, LegExit.Survived, LegExit.Unattributed,
+        ];
         Assert.Equal(codes.Length, codes.Distinct().Count());
 
         foreach (var code in codes)
@@ -159,6 +188,7 @@ public sealed class LegVerdictTests
                  {
                      LegVerdict.Failed, LegVerdict.Unwitnessed, LegVerdict.InputsMoved, LegVerdict.Unmeasured,
                      LegVerdict.Contended, LegVerdict.RefusedLocked, LegVerdict.NotAdmitted, LegVerdict.LogHeld, LegVerdict.Poisoned,
+                     LegVerdict.Violated, LegVerdict.Survived, LegVerdict.Unattributed,
                  })
         {
             Assert.True(Verdicts.IsFailure(verdict), $"{verdict} counts as a failure");
@@ -196,6 +226,27 @@ public sealed class LegVerdictTests
         Assert.True(Verdicts.IsFailure(reached.Verdict), "a leg that vanishes must fail the run");
     }
 
+    /// <summary>
+    /// The verdict work that ended in a failure comes to is read in one place, for a leg and for every unit of a sweep:
+    /// the verdict a refusal names, unmeasured where a phase's output could not be read back from its log, failed where
+    /// the cause is one this build can name - and none where nobody named it, which is the caller's to say as poisoned.
+    /// </summary>
+    [Fact]
+    public void AFailure_ComesToTheVerdictItsCauseNames_AndToNoneWhereNobodyNamedIt()
+    {
+        Assert.Equal(
+            ReachedVerdict.Of(LegVerdict.SkippedToolMissing, "ninja was not found"),
+            Verdicts.ForFailure(new HarnessException(HarnessExit.ToolMissing, "ninja was not found")));
+        Assert.Equal(
+            ReachedVerdict.Of(LegVerdict.Unmeasured, PhaseOutputTests.Unread.Said),
+            Verdicts.ForFailure(new PhaseOutputUnreadException("build.log", "it was written again since")));
+        Assert.Equal(
+            ReachedVerdict.Of(LegVerdict.Failed, "'bench' could not be started: Exec format error"),
+            Verdicts.ForFailure(new RepoHarness.Core.Processes.ProgramStartException("bench", "'bench' could not be started: Exec format error")));
+        Assert.Null(Verdicts.ForFailure(new InvalidOperationException("the build directory vanished")));
+        Assert.Null(Verdicts.ForFailure(new IOException("the disk went away")));
+    }
+
     [Fact]
     public void ARefusal_KeepsTheMeaningItWasRaisedWith()
     {
@@ -206,5 +257,24 @@ public sealed class LegVerdictTests
         Assert.Equal(LegVerdict.LogHeld, Verdicts.ForRefusal(LegExit.LogHeld));
         Assert.Equal(LegVerdict.NotAdmitted, Verdicts.ForRefusal(LegExit.NotAdmitted));
         Assert.Equal(LegVerdict.Poisoned, Verdicts.ForRefusal(HarnessExit.InternalError));
+    }
+
+    /// <summary>
+    /// A refusal never names what only a sweep's judge decides: a program a host ran that exited 1, 2 or 8 - as any
+    /// program may - refuses with that code, and is no arm that was violated, survived or went unattributed. Whatever
+    /// code a refusal carries, the verdict it gives is one a build, a test or a run can reach.
+    /// </summary>
+    [Fact]
+    public void ARefusal_NeverNamesWhatOnlyASweepsJudgeDecides()
+    {
+        Assert.All(
+            Verdicts.All.Where(info => info.OfASweep),
+            info => Assert.Equal(LegVerdict.Poisoned, Verdicts.ForRefusal(info.ExitCode)));
+        Assert.All(
+            Enumerable.Range(0, 256),
+            code => Assert.False(Verdicts.All.Single(info => info.Verdict == Verdicts.ForRefusal(code)).OfASweep, $"a refusal carrying {code} names a sweep's verdict"));
+        Assert.Equal(
+            ReachedVerdict.Of(LegVerdict.Poisoned, "pi: 'manifest' exited 1"),
+            Verdicts.ForFailure(new HarnessException(LegExit.Violated, "pi: 'manifest' exited 1")));
     }
 }

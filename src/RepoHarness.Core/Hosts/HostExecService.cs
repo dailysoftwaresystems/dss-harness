@@ -158,6 +158,11 @@ public sealed class HostExecService(
                 // input on the host, which cancels the command there instead of leaving it running.
                 StandardInput = request + "\n",
                 HoldStandardInputOpen = true,
+
+                // Both streams are shown line by line as they arrive, and are as long as what the command prints:
+                // the end of each is all the result keeps, for the message that says how the command ended.
+                OutputKept = StreamKept.Tail,
+                ErrorKept = StreamKept.Tail,
                 OnOutputLine = line =>
                 {
                     if (lines.Output(line))

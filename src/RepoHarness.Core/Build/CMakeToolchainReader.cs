@@ -198,15 +198,25 @@ public static class CompilerFacts
 /// writes no answer, which leaves the last one's beside a record of a compiler that built nothing
 /// there. So the record must name the compiler the answer names, where the answer names one - the
 /// program CMake makes of it, since the answer keeps a toolchain file's value as written: a list's first
-/// item, a path tidied as CMake tidies it, a name alone found as a program - and must have been written
-/// no later than the answer, which a configure writes after every record it writes. Each tie leaves a
-/// case to the other: the time alone tells a later record apart where the answer names no compiler, as
-/// under a Visual Studio generator, where it names one by its name alone, which a program of that name
-/// elsewhere answers to, and where the same file was replaced in place; the compiler alone does where a
-/// clock stepped back since the answer was written. Measured with CMake 3.29 and 4.3: MSVC through
-/// Ninja and through Visual Studio 18 2026, gcc on Windows and on Linux, toolchain files naming the
-/// compiler each way the comparison lists, and a configure that failed after identifying the compiler
-/// again.
+/// item, a path tidied as CMake tidies it, a name alone found as a program. Measured with CMake 3.29 and
+/// 4.3: MSVC through Ninja and through Visual Studio 18 2026, gcc on Windows and on Linux, toolchain
+/// files naming the compiler each way the comparison lists, and a configure that failed after
+/// identifying the compiler again.
+/// </para>
+/// <para>
+/// Never by when either was written. A host whose clock steps forward for a moment stamps a file ahead
+/// of one written after it - on a consumer's WSL host, two files written a fraction of a second apart
+/// came out dated 24 seconds apart, just before a configure whose own record came out dated after its
+/// answer - and a phase that starts and ends outside the step measures no drift, so no step anybody
+/// detected marks which dates are wrong. Read for the configure that wrote it, the record can be no
+/// later configure's: <see cref="Ask"/> tells that configure's answer from every earlier one, and
+/// nothing configures between it and the reading. Read for a directory a leg did not configure, a later
+/// configure is told apart by what CMake leaves of it: one that identified another program by the
+/// program the record names, and one that failed, whatever it identified, by the error index CMake 4
+/// writes in place of an answer - kept beside the last answer, where a configure that answers removes
+/// every one before it, measured with CMake 4.3. A configure before CMake 4 that failed leaves nothing
+/// of itself there, and its record is read as it names it, held to the program the answer names: a
+/// date would tell it apart only on a clock that holds, which no verdict can rest on.
 /// </para>
 /// </remarks>
 public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
@@ -266,7 +276,9 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
     /// </param>
     /// <remarks>
     /// Read from the newest index, whose name sorts last - the file API's own rule, since an index is
-    /// named for the moment it was written. A language the answer names with no id is identified from
+    /// named for the moment it was written. No stepped clock reorders two of them: measured with CMake
+    /// 4.3, a configure that answers removes every answer before it, and one that fails keeps the last
+    /// beside an error index of its own. A language the answer names with no id is identified from
     /// CMake's own record of it, as the remarks on this class say. One CMake identified nowhere, such as
     /// the resource compiler it lists on Windows, is not one this build can be held to: it is left out
     /// of the compilers rather than read as a mismatch, and named among the unidentified, with why.
@@ -286,10 +298,15 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
 
             var index = written.LastOrDefault(name => name.StartsWith(IndexPrefix, StringComparison.Ordinal));
 
+            // What CMake 4 writes in place of an answer when a configure fails. Beside an answer, it is a
+            // configure since that answer, as one that answers removes every error index before it; never
+            // beside an answer a configure this build asked wrote, which writes one or the other.
+            var failed = written.LastOrDefault(name => name.StartsWith(ErrorPrefix, StringComparison.Ordinal));
+
             if (index is null)
             {
                 // What CMake wrote in its place when the configure failed, where it wrote that much.
-                return written.LastOrDefault(name => name.StartsWith(ErrorPrefix, StringComparison.Ordinal)) is { } failed
+                return failed is not null
                     ? CompilerReading.None(Error(Path.Combine(replies, failed)))
                     : CompilerReading.None(asked is null
                         ? "CMake wrote no file API answer there, which it does from version 3.20"
@@ -299,9 +316,6 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
             var indexFile = Path.Combine(replies, index);
 
             using var indexDocument = JsonDocument.Parse(_fileSystem.ReadAllText(indexFile));
-
-            // When CMake answered: a record of identifying a compiler written since is a later configure's.
-            var answeredAt = _fileSystem.LastWriteTimeUtc(indexFile);
 
             // The version that answered, under which CMake keeps its record of each language it identified.
             var version = VersionIn(indexDocument);
@@ -355,7 +369,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
                     continue;
                 }
 
-                var (fact, why) = Recorded(buildDirectory, version, language, Text(compiler, "path"), answeredAt);
+                var (fact, why) = Recorded(buildDirectory, version, language, Text(compiler, "path"), failed);
 
                 if (fact is not null)
                 {
@@ -394,6 +408,17 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
     /// </remarks>
     public (IReadOnlyList<IdentifiedCompiler> Compilers, IReadOnlyList<string> Unread) Identified(string buildDirectory)
     {
+        var (compilers, unread) = Records(buildDirectory);
+
+        return (compilers, [.. unread.Select(record => record.Why)]);
+    }
+
+    /// <summary>
+    /// What <see cref="Identified"/> reads, each thing that could not be read with the language whose record it is -
+    /// <see langword="null"/> where it is CMake's answer as a whole, which says nothing of any language.
+    /// </summary>
+    private (IReadOnlyList<IdentifiedCompiler> Compilers, IReadOnlyList<(string? Language, string Why)> Unread) Records(string buildDirectory)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
 
         string? version;
@@ -409,7 +434,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            return ([], [$"CMake's file API answer could not be read: {ex.Message.TrimEnd('.')}"]);
+            return ([], [(null, $"CMake's file API answer could not be read: {ex.Message.TrimEnd('.')}")]);
         }
 
         if (version is null)
@@ -418,7 +443,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
         }
 
         var compilers = new List<IdentifiedCompiler>();
-        var unread = new List<string>();
+        var unread = new List<(string? Language, string Why)>();
 
         foreach (var language in new[] { "C", "CXX" })
         {
@@ -439,7 +464,7 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
                 // one missing is a record CMake did not write whole, and none of it can be relied on.
                 if (Setting(string.Empty) is not { } program || Setting("_ID") is not { } id || Setting("_VERSION") is not { } identified)
                 {
-                    unread.Add($"'{record}' lacks a line CMake writes in every record of a compiler: its path, id or version, for {language}");
+                    unread.Add((language, $"'{record}' lacks a line CMake writes in every record of a compiler: its path, id or version, for {language}"));
                     continue;
                 }
 
@@ -456,12 +481,114 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                unread.Add($"'{record}' could not be read: {ex.Message.TrimEnd('.')}");
+                unread.Add((language, $"'{record}' could not be read: {ex.Message.TrimEnd('.')}"));
             }
         }
 
         return (compilers, unread);
     }
+
+    /// <summary>
+    /// Why no build of <paramref name="project"/> identifies a compiler, as a refusal ends; <see langword="null"/> where
+    /// one does: a project CMake builds.
+    /// </summary>
+    /// <param name="project">The leg's project, or <see langword="null"/> for a leg that builds nothing.</param>
+    /// <remarks>
+    /// The one place that says which legs have a compiler their build identified: a run reads it before any host is
+    /// measured, a test before its leg is built, and both once the leg is built - so none of them refuses a leg another
+    /// would fill in.
+    /// </remarks>
+    public static string? IdentifiesNone(ProjectConfig? project)
+    {
+        if (project is null)
+        {
+            return "its leg builds nothing, so no build identifies a compiler";
+        }
+
+        return BuildAdapters.Find(project.Type) switch
+        {
+            CMakeAdapter => null,
+            { } adapter => Other(adapter.Program),
+            null => Other($"'{project.Type}'"),
+        };
+
+        string Other(string builder)
+            => $"project '{project.Name}' is built by {builder}, which identifies no compiler: only a build CMake configures records one";
+    }
+
+    /// <summary>
+    /// What the names of a leg's compilers are filled in with ahead of its build: nothing yet, each standing as written,
+    /// where the build of <paramref name="project"/> will identify them - and none, saying why, where no build of it does.
+    /// </summary>
+    /// <param name="project">The leg's project, or <see langword="null"/> for a leg that builds nothing.</param>
+    public static LegCompilers BeforeTheBuild(ProjectConfig? project)
+        => IdentifiesNone(project) is { } why ? LegCompilers.None(why) : LegCompilers.AheadOfTheBuild;
+
+    /// <summary>
+    /// What the names of a leg's compilers are filled in with once <paramref name="project"/> is built in
+    /// <paramref name="buildDirectory"/>: what <see cref="Named"/> reads there, read where a line first names one, and
+    /// once - or none, saying why, where no build of the project identifies one.
+    /// </summary>
+    /// <param name="project">The leg's project, or <see langword="null"/> for a leg that builds nothing.</param>
+    /// <param name="buildDirectory">The leg's build directory.</param>
+    public LegCompilers NamedFor(ProjectConfig? project, string buildDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
+
+        return IdentifiesNone(project) is { } why ? LegCompilers.None(why) : LegCompilers.ReadBy(() => Named(buildDirectory));
+    }
+
+    /// <summary>
+    /// What a line naming the compiler of each language is filled in with for the leg built in
+    /// <paramref name="buildDirectory"/>, by the language as CMake names it: the program its record of identifying that
+    /// compiler names, as this machine spells a path - or why none fills the name in.
+    /// </summary>
+    /// <param name="buildDirectory">The leg's build directory.</param>
+    /// <remarks>
+    /// What built the leg, never what a toolchain declares: read, as <see cref="Identified"/> reads it, from the record
+    /// every configure of the directory after the first loads, the one the build's own witness is held to. A compiler
+    /// the build runs with words after it - a launcher such as ccache given its compiler, or a compiler given options -
+    /// fills no name in: the name is a program alone, and the program alone is not what built the leg, so the two are
+    /// named rather than one of them handed over as the whole.
+    /// </remarks>
+    public IReadOnlyDictionary<string, LegCompiler> Named(string buildDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(buildDirectory);
+
+        var (identified, records) = Records(buildDirectory);
+        var named = new Dictionary<string, LegCompiler>(StringComparer.Ordinal);
+
+        foreach (var (_, language) in LegPathNames.Compilers)
+        {
+            // What could not be read of this language's own record, or of the answer every language's is found by:
+            // another language's record that could not be read says nothing of this one.
+            List<string> unread = [.. records.Where(record => record.Language is null || string.Equals(record.Language, language, StringComparison.Ordinal)).Select(record => record.Why)];
+
+            named[language] = identified.FirstOrDefault(compiler => string.Equals(compiler.Language, language, StringComparison.Ordinal)) switch
+            {
+                null when unread.Count > 0 => LegCompiler.None($"which {language} compiler its build identified could not be read: {string.Join("; ", unread)}"),
+                null => LegCompiler.None($"its build identified no {language} compiler: '{buildDirectory}' holds no record of CMake identifying one"),
+                { Program: var program } when string.IsNullOrWhiteSpace(program) || program.Contains('\0', StringComparison.Ordinal)
+                    => LegCompiler.None($"CMake's record of its build's {language} compiler names no program"),
+                { Arguments.Count: > 0 } launched => LegCompiler.None(
+                    $"its build runs its {language} compiler as '{launched.Program}' followed by '{string.Join(' ', launched.Arguments)}' - a launcher "
+                    + "given a compiler, or a compiler given options - while the name is filled in with a program alone, which would "
+                    + "start something other than what built the leg. Take those words out of the toolchain's compiler, or write the "
+                    + "line's program and words as they are"),
+                { } compiler => LegCompiler.Of(AsThisMachineSpells(compiler.Program)),
+            };
+        }
+
+        return named;
+    }
+
+    /// <summary>
+    /// <paramref name="program"/> as this machine spells a path, where it is a whole one here: CMake writes a path with
+    /// '/' on every system, and a run line is handed the leg's directories as its machine spells them. One that is no
+    /// whole path here is handed over as its record names it.
+    /// </summary>
+    private static string AsThisMachineSpells(string program)
+        => Path.IsPathFullyQualified(program) ? Path.GetFullPath(program) : program;
 
     /// <summary>
     /// What <paramref name="buildDirectory"/> was last configured with, where <paramref name="project"/>
@@ -553,12 +680,14 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
     /// <param name="version">The CMake version that answered, whose directory holds the record; <see langword="null"/> where its index named none.</param>
     /// <param name="language">The language, as CMake names it.</param>
     /// <param name="path">The compiler the answer names for it, as the top-level directory spells it; <see langword="null"/> where it names none.</param>
-    /// <param name="answeredAt">When the answer was written.</param>
+    /// <param name="failedSince">
+    /// The error index a configure that failed since the answer left beside it, by file name; <see langword="null"/> where none did.
+    /// </param>
     /// <remarks>
     /// Held to the answer, as the remarks on this class say: to the compiler it names, where it names
-    /// one, and to when it was written.
+    /// one, and to no configure having failed since it - never to when either was written.
     /// </remarks>
-    private (CompilerFact? Fact, string? Why) Recorded(string buildDirectory, string? version, string language, string? path, DateTime answeredAt)
+    private (CompilerFact? Fact, string? Why) Recorded(string buildDirectory, string? version, string language, string? path, string? failedSince)
     {
         var answered = $"its answer names {(path is null ? "no compiler" : $"'{path}'")} for {language} and no id, and";
 
@@ -597,9 +726,9 @@ public sealed partial class CMakeToolchainReader(IFileSystem fileSystem)
                 }
             }
 
-            if (_fileSystem.LastWriteTimeUtc(record) > answeredAt)
+            if (failedSince is not null)
             {
-                return (null, $"{of} was written after that answer");
+                return (null, $"{of} can be a later configure's: CMake's '{failedSince}' says one failed since that answer");
             }
 
             return (new CompilerFact(language, id, settings.GetValueOrDefault($"CMAKE_{language}_COMPILER_VERSION") ?? string.Empty), null);

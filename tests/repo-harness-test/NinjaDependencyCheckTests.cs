@@ -478,6 +478,46 @@ public sealed class NinjaDependencyCheckTests
     }
 
     /// <summary>
+    /// A file the manifest was to be read from and was not - <c>build.ninja</c> itself, or one it includes - is passed
+    /// over, and named with why: not there, or there and not read - held by another process, or not this user's to
+    /// read. One read whole names none, a file included twice among it.
+    /// </summary>
+    [Fact]
+    public void AFileTheManifestWasToBeReadFromAndWasNot_IsPassedOver_AndNamedWithWhy()
+    {
+        using var temp = new TempDirectory();
+        var build = Directory.CreateDirectory(temp.Combine("build")).FullName;
+        var rules = Path.Combine(build, "CMakeFiles", "rules.ninja");
+
+        Assert.Equal([(NinjaDependencyCheck.ManifestFileName, "is not there")], NinjaManifest.Read(FileSystem(), build).PassedOver);
+
+        File.WriteAllText(
+            Path.Combine(build, NinjaDependencyCheck.ManifestFileName),
+            "include CMakeFiles/rules.ninja\ninclude CMakeFiles/rules.ninja\nsubninja gone.ninja\nbuild a.o: cc a.c\n");
+        Directory.CreateDirectory(Path.GetDirectoryName(rules)!);
+        File.WriteAllText(rules, "rule cc\n  deps = gcc\n");
+
+        var gone = NinjaManifest.Read(FileSystem(), build);
+
+        Assert.Equal([("gone.ninja", "is not there")], gone.PassedOver);
+        Assert.Equal("gcc", gone.EdgeFor("a.o")?.Deps);
+
+        File.WriteAllText(Path.Combine(build, "gone.ninja"), "build b.o: cc b.c\n");
+
+        Assert.Empty(NinjaManifest.Read(FileSystem(), build).PassedOver);
+
+        var held = NinjaManifest.Read(new Held(FileSystem(), rules), build);
+
+        Assert.Equal([("CMakeFiles/rules.ninja", "could not be read: it is held by another process")], held.PassedOver);
+        Assert.Null(held.EdgeFor("a.o")?.Deps);
+
+        var denied = NinjaManifest.Read(new Held(FileSystem(), rules, denied: true), build);
+
+        Assert.Equal([("CMakeFiles/rules.ninja", "could not be read: it is held by another process")], denied.PassedOver);
+        Assert.Null(denied.EdgeFor("a.o")?.Deps);
+    }
+
+    /// <summary>
     /// A path is read as ninja canonicalizes it, so the <c>.pch</c> CMake declares with <c>.\\</c> is the
     /// one its units name without, and a record's path is the manifest's; a network path keeps the pair
     /// of separators it opens with, as ninja on Windows keeps it.

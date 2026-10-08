@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using RepoHarness.Core.Anchors;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
@@ -51,6 +52,7 @@ public static partial class HarnessConfigValidator
         ValidateDefaults(config, problems);
         ValidateWorktrees(config.Worktrees, problems);
         ValidateAnchors(config.Anchors, problems);
+        ValidateMutations(config, problems);
         ValidateProjects(config, problems);
         ValidateToolchains(config, problems);
         ValidateHosts(config.Hosts, problems);
@@ -270,6 +272,81 @@ public static partial class HarnessConfigValidator
         RequireAtLeastOne(anchors.MinimumIdSegments, "anchors.minimumIdSegments", problems);
 
         RequireRelativePaths(anchors.CitationRoots, "anchors.citationRoots", problems);
+    }
+
+    /// <summary>
+    /// Checks what <c>check-mutations</c> reads before it touches a host: the registry and its texts must lie in the
+    /// tree where sync carries them, since every host reads them from its own copy; the report must be named somewhere
+    /// the run can be told of; and the bound on a mutated run must be one a run can stay within.
+    /// </summary>
+    private static void ValidateMutations(HarnessConfig config, List<string> problems)
+    {
+        var mutations = config.Mutations;
+        var carried = new Sync.SyncExclusions(config.Sync, config.Worktrees.Root);
+
+        foreach (var (path, setting) in new[] { (mutations.Registry, "mutations.registry"), (mutations.TextDirectory, "mutations.textDirectory") })
+        {
+            if (path is null)
+            {
+                continue;
+            }
+
+            RequireRelativePaths([path], setting, problems);
+
+            if (Repository.PathPatterns.Misspelling(path) is { } misspelled)
+            {
+                problems.Add($"{setting} names '{path}', which {misspelled}");
+            }
+
+            // A host sweeps its own copy, and a worker is a copy a sync makes: a registry or a text directory no sync
+            // carries is one neither has - every arm read violated for a text nobody carried, or no registry found.
+            var named = Repository.PathPatterns.Normalize(path);
+
+            if (Sync.HarnessDirectorySync.Withholds(named))
+            {
+                problems.Add(
+                    $"{setting} names '{path}', inside the harness's own directory, which sync never carries to another "
+                    + "host but for its runner actions: put it in the tree, or under an action's directory");
+            }
+            else if (carried.IsWithheldFromTransfer(named))
+            {
+                problems.Add(
+                    $"{setting} names '{path}', which a sync withholds from every copy of the tree - sync.neverTransfer, "
+                    + "sync.exclude or worktrees.root covers it - so no worker, and no host sweeping a leg, would hold it: "
+                    + "keep it where a sync carries it");
+            }
+        }
+
+        RequireAtLeastOne(mutations.Workers, "mutations.workers", problems);
+
+        if (mutations.ReportArgs is { } reportArgs)
+        {
+            foreach (var argument in reportArgs)
+            {
+                try
+                {
+                    _ = MutationReport.Arguments([argument], "report.xml");
+                }
+                catch (HarnessException ex)
+                {
+                    problems.Add(ex.Message);
+                }
+            }
+
+            if (reportArgs.Count > 0 && !reportArgs.Any(argument => LegPathNames.NamesIn(argument).Contains(MutationReport.Placeholder, StringComparer.Ordinal)))
+            {
+                problems.Add(
+                    $"{MutationReport.Setting} never names {{{MutationReport.Placeholder}}}, so a test binary would write its "
+                    + "report where no arm reads it");
+            }
+        }
+
+        if (!(double.IsFinite(mutations.RunTimeFactor) && mutations.RunTimeFactor > 1))
+        {
+            problems.Add(
+                $"mutations.runTimeFactor must be above 1, found {Number(mutations.RunTimeFactor)}: a bound at or below the "
+                + "unmutated run's own duration stops a mutated run that is merely as slow");
+        }
     }
 
     /// <summary>

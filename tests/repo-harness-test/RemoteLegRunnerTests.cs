@@ -1,6 +1,7 @@
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
@@ -194,6 +195,82 @@ public sealed class RemoteLegRunnerTests
         var entry = await Runner(hosts).RunAsync("run", Leg(), [], TestContext.Current.CancellationToken);
 
         Assert.Equal([Kept], entry.KeptOutputs);
+    }
+
+    /// <summary>
+    /// Each arm a host's sweep was asked about travels on its leg's line as the host judged it, read from the very
+    /// document the host writes: what its run measured beside what it declares, and its records as the host names
+    /// them, which stay on that host - its detail naming the host as declared, never by an address its name resolved
+    /// to, and a verdict this build does not know read as poisoned rather than as any it does.
+    /// </summary>
+    [Fact]
+    public async Task EachArmAHostsSweepJudged_IsCarriedOnItsLegsLine()
+    {
+        var written = LedgerReport
+            .From(
+                [
+                    new LegEntry
+                    {
+                        Leg = "wsl-debug",
+                        Verdict = LegVerdict.Survived,
+                        Arms =
+                        [
+                            new ArmEntry
+                            {
+                                Arm = "charge-bound",
+                                Verdict = LegVerdict.Survived,
+                                Detail = "ran 3 case(s) beside 192.0.2.10, and none failed",
+                                Duration = TimeSpan.FromSeconds(12.5),
+                                Worker = 2,
+                                Cases = 3,
+                                DeclaredCases = 3,
+                                Reds = [],
+                                DeclaredReds = ["Fixture.Charge"],
+                                Records = "/home/dev/repo/.harness-config/runs/r1/wsl-debug/arms/charge-bound",
+                            },
+                            new ArmEntry { Arm = "floor", Verdict = LegVerdict.Passed, Detail = "a verdict of a later build", DeclaredCases = 3, DeclaredReds = ["Fixture.Floor"] },
+                        ],
+                    },
+                ],
+                durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: [])
+            .Replace("\"verdict\": \"passed\"", "\"verdict\": \"exploded\"", StringComparison.Ordinal);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var mac = HostId.Ssh("mac");
+        var connection = new HostConnection
+        {
+            Host = mac,
+            Address = "mac.invalid",
+            Resolved = new ResolvedAddresses(new AddressResolution("mac.invalid", Attempts: 1, ["192.0.2.10"]), NSubstitute.Substitute.For<IHostAddressResolver>()),
+        };
+        var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
+
+        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, leg, [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(["charge-bound", "floor"], entry.Arms.Select(arm => arm.Arm));
+
+        var charge = entry.Arms[0];
+
+        Assert.Equal((LegVerdict.Survived, "ran 3 case(s) beside mac.invalid, and none failed"), (charge.Verdict, charge.Detail));
+        Assert.Equal(TimeSpan.FromSeconds(12.5), charge.Duration);
+        Assert.Equal((2, 3, 3), (charge.Worker, charge.Cases, charge.DeclaredCases));
+        Assert.NotNull(charge.Reds);
+        Assert.Empty(charge.Reds);
+        Assert.Equal(["Fixture.Charge"], charge.DeclaredReds);
+        Assert.Equal("/home/dev/repo/.harness-config/runs/r1/wsl-debug/arms/charge-bound", charge.Records);
+
+        var floor = entry.Arms[1];
+
+        Assert.Equal(LegVerdict.Poisoned, floor.Verdict);
+        Assert.Equal((null, null, null, null), (floor.Worker, floor.Cases, floor.Reds, floor.Records));
+        Assert.Equal(["Fixture.Floor"], floor.DeclaredReds);
     }
 
     /// <summary>
@@ -551,6 +628,85 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// A host's refusal of the run that came with the leg's line - a sweep whose arms were judged before something there
+    /// refused the run - is this run's refusal too: the line is carried, with every arm on it, and ends the run with the
+    /// host's code and words, as the same sweep on this machine does. A run the host ended with any other code ends none.
+    /// </summary>
+    [Theory]
+    [InlineData(HarnessExit.Refused, true)]
+    [InlineData(HarnessExit.ConfigInvalid, true)]
+    [InlineData(HarnessExit.UsageError, true)]
+    [InlineData(HarnessExit.Incomplete, false)]
+    [InlineData(1, false)]
+    [InlineData(HarnessExit.CommandFailed, false)]
+    public async Task AHostsRefusalWithTheLegsLine_CarriesTheLine_AndEndsThisRunAsTheHostsDid(int code, bool refuses)
+    {
+        const string Said = "The mutation worker's claim file '/home/dev/repo.mutation-357e24cw-2.claim.json' could not be written.";
+
+        var written = LedgerReport
+            .From(
+                [
+                    new LegEntry
+                    {
+                        Leg = "wsl-debug",
+                        Verdict = LegVerdict.Stopped,
+                        Detail = "2 arm(s): 1 passed, 1 stopped",
+                        Arms =
+                        [
+                            new ArmEntry { Arm = "charge-bound", Verdict = LegVerdict.Passed, Worker = 1 },
+                            new ArmEntry { Arm = "floor", Verdict = LegVerdict.Stopped, Detail = "the sweep was stopped before a worker drove it" },
+                        ],
+                    },
+                ],
+                durationWarningFactor: 0)
+            .ToJson(code, Said);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For(MutationService.CommandName, Said));
+            Answer(command, written);
+
+            return HostResults.Finished(command, code);
+        });
+
+        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Stopped, "2 arm(s): 1 passed, 1 stopped"), (entry.Verdict, entry.Detail));
+        Assert.Equal([("charge-bound", LegVerdict.Passed), ("floor", LegVerdict.Stopped)], entry.Arms.Select(arm => (arm.Arm, arm.Verdict)));
+        Assert.Equal(refuses ? code : null, entry.EndsTheRun?.ExitCode);
+        Assert.Equal(
+            refuses ? $"wsl Example-Linux refused '{MutationService.CommandName}' for leg 'wsl-debug': {Said}" : null,
+            entry.EndsTheRun?.Message);
+    }
+
+    /// <summary>
+    /// A leg its host could not run for a lock held there is that leg's verdict, though the code the host ends with is
+    /// a refusal's: the host reported on its legs as any run does, nothing ended its run, and nothing ends this one.
+    /// </summary>
+    [Fact]
+    public async Task AHostsLegRefusedForALock_IsThatLegsVerdict_AndEndsNoRun()
+    {
+        const string Why = "a sweep still running holds its mutation workers: vps pid 4242, run 20261007-101500-abcd";
+
+        var report = LedgerReport.From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.RefusedLocked, Detail = Why }], durationWarningFactor: 0);
+        var code = report.ExitCodeGiven(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For(CleanService.CommandName, report.Summarize(cancelled: false, unfinished: [])));
+            Answer(command, report.ToJson(cancelled: false, unfinished: []));
+
+            return HostResults.Finished(command, code);
+        });
+
+        var entry = await Runner(hosts).RunAsync(CleanService.CommandName, Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, code);
+        Assert.Equal((LegVerdict.RefusedLocked, "wsl Example-Linux: " + Why), (entry.Verdict, entry.Detail));
+        Assert.Null(entry.EndsTheRun);
+    }
+
+    /// <summary>
     /// Any other end without a ledger is still no verdict about the code, and now says what the host
     /// said about it rather than only the code it exited with.
     /// </summary>
@@ -606,6 +762,42 @@ public sealed class RemoteLegRunnerTests
         Assert.Contains("run: corpus: resolving the action", shown, StringComparison.Ordinal);
         Assert.DoesNotContain("may not run", shown, StringComparison.Ordinal);
         Assert.DoesNotContain(First, shown, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What a host's command prints is relayed as it comes, and only its end is kept, while its ledger arrives whole. A
+    /// failure line followed by more lines than any failure runs to was printed by the command's own work: what was held
+    /// with it is shown then, in order, everything after it as it comes, and none of it is taken for how the command ended
+    /// - holding it all would hold the rest of what the run prints.
+    /// </summary>
+    [Fact]
+    public async Task AFailureLineFollowedByMoreThanAnyFailureRunsTo_IsShownAsItComes_AndIsNoConclusion()
+    {
+        var harness = new HarnessFactory();
+        var inner = FailureLine.For("run", "an inner run's own failure, printed by a step");
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(inner);
+
+            for (var line = 0; line < RemoteLegRunner.MostHeldLines + 50; line++)
+            {
+                command.OnErrorLine?.Invoke($"step output {line}");
+            }
+
+            return HostResults.Finished(command, HarnessExit.Refused);
+        });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts, harness).RunAsync(
+            "run", Leg(), ["corpus"], TestContext.Current.CancellationToken));
+
+        Assert.EndsWith($"it exited {HarnessExit.Refused} and said nothing more", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            string.Join(Environment.NewLine, [inner, .. Enumerable.Range(0, RemoteLegRunner.MostHeldLines + 50).Select(line => $"step output {line}")]),
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
+
+        var (_, command) = Assert.Single(hosts.Calls);
+        Assert.Equal((StreamKept.Whole, StreamKept.Tail), (command.OutputKept, command.ErrorKept));
     }
 
     /// <summary>

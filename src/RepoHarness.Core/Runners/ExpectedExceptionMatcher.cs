@@ -135,8 +135,10 @@ public sealed class ExpectedExceptionMatcher(IHarnessOutput output)
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentNullException.ThrowIfNull(failure);
 
+        // Each text against every message, rather than each message against every text: the texts are the failing
+        // unit's output, read from its log, and read once.
         return MatchesType(entry.ExceptionType, failure.ExceptionType)
-            && entry.Messages.Any(message => failure.Texts.Any(text => MatchesMessage(message, text)));
+            && failure.Texts.Any(text => entry.Messages.Any(message => MatchesMessage(message, text)));
     }
 
     /// <summary>
