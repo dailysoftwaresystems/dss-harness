@@ -1,8 +1,9 @@
 name: Package Pipeline
 
-# Owns everything that produces a published artifact: build, test, pack, the immutable
-# tag, publishing to nuget.org, and the GitHub release. Started by Deploy once it has
-# promoted a release branch, or by hand from the Actions tab for a release branch.
+# Owns everything that produces a published artifact: build, pack, the immutable tag,
+# publishing to nuget.org, and the GitHub release - and the test of a commit nothing else
+# tested. Started by Deploy once it has promoted a release branch, or by hand from the
+# Actions tab for a release branch.
 #
 # beta releases on GitHub alone, as a prerelease with the package attached. stable publishes
 # to nuget.org, then releases on GitHub with the package attached too. However a run started,
@@ -12,8 +13,9 @@ name: Package Pipeline
 # the exact commit it promoted, which this refuses to substitute, and a push to a release
 # branch publishes nothing by itself, so a stray push can never ship.
 #
-# Four jobs, so each holds only what it needs. package builds, tests and verifies with
-# read-only permissions, so repository code never runs with a credential that can write.
+# Four jobs, so each holds only what it needs. package builds, tests where nothing else did,
+# and verifies with read-only permissions, so repository code never runs with a credential
+# that can write.
 # tag creates the tag. nuget, for stable only, is the one job in the nuget environment and
 # the one that can ask GitHub for the OIDC token nuget.org trusts. release creates the GitHub
 # release last, which is what marks a version published.
@@ -264,7 +266,7 @@ jobs:
         # repository's <Version> rather than the version actually published.
         #
         # Nothing is built for a version nuget.org already has: the run that published it built,
-        # tested and packed this commit, and a rebuild now could fail on something that changed
+        # packed and verified this commit, and a rebuild now could fail on something that changed
         # since, such as a new advisory, and leave the release unable to finish.
         if: env.ON_NUGET != 'true'
         run: >
@@ -272,11 +274,19 @@ jobs:
           -p:Version=${{ env.PACKAGE_VERSION }}
 
       - name: Test
-        # The package is only worth publishing if the suite passes on the commit being
-        # published. This run is Linux x86_64 only. The full matrix already passed in Deploy:
-        # for this commit on stable, and on beta for its parent, which differs only in
-        # <Version>. A beta run started by hand may have only this run behind it.
-        if: env.ON_NUGET != 'true'
+        # The package is only worth publishing if the suite passed on the commit being
+        # published, and this runs it only where nothing else did. A run Deploy started names
+        # the commit it promoted, and the full matrix passed in Deploy: on this commit for
+        # stable, and for beta on its parent, which differs only in <Version>. A run resuming a
+        # commit an earlier run tagged has that run's package job behind it, which passed by
+        # this same rule before the tag was made. What is left is a run started by hand on a
+        # commit no run has packaged: a release branch moved past the rules that guard it has
+        # nothing else behind it, so the suite runs here, on Linux x86_64 alone.
+        if: env.ON_NUGET != 'true' && inputs.expected_sha == '' && steps.resume.outputs.tag_exists != 'true'
+        env:
+          # As the test matrix sets it: a test that really builds fails where the runner lacks cmake, ninja or a
+          # compiler, rather than being skipped green. This runner's image carries all three.
+          DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"
         run: dotnet test --project tests/repo-harness-test/repo-harness-test.csproj --configuration Release --no-build
 
       - name: Pack

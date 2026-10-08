@@ -328,6 +328,12 @@ dotnet test --project tests/repo-harness-test/repo-harness-test.csproj
 Everything a build produces — binaries, intermediates and packages — lands under
 `build/`, which git ignores. Deleting it is a complete clean.
 
+The end-to-end tests build real CMake projects, so they need `cmake`, `ninja` and a C and C++
+compiler on the `PATH` (`gcc` and `g++` on Windows, `cc` and `c++` elsewhere), and on Windows
+one of them needs Visual Studio's C++ build tools. A machine lacking any of these skips those
+tests, naming what it lacks; set `DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS=1`, as the continuous
+integration runners do, to have them fail instead.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) — layering, paths, hosts and legs, parallel execution, contamination guarantees

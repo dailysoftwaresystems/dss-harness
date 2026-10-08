@@ -66,6 +66,21 @@ jobs:
         # against a pinned dependency fails here rather than shipping.
         run: dotnet build RepoHarness.slnx --configuration Release --no-restore
 
+      - name: Build tools
+        # The end-to-end tests build a real CMake project with ninja and the runner's own C and C++ compilers - on
+        # Windows with MinGW's and with Visual Studio's - and here a runner lacking one fails them (see the variable
+        # the Test step sets) rather than skipping them green. Every image carries cmake and its compilers; ninja is
+        # installed where an image carries none, as the arm64 Linux image's own list of what it holds says it does not.
+        shell: bash
+        run: |
+          command -v ninja >/dev/null && exit 0
+
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get update && sudo apt-get install --yes ninja-build ;;
+            macOS) brew install ninja ;;
+            Windows) choco install ninja --yes --no-progress ;;
+          esac
+
       - name: Test
         # The suite's own executable, which exits non-zero when any test fails: never through
         # dotnet, which the suite then finds running it and starts its children with by path.
@@ -77,4 +92,8 @@ jobs:
         # macOS runner was measured taking more than twenty minutes over a suite that hung
         # nowhere, no test of it running two minutes, while the arm64 one took seventeen.
         timeout-minutes: 40
+        env:
+          # A runner is meant to hold cmake, ninja and a compiler: a test that really builds fails here where one is
+          # lacking, and is skipped only on a developer's machine that has none.
+          DSSHARNESS_TESTS_REQUIRE_BUILD_TOOLS: "1"
         run: ./build/bin/repo-harness-test/release/repo-harness-test${{ runner.os == 'Windows' && '.exe' || '' }} --xunit-diagnostics on --long-running 120 --show-slowest-tests 20

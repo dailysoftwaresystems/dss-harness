@@ -15,7 +15,8 @@ namespace RepoHarness.Tests;
 /// The built CLI's <c>check-mutations</c>, end to end through real builds by the CMake, Ninja and C++ compiler on this
 /// machine: the fixture this tool carries, swept as a repository's own project and as a self-test, each of its arms
 /// reaching the verdict it is designed to reach. Skipped where this machine has no CMake, no Ninja or no C or C++
-/// compiler, and where its builds did not run on an honest clock.
+/// compiler - failed there instead, where it says it is meant to hold every build tool (<see cref="BuildTools"/>) -
+/// and where its builds did not run on an honest clock.
 /// </summary>
 public sealed class CheckMutationsEndToEndTests
 {
@@ -278,9 +279,7 @@ public sealed class CheckMutationsEndToEndTests
 
     /// <summary>Skips the test where this machine lacks a program a real build of the fixture needs.</summary>
     private static void SkipUnlessThisMachineBuilds(HarnessFactory harness)
-        => Assert.SkipUnless(
-            new[] { "cmake", "ninja", Compilers.C, Compilers.Cxx }.All(program => harness.ProcessRunner.FindExecutable(program) is not null),
-            $"This machine lacks cmake, ninja, {Compilers.C} or {Compilers.Cxx}, which a real build of the fixture needs.");
+        => BuildTools.Need(harness.ProcessRunner, "a real build of the fixture", "cmake", "ninja", Compilers.C, Compilers.Cxx);
 
     /// <summary>The one leg this machine runs, built by its C and C++ compilers with the Ninja generator.</summary>
     private static LegConfig Leg(IHostPlatform platform)

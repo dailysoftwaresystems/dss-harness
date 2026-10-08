@@ -2041,7 +2041,8 @@ public sealed partial class CliEndToEndTests
     /// <summary>
     /// A real configure, by the CMake on this machine: the compiler it resolved is named on the leg's
     /// line by build and by a runner that builds, read back from what CMake itself wrote. Skipped
-    /// where this machine has no CMake, no Ninja or no C compiler.
+    /// where this machine has no CMake, no Ninja or no C compiler - and failed there instead, where it
+    /// says it is meant to hold every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task ARealConfigure_IsNamedOnTheLegsLine_ByBuildAndByARunnerThatBuilds()
@@ -2050,11 +2051,7 @@ public sealed partial class CliEndToEndTests
         var platform = harness.Platform;
         var compiler = OperatingSystem.IsWindows() ? "gcc" : "cc";
 
-        Assert.SkipUnless(
-            harness.ProcessRunner.FindExecutable("cmake") is not null
-                && harness.ProcessRunner.FindExecutable("ninja") is not null
-                && harness.ProcessRunner.FindExecutable(compiler) is not null,
-            $"This machine lacks cmake, ninja or {compiler}, which a real configure needs.");
+        BuildTools.Need(harness.ProcessRunner, "a real configure", "cmake", "ninja", compiler);
 
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
@@ -2132,7 +2129,8 @@ public sealed partial class CliEndToEndTests
     /// was renamed away since its last build: that target's object is still in the build directory, deeper than the
     /// path budget's reserve, and ninja says no target produces it any more. It is left out of the check and noted,
     /// naming what removes it, and the warning a consumer's builds gave every time is not given. Skipped where this
-    /// machine has no CMake, no Ninja, or no C compiler.
+    /// machine has no CMake, no Ninja, or no C compiler - and failed there instead, where it says it is meant to hold
+    /// every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task ARealIncrementalBuild_LeavesATargetRenamedAwayOutOfThePathBudget()
@@ -2143,11 +2141,7 @@ public sealed partial class CliEndToEndTests
         var platform = harness.Platform;
         var compiler = OperatingSystem.IsWindows() ? "gcc" : "cc";
 
-        Assert.SkipUnless(
-            harness.ProcessRunner.FindExecutable("cmake") is not null
-                && harness.ProcessRunner.FindExecutable("ninja") is not null
-                && harness.ProcessRunner.FindExecutable(compiler) is not null,
-            $"This machine lacks cmake, ninja or {compiler}, which a real build needs.");
+        BuildTools.Need(harness.ProcessRunner, "a real build", "cmake", "ninja", compiler);
 
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
@@ -2216,7 +2210,8 @@ public sealed partial class CliEndToEndTests
     /// named from the record where CMake before 4 leaves nothing to say so, the record naming the
     /// compiler the answer names; after one that identified another program for C, nothing ties the
     /// record to the build, and C is unwitnessed rather than named from it. Never by the record's date.
-    /// Skipped where this machine has no CMake, no Ninja, or no C or C++ compiler.
+    /// Skipped where this machine has no CMake, no Ninja, or no C or C++ compiler - and failed there instead, where it
+    /// says it is meant to hold every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task ALanguageOnlyADependencyEnables_IsIdentified_AndHeldToTheToolchain()
@@ -2224,11 +2219,9 @@ public sealed partial class CliEndToEndTests
         var harness = new HarnessFactory();
         var platform = harness.Platform;
         var (c, cxx) = OperatingSystem.IsWindows() ? ("gcc", "g++") : ("cc", "c++");
-        var programs = new[] { "cmake", "ninja", c, cxx }.ToDictionary(program => program, harness.ProcessRunner.FindExecutable);
+        BuildTools.Need(harness.ProcessRunner, "a real configure", "cmake", "ninja", c, cxx);
 
-        Assert.SkipUnless(
-            programs.Values.All(found => found is not null),
-            $"This machine lacks cmake, ninja, {c} or {cxx}, which a real configure needs.");
+        var programs = new[] { "cmake", "ninja", c, cxx }.ToDictionary(program => program, harness.ProcessRunner.FindExecutable);
 
         using var temp = new TempDirectory();
         var token = TestContext.Current.CancellationToken;
@@ -2403,7 +2396,8 @@ public sealed partial class CliEndToEndTests
     /// the object compiling the precompiled header, which records what it holds. The check reads every
     /// object and excuses exactly those that include nothing ninja keeps or are rebuilt that way. Skipped
     /// where this machine has no Visual Studio with the C++ build tools, or no CMake or Ninja in the
-    /// environment it sets up.
+    /// environment it sets up - and failed there instead, where a Windows machine says it is meant to
+    /// hold every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task AnMsvcLeg_BuildsFromAPlainShell_InTheEnvironmentVisualStudioSetsUp()
@@ -2416,7 +2410,10 @@ public sealed partial class CliEndToEndTests
 
         var found = await probe.CheckAsync(visualStudio, token);
 
-        Assert.SkipUnless(found.CanSetUp, $"This machine has no Visual Studio with the C++ build tools: {found.Reason}");
+        if (!found.CanSetUp)
+        {
+            BuildTools.Lacks($"This machine has no Visual Studio with the C++ build tools: {found.Reason}", couldHold: OperatingSystem.IsWindows());
+        }
 
         var setUp = await new DeveloperEnvironmentProvider(platform, harness.ProcessRunner, harness.FileSystem, harness.Output)
             .SetUpAsync("visualStudio", found, platform.Processor, new Dictionary<string, string>(), token);
@@ -2426,9 +2423,10 @@ public sealed partial class CliEndToEndTests
         var path = setUp.Environment.TryGetValue("PATH", out var set) ? set : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         var reachable = path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
 
-        Assert.SkipUnless(
-            new[] { "cmake.exe", "ninja.exe" }.All(program => reachable.Any(directory => File.Exists(Path.Combine(directory, program)))),
-            "This machine has no CMake or no Ninja in the environment Visual Studio sets up.");
+        if (!new[] { "cmake.exe", "ninja.exe" }.All(program => reachable.Any(directory => File.Exists(Path.Combine(directory, program)))))
+        {
+            BuildTools.Lacks("This machine has no CMake or no Ninja in the environment Visual Studio sets up.");
+        }
 
         using var temp = new TempDirectory();
 

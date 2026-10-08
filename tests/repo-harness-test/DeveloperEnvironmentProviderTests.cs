@@ -503,7 +503,8 @@ public sealed class DeveloperEnvironmentProviderTests
     /// <summary>
     /// Visual Studio as it is installed on this machine: cl is on the PATH it sets up, beside INCLUDE
     /// and LIB, for this machine's own processor. Skipped where this machine has no Visual Studio with
-    /// the C++ build tools.
+    /// the C++ build tools - and failed there instead, where a Windows machine says it is meant to hold
+    /// every build tool (<see cref="BuildTools"/>).
     /// </summary>
     [Fact]
     public async Task TheVisualStudioOnThisMachine_SetsUpCl()
@@ -515,7 +516,10 @@ public sealed class DeveloperEnvironmentProviderTests
 
         var found = await probe.CheckAsync(VisualStudio, token);
 
-        Assert.SkipUnless(found.CanSetUp, $"This machine has no Visual Studio with the C++ build tools: {found.Reason}");
+        if (!found.CanSetUp)
+        {
+            BuildTools.Lacks($"This machine has no Visual Studio with the C++ build tools: {found.Reason}", couldHold: OperatingSystem.IsWindows());
+        }
 
         var provider = new DeveloperEnvironmentProvider(platform, processes, new PhysicalFileSystem(FilePermissionsFactory.Create()), new HarnessFactory().Output);
         var setUp = await provider.SetUpAsync("vs", found, platform.Processor, NoHostEnvironment, token);
