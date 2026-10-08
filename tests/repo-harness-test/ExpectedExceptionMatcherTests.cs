@@ -155,6 +155,23 @@ public sealed class ExpectedExceptionMatcherTests
         Assert.Equal("excused: the device was busy", outcome.Message);
     }
 
+    /// <summary>
+    /// A failure whose output cannot be read back from its log is matched against no entry as one that printed nothing,
+    /// and its type is not read as one it named none of: both are said as unread, so the failure is neither excused nor
+    /// called genuine on what is left of a log.
+    /// </summary>
+    [Fact]
+    public void Find_SaysOutputThatCouldNotBeReadBack_NeverAFailureThatPrintedNothing()
+    {
+        var entry = Entry(messages: ["resource busy"]);
+
+        var unread = Assert.Throws<PhaseOutputUnreadException>(
+            () => Matcher().Find(Scope("corpus", ["linux-arm64-qemu"], entry), "linux-arm64-qemu", new RunFailure("IOException", Output: new PhaseOutputTests.Unread())));
+
+        Assert.Equal(PhaseOutputTests.Unread.Said, unread.Message);
+        Assert.Equal(PhaseOutputTests.Unread.Said, Assert.Throws<PhaseOutputUnreadException>(() => RunnerRunService.FailureTypeIn(new PhaseOutputTests.Unread())).Message);
+    }
+
     internal static ExpectedException Entry(
         string exceptionType = "IOException",
         IEnumerable<string>? messages = null,

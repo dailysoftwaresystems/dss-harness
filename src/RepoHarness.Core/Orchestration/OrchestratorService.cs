@@ -322,13 +322,7 @@ public sealed class OrchestratorService(
     {
         try
         {
-            return !_fileSystem.DirectoryExists(group)
-                ? []
-                : [.. _fileSystem.EnumerateDirectories(group)
-                    .Select(directory => MutationWorkers.TreeNamed(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))))
-                    .OfType<string>()
-                    .Distinct(StringComparer.Ordinal)
-                    .Order(StringComparer.Ordinal)];
+            return MutationWorkers.TreesWithWorkersIn(_fileSystem, group);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -132,15 +132,85 @@ public sealed class OrchestratorServiceTests
         Assert.False(Directory.Exists(worker));
 
         var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-357e24cw-1");
+        var other = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-357e24cw-2");
         var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
 
         Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
         Assert.False(Directory.Exists(left));
+        Assert.False(Directory.Exists(other));
         Assert.False(Directory.Exists(kit.Worktrees));
+
+        // Its agent is asked for once, however many workers it left: asked for again, it would be no worktree at all.
+        var said = Assert.Single(deleted.Details ?? [], line => line.StartsWith("its agent 'old': ", StringComparison.Ordinal));
+
+        Assert.StartsWith("its agent 'old': removed 2 mutation worker(s) kept beside it, ", said, StringComparison.Ordinal);
+        Assert.EndsWith($": '{left}', '{other}'", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An agent whose worktree is gone already still has the workers a sweep left beside it removed as it is deleted,
+    /// and said: nothing else would remove them before its orchestrator goes. One a sweep still running holds keeps the
+    /// agent from being deleted yet, said with what holds it; deleted again once the sweep has ended, it is finished.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentGoneAlready_StillHasTheWorkersLeftBesideItRemoved_AsItIsDeleted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
+
+        var left = await WorkerAsync(kit, worktree + ".mutation-357e24cw-1");
+        var copies = Copies(kit);
+        var sweep = RepoHarness.Core.Execution.RunId.New();
+
+        Assert.True(copies.Claim(left, sweep, force: false).Taken);
+
+        var waiting = await kit.DeleteAsync("ag", apply: true, discard: true);
+
+        Assert.Equal(HarnessExit.Incomplete, waiting.ExitCode);
+        Assert.True(Directory.Exists(left));
+        Assert.Contains(
+            waiting.Details ?? [],
+            line => line.Contains($"left the mutation worker '{left}' kept beside it: a sweep still running holds it: ", StringComparison.Ordinal));
+        Assert.NotEqual(AgentStates.Deleted, kit.Record("ag").State);
+
+        copies.Release(left, sweep);
+
+        var deleted = await kit.DeleteAsync("ag", apply: true, discard: true);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.False(Directory.Exists(left));
         Assert.Contains(
             deleted.Details ?? [],
-            line => line.StartsWith("its agent 'old': removed 1 mutation worker(s) kept beside it, ", StringComparison.Ordinal)
-                && line.EndsWith($": '{left}'", StringComparison.Ordinal));
+            line => line.Contains("removed 1 mutation worker(s) kept beside it, ", StringComparison.Ordinal) && line.EndsWith($": '{left}'", StringComparison.Ordinal));
+        Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
+    }
+
+    /// <summary>
+    /// Only its own: an agent whose worktree is gone, with no worker left beside it, is deleted asking nothing of
+    /// delete-worktree - which would answer that no such worktree exists - though another agent's workers stand in the
+    /// same directory, and those stay where they are.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentGoneAlready_WithNoWorkerOfItsOwn_IsDeleted_AndAnothersWorkersStay()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+
+        await kit.CreateAgentAsync("ag");
+
+        var anothers = await WorkerAsync(kit, await kit.CreateAgentAsync("other") + ".mutation-357e24cw-1");
+
+        Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
+
+        var deleted = await kit.DeleteAsync("ag", apply: true, discard: true);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
+        Assert.True(Directory.Exists(anothers));
+        Assert.DoesNotContain(deleted.Details ?? [], line => line.Contains("mutation worker", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -154,13 +224,7 @@ public sealed class OrchestratorServiceTests
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-357e24cw-1");
-        var copies = new RepoHarness.Core.Mutations.WorkerCopies(
-            SyncKit.Service(kit.Harness),
-            kit.Harness.LocalTransport,
-            kit.Harness.FileSystem,
-            kit.Harness.Output,
-            kit.Harness.Identity,
-            RepoHarness.Core.Mutations.MutationService.CommandName);
+        var copies = Copies(kit);
         var sweep = RepoHarness.Core.Execution.RunId.New();
 
         Assert.Empty(await kit.Harness.WorktreeService.ListAsync(kit.Main, Token));
@@ -213,6 +277,16 @@ public sealed class OrchestratorServiceTests
         Assert.Equal("mine", File.ReadAllText(Path.Combine(notes, "notes.txt")));
         Assert.Contains(deleted.Details ?? [], line => line.StartsWith("its agent 'notes': ", StringComparison.Ordinal));
     }
+
+    /// <summary>The copies a sweep keeps its workers in, as it claims and releases them.</summary>
+    private static RepoHarness.Core.Mutations.WorkerCopies Copies(OrchestrationKit kit)
+        => new(
+            SyncKit.Service(kit.Harness),
+            kit.Harness.LocalTransport,
+            kit.Harness.FileSystem,
+            kit.Harness.Output,
+            kit.Harness.Identity,
+            RepoHarness.Core.Mutations.MutationService.CommandName);
 
     /// <summary>A mutation worker as a sync makes one: marked as the harness's, a repository of its own, holding a file.</summary>
     private static async Task<string> WorkerAsync(OrchestrationKit kit, string path)

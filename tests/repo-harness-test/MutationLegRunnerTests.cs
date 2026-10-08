@@ -113,6 +113,7 @@ public sealed class MutationLegRunnerTests
         var entry = await sweep.RunAsync([ChargeBound, DepthType]);
 
         Assert.Equal((LegVerdict.Passed, "2 arm(s): 2 passed"), (entry.Verdict, entry.Detail));
+        Assert.Empty(entry.TimingNotes);
         Assert.Equal(
             [
                 ("charge-bound", LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
@@ -392,11 +393,13 @@ public sealed class MutationLegRunnerTests
     /// Each site of an arm is put back on its own: one whose writing back fails keeps no other from being put back, and
     /// only it is named as not holding what the tree held.
     /// </summary>
-    [Fact]
-    public async Task ASiteThatCannotBePutBack_KeepsNoOtherSiteOfItsArmFromBeingPutBack()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ASiteThatCannotBePutBack_KeepsNoOtherSiteOfItsArmFromBeingPutBack(bool denied)
     {
         using var sweep = new Sweep { Workers = 1 };
-        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"]);
+        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"], denied);
 
         var coupled = ChargeBound with { Coupled = [new MutationSite("src/budget.hpp", "texts/depth.control-before", "texts/depth.control-after", 2)] };
 
@@ -497,7 +500,8 @@ public sealed class MutationLegRunnerTests
     /// <summary>
     /// A mutation that changes nothing - its after-text its before-text again - is violated before anything of the arm is
     /// built or written: built and run it would redden nothing, and read as a mutation no test caught. So is a paired
-    /// control that changes nothing, which would build as the unmutated tree builds and prove nothing of the site.
+    /// control that changes nothing, which would build as the unmutated tree builds and prove nothing of the site; and
+    /// so is a coupled site's, naming that site and never the arm's own.
     /// </summary>
     [Fact]
     public async Task AMutationThatChangesNothing_IsViolated_BeforeAnythingIsBuilt()
@@ -508,13 +512,17 @@ public sealed class MutationLegRunnerTests
 
         var same = ChargeBound with { Id = "charge-same", Own = ChargeBound.Own with { After = "texts/charge.same" } };
         var idle = DepthType with { Id = "depth-idle", Line = 9, Control = new PairedControl("texts/depth.control-before", "texts/depth.control-same", 10) };
+        var coupled = ChargeBound with { Id = "charge-coupled", Line = 12, Coupled = [new MutationSite("src/budget.hpp", "texts/depth.control-before", "texts/depth.control-same", 13)] };
+        var own = same with { Id = "charge-own-same", Line = 15, Coupled = [new MutationSite("src/budget.hpp", "texts/depth.before", "texts/depth.after", 16)] };
 
-        var entry = await sweep.RunAsync([same, idle]);
+        var entry = await sweep.RunAsync([same, idle, coupled, own]);
 
         Assert.Equal(
             [
                 (LegVerdict.Violated, "the text in 'texts/charge.same' is the text in 'texts/charge.before', so replacing one with the other changes nothing in 'src/fixture.cpp'"),
                 (LegVerdict.Violated, "the text in 'texts/depth.control-same' is the text in 'texts/depth.control-before', so replacing one with the other changes nothing in 'src/budget.hpp'"),
+                (LegVerdict.Violated, "the text in 'texts/depth.control-same' is the text in 'texts/depth.control-before', so replacing one with the other changes nothing in 'src/budget.hpp'"),
+                (LegVerdict.Violated, "the text in 'texts/charge.same' is the text in 'texts/charge.before', so replacing one with the other changes nothing in 'src/fixture.cpp'"),
             ],
             entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
         Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
@@ -524,7 +532,8 @@ public sealed class MutationLegRunnerTests
     /// <summary>
     /// A before-text its site does not hold exactly once is violated before anything of the arm is built or written,
     /// saying how often it occurs and nothing else: no times, where the site moved under the arm; twice, where the arm
-    /// does not say which it hits; and a paired control's, counted in the site as the tree holds it.
+    /// does not say which it hits; a paired control's, counted in the site as the tree holds it; and a coupled site's,
+    /// counted in that site and naming it, never the arm's own - which here holds it twice.
     /// </summary>
     [Fact]
     public async Task ABeforeTextNotThereExactlyOnce_IsViolated_SayingHowOften()
@@ -536,14 +545,18 @@ public sealed class MutationLegRunnerTests
         var moved = DepthType with { Id = "depth-moved", Own = DepthType.Own with { Before = "texts/depth.after", After = "texts/depth.before" } };
         var twice = ChargeBound with { Id = "charge-twice", Line = 6, Own = ChargeBound.Own with { Before = "texts/twice.before" } };
         var control = DepthType with { Id = "depth-control", Line = 9, Control = new PairedControl("texts/depth.after", "texts/depth.control-after", 10) };
+        var coupled = ChargeBound with { Id = "charge-coupled", Line = 12, Coupled = [new MutationSite("src/budget.hpp", "texts/twice.before", "texts/depth.control-after", 13)] };
+        var own = twice with { Id = "charge-own-twice", Line = 15, Coupled = [new MutationSite("src/budget.hpp", "texts/depth.before", "texts/depth.after", 16)] };
 
-        var entry = await sweep.RunAsync([moved, twice, control]);
+        var entry = await sweep.RunAsync([moved, twice, control, coupled, own]);
 
         Assert.Equal(
             [
                 (LegVerdict.Violated, "the text in 'texts/depth.after' occurs 0 time(s) in 'src/budget.hpp', where it must occur exactly once"),
                 (LegVerdict.Violated, "the text in 'texts/twice.before' occurs 2 time(s) in 'src/fixture.cpp', where it must occur exactly once"),
                 (LegVerdict.Violated, "the text in 'texts/depth.after' occurs 0 time(s) in 'src/budget.hpp', where it must occur exactly once"),
+                (LegVerdict.Violated, "the text in 'texts/twice.before' occurs 0 time(s) in 'src/budget.hpp', where it must occur exactly once"),
+                (LegVerdict.Violated, "the text in 'texts/twice.before' occurs 2 time(s) in 'src/fixture.cpp', where it must occur exactly once"),
             ],
             entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
         Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
@@ -899,19 +912,33 @@ public sealed class MutationLegRunnerTests
     /// saying which log and why - never poisoned, which is a defect of this tool's and retires a worker: its site is put
     /// back, and its worker drives the next arm.
     /// </summary>
-    [Fact]
-    public async Task AnArmWhoseOutputCouldNotBeReadBack_IsUnmeasured_AndItsWorkerDrivesTheNext()
+    [Theory]
+    [InlineData("build")]
+    [InlineData("run")]
+    public async Task AnArmWhoseOutputCouldNotBeReadBack_IsUnmeasured_AndItsWorkerDrivesTheNext(string phase)
     {
         using var sweep = new Sweep { Workers = 1 };
-        sweep.Tests.Before = (request, _) => request.Leg == "native/arms/charge-bound"
-            ? throw new PhaseOutputUnreadException("build.log", "it was written again since")
-            : Task.CompletedTask;
+        MutationArm unread;
 
-        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
+        if (phase == "build")
+        {
+            // Its mutation stops the build, and which step failed is read from what the build printed.
+            unread = DepthType;
+            sweep.Builder.Output = request => request.Leg == "native/arms/depth-type" ? new PhaseOutputTests.Unread() : null;
+        }
+        else
+        {
+            unread = ChargeBound;
+            sweep.Tests.Before = (request, _) => request.Leg == "native/arms/charge-bound"
+                ? throw new PhaseOutputUnreadException("build.log", "it was written again since")
+                : Task.CompletedTask;
+        }
+
+        var entry = await sweep.RunAsync([unread, ChargeFloor]);
 
         Assert.Equal(
             [
-                ("charge-bound", LegVerdict.Unmeasured, PhaseOutputTests.Unread.Said),
+                (unread.Id, LegVerdict.Unmeasured, PhaseOutputTests.Unread.Said),
                 ("charge-floor", LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
             ],
             entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
@@ -1210,11 +1237,13 @@ public sealed class MutationLegRunnerTests
     /// the tree held: its arm is poisoned, naming the site and why, and its worker retired, while the other worker
     /// drives every other arm to its verdict.
     /// </summary>
-    [Fact]
-    public async Task ASiteThatCannotBeReadBack_PoisonsItsArm_AndTheOtherWorkersGoOn()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ASiteThatCannotBeReadBack_PoisonsItsArm_AndTheOtherWorkersGoOn(bool denied)
     {
         using var sweep = new Sweep();
-        sweep.SiteFiles = new UnreadableOncePutBack(sweep.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"]);
+        sweep.SiteFiles = new UnreadableOncePutBack(sweep.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"], denied);
 
         var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
@@ -1230,11 +1259,13 @@ public sealed class MutationLegRunnerTests
     /// A site or a text an arm's pre-flight cannot read - held by another process, the disk gone - poisons that arm
     /// alone, saying why: nothing of it was built or written, so its worker is not retired, and drives the next arm.
     /// </summary>
-    [Fact]
-    public async Task AFileAPreflightCannotRead_PoisonsItsArm_AndItsWorkerDrivesTheNext()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileAPreflightCannotRead_PoisonsItsArm_AndItsWorkerDrivesTheNext(bool denied)
     {
         using var sweep = new Sweep { Workers = 1 };
-        var writes = new RecordingWrites(new Unreadable(sweep.Harness.FileSystem, "budget.hpp", "floor.after"));
+        var writes = new RecordingWrites(new Unreadable(sweep.Harness.FileSystem, denied, "budget.hpp", "floor.after"));
         sweep.SiteFiles = writes;
 
         var entry = await sweep.RunAsync([DepthType, ChargeFloor, ChargeBound]);
@@ -1589,7 +1620,7 @@ public sealed class MutationLegRunnerTests
     /// An arm's run starts where the leg's tests start, read for the worker's copy, in the environment they start in: the
     /// leg's host's, and the test invocation's over it. It and its binary's control both find the programs the leg's
     /// host found - a compiler's own libraries among them - and are watched as every phase is, for a stall and for a
-    /// clock that stepped.
+    /// clock that stepped, which the leg's line then says.
     /// </summary>
     [Fact]
     public async Task AnArmsRun_StartsWhereTheLegsTestsStart_InTheWorker_WithTheirEnvironment()
@@ -1619,6 +1650,41 @@ public sealed class MutationLegRunnerTests
             Assert.Equal(77, request.StallSeconds);
             Assert.Equal(1234, request.ClockStepToleranceMilliseconds);
         });
+    }
+
+    /// <summary>
+    /// What a sweep timed that its clock makes suspect is said on the leg's line, as a build's or a test's is, and
+    /// changes no verdict: each run - an arm's, and the unmutated one that bounds it - that spanned a clock step or a
+    /// host sleep, and what each of its builds says of its own, a worker's rebuilt from clean among them. Said in one
+    /// order, whichever worker met it first.
+    /// </summary>
+    [Fact]
+    public async Task WhatASweepTimedAcrossAClockStep_IsSaidOnTheLegsLine_AndChangesNoVerdict()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var stepped = $"{CMakeAdapter.BuildPhase} spanned a clock step, so its duration and every mtime it wrote are suspect";
+
+        sweep.Tests.SteppedBy = request => request.Bound is null
+            ? TimeSpan.FromSeconds(90)
+            : request.Leg.EndsWith("/charge-bound", StringComparison.Ordinal) ? TimeSpan.FromSeconds(5) : null;
+        sweep.Builder.RebuiltFromClean = request => request.Leg == "native/workers/1" ? "its record names another compiler" : null;
+        sweep.Builder.Stepped = request => request.Leg is "native/arms/charge-floor" or "native/arms/depth-type/control" or "native/controls/fixture_tests";
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
+
+        Assert.Equal((LegVerdict.Passed, "3 arm(s): 3 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal(
+            [
+                $"the build of arm 'charge-floor': {stepped}",
+                $"the build of the paired control of arm 'depth-type': {stepped}",
+                $"the build of the unmutated fixture_tests: {stepped}",
+                "the run of arm 'charge-bound' spanned a clock step or a host sleep (wall and monotonic time disagreed by 00:00:05), so its "
+                + "duration, which its bound is held against, is suspect",
+                "the run of the unmutated fixture_tests spanned a clock step or a host sleep (wall and monotonic time disagreed by 00:01:30), "
+                + "so its duration, which bounds the run of each of its arms, is suspect",
+                "worker 1's build of the unmutated tree: rebuilt from clean: its record names another compiler",
+            ],
+            entry.TimingNotes);
     }
 
     /// <summary>
@@ -2343,6 +2409,228 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// A unit the machine took is given back whatever ends what it was taken for: a worker whose copy or whose build
+    /// fails, an arm stopped for its binary's control, and an arm whose driving ends in a failure nobody named - none
+    /// keeps its slot, or the room it claimed, once the sweep is done.
+    /// </summary>
+    [Theory]
+    [InlineData("copy")]
+    [InlineData("build")]
+    [InlineData("control")]
+    [InlineData("arm")]
+    public async Task AUnit_IsGivenBack_WhateverEndsWhatItWasTakenFor(string ended)
+    {
+        using var state = new TempDirectory();
+        var record = state.Combine("admission.json");
+        var admission = AdmissionKit.Admission(new HarnessFactory(), record, new ScriptedGauge(10), new ManualClock());
+        var rule = AdmissionKit.Rule(heavyLegs: 2);
+        var taken = new ConcurrentQueue<string>();
+
+        using var sweep = new Sweep
+        {
+            Workers = 2,
+            Hold = ended == "arm"
+                ? (arm, reached) => arm == "charge-bound" ? throw new InvalidOperationException("its verdict could not be held") : reached
+                : null,
+            AdmitAsync = async (unit, token) =>
+            {
+                var admitted = await admission.AdmitAsync(
+                    new AdmissionRequest(rule, "run-1", MutationService.CommandName, $"{LegName}/{unit.Unit}", "local", "/src/tree", Variant.DirectoryName, _ => { }, unit.Room)
+                    {
+                        Settle = unit.Settle,
+                    },
+                    token);
+
+                taken.Enqueue(unit.Unit);
+
+                return admitted;
+            },
+        };
+
+        switch (ended)
+        {
+            case "copy":
+                sweep.Copies.SyncFails = worker => worker == sweep.Worker(2) ? new IOException("There is not enough space on the disk.") : null;
+                break;
+            case "build":
+                sweep.Builder.Answer = request => request.Leg == "native/workers/2" ? ReachedVerdict.Of(LegVerdict.Failed, "exited 2") : null;
+                break;
+            case "control":
+                sweep.Tests.Answer = request => request.Bound is null ? Tests.Ran(["Fixture.Depth"]) : Tests.Judged(request);
+                break;
+        }
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ended switch
+            {
+                "control" => new[] { LegVerdict.Stopped, LegVerdict.Stopped },
+                "arm" => new[] { LegVerdict.Poisoned, LegVerdict.Passed },
+                _ => new[] { LegVerdict.Passed, LegVerdict.Passed },
+            },
+            entry.Arms.Select(arm => arm.Verdict));
+
+        // Each was taken - a worker's with the room its copy claims - and none is held once the sweep is done.
+        Assert.Contains("worker-2", taken);
+        Assert.Contains("charge-bound", taken);
+        Assert.Empty(AdmissionKit.Read(record));
+        Assert.Empty(AdmissionKit.ReadClaims(record));
+    }
+
+    /// <summary>
+    /// A worker whose own unit of admission cannot even be asked for - the record of the machine's slots gone - is
+    /// retired alone, saying what was raised, as one whose copy fails is: the other worker drives every arm.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerWhoseOwnAdmissionFails_IsRetiredAlone_AndTheOtherDrivesEveryArm()
+    {
+        using var sweep = new Sweep
+        {
+            Admit = unit => unit.Unit == "worker-2" ? throw new InvalidOperationException("the record of the machine's slots vanished") : (Admission?)null,
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            (LegVerdict.Passed, "2 arm(s): 2 passed; worker 2: it could not be made, InvalidOperationException: the record of the machine's slots vanished, so it drove no arm"),
+            (entry.Verdict, entry.Detail));
+        Assert.All(entry.Arms, arm => Assert.Equal((LegVerdict.Passed, 1), (arm.Verdict, arm.Worker)));
+        Assert.Equal([sweep.Worker(1)], sweep.Copies.Synced.Select(sync => sync.Worker));
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.Released.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Where two workers each end the sweep, the first is the sweep's: a worker refusing the run only once another's
+    /// refusal has stopped it is not said in the first one's place.
+    /// </summary>
+    [Fact]
+    public async Task OfTwoWorkersEndingTheSweep_TheFirstIsTheSweeps()
+    {
+        using var sweep = new Sweep();
+
+        // Worker 1 refuses the run as it claims its copy. Worker 2 refuses it too, as it is built - but only once the
+        // sweep has been stopped, which the first refusal does.
+        sweep.Copies.ClaimThrows = worker => worker == sweep.Worker(1) ? new HarnessException(HarnessExit.Refused, "worker 1's claim file cannot be written") : null;
+        sweep.Builder.Before = async (request, token) =>
+        {
+            if (request.Leg != "native/workers/2")
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Stopped by the first: now the second ends it too.
+            }
+
+            throw new HarnessException(HarnessExit.ConfigInvalid, "a setting is wrong");
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((HarnessExit.Refused, "worker 1's claim file cannot be written"), (entry.EndsTheRun?.ExitCode, entry.EndsTheRun?.Message));
+        Assert.All(entry.Arms, arm => Assert.Equal((LegVerdict.Stopped, StoppedUndriven), (arm.Verdict, arm.Detail)));
+    }
+
+    /// <summary>
+    /// A mutation that cannot be written - the disk full under it - leaves a site holding part of it: so the site counts
+    /// as written from before the write, and is put back and checked as one that was. The arm ends in the failure, and
+    /// its worker's copy is as the tree holds it.
+    /// </summary>
+    [Fact]
+    public async Task AMutationThatCannotBeWritten_IsPutBackAsOneThatWas()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(new FailingMutation(sweep.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"]));
+        sweep.SiteFiles = writes;
+
+        var entry = await sweep.RunAsync([ChargeBound]);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned, "the sweep could not judge this arm, IOException: the disk is full"),
+            (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+
+        // The write that failed, and the one that put the site back.
+        Assert.Equal(2, writes.Written.Count(path => Path.GetFileName(path) == "fixture.cpp"));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+    }
+
+    /// <summary>
+    /// A worker's copy is the tree and every dependency's sources it is given, counted together, and its paths are
+    /// reckoned by the longest among them all - one of them holding no file adds nothing and reckons none.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerGivenSeveralDependencies_CountsThemAll_AndIsReckonedByTheLongest()
+    {
+        using var sweep = new Sweep { Workers = 1, Worktrees = new WorktreeSettings { PathBudgetReserve = 100, PathBudgetMargin = 7, PathLimit = 4000 } };
+        var json = Path.Combine(sweep.Tree, "..", "json");
+        var fmt = Path.Combine(sweep.Tree, "..", "fmt");
+        var empty = Path.Combine(sweep.Tree, "..", "empty");
+        var deep = "include/" + new string('d', 300) + ".hpp";
+
+        // Each read as its own: a long path in the first, a short one in the second, and nothing at all in the third.
+        sweep.Fetched = new FetchedSet([new FetchedSource("JSON", json), new FetchedSource("FMT", fmt), new FetchedSource("EMPTY", empty)], Every: true);
+        sweep.Copies.FetchedFiles = directory =>
+            directory == json ? [(deep, 700L)]
+            : directory == fmt ? [("fmt.cc", 300L)]
+            : [];
+
+        var entry = await sweep.RunAsync([DepthType]);
+
+        Assert.Equal((LegVerdict.Passed, "1 arm(s): 1 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal([json, fmt, empty], sweep.Copies.FetchedRead);
+
+        // The room its making claims: the tree, and 700 + 300 of dependency sources, none left out or counted twice.
+        Assert.Equal(TreeFiles.Values.Sum(text => (long)text.Length) + 1000, sweep.Admissions.Single(unit => unit.Unit == "worker-1").Room!.Bytes);
+
+        // Reckoned by the longest path among every dependency's, below the worker: the first one's.
+        var below = FetchedSources.KeptIn(sweep.Worker(1), "JSON").Length - sweep.Worker(1).Length + 1 + deep.Length;
+
+        sweep.Budget.Received().Check(sweep.Worker(1), below, 7, 4000);
+    }
+
+    /// <summary>
+    /// A sweep stopped while it reads a dependency's sources stops there, before any worker is claimed; and one stopped
+    /// while a worker is given them stops that worker before it builds. Both are asked with the token a stop cancels.
+    /// </summary>
+    [Fact]
+    public async Task ASweepStoppedOverDependencySources_StopsThere()
+    {
+        using var reading = new Sweep { Workers = 1 };
+        using var stopReading = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+
+        reading.Fetched = new FetchedSet([new FetchedSource("JSON", Path.Combine(reading.Tree, "..", "json"))], Every: true);
+        reading.Copies.WhileFetchedRead = async (_, token) =>
+        {
+            await stopReading.CancelAsync();
+            token.ThrowIfCancellationRequested();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reading.RunAsync([DepthType], cancellationToken: stopReading.Token));
+        Assert.Empty(reading.Copies.Claimed);
+
+        using var giving = new Sweep { Workers = 1 };
+        using var stopGiving = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+
+        giving.Fetched = new FetchedSet([new FetchedSource("JSON", Path.Combine(giving.Tree, "..", "json"))], Every: true);
+        giving.Copies.WhileFetchedGiven = async (_, token) =>
+        {
+            await stopGiving.CancelAsync();
+            token.ThrowIfCancellationRequested();
+        };
+
+        var entry = await giving.RunAsync([DepthType], cancellationToken: stopGiving.Token);
+
+        Assert.Equal((LegVerdict.Stopped, "1 arm(s): 1 stopped"), (entry.Verdict, entry.Detail));
+        Assert.Empty(giving.Builder.Builds);
+    }
+
+    /// <summary>
     /// Everything a sweep is given: its tree, the doubles of what touches a build, and how the leg is placed - each double
     /// recording what it was asked.
     /// </summary>
@@ -2670,29 +2958,42 @@ public sealed class MutationLegRunnerTests
         /// <summary>The file each dependency's sources are read as holding, beside one of the shortest path.</summary>
         public string FetchedPath { get; set; } = "CMakeLists.txt";
 
-        public Task<SyncManifest> ReadFetchedAsync(string directory, CancellationToken cancellationToken)
+        /// <summary>What a dependency's sources are read as holding, by its directory, where a test says: each file's path and size.</summary>
+        public Func<string, IReadOnlyList<(string Path, long Bytes)>>? FetchedFiles { get; set; }
+
+        /// <summary>What happens as a dependency's sources are read, given the token the reading was asked with.</summary>
+        public Func<string, CancellationToken, Task> WhileFetchedRead { get; set; } = (_, _) => Task.CompletedTask;
+
+        /// <summary>What happens as a worker is given them, given the token the giving was asked with.</summary>
+        public Func<string, CancellationToken, Task> WhileFetchedGiven { get; set; } = (_, _) => Task.CompletedTask;
+
+        public async Task<SyncManifest> ReadFetchedAsync(string directory, CancellationToken cancellationToken)
         {
             FetchedRead.Enqueue(directory);
+            await WhileFetchedRead(directory, cancellationToken);
 
             if (FetchedReadFails(directory) is { } failure)
             {
                 throw failure;
             }
 
-            // Two files, the shorter path of nothing: the longest is the one a path limit is reckoned by.
-            var files = new Dictionary<string, SyncEntry>(StringComparer.Ordinal)
-            {
-                [FetchedPath] = new(FetchedPath, FetchedBytes, "read"),
-                ["x"] = new("x", 0, "empty"),
-            };
+            // Two files, the shorter path of nothing, unless a test says what: the longest is the one a path limit is reckoned by.
+            var files = FetchedFiles is { } said
+                ? said(directory).ToDictionary(file => file.Path, file => new SyncEntry(file.Path, file.Bytes, "read"), StringComparer.Ordinal)
+                : new Dictionary<string, SyncEntry>(StringComparer.Ordinal)
+                {
+                    [FetchedPath] = new(FetchedPath, FetchedBytes, "read"),
+                    ["x"] = new("x", 0, "empty"),
+                };
 
-            return Task.FromResult(new SyncManifest(directory, files) { Links = FetchedLinks });
+            return new SyncManifest(directory, files) { Links = FetchedLinks };
         }
 
-        public Task SyncFetchedAsync(IReadOnlyList<FetchedReading> fetched, string worker, CancellationToken cancellationToken)
+        public async Task SyncFetchedAsync(IReadOnlyList<FetchedReading> fetched, string worker, CancellationToken cancellationToken)
         {
             // Given into a worker that is the tree already: its copy comes first.
             Assert.Contains(Synced, sync => sync.Worker == worker);
+            await WhileFetchedGiven(worker, cancellationToken);
 
             if (FetchedFails(worker) is { } failure)
             {
@@ -2700,7 +3001,6 @@ public sealed class MutationLegRunnerTests
             }
 
             FetchedGiven.Enqueue((worker, fetched));
-            return Task.CompletedTask;
         }
 
         public Task<CopyRemoval> RemoveAsync(string worker, CancellationToken cancellationToken)
@@ -2731,8 +3031,17 @@ public sealed class MutationLegRunnerTests
 
         public Func<BuildRequest, Exception?> Throws { get; set; } = _ => null;
 
+        /// <summary>What a build that fails printed, where not the failed step a build of the fixture prints.</summary>
+        public Func<BuildRequest, PhaseOutput?> Output { get; set; } = _ => null;
+
         /// <summary>What happens before a build answers or throws, once it has been noted as started.</summary>
         public Func<BuildRequest, CancellationToken, Task> Before { get; set; } = (_, _) => Task.CompletedTask;
+
+        /// <summary>Whether a build that passes spanned a clock step, which its phase then says.</summary>
+        public Func<BuildRequest, bool> Stepped { get; set; } = _ => false;
+
+        /// <summary>Why a build was rebuilt from clean, or <see langword="null"/> where it was not.</summary>
+        public Func<BuildRequest, string?> RebuiltFromClean { get; set; } = _ => null;
 
         public bool Rebuilds { get; set; } = true;
 
@@ -2769,10 +3078,15 @@ public sealed class MutationLegRunnerTests
             }
 
             IReadOnlyList<PhaseResult> phases = verdict.Verdict == LegVerdict.Failed
-                ? [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 1, false, 0, null, TimeSpan.Zero, TimeSpan.Zero, false, [], Path.Combine(directory, "build.log"), PhaseOutput.Of($"[1/2] Building CXX object {SiteObject}\nFAILED: {SiteObject}\nerror: depth is no integer\n"))]
+                ? [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 1, false, 0, null, TimeSpan.Zero, TimeSpan.Zero, false, [], Path.Combine(directory, "build.log"), Output(request) ?? PhaseOutput.Of($"[1/2] Building CXX object {SiteObject}\nFAILED: {SiteObject}\nerror: depth is no integer\n"))]
                 : [];
 
-            return new BuildResult(verdict, directory, phases, null, null);
+            if (verdict.Verdict == LegVerdict.Passed && Stepped(request))
+            {
+                phases = [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 0, false, 0, null, TimeSpan.Zero, TimeSpan.FromSeconds(90), true, [], Path.Combine(directory, "build.log"), PhaseOutput.Of("built"))];
+            }
+
+            return new BuildResult(verdict, directory, phases, RebuiltFromClean(request), null);
         }
 
         /// <summary>What reading a build's graph raises, or <see langword="null"/> where it is read.</summary>
@@ -2839,12 +3153,18 @@ public sealed class MutationLegRunnerTests
 
         public Func<ArmRunRequest, CancellationToken, Task> Before { get; set; } = (_, _) => Task.CompletedTask;
 
+        /// <summary>How far a run's clocks disagreed, past its tolerance, or <see langword="null"/> where they did not.</summary>
+        public Func<ArmRunRequest, TimeSpan?> SteppedBy { get; set; } = _ => null;
+
         public async Task<ArmRunResult> RunAsync(ArmRunRequest request, CancellationToken cancellationToken)
         {
             Runs.Enqueue(request);
             await Before(request, cancellationToken);
 
-            return new ArmRunResult(Answer(request), Took, Path.Combine(request.RecordDirectory, "run.log"), Path.Combine(request.RecordDirectory, "report.xml"));
+            return new ArmRunResult(Answer(request), Took, Path.Combine(request.RecordDirectory, "run.log"), Path.Combine(request.RecordDirectory, "report.xml"))
+            {
+                SteppedBy = SteppedBy(request),
+            };
         }
 
         /// <summary>What the binary built in the request's worker says, read from the worker's source as it stands.</summary>
@@ -2900,12 +3220,22 @@ public sealed class MutationLegRunnerTests
         }
     }
 
-    /// <summary>A file system, save that no file named as one of <paramref name="names"/> can be read, as one another process holds cannot.</summary>
-    private sealed class Unreadable(IFileSystem inner, params string[] names) : PassThroughFileSystem(inner)
+    /// <summary>
+    /// What a disk raises of a file it will not give or take: an <see cref="IOException"/>, or, where it is
+    /// <paramref name="denied"/> - not this user's, read-only - an <see cref="UnauthorizedAccessException"/>, which is no
+    /// kind of the other.
+    /// </summary>
+    private static Exception Raised(bool denied, string message) => denied ? new UnauthorizedAccessException(message) : new IOException(message);
+
+    /// <summary>
+    /// A file system, save that no file named as one of <paramref name="names"/> can be read, as one another process holds
+    /// cannot - or, where <paramref name="denied"/>, as one this user may not read cannot.
+    /// </summary>
+    private sealed class Unreadable(IFileSystem inner, bool denied, params string[] names) : PassThroughFileSystem(inner)
     {
         public override byte[] ReadAllBytes(string path)
             => names.Contains(Path.GetFileName(path), StringComparer.Ordinal)
-                ? throw new IOException($"'{Path.GetFileName(path)}' is held by another process.")
+                ? throw Raised(denied, $"'{Path.GetFileName(path)}' is held by another process.")
                 : base.ReadAllBytes(path);
     }
 
@@ -2913,7 +3243,7 @@ public sealed class MutationLegRunnerTests
     /// The real file system, save that a file named <paramref name="name"/> cannot be read once <paramref name="pristine"/>
     /// was written back to it, as a disk that went away once the write returned cannot.
     /// </summary>
-    private sealed class UnreadableOncePutBack(IFileSystem inner, string name, string pristine) : PassThroughFileSystem(inner)
+    private sealed class UnreadableOncePutBack(IFileSystem inner, string name, string pristine, bool denied = false) : PassThroughFileSystem(inner)
     {
         private readonly ConcurrentDictionary<string, bool> _putBack = new(StringComparer.Ordinal);
 
@@ -2928,7 +3258,7 @@ public sealed class MutationLegRunnerTests
         }
 
         public override byte[] ReadAllBytes(string path)
-            => _putBack.ContainsKey(path) ? throw new IOException("the disk went away.") : base.ReadAllBytes(path);
+            => _putBack.ContainsKey(path) ? throw Raised(denied, "the disk went away.") : base.ReadAllBytes(path);
     }
 
     /// <summary>A file system, recording each date a file was given through it, with what the file held then.</summary>
@@ -2961,11 +3291,31 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>The real file system, save that writing <paramref name="name"/> back as <paramref name="pristine"/> fails, as a disk that went away fails.</summary>
-    private sealed class FailingRestore(IFileSystem inner, string name, string pristine) : PassThroughFileSystem(inner)
+    private sealed class FailingRestore(IFileSystem inner, string name, string pristine, bool denied = false) : PassThroughFileSystem(inner)
     {
         public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
             => Path.GetFileName(path) == name && System.Text.Encoding.UTF8.GetString(contents) == pristine
-                ? throw new IOException("the disk went away.")
+                ? throw Raised(denied, "the disk went away.")
                 : base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+    }
+
+    /// <summary>
+    /// The real file system, save that writing <paramref name="name"/> as anything but <paramref name="pristine"/> fails
+    /// with half of it written: a mutation the disk filled under.
+    /// </summary>
+    private sealed class FailingMutation(IFileSystem inner, string name, string pristine) : PassThroughFileSystem(inner)
+    {
+        public override async Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        {
+            if (Path.GetFileName(path) != name || System.Text.Encoding.UTF8.GetString(contents) == pristine)
+            {
+                await base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+                return;
+            }
+
+            await base.WriteAllBytesAtomicAsync(path, contents[..(contents.Length / 2)], cancellationToken);
+
+            throw new IOException("the disk is full.");
+        }
     }
 }

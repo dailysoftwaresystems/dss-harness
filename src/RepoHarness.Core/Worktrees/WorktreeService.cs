@@ -686,13 +686,18 @@ public sealed class WorktreeService(
             }
             catch (OperationCanceledException) when (stopping.IsCancellationRequested)
             {
-                return Stopped(worktreeName, path, identity.AdministrativeDirectory, checksRan: !force);
+                return WithWorkers(Stopped(worktreeName, path, identity.AdministrativeDirectory, checksRan: !force));
             }
         }
 
+        // What became of its workers is said whichever way the worktree's own removal ended: they went before it, and
+        // an outcome naming none of them would leave nobody knowing those copies are gone.
+        WorktreeOutcome WithWorkers(WorktreeOutcome said)
+            => workers.Lines.Count == 0 ? said : said with { Outcome = said.Outcome with { Details = [.. said.Outcome.Details ?? [], .. workers.Lines] } };
+
         if (!outcome.Succeeded)
         {
-            return outcome;
+            return WithWorkers(outcome);
         }
 
         if (discarded.Count > 0)
@@ -707,10 +712,7 @@ public sealed class WorktreeService(
         }
 
         // A worker left here was left by --force, which chose to: said, and never what fails the deletion it asked for.
-        if (workers.Lines.Count > 0)
-        {
-            outcome = outcome with { Outcome = outcome.Outcome with { Details = [.. outcome.Outcome.Details ?? [], .. workers.Lines] } };
-        }
+        outcome = WithWorkers(outcome);
 
         // Only once the worktree is really gone. Forgetting it earlier would lose the record of a
         // worktree a failed removal left in place. Not cancelled: the removal is past its point of

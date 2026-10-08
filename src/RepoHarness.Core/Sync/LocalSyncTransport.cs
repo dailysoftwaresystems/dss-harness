@@ -406,13 +406,25 @@ public sealed class LocalSyncTransport(
 
             if (!measureOnly)
             {
+                CopyRemoval removal;
+
                 try
                 {
-                    await RemoveCopyAsync(copy.Path, cancellationToken).ConfigureAwait(false);
+                    removal = await RemoveCopyAsync(copy.Path, cancellationToken).ConfigureAwait(false);
                 }
                 catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
                 {
                     left.Add(new WorkerLeft(copy.Path, ex.Message, InUse: true));
+                    continue;
+                }
+
+                // Its marker is read again as it is removed, and may say otherwise by then: a directory left where it is
+                // is said as that, never as removed, and the claim on it stays.
+                if (removal is CopyRemoval.Adopted or CopyRemoval.NotACopy)
+                {
+                    var origin = removal == CopyRemoval.Adopted ? CopyOrigin.TakenOver : CopyOrigin.Unmarked;
+
+                    left.Add(new WorkerLeft(copy.Path, WorktreeReports.Origin(copy with { Origin = origin }), InUse: false));
                     continue;
                 }
 

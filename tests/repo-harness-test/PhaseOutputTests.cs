@@ -61,12 +61,14 @@ public sealed class PhaseOutputTests
     }
 
     /// <summary>
-    /// A log that no longer holds what its phase left in it - gone, cut short, or written again since - is said as
-    /// unread, naming it and why, before any line of it is handed on: read as what is there, a build ninja failed read
-    /// as one stopped from outside, and a step's lines as another's. A reader that stops at its first line is told too.
+    /// A log that no longer holds what its phase left in it - gone, no file any more, cut short, or written again
+    /// since - is said as unread, naming it and why, before any line of it is handed on: read as what is there, a build
+    /// ninja failed read as one stopped from outside, and a step's lines as another's. A reader that stops at its first
+    /// line is told too.
     /// </summary>
     [Theory]
     [InlineData("gone", "could not be read back from its log")]
+    [InlineData("a directory", "could not be read back from its log")]
     [InlineData("cut short", "byte(s), fewer than the")]
     [InlineData("written again", "it no longer holds what the phase wrote after its last line: it was written again since")]
     public async Task ALogThatNoLongerHoldsWhatItsPhaseLeft_IsSaidAsUnread_BeforeAnyLineIsHandedOn(string how, string why)
@@ -87,6 +89,12 @@ public sealed class PhaseOutputTests
         {
             case "gone":
                 File.Delete(log);
+                break;
+
+            case "a directory":
+                // Opened as the file it was, it is refused as one this user may not read: no kind of what a file gone raises.
+                File.Delete(log);
+                Directory.CreateDirectory(log);
                 break;
 
             case "cut short":
@@ -201,6 +209,20 @@ public sealed class PhaseOutputTests
         public const string Said = "what the phase printed could not be read back from its log 'build.log': it was written again since";
 
         public override IEnumerable<string> Lines() => throw new PhaseOutputUnreadException("build.log", "it was written again since");
+    }
+
+    /// <summary>Output that reads as <paramref name="lines"/>, and is then found cut short in its log: unread from there on.</summary>
+    internal sealed class UnreadAfter(params string[] lines) : PhaseOutput
+    {
+        public override IEnumerable<string> Lines()
+        {
+            foreach (var line in lines)
+            {
+                yield return line;
+            }
+
+            throw new PhaseOutputUnreadException("build.log", "it was cut short while it was read");
+        }
     }
 
     /// <summary>

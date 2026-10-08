@@ -182,6 +182,25 @@ public sealed class MutationWorkersTests
         => Assert.Equal(tree, MutationWorkers.TreeNamed(name));
 
     /// <summary>
+    /// The trees with a worker in a directory are named once each, however many workers each has, in order - whether
+    /// the tree itself is still there or gone - and a directory that is not there holds none.
+    /// </summary>
+    [Fact]
+    public void TheTreesWithAWorkerInADirectory_AreNamedOnceEach_InOrder()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        foreach (var name in new[] { "beta", "beta.mutation-357e24cw-2", "beta.mutation-357e24cw-1", "alpha.mutation-357e24cs-1", "gamma", "gamma.mutation-notes", "delta.worktree-x" })
+        {
+            Directory.CreateDirectory(temp.Combine("group", name));
+        }
+
+        Assert.Equal(["alpha", "beta"], MutationWorkers.TreesWithWorkersIn(harness.FileSystem, temp.Combine("group")));
+        Assert.Empty(MutationWorkers.TreesWithWorkersIn(harness.FileSystem, temp.Combine("nowhere")));
+    }
+
+    /// <summary>
     /// A sweep's lock is its workers' key, whole: a build holding the leg's tree and variant never meets it, and another
     /// sweep of the leg does, as does a clean of its workers.
     /// </summary>

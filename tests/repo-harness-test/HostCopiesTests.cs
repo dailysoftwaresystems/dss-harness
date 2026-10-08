@@ -1121,8 +1121,9 @@ public sealed class HostCopiesTests
     /// <summary>
     /// The mutation workers kept beside a tree go with it, of whichever variant, a self-test's among them, with what an
     /// unfinished removal of one left aside: each a sync made is removed and its claim forgotten; one a sweep still
-    /// running holds is left, as in use; a directory nothing says the harness made is left, as somebody's; and another
-    /// tree's workers are never touched. Asked only to measure, it says the same and removes nothing.
+    /// running holds is left, as in use; a directory nothing says the harness made is left, as somebody's - as is one
+    /// the harness took over, which was somebody's first, and one whose marker cannot be read; and another tree's
+    /// workers are never touched. Asked only to measure, it says the same and removes nothing.
     /// </summary>
     [Fact]
     public async Task TheWorkersBesideATree_AreRemoved_ButForOneInUse_AndOneNobodyMade()
@@ -1135,6 +1136,8 @@ public sealed class HostCopiesTests
         var selfTest = tree + ".mutation-357e24cs-1";
         var held = tree + ".mutation-c41a8a5w-1";
         var somebodys = tree + ".mutation-notes";
+        var takenOver = tree + ".mutation-357e24cw-3";
+        var damaged = tree + ".mutation-357e24cw-4";
         var aside = hosts.Combine("src", ".repo.worktree-alpha.mutation-357e24cw-2.removing");
         var anothers = hosts.Combine("src", "repo.mutation-357e24cw-1");
         var anothersAside = hosts.Combine("src", ".repo.mutation-357e24cw-2.removing");
@@ -1148,6 +1151,10 @@ public sealed class HostCopiesTests
 
         Directory.CreateDirectory(somebodys);
         File.WriteAllText(Path.Combine(somebodys, "notes.txt"), "somebody's");
+        await Local(harness).CreateRootAsync(takenOver, CopyMark.AdoptionStopped, cancellationToken);
+        File.WriteAllText(Path.Combine(takenOver, "work.txt"), "somebody's, before it was a copy");
+        Directory.CreateDirectory(Path.Combine(damaged, HarnessLayout.DirectoryName));
+        File.WriteAllText(Path.Combine(damaged, HarnessLayout.DirectoryName, LocalSyncTransport.MarkerFileName), "{}");
 
         foreach (var left in new[] { aside, anothersAside, nobodys })
         {
@@ -1160,8 +1167,11 @@ public sealed class HostCopiesTests
         var sizes = new[] { selfTest, swept, aside }.Select(harness.FileSystem.DirectorySize).ToList();
 
         var expected = new[] { selfTest, swept, aside }.Zip(sizes, (path, bytes) => new WorkerRemoved(path, bytes)).ToList();
+        var unreadable = Assert.Single(await transport.ListCopiesAsync(tree, HostCopies.MutationSuffix, cancellationToken), copy => copy.Origin == CopyOrigin.Unreadable);
         var left_ = new[]
         {
+            new WorkerLeft(takenOver, "the harness took over a directory that was there, which is yours to remove", InUse: false),
+            new WorkerLeft(damaged, $"its marker cannot be read: {unreadable.Problem!.TrimEnd('.')}", InUse: false),
             new WorkerLeft(held, "a sweep still running holds it: run 20261007-101500-abcd, process 4242 on this machine", InUse: true),
             new WorkerLeft(somebodys, "nothing there says the harness made it, so it is yours to remove", InUse: false),
         };
@@ -1170,7 +1180,7 @@ public sealed class HostCopiesTests
 
         Assert.Equal(expected, measured.Removed);
         Assert.Equal(left_, measured.Left);
-        Assert.All(new[] { swept, selfTest, held, somebodys, aside }, path => Assert.True(Directory.Exists(path), path));
+        Assert.All(new[] { swept, selfTest, held, somebodys, takenOver, damaged, aside }, path => Assert.True(Directory.Exists(path), path));
         Assert.Empty(claims.Forgotten);
 
         var removed = await transport.RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
@@ -1178,9 +1188,9 @@ public sealed class HostCopiesTests
         Assert.Equal(expected, removed.Removed);
         Assert.Equal(left_, removed.Left);
         Assert.Equal(sizes.Sum(), removed.Bytes);
-        Assert.Equal([left_[0]], removed.InUse);
+        Assert.Equal([left_[2]], removed.InUse);
         Assert.All(new[] { swept, selfTest, aside }, path => Assert.False(Directory.Exists(path), path));
-        Assert.All(new[] { held, somebodys, anothers, anothersAside, nobodys }, path => Assert.True(Directory.Exists(path), path));
+        Assert.All(new[] { held, somebodys, takenOver, damaged, anothers, anothersAside, nobodys }, path => Assert.True(Directory.Exists(path), path));
         Assert.Equal([selfTest, swept], claims.Forgotten);
 
         // Nothing beside a tree, or no directory it would be kept in: nothing to remove, and nothing said.
@@ -1191,6 +1201,92 @@ public sealed class HostCopiesTests
     }
 
     /// <summary>
+    /// A worker whose marker says somebody's by the time it is removed - taken over since it was listed, or its marker
+    /// gone - is left where it is and said as which: never said removed, nor its claim forgotten, for a directory that
+    /// is still there.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWorkerNoLongerTheHarnesssByTheTimeItIsRemoved_IsLeft_AndNeverSaidRemoved(bool takenOver)
+    {
+        using var hosts = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = hosts.Combine("repo");
+        var worker = tree + ".mutation-357e24cw-1";
+        var marker = Path.Combine(worker, HarnessLayout.DirectoryName, LocalSyncTransport.MarkerFileName);
+
+        await Local(harness).CreateRootAsync(worker, CopyMark.Complete, cancellationToken);
+        File.WriteAllText(Path.Combine(worker, "main.c"), "int main;");
+
+        // Asked about between its listing and its removal, which is when its marker changes hands, or goes.
+        var claims = new Claims
+        {
+            Asked = _ =>
+            {
+                if (takenOver)
+                {
+                    File.WriteAllText(marker, """{"CreatedUtc":"2026-10-07T12:00:00Z","CreatedBy":"builder","Adopted":true,"Completed":true}""");
+                }
+                else
+                {
+                    File.Delete(marker);
+                }
+            },
+        };
+
+        var removal = await Local(harness, claims: claims).RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
+
+        Assert.Empty(removal.Removed);
+        Assert.Equal(
+            [
+                new WorkerLeft(
+                    worker,
+                    takenOver ? "the harness took over a directory that was there, which is yours to remove" : "nothing there says the harness made it, so it is yours to remove",
+                    InUse: false),
+            ],
+            removal.Left);
+        Assert.True(File.Exists(Path.Combine(worker, "main.c")));
+        Assert.Empty(claims.Forgotten);
+    }
+
+    /// <summary>
+    /// What an unfinished removal left aside that still cannot be removed - something holds it, or it is not this
+    /// user's to remove - is left as in use, saying why, and keeps no worker from going; asking again removes it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhatARemovalLeftAside_AndStillCannotRemove_IsLeftAsInUse_AndTheWorkersGo(bool denied)
+    {
+        using var hosts = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = hosts.Combine("repo");
+        var free = tree + ".mutation-357e24cw-1";
+        var aside = hosts.Combine(".repo.mutation-357e24cw-2.removing");
+
+        await Local(harness).CreateRootAsync(free, CopyMark.Complete, cancellationToken);
+        Directory.CreateDirectory(aside);
+        File.WriteAllText(Path.Combine(aside, "part.o"), "what a removal left");
+
+        var removal = await Local(harness, new HoldsOpen(harness.FileSystem, Path.GetFileName(aside), denied)).RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
+
+        Assert.Equal([free], removal.Removed.Select(worker => worker.Path));
+
+        var left = Assert.Single(removal.Left);
+
+        Assert.Equal((aside, true), (left.Path, left.InUse));
+        Assert.Equal($"what a removal left aside could not be removed: The process cannot access '{aside}' because it is being used by another process.", left.Why);
+        Assert.Equal([left], removal.InUse);
+        Assert.True(Directory.Exists(aside));
+
+        Assert.Equal([aside], (await Local(harness).RemoveWorkersAsync(tree, cancellationToken: cancellationToken)).Removed.Select(worker => worker.Path));
+        Assert.False(Directory.Exists(aside));
+    }
+
+    /// <summary>
     /// A tree named from this machine's home, as a host's repositoryPath is, has its workers' claims asked about where
     /// this machine keeps them, which is where a sweep claimed them: one a sweep still running holds is left, and one
     /// removed has its claim forgotten there - each still answered for as the caller spelt its tree.
@@ -1198,12 +1294,15 @@ public sealed class HostCopiesTests
     [Fact]
     public async Task AWorkerOfATreeNamedFromHome_IsAskedAboutWhereThisMachineKeepsIt()
     {
-        using var hosts = new TempDirectory();
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        Assert.SkipUnless(
-            PathContainment.IsStrictlyInside(home, hosts.Path, StringComparison.OrdinalIgnoreCase),
-            $"this machine keeps temporary files outside its account's home, '{home}', which is where a path from home is read from");
+        Assert.SkipWhen(home.Length == 0, "this account has no home, so no path is read from one");
+
+        // Kept in the account's home, which is where a path from home is read from: the suite's temporary root is there
+        // on most machines, and where it is not, a directory of this test's own is, removed with it.
+        using var hosts = PathContainment.IsStrictlyInside(home, TestHost.TemporaryRoot, StringComparison.OrdinalIgnoreCase)
+            ? new TempDirectory()
+            : new TempDirectory(home, ".dssharness-test-");
 
         var harness = new HarnessFactory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -1774,7 +1873,15 @@ public sealed class HostCopiesTests
 
         public List<string> Forgotten { get; } = [];
 
-        public string? HeldBy(string copy) => Held.GetValueOrDefault(Path.GetFullPath(copy));
+        /// <summary>What happens as a copy is asked about, where a test says: between its listing and its removal.</summary>
+        public Action<string>? Asked { get; init; }
+
+        public string? HeldBy(string copy)
+        {
+            Asked?.Invoke(copy);
+
+            return Held.GetValueOrDefault(Path.GetFullPath(copy));
+        }
 
         public void Forget(string copy) => Forgotten.Add(Path.GetFullPath(copy));
     }
@@ -1791,14 +1898,19 @@ public sealed class HostCopiesTests
         }
     }
 
-    /// <summary>A disk on which a directory of one name is held open, so it cannot be deleted.</summary>
-    private sealed class HoldsOpen(IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    /// <summary>
+    /// A disk on which a directory of one name is held open, so it cannot be deleted - or, where
+    /// <paramref name="denied"/>, is not this user's to delete, which is raised as no kind of the other.
+    /// </summary>
+    private sealed class HoldsOpen(IFileSystem inner, string held, bool denied = false) : PassThroughFileSystem(inner)
     {
         public override void DeleteDirectory(string path)
         {
             if (string.Equals(Path.GetFileName(path), held, StringComparison.Ordinal))
             {
-                throw new IOException($"The process cannot access '{path}' because it is being used by another process.");
+                var why = $"The process cannot access '{path}' because it is being used by another process.";
+
+                throw denied ? new UnauthorizedAccessException(why) : new IOException(why);
             }
 
             base.DeleteDirectory(path);

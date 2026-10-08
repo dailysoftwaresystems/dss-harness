@@ -247,9 +247,8 @@ public sealed class PhaseRunner(
 
         // Both readings cover the same window, so what they disagree by is the clock's own movement:
         // a step forward, a step back, or a host that slept in the middle of the phase.
-        var drift = Abs(wall - clock.Elapsed);
-        var stepped = request.ClockStepToleranceMilliseconds > 0
-            && drift > TimeSpan.FromMilliseconds(request.ClockStepToleranceMilliseconds);
+        var drift = ClockStep.Drift(wall, clock.Elapsed);
+        var stepped = ClockStep.IsPast(drift, request.ClockStepToleranceMilliseconds);
 
         long end;
 
@@ -430,8 +429,6 @@ public sealed class PhaseRunner(
             throw new HarnessException(HarnessExit.ConfigInvalid, $"'{pattern}' is not {what}: {ex.Message}", ex);
         }
     }
-
-    private static TimeSpan Abs(TimeSpan value) => value < TimeSpan.Zero ? -value : value;
 
     /// <summary>
     /// What a phase establishes from its child's output, read a line at a time as each line is kept: whether the success

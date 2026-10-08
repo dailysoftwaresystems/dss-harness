@@ -378,6 +378,37 @@ public sealed class WorkerCopiesTests
     }
 
     /// <summary>
+    /// A sweep stopped stops the reading of a dependency's sources, and the giving of them to a worker - before any is
+    /// carried, and before anything the worker kept of one no longer given is removed. Each is asked with the token a
+    /// stop cancels, never left to run on.
+    /// </summary>
+    [Fact]
+    public async Task ASweepStopped_StopsTheReadingAndTheGivingOfDependencySources()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var json = temp.Combine("opt", "json");
+        var kept = Path.Combine(FetchedSources.KeptIn(worker, "JSON"), "json.hpp");
+        var stopped = new CancellationToken(canceled: true);
+
+        temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        var read = new FetchedReading(new FetchedSource("JSON", json), await copies.ReadFetchedAsync(json, cancellationToken));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => copies.ReadFetchedAsync(json, stopped));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => copies.SyncFetchedAsync([read], worker, stopped));
+        Assert.False(File.Exists(kept), "the worker was given them though the sweep was stopped");
+
+        await copies.SyncFetchedAsync([read], worker, cancellationToken);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => copies.SyncFetchedAsync([], worker, stopped));
+        Assert.True(File.Exists(kept), "what the worker kept was removed though the sweep was stopped");
+    }
+
+    /// <summary>
     /// A claim that cannot be removed with its worker claims nothing once the worker is gone: it is said, with its
     /// file, and the removal that went through is still the answer.
     /// </summary>

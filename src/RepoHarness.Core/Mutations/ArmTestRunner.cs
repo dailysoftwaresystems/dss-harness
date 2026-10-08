@@ -30,7 +30,10 @@ internal sealed record ArmRunRequest
     /// <summary>How long it may print nothing before it is stopped as hung: <c>defaults.stallSeconds</c>.</summary>
     public int StallSeconds { get; init; }
 
-    /// <summary>How far the clock may move from monotonic time across the run before it is said to have stepped.</summary>
+    /// <summary>
+    /// How far wall-clock time may move from monotonic time across the run before it is said to have stepped:
+    /// <c>defaults.clockStepToleranceMilliseconds</c>, zero watching for none.
+    /// </summary>
     public int ClockStepToleranceMilliseconds { get; init; }
 
     /// <summary>How long it may run before it is stopped, or <see langword="null"/> for a control, which is unbounded.</summary>
@@ -48,7 +51,15 @@ internal sealed record ArmRunRequest
 /// <param name="Duration">How long it ran, from the monotonic clock.</param>
 /// <param name="LogFile">Its output, both streams in the order they came.</param>
 /// <param name="ReportFile">Where it was told to write its report.</param>
-internal sealed record ArmRunResult(ArmRun Run, TimeSpan Duration, string LogFile, string ReportFile);
+internal sealed record ArmRunResult(ArmRun Run, TimeSpan Duration, string LogFile, string ReportFile)
+{
+    /// <summary>
+    /// How far wall-clock time moved from monotonic time across the run, where that is past the tolerance its request
+    /// set - the clock stepped, or the host slept, while it ran - or <see langword="null"/>. Told however the run ended,
+    /// stopped at its bound included: what it marks is how long the run took, which a bound is held against.
+    /// </summary>
+    public TimeSpan? SteppedBy { get; init; }
+}
 
 /// <summary>Runs a test binary whole, and reads its report and what it said.</summary>
 internal interface IArmTestRunner
@@ -71,6 +82,11 @@ internal interface IArmTestRunner
 /// <c>defaults.stallSeconds</c> - and besides bounded, where a bound is given, by how long it may take at all: a mutation
 /// that turns a loop endless can keep printing. A run past its bound is stopped and said as one; the sweep stopped
 /// meanwhile is the sweep's to say. What it said is read from its log, a line at a time, and never held whole.
+/// </para>
+/// <para>
+/// Timed on both clocks across the run, as a phase is across itself (<see cref="ClockStep"/>), and by this rather than
+/// by its phase: a step past <c>defaults.clockStepToleranceMilliseconds</c> is said however the run ended, and one
+/// stopped at its bound has no phase left to say it.
 /// </para>
 /// <para>
 /// Its report is read once it ends, and read again where its file cannot be: a report that is no report is the
@@ -116,7 +132,17 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
         using var timed = request.Bound is { } bound ? new CancellationTokenSource(bound, _clock) : new CancellationTokenSource();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timed.Token);
         var started = _clock.GetTimestamp();
+        var startedAt = _clock.GetUtcNow();
         PhaseResult phase;
+
+        // Both clocks read across the run, as a phase reads them across itself, and here rather than by the phase: a
+        // run stopped at its bound answers with no phase to say a step, and its length is what the bound was held against.
+        TimeSpan? SteppedBy()
+        {
+            var drift = ClockStep.Drift(_clock.GetUtcNow() - startedAt, _clock.GetElapsedTime(started));
+
+            return ClockStep.IsPast(drift, request.ClockStepToleranceMilliseconds) ? drift : null;
+        }
 
         try
         {
@@ -133,7 +159,6 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
                         Environment = request.Environment,
                         AppendToPath = request.AppendToPath,
                         StallSeconds = request.StallSeconds,
-                        ClockStepToleranceMilliseconds = request.ClockStepToleranceMilliseconds,
                     },
                     linked.Token)
                 .ConfigureAwait(false);
@@ -150,8 +175,13 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
                 },
                 _clock.GetElapsedTime(started),
                 log,
-                report);
+                report)
+            {
+                SteppedBy = SteppedBy(),
+            };
         }
+
+        var steppedBy = SteppedBy();
 
         if (phase.Stalled)
         {
@@ -165,7 +195,10 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
                 },
                 phase.Duration,
                 log,
-                report);
+                report)
+            {
+                SteppedBy = steppedBy,
+            };
         }
 
         var written = _fileSystem.FileExists(report);
@@ -185,7 +218,10 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
             },
             phase.Duration,
             log,
-            report);
+            report)
+        {
+            SteppedBy = steppedBy,
+        };
     }
 
     /// <summary>

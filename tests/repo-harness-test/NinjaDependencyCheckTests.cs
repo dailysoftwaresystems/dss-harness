@@ -479,8 +479,8 @@ public sealed class NinjaDependencyCheckTests
 
     /// <summary>
     /// A file the manifest was to be read from and was not - <c>build.ninja</c> itself, or one it includes - is passed
-    /// over, and named with why: not there, or there and not read. One read whole names none, a file included twice
-    /// among it.
+    /// over, and named with why: not there, or there and not read - held by another process, or not this user's to
+    /// read. One read whole names none, a file included twice among it.
     /// </summary>
     [Fact]
     public void AFileTheManifestWasToBeReadFromAndWasNot_IsPassedOver_AndNamedWithWhy()
@@ -510,6 +510,11 @@ public sealed class NinjaDependencyCheckTests
 
         Assert.Equal([("CMakeFiles/rules.ninja", "could not be read: it is held by another process")], held.PassedOver);
         Assert.Null(held.EdgeFor("a.o")?.Deps);
+
+        var denied = NinjaManifest.Read(new Held(FileSystem(), rules, denied: true), build);
+
+        Assert.Equal([("CMakeFiles/rules.ninja", "could not be read: it is held by another process")], denied.PassedOver);
+        Assert.Null(denied.EdgeFor("a.o")?.Deps);
     }
 
     /// <summary>

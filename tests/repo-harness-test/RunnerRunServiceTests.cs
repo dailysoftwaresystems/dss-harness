@@ -1732,6 +1732,99 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
+    /// A runner's own phases are held to the same: the file is read refusing only one name given twice, so two phases
+    /// kept as one log are refused here, where the phases a leg runs are counted, before any of them runs.
+    /// </summary>
+    [Fact]
+    public async Task TwoPhasesOfARunnersOwn_KeptAsOneLog_AreRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runner = new RunnerConfig { Phases = [Phase("bench: fast", "exit", ["0"]), Phase("Bench/ fast", "exit", ["0"])] };
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(Config(), Request(temp, runner), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.StartsWith(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench: fast' and 'Bench/ fast' as 'bench- fast.log'. ",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A step of several lines is a phase to each, named with its place among them - and one of those names can be kept
+    /// as the log of a step named much like it, which no two steps' names alone would say: refused where the phases are
+    /// counted.
+    /// </summary>
+    [Fact]
+    public async Task ALineOfAStep_KeptAsTheLogOfAnotherStep_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: bench
+                run: |
+                  dotnet --version
+                  dotnet --info
+              - name: 'bench (1-2)'
+                run: |
+                  dotnet --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.StartsWith(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench (1/2)' and 'bench (1-2)' as 'bench (1-2).log'. ",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two steps of one name that run on different systems are one step to each leg, which runs only its own: neither
+    /// leg is refused for the other's, as a leg is refused for no step it does not run.
+    /// </summary>
+    [Fact]
+    public async Task TwoStepsOfOneName_ForDifferentSystems_AreOneStepToEachLeg()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: measure
+                runOn: [windows]
+                run: |
+                  dotnet --version
+              - name: measure
+                runOn: [linux, macos]
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var result = await Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with { Identity = Identity("linux") },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Equal(["measure"], result.Entry.SkippedSteps);
+    }
+
+    /// <summary>
     /// A leg left with only predefined steps runs nothing of the action's own: reading inputs settles
     /// what the steps after it run, and runs none. Refused like a leg left with no step at all, where
     /// it passed on "0 step(s) passed".

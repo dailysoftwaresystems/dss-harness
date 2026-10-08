@@ -150,8 +150,14 @@ public sealed class MutationServiceTests
         false,
         "mutations/texts",
         "  - the text directory 'mutations/texts' could not be listed, so whether every text in it is cited cannot be read: it is held by another process")]
+    [InlineData(
+        true,
+        "mutations/texts",
+        "  - the text directory 'mutations/texts' could not be listed, so whether every text in it is cited cannot be read: it is held by another process")]
+    [InlineData(false, "mutations/texts/charge.before", "  - line 1: text 'mutations/texts/charge.before' could not be read: it is held by another process")]
     [InlineData(true, "mutations/texts/charge.before", "  - line 1: text 'mutations/texts/charge.before' could not be read: it is held by another process")]
     [InlineData(false, "mutations/texts/depth.control-before", "  - line 4: text 'mutations/texts/depth.control-before' could not be read: it is held by another process")]
+    [InlineData(true, "mutations/texts/depth.control-before", "  - line 4: text 'mutations/texts/depth.control-before' could not be read: it is held by another process")]
     public async Task WhatASweepReadsOfItsRegistry_AndCannot_IsRefusedAsTheRegistryIs(bool denied, string unreadable, string said)
     {
         using var temp = new TempDirectory();
@@ -468,18 +474,23 @@ public sealed class MutationServiceTests
     /// <summary>
     /// A cited text that a sync withholds from every copy of the tree - never transferred, or excluded - is refused
     /// before anything starts, with its row's line: a worker is such a copy, so every arm citing it would read violated
-    /// for a text nobody carried. The registry and the text directory are held to the same when the configuration is
-    /// read, which is where their paths are known.
+    /// for a text nobody carried. Whatever cites it: a site's before-text or what replaces it, a paired control's, or a
+    /// diagnostic. The registry and the text directory are held to the same when the configuration is read, which is
+    /// where their paths are known.
     /// </summary>
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task ACitedTextASyncWithholds_IsRefusedBeforeAnythingStarts(bool neverTransferred)
+    [InlineData(true, "charge.diag", 1)]
+    [InlineData(false, "charge.diag", 1)]
+    [InlineData(true, "charge.before", 1)]
+    [InlineData(false, "charge.after", 1)]
+    [InlineData(true, "depth.control-before", 4)]
+    [InlineData(false, "depth.control-after", 4)]
+    public async Task ACitedTextASyncWithholds_IsRefusedBeforeAnythingStarts(bool neverTransferred, string cited, int line)
     {
         using var temp = new TempDirectory();
         var config = Sweepable();
 
-        (neverTransferred ? config.Sync.NeverTransfer : config.Sync.Exclude).Add("mutations/texts/charge.diag");
+        (neverTransferred ? config.Sync.NeverTransfer : config.Sync.Exclude).Add("mutations/texts/" + cited);
 
         var (service, context) = Prepare(temp, config);
 
@@ -490,7 +501,7 @@ public sealed class MutationServiceTests
             string.Join(
                 Environment.NewLine,
                 "The arms registry 'mutations/arms.txt' cannot be swept: 1 problem(s), each to fix:",
-                "  - line 1: text 'mutations/texts/charge.diag' is withheld from every copy of the tree by a sync - git ignores it, or "
+                $"  - line {line}: text 'mutations/texts/{cited}' is withheld from every copy of the tree by a sync - git ignores it, or "
                 + "sync.neverTransfer, sync.exclude or worktrees.root covers it - so no worker would hold it"),
             refusal.Message);
     }

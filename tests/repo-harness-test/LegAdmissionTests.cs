@@ -650,6 +650,34 @@ public sealed class LegAdmissionTests
     }
 
     /// <summary>
+    /// A leg stopped while it settles stops at the piece of the settle it was waiting out, and gives its slot back: it
+    /// does not wait the rest of it first.
+    /// </summary>
+    [Fact]
+    public async Task ALegStoppedWhileItSettles_StopsThere_AndGivesItsSlotBack()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        using var stop = new CancellationTokenSource();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "neighbour"));
+
+        // A settle of twelve minutes, waited in pieces of five: stopped as the first of them has passed.
+        var rule = AdmissionKit.Rule(settleLeast: 720, settleMost: 720, pollSeconds: 3600, maxWaitMinutes: 120);
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(60), clock, onWait: stop.Cancel);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            using var admitted = await admission.AdmitAsync(AdmissionKit.Request(rule, []), stop.Token);
+        });
+
+        Assert.Equal(TimeSpan.FromMinutes(5), clock.Moved);
+        Assert.Equal(["neighbour"], AdmissionKit.Read(record).Select(entry => entry.Leg));
+    }
+
+    /// <summary>
     /// A process that can name no directory of its user's own keeps no slots anywhere else - never in the directory every
     /// user shares - and refuses its heavy legs, saying why.
     /// </summary>

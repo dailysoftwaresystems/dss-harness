@@ -102,6 +102,11 @@ internal sealed record MutationSubject
 /// sweep stopped part way, or ended by a refusal of the run, still answers with the leg's line - each arm judged by then,
 /// and every other <c>stopped</c> - once every site is back.
 /// </para>
+/// <para>
+/// What it timed that its clock makes suspect is said on the leg's line, beside the verdict and never in it: what each
+/// of its builds says of its own timings, and each run - an arm's, or the unmutated one that bounds it - whose clocks
+/// disagreed past <c>defaults.clockStepToleranceMilliseconds</c>.
+/// </para>
 /// </remarks>
 internal sealed class MutationLegRunner(
     IMutationSource source,
@@ -196,6 +201,9 @@ internal sealed class MutationLegRunner(
         private readonly ConcurrentDictionary<string, Lazy<Task<PristineOutcome>>> _controls = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<int, ReachedVerdict> _unmade = new();
         private readonly ConcurrentQueue<ReachedVerdict> _own = new();
+
+        /// <summary>Why what the sweep timed is suspect, each kept for the leg's line by whichever worker met it.</summary>
+        private readonly ConcurrentQueue<string> _timing = new();
         private SyncSource _reading = null!;
 
         /// <summary>The dependencies each worker is configured with the sources of: what the leg's build fetched, but for what its project points at itself.</summary>
@@ -641,7 +649,7 @@ internal sealed class MutationLegRunner(
 
                 _work.Progress($"worker {number}: building it whole");
                 var request = Request(number, worker, $"{MutationRecords.WorkersDirectory}/{number}", _subject.Project);
-                var baseline = await _runner._builder.BuildAsync(_config, request, cancellationToken).ConfigureAwait(false);
+                var baseline = Noted($"worker {number}'s build of the unmutated tree", await _runner._builder.BuildAsync(_config, request, cancellationToken).ConfigureAwait(false));
 
                 if (baseline.Verdict.Verdict != LegVerdict.Passed)
                 {
@@ -827,9 +835,11 @@ internal sealed class MutationLegRunner(
 
                 await WriteAsync([.. sites.Select(state => (state, state.Mutated!))], buildDirectory, cancellationToken).ConfigureAwait(false);
 
-                var build = await _runner._builder
-                    .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ArmsDirectory}/{arm.Id}", project), cancellationToken)
-                    .ConfigureAwait(false);
+                var build = Noted(
+                    $"the build of arm '{arm.Id}'",
+                    await _runner._builder
+                        .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ArmsDirectory}/{arm.Id}", project), cancellationToken)
+                        .ConfigureAwait(false));
 
                 observation = observation with { Build = Observe(build, before, buildDirectory, preflight.Dependents, graph) };
 
@@ -840,17 +850,22 @@ internal sealed class MutationLegRunner(
 
                     await WriteAsync([(sites[0], control!)], buildDirectory, cancellationToken).ConfigureAwait(false);
 
-                    var controlBuild = await _runner._builder
-                        .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ArmsDirectory}/{arm.Id}/{MutationRecords.PairedControlDirectory}", project), cancellationToken)
-                        .ConfigureAwait(false);
+                    var controlBuild = Noted(
+                        $"the build of the paired control of arm '{arm.Id}'",
+                        await _runner._builder
+                            .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ArmsDirectory}/{arm.Id}/{MutationRecords.PairedControlDirectory}", project), cancellationToken)
+                            .ConfigureAwait(false));
 
                     observation = observation with { Control = Observe(controlBuild, controlBefore, buildDirectory, preflight.Dependents, graph) };
                 }
                 else if (ArmJudge.Judge(arm, observation) is null)
                 {
-                    var run = await _runner._tests
-                        .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ArmsDirectory}/{arm.Id}", worker, buildDirectory, graph.ProgramOf(arm.Runner).Path!, records, bound, diagnostic), cancellationToken)
-                        .ConfigureAwait(false);
+                    var run = Noted(
+                        $"the run of arm '{arm.Id}'",
+                        "which its bound is held against",
+                        await _runner._tests
+                            .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ArmsDirectory}/{arm.Id}", worker, buildDirectory, graph.ProgramOf(arm.Runner).Path!, records, bound, diagnostic), cancellationToken)
+                            .ConfigureAwait(false));
 
                     report = run.Run.Report;
                     observation = observation with { Run = run.Run };
@@ -1053,9 +1068,11 @@ internal sealed class MutationLegRunner(
 
             try
             {
-                var build = await _runner._builder
-                    .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ControlsDirectory}/{runner}", _subject.Project.Retargeted([runner], graph.OutputsOf(runner))), cancellationToken)
-                    .ConfigureAwait(false);
+                var build = Noted(
+                    $"the build of the unmutated {runner}",
+                    await _runner._builder
+                        .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ControlsDirectory}/{runner}", _subject.Project.Retargeted([runner], graph.OutputsOf(runner))), cancellationToken)
+                        .ConfigureAwait(false));
                 var observed = new ArmBuild(build.Verdict, [], []);
 
                 if (build.Verdict.Verdict != LegVerdict.Passed)
@@ -1063,9 +1080,12 @@ internal sealed class MutationLegRunner(
                     return Decided(PristineJudge.Judge(runner, observed, null, TimeSpan.Zero, _subject.Settings.RunTimeFactor));
                 }
 
-                var run = await _runner._tests
-                    .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ControlsDirectory}/{runner}", worker, buildDirectory, path, records, null, null), cancellationToken)
-                    .ConfigureAwait(false);
+                var run = Noted(
+                    $"the run of the unmutated {runner}",
+                    "which bounds the run of each of its arms",
+                    await _runner._tests
+                        .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ControlsDirectory}/{runner}", worker, buildDirectory, path, records, null, null), cancellationToken)
+                        .ConfigureAwait(false));
 
                 return Decided(PristineJudge.Judge(runner, observed, run.Run, run.Duration, _subject.Settings.RunTimeFactor));
             }
@@ -1315,7 +1335,37 @@ internal sealed class MutationLegRunner(
 
             detail.AddRange(notes);
 
-            return _leg.Entry(verdict, string.Join("; ", detail)) with { Arms = ordered };
+            // Beside the verdict and never in it, as a build's and a test's are; in one order, whichever worker met each.
+            return _leg.Entry(verdict, string.Join("; ", detail)) with { Arms = ordered, TimingNotes = [.. _timing.Order(StringComparer.Ordinal)] };
+        }
+
+        /// <summary>
+        /// <paramref name="build"/>, what it says of its own timings kept for the leg's line as <paramref name="of"/>'s: the
+        /// same notes whichever command built (<see cref="BuildResult.Notes"/>) - rebuilt from clean, a phase that spanned
+        /// a clock step.
+        /// </summary>
+        private BuildResult Noted(string of, BuildResult build)
+        {
+            foreach (var note in build.Notes)
+            {
+                _timing.Enqueue($"{of}: {note}");
+            }
+
+            return build;
+        }
+
+        /// <summary>
+        /// <paramref name="run"/>, kept for the leg's line as <paramref name="of"/> where its clocks disagreed past the
+        /// tolerance: its duration is then suspect, and <paramref name="resting"/> says what rests on that duration.
+        /// </summary>
+        private ArmRunResult Noted(string of, string resting, ArmRunResult run)
+        {
+            if (run.SteppedBy is { } drift)
+            {
+                _timing.Enqueue($"{of} spanned a clock step or a host sleep (wall and monotonic time disagreed by {drift}), so its duration, {resting}, is suspect");
+            }
+
+            return run;
         }
     }
 

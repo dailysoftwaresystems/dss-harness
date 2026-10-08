@@ -230,6 +230,24 @@ public sealed class RunCheckGateTests
         Assert.True(result.Confirmed);
     }
 
+    /// <summary>
+    /// What a checked run's steps printed, where it cannot be read back from their logs, is never read as steps that
+    /// printed nothing - which would say no step printed the message, and excuse nothing for a reason nobody measured:
+    /// it is said as unread.
+    /// </summary>
+    [Fact]
+    public async Task ConfirmAsync_SaysOutputThatCouldNotBeReadBack_NeverThatNoStepPrintedTheMessage()
+    {
+        var entry = ExpectedExceptionMatcherTests.Entry(
+            messages: ["busy"],
+            runChecks: [Check("probe", new RunCheckExpectation { Message = "steps=" })]);
+
+        var unread = await Assert.ThrowsAsync<PhaseOutputUnreadException>(
+            () => ConfirmAsync(entry, _ => RunOutcome.Ok("2 step(s) passed", new PhaseOutputTests.Unread())));
+
+        Assert.Equal(PhaseOutputTests.Unread.Said, unread.Message);
+    }
+
     [Fact]
     public async Task ConfirmAsync_StillMatchesAMessage_AgainstTheOutcomesOwnSentence()
     {

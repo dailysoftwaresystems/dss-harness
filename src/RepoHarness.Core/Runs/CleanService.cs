@@ -263,8 +263,7 @@ public sealed class CleanService(
             }
 
             // Removed first, and outside the lock: nothing builds in a directory an earlier removal moved aside.
-            var removed = _fileSystem.DirectorySize(aside);
-            _fileSystem.DeleteDirectory(aside);
+            var removed = Remove(aside);
 
             var moved = false;
             var holder = _runLock.HeldBy(layout, building, () =>
@@ -285,8 +284,7 @@ public sealed class CleanService(
 
             if (moved)
             {
-                removed += _fileSystem.DirectorySize(aside);
-                _fileSystem.DeleteDirectory(aside);
+                removed += Remove(aside);
             }
 
             var (after, why) = DiskSpace.Measure(_fileSystem, directory);
@@ -366,8 +364,7 @@ public sealed class CleanService(
             // Removed first, and outside the lock: nothing sweeps in a worker an earlier removal moved aside.
             foreach (var aside in asides)
             {
-                removed += _fileSystem.DirectorySize(aside);
-                _fileSystem.DeleteDirectory(aside);
+                removed += Remove(aside);
             }
 
             foreach (var worker in made)
@@ -409,8 +406,7 @@ public sealed class CleanService(
 
             foreach (var worker in moved)
             {
-                removed += _fileSystem.DirectorySize(RemovalAside.Of(worker.Path));
-                _fileSystem.DeleteDirectory(RemovalAside.Of(worker.Path));
+                removed += Remove(RemovalAside.Of(worker.Path));
             }
 
             var said = new List<string>();
@@ -441,6 +437,19 @@ public sealed class CleanService(
                     + (dryRun ? string.Empty : "; what is left of any moved aside is removed by the next clean of this leg")),
                 removed);
         }
+    }
+
+    /// <summary>
+    /// Removes <paramref name="directory"/>, and says what it held: counted only once it is gone, so one that could not
+    /// be removed is never among what a clean says it freed - it is still there, for the next clean to count.
+    /// </summary>
+    private long Remove(string directory)
+    {
+        var held = _fileSystem.DirectorySize(directory);
+
+        _fileSystem.DeleteDirectory(directory);
+
+        return held;
     }
 
     /// <summary>

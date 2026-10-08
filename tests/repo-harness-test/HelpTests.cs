@@ -262,6 +262,9 @@ public sealed partial class HelpTests
             "unattributed the run failed and nothing ties that to a case: no report, one that is no JUnit report - its line says why - a "
             + "failing exit whose report names no failing case, or a run past its bound, or silent for defaults.stallSeconds, stopped as hung",
             "ARMS, below the table, names each arm selected that did not pass, and why;",
+            "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
+            + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
+            + "of its own - a worker's rebuilt from clean with it.",
             "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build, or the "
             + "main checkout's, last recorded",
             "each read as its file holds it, less a UTF-8 byte order mark at its start and one line ending at its end,",
@@ -823,7 +826,8 @@ public sealed partial class HelpTests
             + $"about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), and workers that cannot be "
             + $"looked for keep it too ({HarnessExit.CommandFailed}), with nothing removed. A sweep that takes one meanwhile keeps the worktree "
             + "as well, the others gone by then, which the refusal says. --force deletes the worktree and leaves a worker still held, "
-            + "saying so; deleting the worktree again removes it once the sweep has ended.",
+            + "saying so; deleting the worktree again removes it once the sweep has ended. A worktree whose own removal then fails, or "
+            + "is stopped, says which workers went before it.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
     }

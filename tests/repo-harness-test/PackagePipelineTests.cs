@@ -1,8 +1,8 @@
 namespace RepoHarness.Tests;
 
 /// <summary>
-/// What the workflow that publishes a release says of this suite: run for the one commit nothing else tested, and for no
-/// other.
+/// What the workflow that publishes a release says of this suite - run for the one commit nothing else tested, and for
+/// no other - and what the workflow that starts it says, which is what makes the other runs safe to publish from.
 /// </summary>
 public sealed class PackagePipelineTests
 {
@@ -23,5 +23,36 @@ public sealed class PackagePipelineTests
         Assert.Equal(
             "if: env.ON_NUGET != 'true' && inputs.expected_sha == '' && steps.resume.outputs.tag_exists != 'true'",
             Assert.Single(step, line => line.StartsWith("if:", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// A run Deploy started publishes without running the suite because of three things the workflows say, and only
+    /// while they say all three: Deploy promotes a commit once the full matrix has passed on that very commit; it starts
+    /// the package run naming the commit it promoted; and the package run publishes nothing where its branch holds
+    /// another. Without the first, what is published was tested by nothing; without the others, it need not be what was.
+    /// </summary>
+    [Fact]
+    public void WhatDeployStarts_PublishesTheCommitTheMatrixPassedOn_AndNoOther()
+    {
+        var matrix = WorkflowFiles.Job("deploy.yml", "test");
+        var promote = WorkflowFiles.Job("deploy.yml", "promote");
+
+        Assert.Contains("uses: ./.github/workflows/test.yml", matrix);
+        Assert.Contains("ref: ${{ needs.plan.outputs.sha }}", matrix);
+        Assert.Contains("needs: [plan, test]", promote);
+        Assert.Contains("TESTED_SHA: ${{ needs.plan.outputs.sha }}", promote);
+
+        var start = WorkflowFiles.StepNamed("deploy.yml", "Start the package pipeline");
+
+        Assert.Contains("if ! gh workflow run pipeline-pkg.yml \\", start);
+        Assert.Contains("-f expected_sha=\"$PROMOTED_SHA\"; then", start);
+
+        var confirm = WorkflowFiles.StepNamed("pipeline-pkg.yml", "Confirm this is the promoted commit");
+
+        Assert.Contains("if: inputs.expected_sha != ''", confirm);
+        Assert.Contains("EXPECTED_SHA: ${{ inputs.expected_sha }}", confirm);
+        Assert.Contains("actual=$(git rev-parse HEAD)", confirm);
+        Assert.Contains("if [ \"$actual\" != \"$EXPECTED_SHA\" ]; then", confirm);
+        Assert.Contains("exit 1", confirm);
     }
 }

@@ -704,6 +704,35 @@ public sealed class CMakeToolchainReaderTests
     }
 
     /// <summary>
+    /// A record of a compiler that is there and cannot be read - held by another process, or not this user's to read -
+    /// is said as unread, naming it and why, for the language whose record it is: the other language's, read whole, is
+    /// its compiler all the same.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ARecordThatCannotBeRead_IsUnreadForItsOwnLanguage_SayingWhy(bool denied)
+    {
+        using var temp = new TempDirectory();
+        var build = WriteSubprojectReply(temp);
+        var record = Path.Combine(build, "CMakeFiles", "4.3.2", "CMakeCCompiler.cmake");
+
+        WriteRecord(build, "C", "set(CMAKE_C_COMPILER \"/usr/bin/cc\")\nset(CMAKE_C_COMPILER_ID \"GNU\")\nset(CMAKE_C_COMPILER_VERSION \"13.3.0\")\n");
+        WriteRecord(build, "CXX", "set(CMAKE_CXX_COMPILER \"/usr/bin/g++\")\nset(CMAKE_CXX_COMPILER_ID \"GNU\")\nset(CMAKE_CXX_COMPILER_VERSION \"13.3.0\")\n");
+
+        var reader = new CMakeToolchainReader(new Held(new PhysicalFileSystem(FilePermissionsFactory.Create()), record, denied));
+        var (compilers, unread) = reader.Identified(build);
+
+        Assert.Equal(["CXX"], compilers.Select(compiler => compiler.Language));
+        Assert.Equal([$"'{record}' could not be read: {Held.Why}"], unread);
+
+        var named = reader.Named(build);
+
+        Assert.Equal($"which C compiler its build identified could not be read: '{record}' could not be read: {Held.Why}", named["C"].Problem);
+        Assert.Null(named["CXX"].Problem);
+    }
+
+    /// <summary>
     /// Only a build CMake configures identifies a compiler: a leg that builds nothing, and one whose project another
     /// tool builds, have none - known from the configuration alone, so said before any build, and after one alike. A
     /// project CMake builds has what its build directory holds, read only once a line names a compiler - and ahead of

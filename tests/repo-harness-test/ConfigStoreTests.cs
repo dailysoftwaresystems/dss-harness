@@ -2291,7 +2291,9 @@ public sealed class ConfigStoreTests
             Projects =
             {
                 new ProjectConfig { Name = "engine", Type = "cmake" },
-                new ProjectConfig { Name = "app", Type = "dotnet", Path = "app.csproj" },
+
+                // It declares what it builds, so nothing but its compiler is wrong with it.
+                new ProjectConfig { Name = "app", Type = "dotnet", Path = "app.csproj", BuildOutputs = ["app.dll"] },
             },
             Legs =
             {

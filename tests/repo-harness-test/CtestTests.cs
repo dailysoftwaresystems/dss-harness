@@ -28,11 +28,15 @@ public sealed class CtestTests
 
     /// <summary>
     /// Output that could not be read back says nothing of ctest having found no test: the phase's own verdict stands,
-    /// unexplained, and never ends as a defect of this tool's over a sentence that only explains it.
+    /// unexplained, and never ends as a defect of this tool's over a sentence that only explains it. Nor does output
+    /// that said so and then could not be read on: a summary after that line would have said tests ran.
     /// </summary>
     [Fact]
     public void FoundNone_IsNotSaidOfOutputThatCouldNotBeReadBack()
-        => Assert.False(Ctest.FoundNone("ctest", new PhaseOutputTests.Unread()));
+    {
+        Assert.False(Ctest.FoundNone("ctest", new PhaseOutputTests.Unread()));
+        Assert.False(Ctest.FoundNone("ctest", new PhaseOutputTests.UnreadAfter("No tests were found!!!")));
+    }
 
     /// <summary>
     /// ctest's summary settles that tests ran, and nothing after it is read: a suite's output can be larger than any text

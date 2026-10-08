@@ -208,6 +208,28 @@ public static class MutationWorkers
     }
 
     /// <summary>
+    /// The trees that have a mutation worker in <paramref name="directory"/>, by the names of their own directories
+    /// there: each once, however many workers it has, in order; none where the directory is not there. Told by name
+    /// alone (<see cref="TreeNamed"/>): whether a directory so named is one a sync made is what removing a tree's
+    /// workers reads, and says.
+    /// </summary>
+    /// <param name="fileSystem">Lists the directory.</param>
+    /// <param name="directory">The directory trees and their workers are kept in, side by side.</param>
+    public static IReadOnlyList<string> TreesWithWorkersIn(IFileSystem fileSystem, string directory)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        return !fileSystem.DirectoryExists(directory)
+            ? []
+            : [.. fileSystem.EnumerateDirectories(directory)
+                .Select(found => TreeNamed(Path.GetFileName(Path.TrimEndingDirectorySeparator(found))))
+                .OfType<string>()
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)];
+    }
+
+    /// <summary>
     /// The lock a sweep of <paramref name="leg"/> takes: its workers' key, whole, on the leg's host - which a build of the
     /// leg, keyed by its tree, never meets.
     /// </summary>

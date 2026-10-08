@@ -92,7 +92,7 @@ public sealed class CleanServiceTests
 
         var (outcome, leg) = await CleanAsync(temp, harness, OneLocalLeg(harness), inspector);
 
-        Assert.NotEqual(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(LegsExit.Unavailable, outcome.ExitCode);
         Assert.EndsWith($"'{Path.Combine("~", "gone")}' could not be read", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.DoesNotContain(temp.Path, leg.GetProperty("detail").GetString()!, StringComparison.OrdinalIgnoreCase);
     }
@@ -519,6 +519,96 @@ public sealed class CleanServiceTests
             }
 
             base.MoveDirectory(source, destination);
+        }
+    }
+
+    /// <summary>
+    /// A leg whose mutation workers cannot be listed - the directory they are kept in will not be read - fails its
+    /// clean, saying why: never passed over as a leg that keeps none.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkersThatCannotBeListed_FailTheLegsClean_SayingWhy(bool denied)
+    {
+        using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var worker = workers.Made(Variant(harness, config), 1, 10);
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config, fileSystem: new CannotList(harness.FileSystem, Path.GetDirectoryName(temp.Path)!, denied));
+
+        Assert.Equal("failed", leg.GetProperty("verdict").GetString());
+        Assert.EndsWith("; its mutation workers could not be listed: the disk would not say", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.Failed), outcome.ExitCode);
+        Assert.True(Directory.Exists(worker));
+    }
+
+    /// <summary>A disk that will not say what one directory holds: something holds it, or it is not this user's to read.</summary>
+    private sealed class CannotList(IFileSystem inner, string directory, bool denied) : PassThroughFileSystem(inner)
+    {
+        public override IEnumerable<string> EnumerateDirectories(string path)
+            => !string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase) ? base.EnumerateDirectories(path)
+                : denied ? throw new UnauthorizedAccessException("the disk would not say.")
+                : throw new IOException("the disk would not say.");
+    }
+
+    /// <summary>
+    /// A leg whose mutation workers cannot all be removed fails its clean, saying why, and counts only what went: the
+    /// one left is aside by then, where the next clean of the leg removes it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkersThatCannotAllBeRemoved_FailTheLegsClean_CountingOnlyWhatWent(bool denied)
+    {
+        using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var first = workers.Made(variant, 1, 10);
+        var second = workers.Made(variant, 2, 20);
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config, fileSystem: new CannotRemove(harness.FileSystem, Workers.AsideOf(second), denied));
+
+        Assert.Equal("failed", leg.GetProperty("verdict").GetString());
+        Assert.EndsWith(
+            "; its mutation workers could not be removed: the disk would not let go; what is left of any moved aside is removed by the next clean of this leg",
+            leg.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.Failed), outcome.ExitCode);
+        Assert.Equal(Workers.Holding(10), leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
+        Assert.False(Directory.Exists(first));
+        Assert.False(Directory.Exists(Workers.AsideOf(first)));
+        Assert.True(Directory.Exists(Workers.AsideOf(second)));
+
+        // Still held, it is tried again by the next clean, which counts nothing of it while it cannot remove it.
+        var (_, held) = await CleanAsync(temp, harness, config, fileSystem: new CannotRemove(harness.FileSystem, Workers.AsideOf(second), denied));
+
+        Assert.Equal("failed", held.GetProperty("verdict").GetString());
+        Assert.Equal(0, held.GetProperty("space").GetProperty("workerBytes").GetInt64());
+        Assert.True(Directory.Exists(Workers.AsideOf(second)));
+
+        var (again, next) = await CleanAsync(temp, harness, config);
+
+        Assert.Equal(HarnessExit.Success, again.ExitCode);
+        Assert.Equal(Workers.Holding(20), next.GetProperty("space").GetProperty("workerBytes").GetInt64());
+        Assert.False(Directory.Exists(Workers.AsideOf(second)));
+    }
+
+    /// <summary>A disk that will not remove one directory: something holds it, or it is not this user's to remove.</summary>
+    private sealed class CannotRemove(IFileSystem inner, string directory, bool denied) : PassThroughFileSystem(inner)
+    {
+        public override void DeleteDirectory(string path)
+        {
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase))
+            {
+                throw denied ? new UnauthorizedAccessException("the disk would not let go.") : new IOException("the disk would not let go.");
+            }
+
+            base.DeleteDirectory(path);
         }
     }
 

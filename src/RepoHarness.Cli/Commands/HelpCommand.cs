@@ -903,7 +903,8 @@ internal static class HelpCommand
             + "tree, the host is asked to remove the workers left beside where it was. delete-worktree and delete-agent "
             + "remove the workers kept beside the worktree first, here and beside each host's copy of it; a worker a "
             + "sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended - or --force "
-            + "deletes the worktree and leaves that worker, which deleting it again then removes. A worker is no "
+            + "deletes the worktree and leaves that worker, which deleting it again then removes, as deleting an "
+            + "agent whose worktree is gone already removes those left beside it. A worker is no "
             + "worktree, though it holds a repository of its own: list-worktree passes over it, and says one whose "
             + "worktree is gone.");
         builder.AppendLine();
@@ -919,7 +920,10 @@ internal static class HelpCommand
             + "declares admission ('help admission'), pre-flighted, mutated - its sites dated past the worker's last build "
             + "- built with its runner beside its target, witnessed rebuilt from ninja's log, then run whole or paired with "
             + "its control. Every site is put back and checked by its hash; a site that cannot be put back poisons the arm "
-            + "and retires its worker, and the other workers go on.");
+            + "and retires its worker, and the other workers go on. What the sweep timed across a clock step or a host sleep "
+            + "is said on the leg's line, among why its timings are suspect, and changes no verdict: an arm's run and the "
+            + "unmutated run that bounds it, however each ended, and what each of its builds says of its own - a worker's "
+            + "rebuilt from clean with it.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1706,7 +1710,7 @@ internal static class HelpCommand
             + $"and workers that cannot be looked for keep it too ({HarnessExit.CommandFailed}), with nothing removed. A sweep "
             + "that takes one meanwhile keeps the worktree as well, the others gone by then, which the refusal says. --force "
             + "deletes the worktree and leaves a worker still held, saying so; deleting the worktree again removes it once "
-            + "the sweep has ended.");
+            + "the sweep has ended. A worktree whose own removal then fails, or is stopped, says which workers went before it.");
         builder.AppendLine();
         AppendWrapped(
             builder,

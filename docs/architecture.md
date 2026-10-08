@@ -2559,8 +2559,10 @@ each worker a sync made, of whichever variant, with what an unfinished removal l
 worker a sweep still running holds says its tree is in use: the worktree is not deleted, nothing of
 it removed, and a host's copy stays, still recorded - or `--force` deletes the worktree and leaves
 that worker, said, which deleting the worktree again removes once the sweep has ended, as it
-removes whatever a worktree already gone left. `list-worktree` says a worker whose worktree is
-gone, with that command, and `delete-orchestrator` takes those left beside agents that are gone.
+removes whatever a worktree already gone left. A worktree whose own removal then fails, or is
+stopped, says which workers went before it. `list-worktree` says a worker whose worktree is gone,
+with that command; `delete-agent` removes those left beside an agent whose worktree is gone
+already, and `delete-orchestrator` takes those left beside agents that are gone.
 
 ### Fetched sources
 
@@ -2895,4 +2897,8 @@ mutation that turns a loop endless can go on printing for ever, which no stall b
 the unmutated run of the very same binary, measured minutes before on the same machine, says how
 long it takes when nothing is wrong. So a mutated run may take `mutations.runTimeFactor` (10) times that run, never less than it
 and a minute, and one stopped past that is `unattributed`, saying so. A stall bound applies to it as
-to every phase.
+to every phase. Each such run, and the unmutated one that bounds it, is timed on both clocks as
+every phase is, by the sweep itself: one that spanned a clock step or a host sleep is said on the
+leg's line, among why its timings are suspect, however it ended - stopped past its bound included,
+which no phase is left to say - with what each of the sweep's builds says of its own, a worker's
+rebuilt from clean among them. A timing mark changes no verdict.

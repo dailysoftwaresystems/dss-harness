@@ -472,11 +472,76 @@ public sealed class WorktreeServiceTests
     }
 
     /// <summary>
-    /// Mutation workers that cannot be looked for keep their worktree, nothing of it removed; forced, the worktree goes
-    /// and the deletion says they were left, and deleting it again fails while they still cannot be.
+    /// A deletion its own checks refuse - evidence in the worktree, a directory that is no worktree, uncommitted work,
+    /// an entry another program holds - has removed nothing: the workers kept beside it go only once nothing refuses.
+    /// </summary>
+    [Theory]
+    [InlineData("evidence", "--delete-evidence")]
+    [InlineData("not a worktree", "is not a worktree")]
+    [InlineData("uncommitted work", "README.md")]
+    [InlineData("held", "something holds")]
+    public async Task DeleteAsync_RefusedByItsOwnChecks_RemovesNoWorker(string refusedFor, string says)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(
+            temp,
+            new WorktreeSettings { PathBudgetReserve = Relaxed.PathBudgetReserve, PathBudgetMargin = Relaxed.PathBudgetMargin, EvidenceRoots = ["evidence"] });
+        var path = HarnessFactory.WorktreePath(temp.Path, "wt");
+        IFileSystem disk = harness.FileSystem;
+
+        if (refusedFor == "not a worktree")
+        {
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "notes.txt"), "mine");
+        }
+        else
+        {
+            var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+            Assert.True(created.Succeeded, created.Outcome.Message);
+        }
+
+        switch (refusedFor)
+        {
+            case "evidence":
+                Directory.CreateDirectory(Path.Combine(path, "evidence"));
+                File.WriteAllText(Path.Combine(path, "evidence", "run.log"), "what a run left");
+                break;
+
+            case "uncommitted work":
+                File.WriteAllText(Path.Combine(path, "README.md"), "modified");
+                break;
+
+            case "held":
+                disk = new HoldsAFile(harness.FileSystem, Path.Combine(path, "README.md"));
+                break;
+        }
+
+        var worker = await WorkerAsync(harness, path + ".mutation-357e24cw-1", cancellationToken);
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, disk, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(disk));
+
+        var refused = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Contains(says, refused.Outcome.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(path));
+        Assert.True(Directory.Exists(worker), "a deletion that was refused removed a worker kept beside the worktree");
+    }
+
+    /// <summary>A disk on which another program holds one file, as Windows says of one it will not delete.</summary>
+    private sealed class HoldsAFile(IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    {
+        public override IReadOnlyList<HeldEntry> FindHeld(string path, CancellationToken cancellationToken = default)
+            => [new HeldEntry(held, "The process cannot access the file because it is being used by another process.")];
+    }
+
+    /// <summary>
+    /// A worktree whose own removal fails once its workers are gone still says which went: they go first, and a failure
+    /// that named none of them would leave nobody knowing those copies are gone.
     /// </summary>
     [Fact]
-    public async Task WorkersThatCannotBeLookedFor_KeepTheirWorktree_UnlessForced()
+    public async Task ARemovalThatFailsOnceTheWorkersAreGone_StillSaysWhichWent()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -486,7 +551,134 @@ public sealed class WorktreeServiceTests
         Assert.True(created.Succeeded, created.Outcome.Message);
 
         var worker = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
-        var blind = new CannotWeigh(harness.FileSystem, worker);
+        var size = harness.FileSystem.DirectorySize(worker);
+        var blind = new JunctionsUnread(harness.FileSystem);
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, blind, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(blind));
+
+        var failed = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, failed.Outcome.ExitCode);
+        Assert.StartsWith("Worktree 'wt' was not deleted: ", failed.Outcome.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(created.Path));
+        Assert.False(Directory.Exists(worker));
+        Assert.Equal([$"removed 1 mutation worker(s) kept beside it, {DiskSpace.Size(size)}: '{worker}'"], failed.Outcome.Details ?? []);
+    }
+
+    /// <summary>A disk that will not say which directory junctions a worktree holds.</summary>
+    private sealed class JunctionsUnread(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public override IReadOnlyList<string> RemoveJunctions(string path) => throw new IOException("the disk would not say.");
+    }
+
+    /// <summary>
+    /// What a deletion says of the workers that went is said beside whatever else it says, never in its place: the
+    /// changes it discarded first, and the workers after them.
+    /// </summary>
+    [Fact]
+    public async Task DeleteAsync_SaysTheWorkersThatWent_BesideWhatElseItSays()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        File.WriteAllText(Path.Combine(created.Path, "c.txt"), "never committed");
+
+        var worker = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var size = harness.FileSystem.DirectorySize(worker);
+
+        var outcome = await harness.WorktreeService.DeleteAsync(
+            temp.Path, "wt", force: false, deleteEvidence: false, discardUncommitted: true, cancellationToken: cancellationToken);
+
+        Assert.True(outcome.Succeeded, outcome.Outcome.Message);
+
+        var details = (outcome.Outcome.Details ?? []).ToList();
+        var discarded = details.IndexOf("discarded 1 uncommitted change(s): c.txt");
+        var went = details.IndexOf($"removed 1 mutation worker(s) kept beside it, {DiskSpace.Size(size)}: '{worker}'");
+
+        Assert.True(discarded >= 0 && went > discarded, string.Join(" | ", details));
+    }
+
+    /// <summary>
+    /// A worktree whose own removal is stopped once its workers are gone says which went, as one whose removal fails
+    /// does: what the interruption left is the worktree, and the copies that went before it are gone all the same.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalStoppedOnceTheWorkersAreGone_StillSaysWhichWent()
+    {
+        using var temp = new TempDirectory();
+        using var interruption = new CancellationTokenSource();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var worker = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var size = harness.FileSystem.DirectorySize(worker);
+
+        // A git that hangs over the worktree's own removal until it is stopped, interrupted as that removal starts.
+        var git = new InterceptingGitClient(harness.GitClient)
+        {
+            BeforeRun = arguments =>
+            {
+                if (arguments is ["worktree", "remove", ..])
+                {
+                    interruption.Cancel();
+                }
+            },
+            RunInstead = async (arguments, token) =>
+            {
+                if (arguments is ["worktree", "remove", ..])
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+
+                return null;
+            },
+        };
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport)
+        {
+            InterruptionGrace = TimeSpan.FromMilliseconds(400),
+        };
+
+        var stopped = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: interruption.Token);
+
+        Assert.Equal(HarnessExit.Cancelled, stopped.Outcome.ExitCode);
+        Assert.StartsWith("Deleting worktree 'wt' was stopped part way", stopped.Outcome.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(created.Path));
+        Assert.False(Directory.Exists(worker));
+        Assert.Equal([$"removed 1 mutation worker(s) kept beside it, {DiskSpace.Size(size)}: '{worker}'"], stopped.Outcome.Details ?? []);
+    }
+
+    /// <summary>
+    /// Mutation workers that cannot be looked for keep their worktree, nothing of it removed, whatever kept them from
+    /// being: the disk, this user's rights, or a refusal of the transport's own. Forced, the worktree goes and the
+    /// deletion says they were left, and deleting it again fails while they still cannot be.
+    /// </summary>
+    [Theory]
+    [InlineData("the disk")]
+    [InlineData("denied")]
+    [InlineData("refused")]
+    public async Task WorkersThatCannotBeLookedFor_KeepTheirWorktree_UnlessForced(string keptBy)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var worker = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        Exception raised = keptBy switch
+        {
+            "denied" => new UnauthorizedAccessException("the disk would not say."),
+            "refused" => new HarnessException(HarnessExit.CommandFailed, "the disk would not say."),
+            _ => new IOException("the disk would not say."),
+        };
+        var blind = new CannotWeigh(harness.FileSystem, worker, raised);
         var service = new WorktreeService(harness.ContextLoader, harness.GitClient, blind, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(blind));
 
         var failed = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
@@ -580,12 +772,12 @@ public sealed class WorktreeServiceTests
         }
     }
 
-    /// <summary>A disk that will not say what one directory holds.</summary>
-    private sealed class CannotWeigh(IFileSystem inner, string directory) : PassThroughFileSystem(inner)
+    /// <summary>A disk that will not say what one directory holds, raising <paramref name="raised"/> where it is asked.</summary>
+    private sealed class CannotWeigh(IFileSystem inner, string directory, Exception raised) : PassThroughFileSystem(inner)
     {
         public override long DirectorySize(string path)
             => string.Equals(Path.GetFullPath(path), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase)
-                ? throw new IOException("the disk would not say.")
+                ? throw raised
                 : base.DirectorySize(path);
     }
 

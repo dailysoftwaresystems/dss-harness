@@ -470,16 +470,18 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
-    /// A file listed in the tree and gone when it is opened, while the tree is read, is a tree that moved, said so:
-    /// raised raw, it read as a defect in this tool.
+    /// A file listed in the tree and gone when it is opened, while the tree is read - itself, or with the directory it
+    /// was in - is a tree that moved, said so: raised raw, it read as a defect in this tool.
     /// </summary>
-    [Fact]
-    public async Task AFileGoneBetweenBeingListedAndOpened_IsATreeThatMovedWhileItWasRead()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileGoneBetweenBeingListedAndOpened_IsATreeThatMovedWhileItWasRead(bool withItsDirectory)
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var (harness, _) = await PrepareAsync(temp, cancellationToken);
-        var service = SyncKit.Service(harness, fileSystem: new GoneWhenOpened(harness.FileSystem, Path.Combine(temp.Path, "src", "a.c")));
+        var service = SyncKit.Service(harness, fileSystem: new GoneWhenOpened(harness.FileSystem, Path.Combine(temp.Path, "src", "a.c"), withItsDirectory));
 
         var moved = await Assert.ThrowsAsync<HarnessException>(() => service.ReadSourceAsync(temp.Path, cancellationToken));
 
@@ -685,13 +687,16 @@ public sealed class SyncServiceTests
         }
     }
 
-    /// <summary>The real file system, save that one file, listed as ever, is gone when it is opened.</summary>
-    private sealed class GoneWhenOpened(Core.FileSystem.IFileSystem inner, string gone) : PassThroughFileSystem(inner)
+    /// <summary>
+    /// The real file system, save that one file, listed as ever, is gone when it is opened - or, where
+    /// <paramref name="withItsDirectory"/>, the directory it was in is, which is raised as no kind of the other.
+    /// </summary>
+    private sealed class GoneWhenOpened(Core.FileSystem.IFileSystem inner, string gone, bool withItsDirectory = false) : PassThroughFileSystem(inner)
     {
         public override Stream OpenRead(string path)
-            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(gone), StringComparison.OrdinalIgnoreCase)
-                ? throw new FileNotFoundException($"Could not find file '{path}'.", path)
-                : base.OpenRead(path);
+            => !string.Equals(Path.GetFullPath(path), Path.GetFullPath(gone), StringComparison.OrdinalIgnoreCase) ? base.OpenRead(path)
+                : withItsDirectory ? throw new DirectoryNotFoundException($"Could not find a part of the path '{path}'.")
+                : throw new FileNotFoundException($"Could not find file '{path}'.", path);
     }
 
     [Fact]
