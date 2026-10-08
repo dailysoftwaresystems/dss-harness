@@ -8,6 +8,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
@@ -26,6 +27,15 @@ public sealed class MutationLegRunnerTests
     private const string LegName = "native";
     private const string SiteObject = "CMakeFiles/fixture.dir/src/fixture.cpp.o";
     private const string Program = "bin/fixture_tests";
+
+    /// <summary>What an arm stopped with its sweep says, once its sites are back.</summary>
+    private const string StoppedWhileDriven = "the sweep was stopped while it was driven, and each site was put back as it was";
+
+    /// <summary>What an arm no worker drove before its sweep was stopped says.</summary>
+    private const string StoppedUndriven = "the sweep was stopped before a worker drove it";
+
+    /// <summary>How long a test waits for a sweep that should have ended, before it fails rather than hangs.</summary>
+    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(60);
 
     private static readonly VariantKey Variant = new("x86_64", "gcc", "debug", null);
 
@@ -372,10 +382,31 @@ public sealed class MutationLegRunnerTests
 
         Assert.Equal((LegVerdict.Poisoned, "3 arm(s): 1 poisoned, 2 passed"), (entry.Verdict, entry.Detail));
         Assert.Equal(
-            "a site could not be put back as it was, so its worker drives no other arm: writing it back failed: the disk went away; "
+            "a site could not be put back as it was, so its worker drives no other arm: writing 'src/budget.hpp' back failed: the disk went away; "
             + "'src/budget.hpp' does not hold what the tree held when the sweep read it",
             entry.Arms.Single(arm => arm.Arm == "depth-type").Detail);
         Assert.All(entry.Arms.Where(arm => arm.Arm != "depth-type"), arm => Assert.Equal(LegVerdict.Passed, arm.Verdict));
+    }
+
+    /// <summary>
+    /// Each site of an arm is put back on its own: one whose writing back fails keeps no other from being put back, and
+    /// only it is named as not holding what the tree held.
+    /// </summary>
+    [Fact]
+    public async Task ASiteThatCannotBePutBack_KeepsNoOtherSiteOfItsArmFromBeingPutBack()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"]);
+
+        var coupled = ChargeBound with { Coupled = [new MutationSite("src/budget.hpp", "texts/depth.control-before", "texts/depth.control-after", 2)] };
+
+        var entry = await sweep.RunAsync([coupled]);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned, "a site could not be put back as it was, so its worker drives no other arm: writing 'src/fixture.cpp' back failed: the disk went away; 'src/fixture.cpp' does not hold what the tree held when the sweep read it"),
+            (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+        Assert.Equal(TreeFiles["src/budget.hpp"], File.ReadAllText(Path.Combine(sweep.Worker(1), "src", "budget.hpp")));
+        Assert.Contains("c < b", File.ReadAllText(Path.Combine(sweep.Worker(1), "src", "fixture.cpp")), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -400,7 +431,7 @@ public sealed class MutationLegRunnerTests
         var lost = await gone.RunAsync([ChargeBound]);
 
         Assert.Equal(
-            (LegVerdict.Poisoned, "a site could not be put back as it was, so its worker drives no other arm: writing it back failed: the disk went away; 'src/fixture.cpp' is gone"),
+            (LegVerdict.Poisoned, "a site could not be put back as it was, so its worker drives no other arm: writing 'src/fixture.cpp' back failed: the disk went away; 'src/fixture.cpp' is gone"),
             (lost.Arms[0].Verdict, lost.Arms[0].Detail));
     }
 
@@ -559,25 +590,105 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(TreeFiles["src/fixture.cpp"], File.ReadAllText(Path.Combine(sweep.Worker(1), "src", "fixture.cpp")));
     }
 
-    /// <summary>A refusal from inside an arm ends the sweep, as it ends any leg's work, once every site is put back.</summary>
+    /// <summary>
+    /// A refusal of the run from inside an arm ends the sweep, as it ends any leg's work, once every site is put back -
+    /// and the leg's line is still its answer, naming the refusal as what ends the run: each arm judged before it keeps
+    /// its verdict, the arm it was raised in is stopped saying so, and each arm no worker reached is stopped too.
+    /// </summary>
     [Fact]
-    public async Task ARefusalFromInsideAnArm_EndsTheSweep_OnceEverySiteIsPutBack()
+    public async Task ARefusalFromInsideAnArm_EndsTheSweep_OnceEverySiteIsPutBack_AndTheLegsLineIsKept()
     {
         using var sweep = new Sweep { Workers = 1 };
-        sweep.Builder.Throws = request => request.Leg.Contains("/arms/", StringComparison.Ordinal)
-            ? new HarnessException(HarnessExit.ConfigInvalid, "a setting is wrong")
+        sweep.Builder.Throws = request => request.Leg == "native/arms/charge-bound"
+            ? new HarnessException(HarnessExit.ConfigInvalid, "a setting is wrong.")
             : null;
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => sweep.RunAsync([DepthType]));
+        var entry = await sweep.RunAsync([DepthType, ChargeBound, ChargeFloor]);
 
-        Assert.Equal((HarnessExit.ConfigInvalid, "a setting is wrong"), (refusal.ExitCode, refusal.Message));
-        Assert.Equal(TreeFiles["src/budget.hpp"], File.ReadAllText(Path.Combine(sweep.Worker(1), "src", "budget.hpp")));
+        Assert.Equal((HarnessExit.ConfigInvalid, "a setting is wrong."), (entry.EndsTheRun?.ExitCode, entry.EndsTheRun?.Message));
+        Assert.Equal((LegVerdict.Stopped, "3 arm(s): 2 stopped, 1 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal(
+            [
+                ("charge-bound", LegVerdict.Stopped, "a refusal of the run ended the sweep while it was driven, and each site was put back as it was: a setting is wrong"),
+                ("depth-type", LegVerdict.Passed, $"the mutation stops the build at {SiteObject}, and its paired control builds"),
+                ("charge-floor", LegVerdict.Stopped, StoppedUndriven),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
         Assert.Equal([sweep.Worker(1)], sweep.Copies.Released);
     }
 
-    /// <summary>A sweep stopped part way puts back each site it had mutated, gives its workers up, and reports nothing of the leg.</summary>
+    /// <summary>
+    /// A refusal of the run raised while an arm still waits for its machine ends the sweep as one from inside an arm
+    /// does: the arm, of which nothing was written, is stopped with those no worker drove, and the arms judged before it
+    /// are kept on the leg's line.
+    /// </summary>
     [Fact]
-    public async Task ASweepStoppedPartWay_PutsEverySiteBack_AndReportsNothing()
+    public async Task ARefusalAsAnArmWaitsForItsMachine_EndsTheSweep_AndTheLegsLineIsKept()
+    {
+        using var sweep = new Sweep
+        {
+            Workers = 1,
+            Admit = unit => unit.Unit == "charge-bound"
+                ? throw new HarnessException(HarnessExit.Refused, "the record of this machine's heavy legs could not be read")
+                : (Admission?)null,
+        };
+
+        var entry = await sweep.RunAsync([DepthType, ChargeBound, ChargeFloor]);
+
+        Assert.Equal(HarnessExit.Refused, entry.EndsTheRun?.ExitCode);
+        Assert.Equal(
+            [
+                ("charge-bound", LegVerdict.Stopped, StoppedUndriven),
+                ("depth-type", LegVerdict.Passed, $"the mutation stops the build at {SiteObject}, and its paired control builds"),
+                ("charge-floor", LegVerdict.Stopped, StoppedUndriven),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+        Assert.Equal([sweep.Worker(1)], sweep.Copies.Released);
+    }
+
+    /// <summary>
+    /// A refusal from inside one worker's arm ends a sweep of two workers once both have put their sites back and been
+    /// given up: the other worker's arm, in the middle of its run, is stopped and its site put back before the leg's
+    /// line, naming the refusal, is the sweep's answer.
+    /// </summary>
+    [Fact]
+    public async Task ARefusalFromInsideAnArm_EndsASweepOfTwoWorkers_OnceBothSitesArePutBack()
+    {
+        using var sweep = new Sweep();
+        var running = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        sweep.Tests.Before = async (request, token) =>
+        {
+            if (request.Bound is not null)
+            {
+                running.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+        };
+        sweep.Builder.Before = (request, token) => request.Leg == "native/arms/depth-type" ? running.Task.WaitAsync(token) : Task.CompletedTask;
+        sweep.Builder.Throws = request => request.Leg == "native/arms/depth-type" ? new HarnessException(HarnessExit.ConfigInvalid, "a setting is wrong") : null;
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((HarnessExit.ConfigInvalid, "a setting is wrong"), (entry.EndsTheRun?.ExitCode, entry.EndsTheRun?.Message));
+        Assert.Equal(
+            [
+                (LegVerdict.Stopped, StoppedWhileDriven),
+                (LegVerdict.Stopped, "a refusal of the run ended the sweep while it was driven, and each site was put back as it was: a setting is wrong"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.Released.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A sweep stopped part way puts back each site it had mutated, gives its workers up, and still says the leg: each arm
+    /// judged by then with its verdict, the arm it was driving stopped with its record, and each arm no worker reached
+    /// stopped too.
+    /// </summary>
+    [Fact]
+    public async Task ASweepStoppedPartWay_PutsEverySiteBack_AndSaysWhatItJudgedAndWhatItStopped()
     {
         using var sweep = new Sweep { Workers = 1 };
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -590,10 +701,481 @@ public sealed class MutationLegRunnerTests
             }
         };
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sweep.RunAsync([ChargeBound, ChargeFloor], cancellationToken: stop.Token));
+        var entry = await sweep.RunAsync([DepthType, ChargeBound, ChargeFloor], cancellationToken: stop.Token);
 
-        Assert.Equal(TreeFiles["src/fixture.cpp"], File.ReadAllText(Path.Combine(sweep.Worker(1), "src", "fixture.cpp")));
+        Assert.Equal((LegVerdict.Stopped, "3 arm(s): 2 stopped, 1 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal(
+            [
+                ("charge-bound", LegVerdict.Stopped, StoppedWhileDriven),
+                ("depth-type", LegVerdict.Passed, $"the mutation stops the build at {SiteObject}, and its paired control builds"),
+                ("charge-floor", LegVerdict.Stopped, StoppedUndriven),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+        Assert.Equal([1, 1, null], entry.Arms.Select(arm => arm.Worker));
+        Assert.True(File.Exists(Path.Combine(sweep.Records("charge-bound"), MutationRecords.ArmRecordFileName)));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
         Assert.Equal([sweep.Worker(1)], sweep.Copies.Released);
+    }
+
+    /// <summary>
+    /// A sweep of two workers stopped while each drives an arm puts both sites back and gives both workers up before it
+    /// says the leg: each arm it was driving stopped, and so the arm neither reached.
+    /// </summary>
+    [Fact]
+    public async Task ASweepOfTwoWorkersStoppedPartWay_PutsBothSitesBack_AndGivesBothWorkersUp()
+    {
+        using var sweep = new Sweep();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var running = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var building = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        sweep.Tests.Before = async (request, token) =>
+        {
+            if (request.Bound is not null)
+            {
+                running.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+        };
+        sweep.Builder.Before = async (request, token) =>
+        {
+            if (request.Leg == "native/arms/depth-type")
+            {
+                building.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
+        };
+
+        var swept = sweep.RunAsync([ChargeBound, DepthType, ChargeFloor], cancellationToken: stop.Token);
+
+        await Task.WhenAll(running.Task, building.Task).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        // Each worker holds a mutated site as the sweep is stopped.
+        Assert.Single(new[] { 1, 2 }, number => File.ReadAllText(Path.Combine(sweep.Worker(number), "src", "fixture.cpp")).Contains("c < b", StringComparison.Ordinal));
+        Assert.Single(new[] { 1, 2 }, number => File.ReadAllText(Path.Combine(sweep.Worker(number), "src", "budget.hpp")).Contains("three", StringComparison.Ordinal));
+
+        await stop.CancelAsync();
+
+        var entry = await swept.WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Stopped, "3 arm(s): 3 stopped"), (entry.Verdict, entry.Detail));
+        Assert.Equal([StoppedWhileDriven, StoppedWhileDriven, StoppedUndriven], entry.Arms.Select(arm => arm.Detail));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.Released.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// An arm a worker had taken and not yet driven when the sweep was stopped - still waiting for its machine to take
+    /// it - is stopped with the arms no worker reached: nothing of it was built or written.
+    /// </summary>
+    [Fact]
+    public async Task AnArmStoppedWhileItWaitedForItsMachine_IsStoppedWithTheArmsNoWorkerDrove()
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var sweep = new Sweep
+        {
+            Workers = 1,
+            AdmitAsync = async (unit, token) =>
+            {
+                if (unit.Unit == "charge-bound")
+                {
+                    await stop.CancelAsync();
+                    token.ThrowIfCancellationRequested();
+                }
+
+                return null;
+            },
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor], cancellationToken: stop.Token);
+
+        Assert.Equal((LegVerdict.Stopped, "2 arm(s): 2 stopped"), (entry.Verdict, entry.Detail));
+        Assert.All(entry.Arms, arm => Assert.Equal((LegVerdict.Stopped, StoppedUndriven, null), (arm.Verdict, arm.Detail, arm.Worker)));
+        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
+        Assert.Equal([sweep.Worker(1)], sweep.Copies.Released);
+    }
+
+    /// <summary>
+    /// A site that cannot be put back as a sweep is stopped still poisons its arm, naming it: stopping a sweep never
+    /// hides a copy it left mutated.
+    /// </summary>
+    [Fact]
+    public async Task ASiteThatCannotBePutBack_AsASweepIsStopped_StillPoisonsItsArm()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"]);
+        sweep.Tests.Before = async (request, token) =>
+        {
+            if (request.Bound is not null)
+            {
+                await stop.CancelAsync();
+                token.ThrowIfCancellationRequested();
+            }
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound], cancellationToken: stop.Token);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned, "a site could not be put back as it was, so its worker drives no other arm: writing 'src/fixture.cpp' back failed: the disk went away; 'src/fixture.cpp' does not hold what the tree held when the sweep read it"),
+            (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+        Assert.Equal(LegVerdict.Poisoned, entry.Verdict);
+    }
+
+    /// <summary>
+    /// A failure inside an arm that refuses nothing of the run is that arm's verdict - a tool its build cannot find, a
+    /// program that will not start - and its worker, the site put back, drives the next arm.
+    /// </summary>
+    [Fact]
+    public async Task AFailureInsideAnArmThatRefusesNothing_IsItsVerdict_AndItsWorkerDrivesTheNext()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.Builder.Throws = request => request.Leg == "native/arms/depth-type" ? new HarnessException(HarnessExit.ToolMissing, "ninja was not found") : null;
+        sweep.Tests.Before = (request, _) => request.Leg == "native/arms/charge-bound"
+            ? throw new ProgramStartException("fixture_tests", "'fixture_tests' could not be started: it is built for another processor")
+            : Task.CompletedTask;
+
+        var entry = await sweep.RunAsync([DepthType, ChargeBound, ChargeFloor]);
+
+        Assert.Equal(
+            [
+                ("charge-bound", LegVerdict.Failed, "'fixture_tests' could not be started: it is built for another processor"),
+                ("depth-type", LegVerdict.SkippedToolMissing, "ninja was not found"),
+                ("charge-floor", LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+        Assert.All(entry.Arms, arm => Assert.Equal(1, arm.Worker));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+    }
+
+    /// <summary>
+    /// A failure nobody named around an arm - in its machine's answer, outside its own build and run - poisons that arm
+    /// alone and retires its worker, whose copy nothing then vouches for; the other worker drives the rest, and every
+    /// arm judged keeps its verdict.
+    /// </summary>
+    [Fact]
+    public async Task AFailureNobodyNamedAroundAnArm_PoisonsIt_AndTheOtherWorkerDrivesTheRest()
+    {
+        using var sweep = new Sweep
+        {
+            Admit = unit => unit.Unit == "depth-type" ? throw new InvalidOperationException("the record of the machine's slots vanished") : (Admission?)null,
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Poisoned, "3 arm(s): 1 poisoned, 2 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal(
+            "the sweep could not drive this arm, InvalidOperationException: the record of the machine's slots vanished",
+            entry.Arms.Single(arm => arm.Arm == "depth-type").Detail);
+        Assert.True(File.Exists(Path.Combine(sweep.Records("depth-type"), MutationRecords.ArmRecordFileName)));
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.Released.Order(StringComparer.Ordinal));
+
+        using var alone = new Sweep
+        {
+            Workers = 1,
+            Admit = unit => unit.Unit == "depth-type" ? throw new InvalidOperationException("the record of the machine's slots vanished") : (Admission?)null,
+        };
+
+        var retired = await alone.RunAsync([DepthType, ChargeFloor]);
+
+        Assert.Equal(
+            (LegVerdict.Stopped, "no worker was left to drive it: worker 1 was retired, arm 'depth-type' ended in a defect: the sweep could not drive this arm, InvalidOperationException: the record of the machine's slots vanished"),
+            (retired.Arms[1].Verdict, retired.Arms[1].Detail));
+    }
+
+    /// <summary>
+    /// A cancellation nobody asked of the sweep - a wait inside a build giving up - is a failure as any other nobody
+    /// named, never a stop: the arm is poisoned, saying what was raised.
+    /// </summary>
+    [Fact]
+    public async Task ACancellationNobodyAskedOfTheSweep_IsAFailure_NeverAStop()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.Builder.Throws = request => request.Leg == "native/arms/depth-type" ? new OperationCanceledException("a wait inside the build gave up") : null;
+
+        var entry = await sweep.RunAsync([DepthType]);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned, "the sweep could not judge this arm, OperationCanceledException: a wait inside the build gave up"),
+            (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+    }
+
+    /// <summary>
+    /// A failure raised as the sweep is stopped is still its arm's own: only a cancellation the stop caused is the arm
+    /// being stopped.
+    /// </summary>
+    [Fact]
+    public async Task AFailureAsTheSweepIsStopped_IsStillItsArmsOwn()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        sweep.Tests.Before = async (request, _) =>
+        {
+            if (request.Bound is not null)
+            {
+                await stop.CancelAsync();
+                throw new IOException("The pipe is being closed.");
+            }
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound], cancellationToken: stop.Token);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned, "the sweep could not judge this arm, IOException: The pipe is being closed"),
+            (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+    }
+
+    /// <summary>
+    /// A failure outside every worker's own handling of its copy and its arms - in claiming a worker - ends the sweep
+    /// and is the leg's own, as a leg whose work ends so is judged: poisoned where nobody named it, and the verdict a
+    /// refusal names where one did. Every arm still has its line. A refusal of the run raised there ends the run.
+    /// </summary>
+    [Fact]
+    public async Task AFailureOutsideEveryWorkersOwnHandling_IsTheLegsOwn_AndEveryArmHasItsLine()
+    {
+        using var defect = new Sweep { Workers = 1 };
+        defect.Copies.ClaimThrows = _ => new InvalidOperationException("the claim's lock was abandoned.");
+
+        var poisoned = await defect.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned, "the sweep ended in a failure nobody named, InvalidOperationException: the claim's lock was abandoned; 2 arm(s): 2 stopped", null),
+            (poisoned.Verdict, poisoned.Detail, poisoned.EndsTheRun));
+        Assert.All(poisoned.Arms, arm => Assert.Equal((LegVerdict.Stopped, StoppedUndriven), (arm.Verdict, arm.Detail)));
+
+        using var named = new Sweep { Workers = 1 };
+        named.Copies.ClaimThrows = _ => new HarnessException(HarnessExit.CommandFailed, "the claim could not be recorded");
+
+        var failed = await named.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(
+            (LegVerdict.Failed, "the claim could not be recorded; 2 arm(s): 2 stopped", null),
+            (failed.Verdict, failed.Detail, failed.EndsTheRun));
+
+        using var refusing = new Sweep { Workers = 1 };
+        refusing.Copies.ClaimThrows = _ => new HarnessException(HarnessExit.Refused, "the claim file cannot be written");
+
+        var refused = await refusing.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(
+            (LegVerdict.Stopped, "2 arm(s): 2 stopped", HarnessExit.Refused),
+            (refused.Verdict, refused.Detail, refused.EndsTheRun?.ExitCode));
+    }
+
+    /// <summary>
+    /// A sweep stopped while a worker is being made stops its arms, and blames no worker: a worker stopped is not one
+    /// that could not be made.
+    /// </summary>
+    [Fact]
+    public async Task ASweepStoppedWhileAWorkerIsMade_StopsItsArms_AndBlamesNoWorker()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        sweep.Builder.Before = async (request, token) =>
+        {
+            if (request.Leg == "native/workers/1")
+            {
+                await stop.CancelAsync();
+                token.ThrowIfCancellationRequested();
+            }
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType], cancellationToken: stop.Token);
+
+        Assert.Equal((LegVerdict.Stopped, "2 arm(s): 2 stopped"), (entry.Verdict, entry.Detail));
+        Assert.All(entry.Arms, arm => Assert.Equal((LegVerdict.Stopped, StoppedUndriven), (arm.Verdict, arm.Detail)));
+        Assert.Equal([sweep.Worker(1)], sweep.Copies.Released);
+    }
+
+    /// <summary>
+    /// A sweep stopped while a binary is controlled stops that binary's arms as arms no worker drove, and blames no
+    /// control: a control stopped is not one that did not pass.
+    /// </summary>
+    [Fact]
+    public async Task ASweepStoppedWhileABinaryIsControlled_StopsItsArms_AndBlamesNoControl()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        sweep.Tests.Before = async (request, token) =>
+        {
+            if (request.Bound is null)
+            {
+                await stop.CancelAsync();
+                token.ThrowIfCancellationRequested();
+            }
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor], cancellationToken: stop.Token);
+
+        Assert.Equal((LegVerdict.Stopped, "2 arm(s): 2 stopped"), (entry.Verdict, entry.Detail));
+        Assert.All(entry.Arms, arm => Assert.Equal((LegVerdict.Stopped, StoppedUndriven), (arm.Verdict, arm.Detail)));
+    }
+
+    /// <summary>
+    /// A refusal of the run raised while a binary is controlled ends the sweep, as one raised inside an arm does: the
+    /// arms judged before it are kept, and the arm that needed the control is stopped undriven.
+    /// </summary>
+    [Fact]
+    public async Task ARefusalAsABinaryIsControlled_EndsTheSweep_AndTheLegsLineIsKept()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.Builder.Throws = request => request.Leg.EndsWith("/controls/fixture_tests", StringComparison.Ordinal)
+            ? new HarnessException(HarnessExit.ConfigInvalid, "a setting is wrong")
+            : null;
+
+        var entry = await sweep.RunAsync([DepthType, ChargeBound]);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, entry.EndsTheRun?.ExitCode);
+        Assert.Equal(
+            [
+                (LegVerdict.Stopped, StoppedUndriven),
+                (LegVerdict.Passed, $"the mutation stops the build at {SiteObject}, and its paired control builds"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+    }
+
+    /// <summary>
+    /// A site that cannot be put back as a refusal ends the sweep still poisons its arm, and the refusal still ends the
+    /// run: neither hides the other.
+    /// </summary>
+    [Fact]
+    public async Task ASiteThatCannotBePutBack_AsARefusalEndsTheSweep_StillPoisonsItsArm_AndTheRefusalStillEndsTheRun()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.SiteFiles = new FailingRestore(sweep.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"]);
+        sweep.Builder.Throws = request => request.Leg == "native/arms/depth-type" ? new HarnessException(HarnessExit.ConfigInvalid, "a setting is wrong") : null;
+
+        var entry = await sweep.RunAsync([DepthType]);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, entry.EndsTheRun?.ExitCode);
+        Assert.Equal(
+            (LegVerdict.Poisoned, "a site could not be put back as it was, so its worker drives no other arm: writing 'src/budget.hpp' back failed: the disk went away; 'src/budget.hpp' does not hold what the tree held when the sweep read it"),
+            (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+    }
+
+    /// <summary>
+    /// A worker its machine does not admit ends that worker alone: its unit claims room, which no arm does, so the
+    /// worker beside it still asks for each arm, and drives it.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerItsMachineDoesNotAdmit_EndsThatWorkerAlone_AndTheOtherDrivesEveryArm()
+    {
+        using var sweep = new Sweep
+        {
+            Admit = unit => unit.Unit == "worker-2" ? Admission.Refused(new AdmissionFact(false, 3600), "not admitted after 1h0m: its build would not fit") : null,
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            (LegVerdict.Passed, "2 arm(s): 2 passed; worker 2: not admitted after 1h0m: its build would not fit, so it drove no arm"),
+            (entry.Verdict, entry.Detail));
+        Assert.All(entry.Arms, arm => Assert.Equal((LegVerdict.Passed, 1), (arm.Verdict, arm.Worker)));
+    }
+
+    /// <summary>
+    /// A worker whose making ends in a failure nobody named - the disk full as its copy is written, or as its build
+    /// records what it built - is retired alone, saying what failed: the other worker drives every arm, and the leg says
+    /// it ran with fewer. Where no worker could be made, their failures are the leg's own, and each arm is stopped.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerThatCannotBeMade_IsRetired_AndTheOthersSweep()
+    {
+        using var one = new Sweep();
+        one.Builder.Throws = request => request.Leg == "native/workers/2" ? new IOException("There is not enough space on the disk.") : null;
+
+        var fewer = await one.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            (LegVerdict.Passed, "2 arm(s): 2 passed; worker 2: it could not be made, IOException: There is not enough space on the disk, so it drove no arm"),
+            (fewer.Verdict, fewer.Detail));
+        Assert.All(fewer.Arms, arm => Assert.Equal((LegVerdict.Passed, 1), (arm.Verdict, arm.Worker)));
+        Assert.Equal([one.Worker(1), one.Worker(2)], one.Copies.Released.Order(StringComparer.Ordinal));
+
+        using var none = new Sweep();
+        none.Copies.SyncFails = worker => worker == none.Worker(1) ? new UnauthorizedAccessException("Access to the path is denied.") : null;
+        none.Builder.Throws = request => request.Leg == "native/workers/2" ? new IOException("There is not enough space on the disk.") : null;
+
+        var neither = await none.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned, "worker 1: it could not be made, UnauthorizedAccessException: Access to the path is denied; worker 2: it could not be made, IOException: There is not enough space on the disk; 2 arm(s): 2 stopped"),
+            (neither.Verdict, neither.Detail));
+    }
+
+    /// <summary>
+    /// A site that cannot be read back once it was put back - the disk gone, the file held - cannot be said to hold what
+    /// the tree held: its arm is poisoned, naming the site and why, and its worker retired, while the other worker
+    /// drives every other arm to its verdict.
+    /// </summary>
+    [Fact]
+    public async Task ASiteThatCannotBeReadBack_PoisonsItsArm_AndTheOtherWorkersGoOn()
+    {
+        using var sweep = new Sweep();
+        sweep.SiteFiles = new UnreadableOncePutBack(sweep.Harness.FileSystem, "budget.hpp", TreeFiles["src/budget.hpp"]);
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Poisoned, "3 arm(s): 1 poisoned, 2 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal(
+            "a site could not be put back as it was, so its worker drives no other arm: 'src/budget.hpp' could not be read back: the disk went away",
+            entry.Arms.Single(arm => arm.Arm == "depth-type").Detail);
+        Assert.All(entry.Arms.Where(arm => arm.Arm != "depth-type"), arm => Assert.Equal(LegVerdict.Passed, arm.Verdict));
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.Released.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A site or a text an arm's pre-flight cannot read - held by another process, the disk gone - poisons that arm
+    /// alone, saying why: nothing of it was built or written, so its worker is not retired, and drives the next arm.
+    /// </summary>
+    [Fact]
+    public async Task AFileAPreflightCannotRead_PoisonsItsArm_AndItsWorkerDrivesTheNext()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(new Unreadable(sweep.Harness.FileSystem, "budget.hpp", "floor.after"));
+        sweep.SiteFiles = writes;
+
+        var entry = await sweep.RunAsync([DepthType, ChargeFloor, ChargeBound]);
+
+        Assert.Equal(
+            [
+                ("charge-bound", LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+                ("depth-type", LegVerdict.Poisoned, "a file its pre-flight reads could not be read, so nothing of the arm was built or written: 'budget.hpp' is held by another process"),
+                ("charge-floor", LegVerdict.Poisoned, "a file its pre-flight reads could not be read, so nothing of the arm was built or written: 'floor.after' is held by another process"),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+        Assert.All(entry.Arms, arm => Assert.Equal(1, arm.Worker));
+        Assert.Equal(["native/arms/charge-bound"], sweep.Builder.Builds.Select(build => build.Leg).Where(leg => leg.Contains("/arms/", StringComparison.Ordinal)));
+
+        // Written twice, both for the arm that was driven: mutated, and put back.
+        Assert.Equal(2, writes.Written.Count);
+    }
+
+    /// <summary>
+    /// A control that ends in a failure nobody named is the leg's own, as a leg's work ending so is: only its binary's
+    /// arms are stopped, saying why, and every other arm is still driven.
+    /// </summary>
+    [Fact]
+    public async Task AControlEndingInAFailureNobodyNamed_IsTheLegsOwn_AndStopsOnlyItsBinarysArms()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.Tests.Before = (request, _) => request.Bound is null ? throw new IOException("The report's directory could not be made.") : Task.CompletedTask;
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
+
+        Assert.Equal(
+            (LegVerdict.Poisoned, "the unmutated fixture_tests could not be built and run, IOException: The report's directory could not be made; 3 arm(s): 2 stopped, 1 passed"),
+            (entry.Verdict, entry.Detail));
+        Assert.Equal(
+            [
+                (LegVerdict.Stopped, "the unmutated fixture_tests could not be built and run, so nothing could tell what a mutation of it changed"),
+                (LegVerdict.Passed, $"the mutation stops the build at {SiteObject}, and its paired control builds"),
+                (LegVerdict.Stopped, "the unmutated fixture_tests could not be built and run, so nothing could tell what a mutation of it changed"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.Single(sweep.Tests.Runs);
     }
 
     /// <summary>
@@ -660,16 +1242,21 @@ public sealed class MutationLegRunnerTests
         Assert.Equal((LegVerdict.Failed, "worker 1: the copy could not be written; 1 arm(s): 1 stopped"), (failed.Verdict, failed.Detail));
     }
 
-    /// <summary>A copy the sync refuses to make - somebody's directory where a worker would be - refuses the run, as a host's copy does.</summary>
+    /// <summary>
+    /// A copy the sync refuses to make - somebody's directory where a worker would be - refuses the run, as a host's copy
+    /// does: the leg's line names the refusal as what ends the run, each arm stopped undriven.
+    /// </summary>
     [Fact]
     public async Task ACopyTheSyncRefusesToMake_RefusesTheRun()
     {
         using var sweep = new Sweep { Workers = 1 };
         sweep.Copies.SyncFails = worker => new HarnessException(HarnessExit.Refused, $"'{worker}' is no copy this tool made");
 
-        var refusal = await Assert.ThrowsAsync<HarnessException>(() => sweep.RunAsync([DepthType]));
+        var entry = await sweep.RunAsync([DepthType]);
 
-        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Equal((HarnessExit.Refused, $"'{sweep.Worker(1)}' is no copy this tool made"), (entry.EndsTheRun?.ExitCode, entry.EndsTheRun?.Message));
+        Assert.Equal((LegVerdict.Stopped, StoppedUndriven), (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+        Assert.Equal([sweep.Worker(1)], sweep.Copies.Released);
     }
 
     /// <summary>A worker another live sweep holds is taken where the sweep was told to force, as --force-lock takes a lock.</summary>
@@ -686,24 +1273,167 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
-    /// An arm its machine does not admit is not-admitted, saying why, its record written; the arms beside it are still
-    /// driven.
+    /// An arm its machine does not admit is not-admitted, saying why, and so at once is every arm after it, its machine
+    /// asked nothing more: each would wait as long as the one refused did, and a sweep of a hundred arms would wait days
+    /// to say what its first refusal said. An arm judged before it keeps its verdict, and each arm not admitted has its
+    /// record.
     /// </summary>
     [Fact]
-    public async Task AnArmItsMachineDoesNotAdmit_IsNotAdmitted_AndTheOthersAreDriven()
+    public async Task AnArmRefusedAdmission_EndsTheRestNotAdmitted_WithoutAskingAgain()
     {
+        const string Refusal = "not admitted after 1h0m: it held a heavy-leg slot, and the memory 97% in use never fell below 76%";
+
         using var sweep = new Sweep
         {
             Workers = 1,
-            Admit = unit => unit.Unit == "depth-type" ? Admission.Refused(new AdmissionFact(false, 0), "memory 97% in use") : null,
+            Admit = unit => unit.Unit == "charge-bound" ? Admission.Refused(new AdmissionFact(false, 3600), Refusal) : null,
         };
 
-        var entry = await sweep.RunAsync([ChargeBound, DepthType]);
+        var entry = await sweep.RunAsync([DepthType, ChargeBound, ChargeFloor]);
 
-        Assert.Equal((LegVerdict.NotAdmitted, "2 arm(s): 1 not-admitted, 1 passed"), (entry.Verdict, entry.Detail));
-        Assert.Equal((LegVerdict.NotAdmitted, "memory 97% in use"), (entry.Arms[1].Verdict, entry.Arms[1].Detail));
-        Assert.True(File.Exists(Path.Combine(sweep.Records("depth-type"), MutationRecords.ArmRecordFileName)));
-        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.StartsWith("native/arms/depth-type", StringComparison.Ordinal));
+        Assert.Equal((LegVerdict.NotAdmitted, "3 arm(s): 2 not-admitted, 1 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal(
+            [
+                ("charge-bound", LegVerdict.NotAdmitted, Refusal),
+                ("depth-type", LegVerdict.Passed, $"the mutation stops the build at {SiteObject}, and its paired control builds"),
+                ("charge-floor", LegVerdict.NotAdmitted, $"the sweep stopped asking its machine once arm 'charge-bound' was not admitted: {Refusal}"),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+        Assert.Equal(["worker-1", "depth-type", "charge-bound"], sweep.Admissions.Select(unit => unit.Unit));
+        Assert.All(
+            new[] { "charge-bound", "charge-floor" },
+            arm => Assert.True(File.Exists(Path.Combine(sweep.Records(arm), MutationRecords.ArmRecordFileName))));
+        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.StartsWith("native/arms/charge-", StringComparison.Ordinal));
+        Assert.Empty(sweep.Tests.Runs);
+    }
+
+    /// <summary>
+    /// An arm still waiting for its machine when another arm of the sweep is refused stops waiting at once, and is
+    /// not-admitted as every arm after the refusal is.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWaitingForItsMachine_WhenAnotherIsRefused_StopsWaiting()
+    {
+        const string Refusal = "not admitted after 1h0m: it held a heavy-leg slot, and the memory 97% in use never fell below 76%";
+
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var sweep = new Sweep
+        {
+            AdmitAsync = async (unit, token) =>
+            {
+                switch (unit.Unit)
+                {
+                    case "charge-bound":
+                        await waiting.Task.WaitAsync(token);
+                        return Admission.Refused(new AdmissionFact(false, 3600), Refusal);
+
+                    case "charge-floor":
+                        waiting.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                        return null;
+
+                    default:
+                        return null;
+                }
+            },
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                (LegVerdict.NotAdmitted, Refusal),
+                (LegVerdict.NotAdmitted, $"the sweep stopped asking its machine once arm 'charge-bound' was not admitted: {Refusal}"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.Released.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Two arms refused while a third still waits: each refused arm says its own refusal, and the one waiting is told the
+    /// first, whichever landed later.
+    /// </summary>
+    [Fact]
+    public async Task TwoArmsRefused_TellAnArmStillWaitingTheFirstRefusal()
+    {
+        const string First = "not admitted after 1h0m: it held a heavy-leg slot, and the memory 97% in use never fell below 76%";
+        const string Second = "not admitted after 1h0m: the 5 heavy leg(s) this machine admits at once were all held";
+
+        var arrived = 0;
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Sweep? made = null;
+
+        using var sweep = made = new Sweep
+        {
+            Workers = 3,
+            AdmitAsync = async (unit, token) =>
+            {
+                switch (unit.Unit)
+                {
+                    case "charge-bound":
+                        await waiting.Task.WaitAsync(token);
+                        return Admission.Refused(new AdmissionFact(false, 3600), First);
+
+                    case "charge-floor":
+                        Arrived();
+
+                        // Refused once the first refusal has ended its wait, and so after it.
+                        try
+                        {
+                            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                        }
+
+                        return Admission.Refused(new AdmissionFact(false, 3600), Second);
+
+                    case "depth-type":
+                        Arrived();
+
+                        try
+                        {
+                            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // Told only once the second refusal has landed too: its arm's record is written after it.
+                            var second = Path.Combine(made!.Records("charge-floor"), MutationRecords.ArmRecordFileName);
+
+                            while (!File.Exists(second))
+                            {
+                                await Task.Delay(10, TestContext.Current.CancellationToken);
+                            }
+
+                            throw;
+                        }
+
+                        return null;
+
+                    default:
+                        return null;
+                }
+            },
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [
+                ("charge-bound", LegVerdict.NotAdmitted, First),
+                ("depth-type", LegVerdict.NotAdmitted, $"the sweep stopped asking its machine once arm 'charge-bound' was not admitted: {First}"),
+                ("charge-floor", LegVerdict.NotAdmitted, Second),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+
+        void Arrived()
+        {
+            if (Interlocked.Increment(ref arrived) == 2)
+            {
+                waiting.TrySetResult();
+            }
+        }
     }
 
     /// <summary>
@@ -1056,6 +1786,9 @@ public sealed class MutationLegRunnerTests
 
         public Func<UnitAdmission, Admission?> Admit { get; init; } = _ => null;
 
+        /// <summary>How the machine answers each unit asking to be taken, where it answers only after a while; otherwise <see cref="Admit"/> answers.</summary>
+        public Func<UnitAdmission, CancellationToken, Task<Admission?>>? AdmitAsync { get; init; }
+
         public ConcurrentQueue<UnitAdmission> Admissions { get; } = new();
 
         public Source? Reader { get; private set; }
@@ -1094,10 +1827,10 @@ public sealed class MutationLegRunnerTests
 
             var work = new LegWork(leg, context, RunId.New(), RunDirectory, Time: false)
             {
-                AdmitUnit = (unit, _) =>
+                AdmitUnit = (unit, token) =>
                 {
                     Admissions.Enqueue(unit);
-                    return Task.FromResult(Admit(unit));
+                    return AdmitAsync is { } asked ? asked(unit, token) : Task.FromResult(Admit(unit));
                 },
             };
 
@@ -1131,6 +1864,18 @@ public sealed class MutationLegRunnerTests
         }
 
         public void Dispose() => _temp.Dispose();
+
+        /// <summary>Every source a worker that was made holds is as the tree holds it: each site an arm mutated was put back.</summary>
+        public void AssertEverySiteAsTheTreeHoldsIt()
+        {
+            foreach (var worker in Copies.Synced.Select(sync => sync.Worker))
+            {
+                foreach (var site in new[] { "src/fixture.cpp", "src/budget.hpp" })
+                {
+                    Assert.Equal(TreeFiles[site], File.ReadAllText(Path.Combine(worker, site)));
+                }
+            }
+        }
 
         /// <summary>The tree as a sync reads it: each file by its size and hash, keyed as a row spells it.</summary>
         private SyncSource Read(HarnessContext context)
@@ -1187,6 +1932,9 @@ public sealed class MutationLegRunnerTests
 
         public Func<string, Exception?> SyncFails { get; set; } = _ => null;
 
+        /// <summary>What claiming a worker raises, where it raises anything.</summary>
+        public Func<string, Exception?> ClaimThrows { get; set; } = _ => null;
+
         public Action<string> AfterSync { get; set; } = _ => { };
 
         public Task<IReadOnlyList<WorkerCopy>> ListAsync(string treeRoot, VariantKey variant, CancellationToken cancellationToken)
@@ -1201,6 +1949,11 @@ public sealed class MutationLegRunnerTests
         public LogClaim Claim(string worker, RunId runId, bool force)
         {
             Claimed.Enqueue((worker, force));
+
+            if (ClaimThrows(worker) is { } failure)
+            {
+                throw failure;
+            }
 
             return Taken.Contains(worker) && !force
                 ? new LogClaim(false, null, worker + MutationWorkers.ClaimSuffix) { HeldBy = Holder }
@@ -1260,11 +2013,14 @@ public sealed class MutationLegRunnerTests
 
         public Func<BuildRequest, Exception?> Throws { get; set; } = _ => null;
 
+        /// <summary>What happens before a build answers or throws, once it has been noted as started.</summary>
+        public Func<BuildRequest, CancellationToken, Task> Before { get; set; } = (_, _) => Task.CompletedTask;
+
         public bool Rebuilds { get; set; } = true;
 
         public bool Logs { get; set; } = true;
 
-        public Task<BuildResult> BuildAsync(HarnessConfig config, BuildRequest request, CancellationToken cancellationToken)
+        public async Task<BuildResult> BuildAsync(HarnessConfig config, BuildRequest request, CancellationToken cancellationToken)
         {
             Builds.Enqueue(request);
 
@@ -1277,6 +2033,8 @@ public sealed class MutationLegRunnerTests
                     DatedAhead.Enqueue($"{request.Leg}: {path}");
                 }
             }
+
+            await Before(request, cancellationToken);
 
             if (Throws(request) is { } failure)
             {
@@ -1296,7 +2054,7 @@ public sealed class MutationLegRunnerTests
                 ? [new PhaseResult(request.Leg, CMakeAdapter.BuildPhase, 1, false, 0, null, TimeSpan.Zero, TimeSpan.Zero, false, [], Path.Combine(directory, "build.log"), PhaseOutput.Of($"[1/2] Building CXX object {SiteObject}\nFAILED: {SiteObject}\nerror: depth is no integer\n"))]
                 : [];
 
-            return Task.FromResult(new BuildResult(verdict, directory, phases, null, null));
+            return new BuildResult(verdict, directory, phases, null, null);
         }
 
         public Task<IWorkerGraph> ReadGraphAsync(HarnessConfig config, BuildRequest request, CancellationToken cancellationToken)
@@ -1405,7 +2163,7 @@ public sealed class MutationLegRunnerTests
         }
     }
 
-    /// <summary>The real file system, recording each file written through it.</summary>
+    /// <summary>A file system, recording each file written through it.</summary>
     private sealed class RecordingWrites(IFileSystem inner) : PassThroughFileSystem(inner)
     {
         public ConcurrentQueue<string> Written { get; } = new();
@@ -1415,6 +2173,37 @@ public sealed class MutationLegRunnerTests
             Written.Enqueue(path);
             return base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
         }
+    }
+
+    /// <summary>A file system, save that no file named as one of <paramref name="names"/> can be read, as one another process holds cannot.</summary>
+    private sealed class Unreadable(IFileSystem inner, params string[] names) : PassThroughFileSystem(inner)
+    {
+        public override byte[] ReadAllBytes(string path)
+            => names.Contains(Path.GetFileName(path), StringComparer.Ordinal)
+                ? throw new IOException($"'{Path.GetFileName(path)}' is held by another process.")
+                : base.ReadAllBytes(path);
+    }
+
+    /// <summary>
+    /// The real file system, save that a file named <paramref name="name"/> cannot be read once <paramref name="pristine"/>
+    /// was written back to it, as a disk that went away once the write returned cannot.
+    /// </summary>
+    private sealed class UnreadableOncePutBack(IFileSystem inner, string name, string pristine) : PassThroughFileSystem(inner)
+    {
+        private readonly ConcurrentDictionary<string, bool> _putBack = new(StringComparer.Ordinal);
+
+        public override async Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        {
+            await base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+
+            if (Path.GetFileName(path) == name && System.Text.Encoding.UTF8.GetString(contents) == pristine)
+            {
+                _putBack[path] = true;
+            }
+        }
+
+        public override byte[] ReadAllBytes(string path)
+            => _putBack.ContainsKey(path) ? throw new IOException("the disk went away.") : base.ReadAllBytes(path);
     }
 
     /// <summary>The real file system, save that writing <paramref name="name"/> back as <paramref name="pristine"/> fails, as a disk that went away fails.</summary>

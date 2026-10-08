@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
@@ -387,6 +388,15 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             // slot while waiting on anything else.
             machine?.Release();
             overall?.Release();
+        }
+
+        // A leg whose work a refusal of the run ended after it had reached verdicts worth keeping answers with both: its
+        // line is the leg's, recorded as any line is, and the refusal is the run's, raised once the line is safe - so what
+        // the leg had measured is reported before the refusal, as a leg that finished before it is.
+        if (entry.EndsTheRun is { } refusal)
+        {
+            ledger.Record(entry with { EndsTheRun = null });
+            ExceptionDispatchInfo.Throw(refusal);
         }
 
         ledger.Record(entry);

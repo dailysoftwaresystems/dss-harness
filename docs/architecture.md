@@ -2497,12 +2497,35 @@ prove anything. Its run bounds theirs (see *Timeouts*). Workers drain one queue 
 6. is run whole with `mutations.reportArgs`, its JUnit report a new file for every run, or for a
    BUILD-RED arm, has its paired control applied to the site as it was and built;
 7. has every site put back and checked against the reading of the tree by its hash, whatever
-   happened - never stopped, so a sweep stopped part way still puts its sites back. A site that
-   cannot be put back makes the arm `poisoned` and retires its worker; the other workers go on, and
-   what no worker drove is `stopped`, saying why.
+   happened - never stopped, so a sweep stopped part way still puts its sites back, and each site
+   on its own, so one that cannot be written keeps no other from it. A site that cannot be put
+   back, or read back, makes the arm `poisoned` and retires its worker; the other workers go on,
+   and what no worker drove is `stopped`, saying why.
 
 The judge is a pure function of the declaration and what was observed, the first row that applies
 deciding, in the order the steps above observe it; `help mutations` lists what each verdict means.
+
+Whatever fails is kept to what it failed in, so one failure never costs the arms already judged. A
+worker that cannot be made - its copy, its whole build - is retired alone, saying why, and the
+workers beside it drive every arm; only where none could be made are their failures the leg's own.
+An arm whose driving ends in a failure is given the verdict that failure comes to, as a leg whose
+work ends so is: the verdict a refusal names, `failed` for a program that will not start, and
+`poisoned` where nobody named it - its worker then retired, since nothing vouches for its copy,
+unless the failure was a file its pre-flight could not read, before anything was written. A binary
+whose control cannot be built and run stops its own arms and no other.
+
+A machine that does not admit one arm has kept it waiting as long as it allows, and would keep the
+next as long: so the sweep asks it for no other, and every arm left - one still waiting among
+them - is `not-admitted` at once, naming the arm that was refused. A worker's own unit refused ends
+that worker alone: it claims room, which no arm does.
+
+A sweep stopped part way puts every site back, gives its workers up, and still answers with the
+leg's line: each arm judged by then with its verdict, and the arms it was driving and those no
+worker reached `stopped`, each saying which. The run ends interrupted, exit 130, as any run does. A
+refusal of the run raised inside a sweep - a setting that cannot be satisfied, a record of the
+machine's that cannot be read - ends the sweep the same way and then the run, with the refusal's
+own exit code, once the leg's line is recorded: what the sweep had measured is reported before the
+refusal, as a leg that finished before it is.
 
 ### Locks, records and hosts
 

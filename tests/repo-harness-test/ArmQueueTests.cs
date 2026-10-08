@@ -137,8 +137,46 @@ public sealed class ArmQueueTests
     }
 
     /// <summary>
-    /// A worker asking while it holds an arm, finishing one it does not hold, retired twice, or not one of the queue's,
-    /// is refused; and the arms left are never asked for while a worker holds one.
+    /// An arm a worker gives back, having taken it and not driven it, goes to the front of the queue and its worker is
+    /// not retired: it is dealt again first, to that worker or another, and where the sweep was stopped it is stopped
+    /// with the arms no worker drove.
+    /// </summary>
+    [Fact]
+    public async Task AnArmGivenBack_IsDealtAgainFirst_OrStoppedWithTheArmsNoWorkerDrove()
+    {
+        using var stop = new CancellationTokenSource();
+        var queue = new ArmQueue([Arm("a"), Arm("b"), Arm("c")], 2);
+
+        await Take(queue, 1, stop.Token);
+        await Take(queue, 2, stop.Token);
+        queue.GiveBack(2);
+        queue.GiveBack(1);
+
+        Assert.Equal("a", (await Take(queue, 2, stop.Token))?.Id);
+        Assert.Equal("b", (await Take(queue, 1, stop.Token))?.Id);
+        queue.Done(1);
+        queue.GiveBack(2);
+        await stop.CancelAsync();
+
+        var stopped = ReachedVerdict.Of(LegVerdict.Stopped, "the sweep was stopped before a worker drove it");
+
+        Assert.Equal([("a", stopped), ("c", stopped)], queue.Undriven(stop.Token).Select(arm => (arm.Arm.Id, arm.Verdict)));
+
+        // A worker waiting for the arm another holds is dealt it once it is given back.
+        var one = new ArmQueue([Arm("x")], 2);
+
+        await Take(one, 1);
+
+        var idle = Take(one, 2);
+
+        one.GiveBack(1);
+
+        Assert.Equal("x", (await idle)?.Id);
+    }
+
+    /// <summary>
+    /// A worker asking while it holds an arm, finishing or giving back one it does not hold, retired twice, or not one of
+    /// the queue's, is refused; and the arms left are never asked for while a worker holds one.
     /// </summary>
     [Fact]
     public async Task WhatNoWorkerDoes_IsRefused()
@@ -149,6 +187,8 @@ public sealed class ArmQueueTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => Take(queue, 1));
         Assert.Throws<InvalidOperationException>(() => queue.Done(2));
+        Assert.Throws<InvalidOperationException>(() => queue.GiveBack(2));
+        Assert.Throws<ArgumentOutOfRangeException>(() => queue.GiveBack(3));
         Assert.Throws<InvalidOperationException>(() => queue.Undriven(CancellationToken.None));
         queue.Retire(2, "its copy could not be made", requeue: true);
         Assert.Throws<InvalidOperationException>(() => queue.Retire(2, "again", requeue: true));

@@ -83,6 +83,13 @@ internal sealed record MutationSubject
 /// A site that cannot be put back as it was makes the arm <c>poisoned</c> and retires its worker; the others go on, and
 /// what no worker drove is <c>stopped</c>, saying why.
 /// </para>
+/// <para>
+/// Whatever fails is kept to what it failed in: a worker that cannot be made is retired alone, an arm whose driving ends
+/// in a failure is given the verdict that failure comes to, and a binary whose control cannot be had stops its own arms.
+/// Once its machine refuses one arm, the sweep asks it for no other: each arm left is <c>not-admitted</c> at once. A
+/// sweep stopped part way, or ended by a refusal of the run, still answers with the leg's line - each arm judged by then,
+/// and every other <c>stopped</c> - once every site is back.
+/// </para>
 /// </remarks>
 internal sealed class MutationLegRunner(
     IMutationSource source,
@@ -108,7 +115,14 @@ internal sealed class MutationLegRunner(
     /// <summary>Sweeps <paramref name="subject"/> on <paramref name="work"/>'s leg, and returns the leg's line.</summary>
     /// <param name="subject">What the leg sweeps.</param>
     /// <param name="work">The leg, its run and its context, and how it asks its machine to take each unit.</param>
-    /// <param name="cancellationToken">Stops the sweep: each site is put back, and nothing is reported of the leg.</param>
+    /// <param name="cancellationToken">
+    /// Stops the sweep: each site is put back, and the leg's line says each arm judged by then, and every other as
+    /// <c>stopped</c>. Stopped before any worker was planned, it reports nothing of the leg, as nothing of it was measured.
+    /// </param>
+    /// <returns>
+    /// The leg's line. Where a refusal of the run ended the sweep, the line names it as what
+    /// <see cref="LegEntry.EndsTheRun">ends the run</see>, with each arm judged before it.
+    /// </returns>
     public async Task<LegEntry> RunAsync(MutationSubject subject, LegWork work, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(subject);
@@ -137,6 +151,24 @@ internal sealed class MutationLegRunner(
         public bool Touched { get; set; }
     }
 
+    /// <summary>The arm a sweep's machine did not admit, after which the sweep asks it for nothing more.</summary>
+    /// <param name="Arm">The arm.</param>
+    /// <param name="Refusal">Why it was not admitted, as its line says it.</param>
+    private sealed record RefusedArm(string Arm, string Refusal);
+
+    /// <summary>What driving one arm in a worker came to.</summary>
+    /// <param name="Entry">The arm's line.</param>
+    /// <param name="Retired">Why its worker drives no other arm, or <see langword="null"/> where it goes on.</param>
+    /// <param name="Refusal">The refusal of the run that ended the arm, raised once its line is kept; otherwise <see langword="null"/>.</param>
+    private sealed record Driven(ArmEntry Entry, string? Retired = null, HarnessException? Refusal = null);
+
+    /// <summary>What observing one arm came to, its sites put back or said not to be.</summary>
+    /// <param name="Verdict">The arm's verdict.</param>
+    /// <param name="Report">The report its run wrote, where it ran and wrote one.</param>
+    /// <param name="Retired">Why its worker drives no other arm, or <see langword="null"/> where it goes on.</param>
+    /// <param name="Refusal">The refusal of the run that ended the arm; otherwise <see langword="null"/>.</param>
+    private sealed record Observed(ReachedVerdict Verdict, JUnitReport? Report = null, string? Retired = null, HarnessException? Refusal = null);
+
     /// <summary>One leg's sweep, while it runs.</summary>
     private sealed class Sweep(MutationLegRunner runner, MutationSubject subject, LegWork work)
     {
@@ -151,6 +183,8 @@ internal sealed class MutationLegRunner(
         private readonly ConcurrentQueue<ReachedVerdict> _own = new();
         private SyncSource _reading = null!;
         private ArmQueue _queue = null!;
+        private CancellationTokenSource _unasked = null!;
+        private RefusedArm? _refused;
         private Exception? _escaped;
         private int _asked;
 
@@ -195,17 +229,14 @@ internal sealed class MutationLegRunner(
             _queue = new ArmQueue(driven, plan.Count);
 
             using (var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            using (_unasked = new CancellationTokenSource())
             {
                 await Task.WhenAll(Enumerable.Range(1, plan.Count).Select(number => Task.Run(() => WorkerAsync(number, needs[number - 1], stop), CancellationToken.None)))
                     .ConfigureAwait(false);
 
-                if (_escaped is { } escaped)
-                {
-                    ExceptionDispatchInfo.Throw(escaped);
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-
+                // Every worker has put its sites back and stopped asking, whatever ended the sweep: what none of them drove
+                // is said, never passed over - by a sweep stopped part way, or ended by a refusal, as by one that ran out
+                // of workers.
                 foreach (var undriven in _queue.Undriven(stop.Token))
                 {
                     _entries[undriven.Arm.Id] = Undriven(undriven.Arm, undriven.Verdict);
@@ -216,6 +247,15 @@ internal sealed class MutationLegRunner(
             // the arms, and the leg says the sweep ran with fewer.
             var own = _own.ToList();
 
+            // What ended the sweep from outside any arm's or worker's own handling: a refusal of the run, which the line
+            // carries to be raised once it is recorded; or a failure nobody named, which is the leg's own.
+            var refusal = _escaped is HarnessException raised && HarnessExit.RefusesTheRun(raised.ExitCode) ? raised : null;
+
+            if (_escaped is { } escaped && refusal is null)
+            {
+                own.Add(Failure(escaped, "the sweep ended in a failure nobody named"));
+            }
+
             if (_unmade.Count == plan.Count)
             {
                 own.AddRange(_unmade.OrderBy(pair => pair.Key).Select(pair => pair.Value));
@@ -225,7 +265,7 @@ internal sealed class MutationLegRunner(
                 notes.AddRange(_unmade.OrderBy(pair => pair.Key).Select(pair => $"{pair.Value.Detail}, so it drove no arm"));
             }
 
-            return Line(own, [.. driven.Select(arm => (arm, _entries[arm.Id])), .. unselected], notes);
+            return Line(own, [.. driven.Select(arm => (arm, _entries[arm.Id])), .. unselected], notes) with { EndsTheRun = refusal };
         }
 
         /// <summary>
@@ -370,11 +410,12 @@ internal sealed class MutationLegRunner(
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested)
             {
-                // Stopped: by the run, which says so for the leg, or because another worker ended the sweep, which says why.
+                // Stopped: by the run, or because another worker ended the sweep. Its arms are said by the leg's line.
             }
             catch (Exception ex)
             {
-                // Ends the sweep, whose other workers put their sites back and stop: raised once they have, as the leg's end.
+                // Ends the sweep, whose other workers put their sites back and stop: a refusal of the run, or a failure
+                // nothing nearer to it could name. Kept for the leg's line, which says it once every worker has stopped.
                 Interlocked.CompareExchange(ref _escaped, ex, null);
                 await stop.CancelAsync().ConfigureAwait(false);
             }
@@ -403,17 +444,38 @@ internal sealed class MutationLegRunner(
 
                 while (await _queue.TakeAsync(number, cancellationToken).ConfigureAwait(false) is { } arm)
                 {
-                    var (entry, retired) = await DriveArmAsync(number, arm, graph, cancellationToken).ConfigureAwait(false);
+                    Driven driven;
 
-                    _entries[arm.Id] = entry;
-
-                    if (retired is not null)
+                    try
                     {
-                        _queue.Retire(number, retired, requeue: false);
-                        return;
+                        driven = await DriveArmAsync(number, arm, graph, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Taken and not driven: the sweep was stopped, or a refusal of the run ended it, while the arm
+                        // waited for its machine or for its binary's control. Given back, so it is said stopped with the
+                        // arms no worker drove.
+                        _queue.GiveBack(number);
+                        throw;
                     }
 
-                    _queue.Done(number);
+                    _entries[arm.Id] = driven.Entry;
+
+                    // A worker retired is dealt no other arm, and so ends here.
+                    if (driven.Retired is { } retired)
+                    {
+                        _queue.Retire(number, retired, requeue: false);
+                    }
+                    else
+                    {
+                        _queue.Done(number);
+                    }
+
+                    if (driven.Refusal is { } refusal)
+                    {
+                        // Raised once the arm's line is kept and its sites are back: it ends the sweep, as it ends the run.
+                        ExceptionDispatchInfo.Throw(refusal);
+                    }
                 }
             }
             finally
@@ -425,7 +487,8 @@ internal sealed class MutationLegRunner(
         /// <summary>
         /// Makes worker <paramref name="number"/> under a unit of admission claiming the room it still needs: its copy synced
         /// from the sweep's reading, and built whole as the leg builds. The worker's build graph, or <see langword="null"/>
-        /// where it could not be made, and it is retired saying why.
+        /// where it could not be made, and it is retired saying why - whatever kept it from being made, short of a stop or a
+        /// refusal of the run.
         /// </summary>
         private async Task<IWorkerGraph?> MakeAsync(int number, long need, string worker, CancellationToken cancellationToken)
         {
@@ -441,9 +504,9 @@ internal sealed class MutationLegRunner(
                         string.Empty)
                     : null;
 
-                admitted = await _work.AdmitUnit(new UnitAdmission($"worker-{number}", room, First()), cancellationToken).ConfigureAwait(false);
+                (admitted, var refusal) = await AskAsync(new UnitAdmission($"worker-{number}", room, First()), arm: null, cancellationToken).ConfigureAwait(false);
 
-                if (admitted is { Refusal: { } refusal })
+                if (refusal is not null)
                 {
                     Unmade(number, LegVerdict.NotAdmitted, refusal);
                     return null;
@@ -464,14 +527,13 @@ internal sealed class MutationLegRunner(
 
                 return await _runner._builder.ReadGraphAsync(_config, request, cancellationToken).ConfigureAwait(false);
             }
-            catch (HarnessException ex) when (!HarnessExit.RefusesTheRun(ex.ExitCode))
+            catch (Exception ex) when (!Stops(ex, cancellationToken) && !EndsTheRun(ex))
             {
-                Unmade(number, Verdicts.ForRefusal(ex.ExitCode), ex.Message);
-                return null;
-            }
-            catch (Exception ex) when (KnownCauses.Names(ex))
-            {
-                Unmade(number, LegVerdict.Failed, ex.Message);
+                // This worker's alone, whatever it is: the disk full as its copy is written or its build recorded is no
+                // reason to lose what the workers beside it judge.
+                var failure = Failure(ex, "it could not be made");
+
+                Unmade(number, failure.Verdict, failure.Detail);
                 return null;
             }
             finally
@@ -483,47 +545,112 @@ internal sealed class MutationLegRunner(
         }
 
         /// <summary>
-        /// Drives <paramref name="arm"/> in worker <paramref name="number"/>, under a unit of admission of its own: its
-        /// line, and why the worker is retired where a site could not be put back.
+        /// Asks this machine to take <paramref name="unit"/>, unless it has refused an arm of this sweep: then nothing is
+        /// asked, and a unit still waiting stops waiting, each refused as that arm was. What was taken, held until
+        /// disposed, or why the unit was not.
         /// </summary>
-        private async Task<(ArmEntry Entry, string? Retired)> DriveArmAsync(int number, MutationArm arm, IWorkerGraph graph, CancellationToken cancellationToken)
+        /// <remarks>
+        /// A refusal comes once the machine has kept a unit waiting as long as it allows. Each arm after one refused would
+        /// wait as long again to be told the same: a sweep of a hundred arms would take days to say what its first refusal
+        /// said. A worker's own unit refused ends nothing but that worker - it claims room, which no arm does.
+        /// </remarks>
+        /// <param name="unit">The unit asking.</param>
+        /// <param name="arm">The arm the unit is, or <see langword="null"/> for a worker's.</param>
+        /// <param name="cancellationToken">Stops the wait.</param>
+        private async Task<(Admission? Taken, string? Refusal)> AskAsync(UnitAdmission unit, MutationArm? arm, CancellationToken cancellationToken)
+        {
+            if (_refused is { } before)
+            {
+                return (null, Unasked(before));
+            }
+
+            using var asking = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _unasked.Token);
+            Admission? admitted;
+
+            try
+            {
+                admitted = await _work.AdmitUnit(unit, asking.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_refused is { } meanwhile)
+            {
+                return (null, Unasked(meanwhile));
+            }
+
+            if (admitted is not { Refusal: { } refusal })
+            {
+                return (admitted, null);
+            }
+
+            if (arm is not null && Interlocked.CompareExchange(ref _refused, new RefusedArm(arm.Id, refusal), null) is null)
+            {
+                await _unasked.CancelAsync().ConfigureAwait(false);
+            }
+
+            return (null, refusal);
+        }
+
+        /// <summary>Why a unit is not admitted once the sweep's machine has refused <paramref name="refused"/>.</summary>
+        private static string Unasked(RefusedArm refused)
+            => $"the sweep stopped asking its machine once arm '{refused.Arm}' was not admitted: {refused.Refusal}";
+
+        /// <summary>
+        /// Drives <paramref name="arm"/> in worker <paramref name="number"/>, under a unit of admission of its own: its
+        /// line, why the worker is retired where it drives no other, and the refusal of the run that ended the arm where
+        /// one did. A failure outside the arm's own build and run - in its machine's answer, its binary's control, its
+        /// record - is its verdict as one inside is, and never the sweep's end.
+        /// </summary>
+        /// <exception cref="OperationCanceledException">The sweep was stopped before the arm was observed: nothing of it was written.</exception>
+        /// <exception cref="HarnessException">A refusal of the run was raised before the arm was observed: nothing of it was written.</exception>
+        private async Task<Driven> DriveArmAsync(int number, MutationArm arm, IWorkerGraph graph, CancellationToken cancellationToken)
         {
             var started = Stopwatch.GetTimestamp();
             var records = Path.Combine(_work.RunDirectory, _leg.Name, MutationRecords.ArmsDirectory, arm.Id);
 
-            using var admitted = await _work.AdmitUnit(new UnitAdmission(arm.Id, null, First()), cancellationToken).ConfigureAwait(false);
-
-            if (admitted is { Refusal: { } refusal })
+            try
             {
-                return (Record(arm, ReachedVerdict.Of(LegVerdict.NotAdmitted, refusal), number, started, null, records), null);
-            }
+                var (admitted, refusal) = await AskAsync(new UnitAdmission(arm.Id, null, First()), arm, cancellationToken).ConfigureAwait(false);
 
-            _work.Progress($"arm {arm.Id}, on worker {number}");
-
-            var bound = TimeSpan.Zero;
-
-            if (arm.Kind == RedKind.TestRed)
-            {
-                var control = await ControlAsync(number, arm.Runner, graph, cancellationToken).ConfigureAwait(false);
-
-                if (control.Stops is { } stops)
+                using (admitted)
                 {
-                    return (Undriven(arm, ReachedVerdict.Of(LegVerdict.Stopped, stops)), null);
+                    if (refusal is not null)
+                    {
+                        return new Driven(Record(arm, ReachedVerdict.Of(LegVerdict.NotAdmitted, refusal), number, started, null, records));
+                    }
+
+                    _work.Progress($"arm {arm.Id}, on worker {number}");
+
+                    var bound = TimeSpan.Zero;
+
+                    if (arm.Kind == RedKind.TestRed)
+                    {
+                        var control = await ControlAsync(number, arm.Runner, graph, cancellationToken).ConfigureAwait(false);
+
+                        if (control.Stops is { } stops)
+                        {
+                            return new Driven(Undriven(arm, ReachedVerdict.Of(LegVerdict.Stopped, stops)));
+                        }
+
+                        bound = control.Bound;
+                    }
+
+                    var observed = await ObserveAsync(number, arm, graph, records, bound, cancellationToken).ConfigureAwait(false);
+
+                    return new Driven(Record(arm, observed.Verdict, number, started, observed.Report, records), observed.Retired, observed.Refusal);
                 }
-
-                bound = control.Bound;
             }
+            catch (Exception ex) when (!Stops(ex, cancellationToken) && !EndsTheRun(ex))
+            {
+                var failure = Failure(ex, "the sweep could not drive this arm");
 
-            var observed = await ObserveAsync(number, arm, graph, records, bound, cancellationToken).ConfigureAwait(false);
-
-            return (Record(arm, observed.Verdict, number, started, observed.Report, records), observed.Retired);
+                return new Driven(Record(arm, failure, number, started, null, records), Defect(arm, failure));
+            }
         }
 
         /// <summary>
         /// Everything an arm's verdict is decided from: its pre-flight, its mutation and the build of it, and its run or its
         /// paired control - every site put back as it was, whatever happens, and checked against the reading of the tree.
         /// </summary>
-        private async Task<(ReachedVerdict Verdict, JUnitReport? Report, string? Retired)> ObserveAsync(
+        private async Task<Observed> ObserveAsync(
             int number,
             MutationArm arm,
             IWorkerGraph graph,
@@ -533,22 +660,39 @@ internal sealed class MutationLegRunner(
         {
             var worker = Worker(number);
             var buildDirectory = _leg.Variant.DirectoryUnder(worker);
-            var sites = arm.Sites
-                .Select(declared => new SiteState(
-                    declared,
-                    InWorker(worker, declared.Site),
-                    _runner._site.Read(InWorker(worker, declared.Site)),
-                    _reading.Files.Entries.GetValueOrDefault(declared.Site)))
-                .ToList();
-            var (preflight, control, diagnostic, builds, outputs) = Preflight(arm, worker, sites, graph);
+            List<SiteState> sites;
+            (ArmPreflight Preflight, byte[]? Control, string? Diagnostic, IReadOnlyList<string> Builds, IReadOnlyList<string> Outputs) flight;
+
+            try
+            {
+                sites =
+                [
+                    .. arm.Sites.Select(declared => new SiteState(
+                        declared,
+                        InWorker(worker, declared.Site),
+                        _runner._site.Read(InWorker(worker, declared.Site)),
+                        _reading.Files.Entries.GetValueOrDefault(declared.Site))),
+                ];
+                flight = Preflight(arm, worker, sites, graph);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Before anything was built or written: the arm alone is lost, and its worker's copy is as it was.
+                return new Observed(ReachedVerdict.Of(
+                    LegVerdict.Poisoned,
+                    $"a file its pre-flight reads could not be read, so nothing of the arm was built or written: {ex.Message.TrimEnd('.')}"));
+            }
+
+            var (preflight, control, diagnostic, builds, outputs) = flight;
             var observation = new ArmObservation(preflight);
 
             if (ArmJudge.Judge(arm, observation) is { } refused)
             {
-                return (Held(arm, refused), null, null);
+                return new Observed(Held(arm, refused));
             }
 
             ReachedVerdict? failure = null;
+            HarnessException? refusal = null;
             JUnitReport? report = null;
             string? restored;
 
@@ -588,43 +732,55 @@ internal sealed class MutationLegRunner(
                     observation = observation with { Run = run.Run };
                 }
             }
-            catch (HarnessException ex) when (!HarnessExit.RefusesTheRun(ex.ExitCode))
+            catch (Exception ex) when (Stops(ex, cancellationToken))
             {
-                failure = ReachedVerdict.Of(Verdicts.ForRefusal(ex.ExitCode), ex.Message);
+                failure = ReachedVerdict.Of(LegVerdict.Stopped, "the sweep was stopped while it was driven, and each site was put back as it was");
             }
-            catch (Exception ex) when (KnownCauses.Names(ex))
+            catch (HarnessException ex) when (EndsTheRun(ex))
             {
-                failure = ReachedVerdict.Of(LegVerdict.Failed, ex.Message);
+                // Ends the sweep, as it ends the run, once the arm's sites are back and its line is kept.
+                refusal = ex;
+                failure = ReachedVerdict.Of(
+                    LegVerdict.Stopped,
+                    $"a refusal of the run ended the sweep while it was driven, and each site was put back as it was: {ex.Message.TrimEnd('.')}");
             }
-            catch (Exception ex) when (ex is not (OperationCanceledException or HarnessException))
+            catch (Exception ex)
             {
-                // A defect of this tool's, in one arm: the arm is poisoned, and the worker, whose copy nothing now vouches
-                // for, drives no other.
-                failure = ReachedVerdict.Of(LegVerdict.Poisoned, $"the sweep could not judge this arm, {ex.GetType().Name}: {ex.Message}");
+                // The arm's own: the verdict a refusal that ends nothing names, failed where its cause can be named, and
+                // otherwise poisoned - with its worker, whose copy nothing then vouches for, driving no other.
+                failure = Failure(ex, "the sweep could not judge this arm");
             }
             finally
             {
                 restored = await RestoreAsync(sites, buildDirectory).ConfigureAwait(false);
             }
 
+            // Before anything else the arm came to: stopping a sweep, or ending it, never hides a copy it left mutated.
             if (restored is not null)
             {
-                return (
+                return new Observed(
                     ReachedVerdict.Of(LegVerdict.Poisoned, $"a site could not be put back as it was, so its worker drives no other arm: {restored}"),
                     report,
-                    $"a site of arm '{arm.Id}' could not be put back as it was: {restored}");
+                    $"a site of arm '{arm.Id}' could not be put back as it was: {restored}",
+                    refusal);
             }
 
             if (failure is not null)
             {
-                return (failure, report, failure.Verdict == LegVerdict.Poisoned ? $"arm '{arm.Id}' ended in a defect: {failure.Detail}" : null);
+                return new Observed(failure, report, Defect(arm, failure), refusal);
             }
 
-            return (
+            return new Observed(
                 ArmJudge.Judge(arm, observation) is { } judged ? Held(arm, judged) : ReachedVerdict.OrPoisoned(null, $"{_leg.Name}/{arm.Id}"),
-                report,
-                null);
+                report);
         }
+
+        /// <summary>
+        /// Why the worker that drove <paramref name="arm"/> drives no other, where the arm ended <c>poisoned</c> by a
+        /// failure nobody named: nothing then vouches for its copy. <see langword="null"/> for any other end.
+        /// </summary>
+        private static string? Defect(MutationArm arm, ReachedVerdict failure)
+            => failure.Verdict == LegVerdict.Poisoned ? $"arm '{arm.Id}' ended in a defect: {failure.Detail}" : null;
 
         /// <summary>
         /// <paramref name="judged"/>, the verdict the judge reached for <paramref name="arm"/>, as the sweep reports it: held
@@ -789,15 +945,16 @@ internal sealed class MutationLegRunner(
 
                 return Decided(PristineJudge.Judge(runner, observed, run.Run, run.Duration, _subject.Settings.RunTimeFactor));
             }
-            catch (Exception ex) when ((ex is HarnessException harness && !HarnessExit.RefusesTheRun(harness.ExitCode)) || KnownCauses.Names(ex))
+            catch (Exception ex) when (!Stops(ex, cancellationToken) && !EndsTheRun(ex))
             {
-                // The leg's own, as a build of the leg that could not run would be: only this binary's arms are stopped, and
-                // every other binary's are still driven.
-                var verdict = ex is HarnessException refused ? Verdicts.ForRefusal(refused.ExitCode) : LegVerdict.Failed;
+                // The leg's own, as a build of the leg that could not run would be, whatever kept it: only this binary's
+                // arms are stopped, and every other binary's are still driven.
+                var could = $"the unmutated {runner} could not be built and run";
+                var failure = Failure(ex, could);
 
                 return Decided(new PristineOutcome(
-                    ReachedVerdict.Of(verdict, $"the unmutated {runner} could not be built and run: {ex.Message}"),
-                    $"the unmutated {runner} could not be built and run, so nothing could tell what a mutation of it changed",
+                    failure.Verdict == LegVerdict.Poisoned ? failure : failure with { Detail = $"{could}: {failure.Detail}" },
+                    $"{could}, so nothing could tell what a mutation of it changed",
                     TimeSpan.Zero));
             }
         }
@@ -867,7 +1024,8 @@ internal sealed class MutationLegRunner(
         /// <summary>
         /// Puts each site written back as the worker held it, dated forward so the next build rebuilds what the mutation
         /// built, and checks every site against the sweep's reading of the tree by its hash; what is wrong, or
-        /// <see langword="null"/> where nothing is. Never stopped: a sweep stopped part way still puts its sites back.
+        /// <see langword="null"/> where nothing is. Never stopped: a sweep stopped part way still puts its sites back. Each
+        /// site is put back and checked on its own, so one that cannot be written or read keeps no other from it.
         /// </summary>
         /// <param name="sites">The sites of an arm past its pre-flight: each a file the worker held, as the reading spells it.</param>
         /// <param name="buildDirectory">The worker's build directory.</param>
@@ -878,24 +1036,34 @@ internal sealed class MutationLegRunner(
 
             if (touched.Count > 0)
             {
-                try
-                {
-                    var stamp = _runner._site.Stamp(buildDirectory);
+                var stamp = _runner._site.Stamp(buildDirectory);
 
-                    foreach (var state in touched)
+                foreach (var state in touched)
+                {
+                    try
                     {
                         await _runner._site.WriteAsync(state.Path, state.Pristine!, stamp, CancellationToken.None).ConfigureAwait(false);
                     }
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
-                {
-                    problems.Add($"writing it back failed: {ex.Message.TrimEnd('.')}");
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+                    {
+                        problems.Add($"writing '{state.Declared.Site}' back failed: {ex.Message.TrimEnd('.')}");
+                    }
                 }
             }
 
             foreach (var state in sites)
             {
-                var held = _runner._site.Read(state.Path);
+                byte[]? held;
+
+                try
+                {
+                    held = _runner._site.Read(state.Path);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    problems.Add($"'{state.Declared.Site}' could not be read back: {ex.Message.TrimEnd('.')}");
+                    continue;
+                }
 
                 if (held is null)
                 {
@@ -1018,6 +1186,28 @@ internal sealed class MutationLegRunner(
         Detail = verdict.Detail,
         DeclaredCases = arm.Cases,
         DeclaredReds = arm.Reds,
+    };
+
+    /// <summary>Whether <paramref name="exception"/> is the sweep being stopped: a cancellation, with <paramref name="cancellationToken"/> cancelled.</summary>
+    private static bool Stops(Exception exception, CancellationToken cancellationToken)
+        => exception is OperationCanceledException && cancellationToken.IsCancellationRequested;
+
+    /// <summary>Whether <paramref name="exception"/> is a refusal of the run, which ends the sweep as it ends any leg's work.</summary>
+    private static bool EndsTheRun(Exception exception)
+        => exception is HarnessException refusal && HarnessExit.RefusesTheRun(refusal.ExitCode);
+
+    /// <summary>
+    /// The verdict a failure that neither stops the sweep nor refuses the run comes to, as a leg whose own work ends in it
+    /// is judged: the verdict its refusal names; <c>failed</c> where its cause is one this build can name; and otherwise
+    /// <c>poisoned</c> - nobody named it - saying <paramref name="unnamed"/>, then its type and what it said.
+    /// </summary>
+    /// <param name="exception">What was raised.</param>
+    /// <param name="unnamed">What the sweep could not do, as a line begins where nothing named why.</param>
+    private static ReachedVerdict Failure(Exception exception, string unnamed) => exception switch
+    {
+        HarnessException refused => ReachedVerdict.Of(Verdicts.ForRefusal(refused.ExitCode), refused.Message),
+        _ when KnownCauses.Names(exception) => ReachedVerdict.Of(LegVerdict.Failed, exception.Message),
+        _ => ReachedVerdict.Of(LegVerdict.Poisoned, $"{unnamed}, {exception.GetType().Name}: {exception.Message.TrimEnd('.')}"),
     };
 
     /// <summary>Where <paramref name="cited"/>, as a row spells it, is in <paramref name="worker"/>'s copy.</summary>

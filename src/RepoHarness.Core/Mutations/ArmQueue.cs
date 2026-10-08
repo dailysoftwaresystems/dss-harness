@@ -17,8 +17,8 @@ public sealed record UndrivenArm(MutationArm Arm, ReachedVerdict Verdict);
 /// <para>
 /// A worker that can no longer drive arms - its copy could not be made, or a site in it could not be put back as it was -
 /// is retired: it takes no arm again, and the arm it held, where that arm reached no verdict of its own, goes back to the
-/// front of the queue for the next worker free. A worker finding the queue empty while another still holds an arm waits
-/// for that arm to finish, since it may come back.
+/// front of the queue for the next worker free. So does an arm a worker gives back undriven, the worker staying. A worker
+/// finding the queue empty while another still holds an arm waits for that arm to finish, since it may come back.
 /// </para>
 /// <para>
 /// What no worker drove is <c>stopped</c>, never passed over: every worker was retired, each saying why, or the sweep was
@@ -114,6 +114,28 @@ public sealed class ArmQueue
                 throw new InvalidOperationException($"Worker {worker} finished an arm while it holds none.");
             }
 
+            Changed();
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="worker"/> gives back the arm it holds, having not driven it - the sweep was stopped, or ended, while
+    /// the arm waited for its machine or for its binary's control. The arm goes back to the front of the queue, to be
+    /// dealt again or said <c>stopped</c> with what no worker drove, and the worker is not retired.
+    /// </summary>
+    /// <param name="worker">The worker, which holds an arm.</param>
+    public void GiveBack(int worker)
+    {
+        lock (_gate)
+        {
+            Check(worker);
+
+            if (!_held.Remove(worker, out var held))
+            {
+                throw new InvalidOperationException($"Worker {worker} gave back an arm while it holds none.");
+            }
+
+            _pending.AddFirst(held);
             Changed();
         }
     }

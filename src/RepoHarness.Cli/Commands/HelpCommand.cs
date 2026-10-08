@@ -864,6 +864,20 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
+            "Whatever fails is kept to what it failed in. A worker that cannot be made is retired alone, saying why, and "
+            + "the workers beside it drive every arm. An arm whose driving ends in a failure is given the verdict that "
+            + "failure comes to - poisoned where nobody named it - and a binary whose control cannot be built and run stops "
+            + "its own arms and no other. Once its machine does not admit one arm, the sweep asks it for no other: every "
+            + "arm left is not-admitted at once, naming the arm refused, rather than each waiting as long again.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A sweep stopped part way puts every site back and still reports the leg: each arm judged by then, and the "
+            + $"arms it was driving and those no worker reached stopped. The run ends interrupted ({HarnessExit.Cancelled}). A refusal "
+            + "of the run raised inside a sweep ends the run with its own exit code, after the leg's line.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             "A sweep of a leg takes a lock of its own, keyed by its workers: it refuses another sweep of the leg's variant, "
             + "refused-locked, and never holds off a build, test or sync of the leg. --force-lock takes it, and a worker "
             + "another live sweep claims.");
@@ -914,9 +928,12 @@ internal static class HelpCommand
         builder.AppendLine("                one, a failing exit whose report names no failing case, or a run past");
         builder.AppendLine("                its bound, or silent for defaults.stallSeconds, stopped as hung");
         builder.AppendLine("  unwitnessed   the build passed and an object that depends on a site was not rebuilt");
-        builder.AppendLine("  stopped       never driven: the sweep was cancelled, no worker was left to run it, or");
-        builder.AppendLine("                the unmutated run of its binary did not pass");
-        builder.AppendLine("  poisoned      a site could not be put back as it was");
+        builder.AppendLine("  stopped       not driven to a verdict: the sweep was stopped, or ended by a refusal of the");
+        builder.AppendLine("                run, while it was driven or before; no worker was left to run it; or the");
+        builder.AppendLine("                unmutated run of its binary did not pass");
+        builder.AppendLine("  not-admitted  its machine did not admit it, or an arm of the sweep before it");
+        builder.AppendLine("  poisoned      a site could not be put back as it was, or a failure nobody named ended");
+        builder.AppendLine("                its driving");
         builder.AppendLine();
         AppendWrapped(
             builder,
