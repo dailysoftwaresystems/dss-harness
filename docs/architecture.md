@@ -397,8 +397,8 @@ repositories are its own contents, and do not make it such a directory.
 
 ### What deleting one refuses
 
-Without `--force`, every check runs before anything is touched. A refusal deletes nothing,
-names everything it found on one line, each with its remedy, and exits 13:
+Without `--force`, every check runs before anything is touched. A refusal deletes nothing of the
+worktree, names everything it found on one line, each with its remedy, and exits 13:
 
 - **Uncommitted changes.** A modified, staged or untracked file git does not ignore, or a
   changed submodule. Status runs with `--untracked-files=normal` and
@@ -446,6 +446,13 @@ names everything it found on one line, each with its remedy, and exits 13:
 - **Held, on Windows.** Looked at last, once every check above has passed: a worktree something
   holds part of is refused on its own, since git's removal would stop part way on it.
   [Removal](#removal) says what holds one.
+- **A mutation worker in use.** The workers kept beside the worktree (see *Mutation testing*) go
+  before it, once every check above has passed, and are asked about before any goes: one a sweep
+  still running holds keeps the worktree, with nothing removed, and workers that cannot be looked
+  for keep it too, exit 20. A sweep that takes one between the asking and the removal keeps the
+  worktree as well, the workers no sweep held gone by then, which the refusal says. `--force`
+  deletes the worktree and leaves a worker still held, saying so, and deleting the worktree again
+  removes it once the sweep has ended.
 
 Without `--force`, when the check cannot be finished, because git cannot answer, a record cannot
 be read or its directory found, or, on Windows, a directory in it cannot be looked through for
@@ -1212,8 +1219,8 @@ from the report.
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran; or a unit of a sweep - a worker, an arm - waited so, and each arm the sweep had left once its machine refused one | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up. A mutation arm whose site could not be put back as it was, or whose driving ended in a failure nobody named | **yes** |
-| `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a mutation arm was never driven, its sweep cancelled, no worker left to run it, or the unmutated run of its test binary not passing | no: incomplete |
-| `violated` | A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than the tree spells it; its before-text is not in its site exactly once, or is replaced by itself; its target or its runner is not built, or no object they build depends on a site; its mutation reddened other cases than its C rows, ran another number of cases, left a G row's case unrun or left out its diagnostic; a mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired control did not | **yes** |
+| `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a mutation arm was not driven to a verdict: its sweep stopped, or ended by a refusal of the run, while it was driven or before; its own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test binary not passing | no: incomplete |
+| `violated` | A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than the tree spells it or is no file the sweep's reading of the tree holds; its before-text is not in its site exactly once, or is replaced by itself; its target or its runner is not built, or no object they build depends on a site; its mutation reddened other cases than its C rows, ran another number of cases, left a G row's case unrun or left out its diagnostic; a mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired control did not | **yes** |
 | `survived` | A mutation arm's mutation built and ran, and no case reddened | **yes** |
 | `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, one that is no JUnit report, a failing exit whose report names no failing case, or a run stopped for passing its bound, or as hung for printing nothing for `defaults.stallSeconds` | **yes** |
 
@@ -1966,7 +1973,9 @@ removes from before it has removed - no sync, no lock entry, no run records.
   variant's, its self-test's, and those of a variant no leg of that host and tree builds any more,
   which nothing else would ever remove - another leg's are that leg's. Each variant's go under the
   lock a sweep of it takes rather than its build's, and are said on the leg's line with what they
-  held, which `--json` carries as `space.workerBytes`: a worker a live sweep still claims is kept,
+  held, which `--json` carries as `space.workerBytes` - what was removed of them, 0 where every one
+  there was kept, or in a dry run what is there; a leg whose line carries no `space`, its build
+  directory a link, locked or not removable, carries none: a worker a live sweep still claims is kept,
   as is one whose claim cannot be read; one whose sweep died holding it is released first, and
   said; and a directory under a worker's name that no sync made is said and left. Where a host
   holds no copy of the tree, nothing there can run a clean, and the host is asked instead to remove
@@ -2231,8 +2240,8 @@ compiler's, from an input or a value, which nothing says a build identified.
 The name is known only once the leg is built, so a step naming one builds its leg first, and what
 fills it in is read then, once, for the check before the first step and the step itself. A name
 nothing fills in is refused before the first step runs, saying which case it is: no compiler
-identified for that language, a record that could not be read, or a compiler the build runs with
-words after it - a launcher such as ccache given its compiler, a compiler given options. The name
+identified for that language, a record that could not be read or that names no program, or a
+compiler the build runs with words after it - a launcher such as ccache given its compiler, a compiler given options. The name
 is a program alone, and the program alone is not what built the leg, so the refusal names the
 program and the words and hands over neither. Which legs have a compiler at all is the
 configuration's to say - only a build CMake configures identifies one - so that is refused before
@@ -2241,7 +2250,8 @@ any host is measured, and never after a build it would have cost.
 A test invocation names one too, in its `args`, `coresArgs` and `workingDirectory`. Its command is
 checked before the leg's build, where no compiler is identified yet: there the name stands as
 written, and is filled in - or refused, as above - once the leg is built and before its runner
-starts. A sweep of mutation arms fills it in from each worker's own build, which is what the
+starts. Under `test --no-build` it is filled in from what the build already in the leg's directory
+identified, which is what built the binaries it tests. A sweep of mutation arms fills it in from each worker's own build, which is what the
 worker's tests run against.
 
 **A runner is refused on a leg the run did not build, where what it runs reads the build.** The run
@@ -2249,7 +2259,8 @@ decides the build, and says to each runner it starts - its own and each a run ch
 it built the leg; a runner requiring the build, or a step or phase naming `{product}`,
 `{buildDir}` or a compiler among those that leg runs, is refused there before anything changes the
 tree, naming each. Nothing an earlier build left there is read to fill a compiler's name in
-meanwhile. It is the rule above asked again of what will run, so a file edited between the run's reading
+meanwhile - a runner's; `test --no-build` tests what an earlier build left, and reads its compiler
+with it. It is the rule above asked again of what will run, so a file edited between the run's reading
 it and the leg's is refused rather than started on whatever the last build left.
 
 **`cleanDirectories` never reaches what the run stands on.** Each is deleted, with all it holds,
@@ -2483,7 +2494,10 @@ its hosts were measured and its slots taken. What a sync withholds is in no copy
 worker is such a copy, as a host's is: so a registry or a text directory under `sync.neverTransfer`,
 `sync.exclude` or the worktrees root is refused when the configuration is read, as one inside the
 harness's own directory is, and a cited text so withheld is a problem of its row - never every arm
-read `violated` for a text nobody carried. The rows a mutation harness of a repository's own once
+read `violated` for a text nobody carried. What git ignores a sync leaves behind as well, and only
+the tree says which that is: so git is asked as the registry is read, and a registry or a cited
+text it ignores is refused the same way - one it tracks is carried, whatever rule would ignore it.
+The rows a mutation harness of a repository's own once
 needed and this one derives - R, X, I, F and T - are refused, each naming what took its place: the
 leg's own tree, project and variant; sync's exclusions; the variant's configure; the dependency
 sources the leg's own build fetched; and ninja's records. A leg built by anything but CMake with the

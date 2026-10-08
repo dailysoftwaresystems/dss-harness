@@ -11,8 +11,8 @@ public sealed class PackagePipelineTests
     /// names the commit it promoted: the full matrix passed on that commit, or for beta on its parent, which differs
     /// only in the version. Never in a run resuming a commit an earlier run tagged: that run's package job passed, by
     /// this same rule, before its tag was made. And never where the version is on nuget.org already, and nothing is
-    /// built. What is left is a run started by hand on a commit no run has packaged - a release branch moved past the
-    /// rules that guard it has nothing else behind it.
+    /// built. What is left is a run started by hand that names no commit, on a commit no run has packaged - a release
+    /// branch moved past the rules that guard it has nothing else behind it.
     /// </summary>
     [Fact]
     public void TheSuite_RunsOnlyForACommitNothingElseTested()

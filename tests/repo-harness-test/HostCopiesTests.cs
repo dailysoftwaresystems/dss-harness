@@ -1191,6 +1191,49 @@ public sealed class HostCopiesTests
     }
 
     /// <summary>
+    /// A tree named from this machine's home, as a host's repositoryPath is, has its workers' claims asked about where
+    /// this machine keeps them, which is where a sweep claimed them: one a sweep still running holds is left, and one
+    /// removed has its claim forgotten there - each still answered for as the caller spelt its tree.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerOfATreeNamedFromHome_IsAskedAboutWhereThisMachineKeepsIt()
+    {
+        using var hosts = new TempDirectory();
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        Assert.SkipUnless(
+            PathContainment.IsStrictlyInside(home, hosts.Path, StringComparison.OrdinalIgnoreCase),
+            $"this machine keeps temporary files outside its account's home, '{home}', which is where a path from home is read from");
+
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = hosts.Combine("src", "repo");
+        var spelt = "~" + tree[home.Length..].Replace('\\', '/');
+        var held = tree + ".mutation-357e24cw-1";
+        var free = tree + ".mutation-357e24cw-2";
+
+        foreach (var made in new[] { held, free })
+        {
+            await Local(harness).CreateRootAsync(made, CopyMark.Complete, cancellationToken);
+            File.WriteAllText(Path.Combine(made, "main.c"), "int main;");
+        }
+
+        var bytes = harness.FileSystem.DirectorySize(free);
+        var claims = new Claims { Held = { [held] = "run 20261007-101500-abcd, process 4242 on this machine" } };
+
+        var removal = await Local(harness, claims: claims).RemoveWorkersAsync(spelt, cancellationToken: cancellationToken);
+
+        Assert.StartsWith("~/", spelt, StringComparison.Ordinal);
+        Assert.Equal([new WorkerRemoved(spelt + ".mutation-357e24cw-2", bytes)], removal.Removed);
+        Assert.Equal(
+            [new WorkerLeft(spelt + ".mutation-357e24cw-1", "a sweep still running holds it: run 20261007-101500-abcd, process 4242 on this machine", InUse: true)],
+            removal.Left);
+        Assert.True(Directory.Exists(held), held);
+        Assert.False(Directory.Exists(free), free);
+        Assert.Equal([free], claims.Forgotten);
+    }
+
+    /// <summary>
     /// The transport this machine is reached through as a host knows the claims sweeps hold too: asked to remove a
     /// tree's workers, it leaves one a sweep still running holds.
     /// </summary>
@@ -1721,16 +1764,19 @@ public sealed class HostCopiesTests
         public ISyncTransport For(HostReport host) => new RecordingTransport(Local(harness, disk, claims), reports: host.Host);
     }
 
-    /// <summary>The claims on copies a test says stand, and those forgotten, in the order they were.</summary>
+    /// <summary>
+    /// The claims on copies a test says stand, and those forgotten, in the order they were - each asked about by the
+    /// copy's full path on this machine, as a sweep's claims are kept: a path spelt any other way names another file.
+    /// </summary>
     private sealed class Claims : ICopyClaims
     {
         public Dictionary<string, string> Held { get; } = new(StringComparer.Ordinal);
 
         public List<string> Forgotten { get; } = [];
 
-        public string? HeldBy(string copy) => Held.GetValueOrDefault(copy);
+        public string? HeldBy(string copy) => Held.GetValueOrDefault(Path.GetFullPath(copy));
 
-        public void Forget(string copy) => Forgotten.Add(copy);
+        public void Forget(string copy) => Forgotten.Add(Path.GetFullPath(copy));
     }
 
     /// <summary>A disk that keeps which directories were weighed.</summary>

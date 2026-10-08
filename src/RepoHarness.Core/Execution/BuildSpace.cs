@@ -17,7 +17,9 @@ public sealed record BuildSpace(string Directory, long BuildBytes, bool Removed,
 {
     /// <summary>
     /// What the mutation workers kept beside the leg's tree held, with what an earlier removal of them left aside: what
-    /// was removed of them, or, where nothing was, what is there. <see langword="null"/> where the leg keeps none.
+    /// was removed of them - 0 where every one there was kept - or, in a dry run, what is there.
+    /// <see langword="null"/> where the leg keeps none; and a leg whose line carries no space at all - its build
+    /// directory a link, locked, or not removable - carries none of this either.
     /// </summary>
     public long? WorkerBytes { get; init; }
 }

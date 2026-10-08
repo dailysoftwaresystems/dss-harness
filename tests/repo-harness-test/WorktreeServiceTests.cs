@@ -360,9 +360,10 @@ public sealed class WorktreeServiceTests
     }
 
     /// <summary>
-    /// A worker a sweep still running holds keeps its worktree: deleting it is refused, and nothing of it removed. Forced,
-    /// the worktree goes, and the worker is left and said; and deleting it again, once the sweep has ended, removes the
-    /// worker - after which nothing of that name is left to delete.
+    /// A worker a sweep still running holds keeps its worktree: deleting it is refused, and nothing removed - of the
+    /// worktree, or of the workers beside it no sweep holds, which are asked about before any goes. Forced, the worktree
+    /// goes with those, and the worker held is left and said; and deleting it again, once the sweep has ended, removes
+    /// the worker - after which nothing of that name is left to delete.
     /// </summary>
     [Fact]
     public async Task DeleteAsync_IsRefusedWhileASweepHoldsAWorker_AndForcedLeavesItForDeletingAgainToRemove()
@@ -375,6 +376,7 @@ public sealed class WorktreeServiceTests
         Assert.True(created.Succeeded, created.Outcome.Message);
 
         var worker = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var free = await WorkerAsync(harness, created.Path + ".mutation-357e24cs-1", cancellationToken);
         var copies = new WorkerCopies(SyncKit.Service(harness), harness.LocalTransport, harness.FileSystem, harness.Output, harness.Identity, MutationService.CommandName);
         var sweep = RunId.New();
 
@@ -389,17 +391,21 @@ public sealed class WorktreeServiceTests
             StringComparison.Ordinal);
         Assert.Contains($"run {sweep.Value}", refused.Outcome.Message, StringComparison.Ordinal);
         Assert.EndsWith(
-            "Wait for it to end, or pass --force to delete the worktree and leave that worker. Nothing of the worktree was removed.",
+            "Wait for it to end, or pass --force to delete the worktree and leave that worker. Nothing was removed.",
             refused.Outcome.Message,
             StringComparison.Ordinal);
         Assert.True(Directory.Exists(created.Path));
         Assert.True(Directory.Exists(worker));
+        Assert.True(Directory.Exists(free), "a refusal removes nothing, a worker no sweep holds included");
+        Assert.DoesNotContain(refused.Outcome.Details ?? [], line => line.StartsWith("removed ", StringComparison.Ordinal));
 
         var forced = await harness.WorktreeService.DeleteAsync(temp.Path, "wt", force: true, deleteEvidence: false, cancellationToken: cancellationToken);
 
         Assert.True(forced.Succeeded, forced.Outcome.Message);
         Assert.False(Directory.Exists(created.Path));
         Assert.True(Directory.Exists(worker));
+        Assert.False(Directory.Exists(free));
+        Assert.Single(forced.Outcome.Details ?? [], line => line.StartsWith("removed 1 mutation worker(s) kept beside it, ", StringComparison.Ordinal) && line.EndsWith($": '{free}'", StringComparison.Ordinal));
         Assert.Contains(
             forced.Outcome.Details ?? [],
             line => line.StartsWith($"left the mutation worker '{worker}' kept beside it: a sweep still running holds it: ", StringComparison.Ordinal)
@@ -426,6 +432,43 @@ public sealed class WorktreeServiceTests
 
         Assert.Equal(HarnessExit.Refused, nothing.Outcome.ExitCode);
         Assert.Equal("No worktree named 'wt'.", nothing.Outcome.Message);
+    }
+
+    /// <summary>
+    /// A sweep that takes a worker between the asking and the removal keeps the worktree as one holding it before does:
+    /// the deletion is refused, the worktree whole, saying which workers went meanwhile.
+    /// </summary>
+    [Fact]
+    public async Task ASweepTakingAWorkerBetweenTheAskingAndTheRemoval_KeepsTheWorktree_SayingWhatWent()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, cancellationToken);
+
+        Assert.True(created.Succeeded, created.Outcome.Message);
+
+        var free = await WorkerAsync(harness, created.Path + ".mutation-357e24cs-1", cancellationToken);
+        var taken = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var local = new LocalSyncTransport(
+            harness.FileSystem,
+            new ManifestBuilder(harness.FileSystem, harness.Platform),
+            harness.GitClient,
+            harness.Platform,
+            new TakenOnceAsked(taken, "run r, process 7 on this machine"));
+        var service = new WorktreeService(harness.ContextLoader, harness.GitClient, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, local);
+
+        var refused = await service.DeleteAsync(temp.Path, "wt", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+        Assert.Equal(
+            $"Worktree 'wt' was not deleted: a mutation worker kept beside it is in use - '{taken}': a sweep still running holds it: run r, process 7 on this machine. "
+            + "Wait for it to end, or pass --force to delete the worktree and leave that worker. Nothing of the worktree was removed.",
+            refused.Outcome.Message);
+        Assert.True(Directory.Exists(created.Path));
+        Assert.True(Directory.Exists(taken));
+        Assert.False(Directory.Exists(free));
+        Assert.Single(refused.Outcome.Details ?? [], line => line.StartsWith("removed 1 mutation worker(s) kept beside it, ", StringComparison.Ordinal) && line.EndsWith($": '{free}'", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -522,6 +565,19 @@ public sealed class WorktreeServiceTests
         Assert.True(again.Succeeded, again.Outcome.Message);
         Assert.Equal("Worktree 'wt2' is gone already; the mutation workers left beside it are dealt with.", again.Outcome.Message);
         Assert.False(Directory.Exists(held));
+    }
+
+    /// <summary>Claims in which a sweep holds <paramref name="worker"/> from the second time it is asked about: one that took it meanwhile.</summary>
+    private sealed class TakenOnceAsked(string worker, string holder) : ICopyClaims
+    {
+        private int _asked;
+
+        public string? HeldBy(string copy)
+            => string.Equals(Path.GetFullPath(copy), Path.GetFullPath(worker), StringComparison.OrdinalIgnoreCase) && _asked++ > 0 ? holder : null;
+
+        public void Forget(string copy)
+        {
+        }
     }
 
     /// <summary>A disk that will not say what one directory holds.</summary>

@@ -61,8 +61,10 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <exception cref="HarnessException">
     /// The host could not be reached - its transport would not start - or never reported how the
     /// command finished, or reported a ledger this build cannot read. None is a verdict about the
-    /// code, so none is reported as one. Or the command refused the whole run there, which is raised
-    /// as that refusal, with what the host said.
+    /// code, so none is reported as one. Or the command refused the whole run there with no line for
+    /// the leg, which is raised as that refusal, with what the host said; one that came with the
+    /// leg's line is carried on it (<see cref="LegEntry.EndsTheRun"/>), and ends the run once the
+    /// line is recorded.
     /// </exception>
     public async Task<LegEntry> RunAsync(
         string commandName,
@@ -182,8 +184,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
         // A command that ended badly ends on its failure line, with what follows it, and that is the host's conclusion:
         // this machine says how the leg ended itself - by the leg's own line where the host's ledger has an entry for
-        // it, and otherwise in the refusal raised from what the host said - so it is never shown. Shown as well, it was
-        // said twice, and a host's summary of its one leg read as this run's. Anything else held is shown, late.
+        // it, and in the refusal raised from what the host said where the host refused the run, with a line or with
+        // none - so it is never shown. Shown as well, it was said twice, and a host's summary of its one leg read as
+        // this run's. Anything else held is shown, late.
         if (lines.Finished is null or HarnessExit.Success)
         {
             Show(held);
@@ -228,7 +231,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <param name="failure">What its failure line said, and every line after it, when it wrote one.</param>
     /// <exception cref="HarnessException">
     /// The host wrote no entry for the leg. A refusal of the whole run there is raised as that same
-    /// refusal; anything else as a host that said nothing about the leg.
+    /// refusal; anything else as a host that said nothing about the leg. A refusal that came with an
+    /// entry is no exception here: the entry carries it.
     /// </exception>
     private static LegEntry Read(string output, PlacedLeg leg, HostConnection connection, string commandName, int exitCode, string? failure)
     {
@@ -261,10 +265,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             // behind on the host's error stream.
             if (HarnessExit.RefusesTheRun(exitCode))
             {
-                throw new HarnessException(
-                    exitCode,
-                    $"{leg.Host.Host} refused '{commandName}' for leg '{leg.Name}': "
-                    + (failure ?? $"it exited {exitCode} and said nothing more"));
+                throw Refusal(leg, commandName, exitCode, failure);
             }
 
             // The exit code is named because it may be the only thing the host did say. A copy with
@@ -289,6 +290,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         {
             Leg = leg.Name,
             Verdict = verdict,
+
+            // A refusal of the run the host made once the leg had its line - a sweep that had judged arms by then - is
+            // this run's refusal as one with no line is: the line is this leg's, and the refusal ends the run after it,
+            // in the host's own words. No ledger writes it, so the code the host ended with is all that carries it.
+            EndsTheRun = HarnessExit.RefusesTheRun(exitCode) ? Refusal(leg, commandName, exitCode, failure) : null,
 
             // Why a leg did not run there is that host's reason, and is named by the host this
             // machine knows: the host places the leg on itself, and has no name for itself but
@@ -346,6 +352,12 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             })],
         };
     }
+
+    /// <summary>A host's refusal of the whole run, as this run's: the code it ended with, and what it said.</summary>
+    private static HarnessException Refusal(PlacedLeg leg, string commandName, int exitCode, string? failure)
+        => new(
+            exitCode,
+            $"{leg.Host.Host} refused '{commandName}' for leg '{leg.Name}': " + (failure ?? $"it exited {exitCode} and said nothing more"));
 
     /// <summary>The shape a host's ledger arrives in, read back by name rather than by position.</summary>
     /// <param name="Legs">Each leg's line.</param>

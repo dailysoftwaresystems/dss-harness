@@ -496,11 +496,12 @@ internal static class HelpCommand
             + "may run though nothing declares it under tools. A leg whose project CMake does not build is refused before "
             + "anything starts, naming each leg and step, since no build of it identifies a compiler; and a name the "
             + "leg's build has nothing for is refused once the leg is built, before its first step, saying which case it "
-            + "is - no compiler identified for that language, or one the build runs with words after it, a launcher such "
+            + "is - no compiler identified for that language, a record of one that could not be read or that names no "
+            + "program, or one the build runs with words after it, a launcher such "
             + "as ccache given its compiler or a compiler given options: the name is a program alone, so the program and "
             + "the words are named and neither is filled in. A test invocation's args, coresArgs and workingDirectory may "
             + "name one too: the check made before the build lets the name stand, and it is filled in, or refused, once "
-            + "the leg is built.");
+            + "the leg is built - under test --no-build, from what the build already in its directory identified.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -725,9 +726,10 @@ internal static class HelpCommand
         builder.AppendLine("verdict there is the worst of its own and its arms': violated where an arm's");
         builder.AppendLine("declaration did not hold, survived where its mutation built and ran and no case");
         builder.AppendLine("failed, and unattributed where its run failed and nothing ties that to a case. An");
-        builder.AppendLine("arm that was due and never driven - its sweep cancelled, no worker left to run it,");
-        builder.AppendLine("or the unmutated run of its test binary not passing - is stopped, saying why");
-        builder.AppendLine("('help mutations').");
+        builder.AppendLine("arm not driven to a verdict - its sweep stopped, or ended by a refusal of the run,");
+        builder.AppendLine("while it was driven or before; its own build, or its paired control's, stopped from");
+        builder.AppendLine("outside; no worker left to run it; or the unmutated run of its test binary not");
+        builder.AppendLine("passing - is stopped, saying why ('help mutations').");
         builder.AppendLine();
         builder.AppendLine("When several apply the more fundamental one is reported, in the order above.");
         builder.AppendLine("A leg whose inputs moved is not reported as failed even when its tests failed,");
@@ -841,7 +843,8 @@ internal static class HelpCommand
             + "declared twice; an M row mutating a file its arm already mutates, as the tree's own file system compares their "
             + "names; an S row naming neither a leg nor a leg set; "
             + "a text no row cites in textDirectory, a mutation nobody drives; a cited text that is not there, or that a "
-            + "sync withholds from every copy of the tree; and a "
+            + "sync withholds from every copy of the tree - one sync.neverTransfer, sync.exclude or worktrees.root "
+            + "covers, or git ignores - as the registry itself is refused where git ignores it; and a "
             + "before-text, a control's before-text or a diagnostic holding nothing, which would match everywhere, or be said "
             + "by every run. Rows R, X, I, F and T are refused, each naming what "
             + "took its place: the leg's own tree, project and variant (R); sync's exclusions (X); the variant's configure "
@@ -986,7 +989,8 @@ internal static class HelpCommand
         builder.AppendLine("  failed        its build failed at a step that is no object depending on its site - a");
         builder.AppendLine("                link, another object - or named no step that failed");
         builder.AppendLine("  violated      its declaration did not hold: a site or a cited text that is not there, or");
-        builder.AppendLine("                a site spelt otherwise than the tree spells it; its before-text not in its");
+        builder.AppendLine("                a site spelt otherwise than the tree spells it, or that is no file the");
+        builder.AppendLine("                sweep's reading of the tree holds; its before-text not in its");
         builder.AppendLine("                site exactly once, or replaced by itself; its target or its runner not");
         builder.AppendLine("                built, or no object they build depending on a site; other cases red than");
         builder.AppendLine("                its C rows, another number of cases run, a G row's case not run, or its");
@@ -999,8 +1003,9 @@ internal static class HelpCommand
         builder.AppendLine("                defaults.stallSeconds, stopped as hung");
         builder.AppendLine("  unwitnessed   the build passed and an object that depends on a site was not rebuilt");
         builder.AppendLine("  stopped       not driven to a verdict: the sweep was stopped, or ended by a refusal of the");
-        builder.AppendLine("                run, while it was driven or before; no worker was left to run it; or the");
-        builder.AppendLine("                unmutated run of its binary did not pass");
+        builder.AppendLine("                run, while it was driven or before; its own build, or its paired control's,");
+        builder.AppendLine("                was stopped from outside; no worker was left to run it; or the unmutated");
+        builder.AppendLine("                run of its binary did not pass");
         builder.AppendLine("  not-admitted  its machine did not admit it, or an arm of the sweep before it");
         builder.AppendLine("  poisoned      a site could not be put back as it was, or a failure nobody named ended");
         builder.AppendLine("                its driving");
@@ -1562,7 +1567,9 @@ internal static class HelpCommand
         builder.AppendLine("directory that is a link is left alone: what it holds is wherever it points. Each");
         builder.AppendLine("leg's line says what was removed and the room left on its filesystem; --dry-run says");
         builder.AppendLine("what each holds and removes nothing; --json carries both as each leg's 'space',");
-        builder.AppendLine("with what its mutation workers held as 'workerBytes'.");
+        builder.AppendLine("with its mutation workers' as 'workerBytes': what was removed of them - 0 where");
+        builder.AppendLine("every one there was kept - or, in a dry run, what is there. A leg whose line carries");
+        builder.AppendLine("no space - its build directory a link, locked, or not removable - carries none.");
         builder.AppendLine();
         builder.AppendLine("A host whose DssHarness is older than this machine's is updated first, as for any");
         builder.AppendLine("command, and the update needs room: a host that is both full and behind has to be");
@@ -1691,6 +1698,15 @@ internal static class HelpCommand
         builder.AppendLine("of it already gone. Close what holds it and run delete-worktree again, from outside");
         builder.AppendLine("the worktree where it is this command's own. A watcher on a directory, as an editor");
         builder.AppendLine("keeps, holds nothing; --force looks for nothing, and goes as far as it can.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The mutation workers kept beside a worktree ('help mutations') go before it, once every check has passed. "
+            + $"They are asked about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), "
+            + $"and workers that cannot be looked for keep it too ({HarnessExit.CommandFailed}), with nothing removed. A sweep "
+            + "that takes one meanwhile keeps the worktree as well, the others gone by then, which the refusal says. --force "
+            + "deletes the worktree and leaves a worker still held, saying so; deleting the worktree again removes it once "
+            + "the sweep has ended.");
         builder.AppendLine();
         AppendWrapped(
             builder,

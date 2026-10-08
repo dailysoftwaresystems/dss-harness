@@ -251,6 +251,16 @@ public interface ISyncService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// What a sync of <paramref name="context"/>'s tree withholds from every copy of it: what its configuration names
+    /// under <c>sync.neverTransfer</c> and <c>sync.exclude</c>, its worktrees root, and what git ignores there - which
+    /// only the tree itself says, so this asks git.
+    /// </summary>
+    /// <param name="context">The tree, and the configuration a sync of it decides by.</param>
+    /// <param name="cancellationToken">Stops the asking.</param>
+    /// <exception cref="HarnessException">git could not be asked what it ignores there.</exception>
+    Task<SyncExclusions> ExclusionsAsync(HarnessContext context, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reads the tree at <paramref name="sourceRoot"/> as a sync carries it, once, for every copy to be made of it.
     /// </summary>
     /// <param name="sourceRoot">The tree.</param>
@@ -827,6 +837,17 @@ public sealed class SyncService(
     }
 
     /// <inheritdoc/>
+    public async Task<SyncExclusions> ExclusionsAsync(HarnessContext context, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        return new SyncExclusions(
+            context.Config.Sync,
+            context.Config.Worktrees.Root,
+            await IgnoredPathsAsync(context.Layout.RepositoryRoot, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <inheritdoc/>
     public async Task<SyncSource> ReadSourceAsync(string sourceRoot, CancellationToken cancellationToken = default)
     {
         var context = await _contextLoader.LoadAsync(sourceRoot, cancellationToken).ConfigureAwait(false);
@@ -839,10 +860,7 @@ public sealed class SyncService(
             .ReadFileAsync(Path.GetDirectoryName(Path.GetDirectoryName(context.ConfigFile))!, HarnessLayout.ConfigFileRelative, cancellationToken)
             .ConfigureAwait(false);
 
-        var exclusions = new SyncExclusions(
-            context.Config.Sync,
-            context.Config.Worktrees.Root,
-            await IgnoredPathsAsync(root, cancellationToken).ConfigureAwait(false));
+        var exclusions = await ExclusionsAsync(context, cancellationToken).ConfigureAwait(false);
 
         // Before the tree is read, because it is about this tree and costs nothing.
         await exclusions.RefuseWhenNoLongerIgnoredAsync(_gitClient, root, cancellationToken).ConfigureAwait(false);

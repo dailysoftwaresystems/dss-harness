@@ -10,7 +10,7 @@ G | charge-bound | Fixture.Depth | reads another constant, and stays green
 A | depth-type | src/budget.hpp | texts/depth.before | texts/depth.after | BUILD-RED | fixture | - | 0 | PAIRED-CONTROL | passed: a depth that is no integer does not compile, where another integer does
 B | depth-type | texts/depth.control-before | texts/depth.control-after | another integer builds
 
-A | depth-coupled | src/budget.hpp | texts/depth.before | texts/coupled.after | TEST-RED | fixture | fixture_tests | 3 | texts/coupled.diag | passed: the depth is renamed where it is defined and where it is read, either alone building nothing, and the one case that reads it says what it found
+A | depth-coupled | src/budget.hpp | texts/depth.before | texts/coupled.after | TEST-RED | fixture | fixture_tests | 3 | texts/coupled.diag | passed: the depth is renamed and changed where it is defined and renamed where it is read, either alone building nothing, and the one case that reads it says what it found
 M | depth-coupled | src/fixture.cpp | texts/coupled-use.before | texts/coupled-use.after | the library reads the depth by the name its header gives it
 C | depth-coupled | Fixture.Depth | reads the depth
 G | depth-coupled | Fixture.Charge | reads another constant, and stays green

@@ -628,6 +628,58 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// A host's refusal of the run that came with the leg's line - a sweep whose arms were judged before something there
+    /// refused the run - is this run's refusal too: the line is carried, with every arm on it, and ends the run with the
+    /// host's code and words, as the same sweep on this machine does. A code that is the leg's own verdict's ends none.
+    /// </summary>
+    [Theory]
+    [InlineData(HarnessExit.Refused, true)]
+    [InlineData(HarnessExit.ConfigInvalid, true)]
+    [InlineData(HarnessExit.UsageError, true)]
+    [InlineData(HarnessExit.Incomplete, false)]
+    [InlineData(1, false)]
+    [InlineData(HarnessExit.CommandFailed, false)]
+    public async Task AHostsRefusalWithTheLegsLine_CarriesTheLine_AndEndsThisRunAsTheHostsDid(int code, bool refuses)
+    {
+        const string Said = "The mutation worker's claim file '/home/dev/repo.mutation-357e24cw-2.claim.json' could not be written.";
+
+        var written = LedgerReport
+            .From(
+                [
+                    new LegEntry
+                    {
+                        Leg = "wsl-debug",
+                        Verdict = LegVerdict.Stopped,
+                        Detail = "2 arm(s): 1 passed, 1 stopped",
+                        Arms =
+                        [
+                            new ArmEntry { Arm = "charge-bound", Verdict = LegVerdict.Passed, Worker = 1 },
+                            new ArmEntry { Arm = "floor", Verdict = LegVerdict.Stopped, Detail = "the sweep was stopped before a worker drove it" },
+                        ],
+                    },
+                ],
+                durationWarningFactor: 0)
+            .ToJson(code, Said);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            command.OnErrorLine?.Invoke(FailureLine.For(MutationService.CommandName, Said));
+            Answer(command, written);
+
+            return HostResults.Finished(command, code);
+        });
+
+        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Stopped, "2 arm(s): 1 passed, 1 stopped"), (entry.Verdict, entry.Detail));
+        Assert.Equal([("charge-bound", LegVerdict.Passed), ("floor", LegVerdict.Stopped)], entry.Arms.Select(arm => (arm.Arm, arm.Verdict)));
+        Assert.Equal(refuses ? code : null, entry.EndsTheRun?.ExitCode);
+        Assert.Equal(
+            refuses ? $"wsl Example-Linux refused '{MutationService.CommandName}' for leg 'wsl-debug': {Said}" : null,
+            entry.EndsTheRun?.Message);
+    }
+
+    /// <summary>
     /// Any other end without a ledger is still no verdict about the code, and now says what the host
     /// said about it rather than only the code it exited with.
     /// </summary>

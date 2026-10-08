@@ -130,7 +130,9 @@ public sealed class MutationService(
         ArgumentNullException.ThrowIfNull(runId);
 
         var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
-        var arms = request.SelfTest ? SelfTestArms(request.ArmNames) : Read(context, request.ArmNames);
+        var arms = request.SelfTest
+            ? SelfTestArms(request.ArmNames)
+            : await ReadAsync(context, request.ArmNames, cancellationToken).ConfigureAwait(false);
         var legs = LegSelection.Resolve(context.Config, request.LegNames).Legs;
 
         RequireSweepable(context.Config, legs, request.SelfTest);
@@ -217,8 +219,9 @@ public sealed class MutationService(
     }
 
     /// <summary>
-    /// What <paramref name="work"/>'s leg sweeps: its tree; its project, configured with the dependency sources its own
-    /// build fetched; the arms it drives; the test settings its tests start by; and what a build of its variant is
+    /// What <paramref name="work"/>'s leg sweeps: its tree; its project, as the leg builds it; the dependency sources its
+    /// own build fetched, which each worker is given its own copy of and configured with; the arms it drives; the test
+    /// settings its tests start by; and what a build of its variant is
     /// expected to come to - its <c>buildSpaceGiB</c> where it declares one, else what its own build directory, or the
     /// main checkout's copy of it, last recorded (<see cref="LegRoom.ExpectedBuildBytes"/>).
     /// </summary>
@@ -313,12 +316,13 @@ public sealed class MutationService(
     /// selects the arms <paramref name="armNames"/> names.
     /// </summary>
     /// <exception cref="HarnessException">
-    /// No registry is configured, it or a text it cites cannot be read whole, a text it cites is one a sync withholds
-    /// from every copy of the tree, a scope names no leg, or a selected arm runs a binary with no report arguments
-    /// configured (<see cref="HarnessExit.ConfigInvalid"/>); or <c>--arms</c> names an arm it does not declare
-    /// (<see cref="HarnessExit.UsageError"/>).
+    /// No registry is configured, it or a text it cites cannot be read whole, it or a text it cites is one a sync
+    /// withholds from every copy of the tree - by the configuration's rules or by git's - a scope names no leg, or a
+    /// selected arm runs a binary with no report arguments configured (<see cref="HarnessExit.ConfigInvalid"/>); or
+    /// <c>--arms</c> names an arm it does not declare (<see cref="HarnessExit.UsageError"/>); or git could not be asked
+    /// what it ignores in the tree (<see cref="HarnessExit.CommandFailed"/>), which no sync of it could be made without.
     /// </exception>
-    internal SweepArms Read(HarnessContext context, IReadOnlyList<string>? armNames)
+    internal async Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
 
@@ -351,6 +355,19 @@ public sealed class MutationService(
             throw new HarnessException(HarnessExit.ConfigInvalid, $"mutations.registry names '{registry}', which could not be read: {ex.Message}");
         }
 
+        // What a sync withholds is in no copy of the tree, and a worker is such a copy, as a host's is: by the rules the
+        // configuration names, which the registry and the text directory are held to as it is read, and by git's - what
+        // git ignores a sync leaves behind as well, and only the tree says which that is. So it is asked here.
+        var carried = await _syncService.ExclusionsAsync(context, cancellationToken).ConfigureAwait(false);
+
+        if (carried.IsWithheldFromTransfer(PathPatterns.Normalize(registry)))
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"mutations.registry names '{registry}', which a sync withholds from every copy of the tree - {Withholders} - so no "
+                + "host sweeping a leg would hold it: keep it where a sync carries it.");
+        }
+
         var reading = MutationRegistryParser.Parse(
             MutationRegistryParser.Lines(rows),
             Listing(root, settings.TextDirectory),
@@ -359,11 +376,7 @@ public sealed class MutationService(
 
         if (reading.Valid)
         {
-            // What a sync withholds is in no copy of the tree, and a worker is such a copy: a text so kept would be
-            // missing to every arm citing it, each read violated for a text nobody carried. The registry and the text
-            // directory are held to the same where their paths are known, as the configuration is read.
-            var carried = new SyncExclusions(context.Config.Sync, context.Config.Worktrees.Root);
-
+            // A text so kept would be missing to every arm citing it, each read violated for a text nobody carried.
             problems.AddRange(TextProblems(reading.Registry, root, carried.IsWithheldFromTransfer));
         }
 
@@ -500,7 +513,7 @@ public sealed class MutationService(
 
         if (withheld(cited))
         {
-            return $"line {line}: text '{cited}' is withheld from every copy of the tree by a sync, so no worker would hold it";
+            return $"line {line}: text '{cited}' is withheld from every copy of the tree by a sync - {Withholders} - so no worker would hold it";
         }
 
         if (!empty)
@@ -559,6 +572,9 @@ public sealed class MutationService(
                 string.Join(Environment.NewLine, [$"The arms registry '{registry}' cannot be swept: {problems.Count} problem(s), each to fix:", .. problems.Select(problem => "  - " + problem)]));
         }
     }
+
+    /// <summary>What keeps a sync from carrying a file, as a refusal names them: git's rules, or the configuration's.</summary>
+    private const string Withholders = "git ignores it, or sync.neverTransfer, sync.exclude or worktrees.root covers it";
 
     /// <summary>Where <paramref name="relative"/>, as configuration and rows spell it, is in <paramref name="root"/>.</summary>
     private static string InTree(string root, string relative) => Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));

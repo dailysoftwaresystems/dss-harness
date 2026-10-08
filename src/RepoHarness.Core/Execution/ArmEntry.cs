@@ -25,7 +25,8 @@ public sealed record ArmEntry
 
     /// <summary>
     /// The worker it was given to, by number - one that drove it, or one whose machine did not admit it - or
-    /// <see langword="null"/> where no worker reached it.
+    /// <see langword="null"/> where none drove it or was refused it: an arm no worker reached, or one a worker took and
+    /// then stopped for its binary's control, which did not pass.
     /// </summary>
     public int? Worker { get; init; }
 
@@ -49,7 +50,8 @@ public sealed record ArmEntry
 
     /// <summary>
     /// Where its records are - its builds' logs, its run's log and report, and its <c>arm.json</c> - or
-    /// <see langword="null"/> where it has none: no worker reached it.
+    /// <see langword="null"/> where it has none: no worker reached it, or the one that took it stopped it for its
+    /// binary's control before anything of its own was built or run.
     /// </summary>
     public string? Records { get; init; }
 }

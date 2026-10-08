@@ -311,7 +311,7 @@ public sealed class CleanService(
 
     /// <summary>What a clean did with the mutation workers a leg keeps beside its tree.</summary>
     /// <param name="Verdict">What was done, as the leg's line says it.</param>
-    /// <param name="Bytes">What was removed of them, or, where nothing was, what is there.</param>
+    /// <param name="Bytes">What was removed of them - 0 where every one there was kept - or, in a dry run, what is there.</param>
     private sealed record WorkersCleaned(ReachedVerdict Verdict, long Bytes);
 
     /// <summary>

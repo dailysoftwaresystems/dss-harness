@@ -172,9 +172,10 @@ Package Pipeline runs the suite only for a commit nothing else tested. A run Dep
 has the full matrix behind it: on that commit for stable, and for beta on its parent, which
 differs only in `<Version>`. A run resuming a commit an earlier run tagged has that run's
 package job behind it, which passed by this same rule before the tag was made. What is left
-is a run started by hand on a commit no run has packaged - a release branch moved past the
-rulesets has nothing else behind it - and there the suite runs, on Linux x86_64 only, before
-anything is packed.
+is a run started by hand that names no commit, on a commit no run has packaged - a release
+branch moved past the rulesets has nothing else behind it - and there the suite runs, on Linux
+x86_64 only, before anything is packed. A run started by hand that fills `expected_sha` in says
+Deploy promoted that commit, and is taken at its word: leave it empty when starting one by hand.
 
 ## Refusals worth knowing
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using NSubstitute;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
@@ -53,26 +54,26 @@ public sealed class MutationServiceTests
 
     /// <summary>A registry read whole and every text there: the arms selected, every one where --arms is left out, in the registry's order.</summary>
     [Fact]
-    public void ARegistryReadWhole_SelectsEveryArm_OrThoseArmsNames()
+    public async Task ARegistryReadWhole_SelectsEveryArm_OrThoseArmsNames()
     {
         using var temp = new TempDirectory();
         var (service, context) = Prepare(temp, Sweepable());
 
-        Assert.Equal(["charge", "depth"], service.Read(context, null).Selected.Select(arm => arm.Id));
-        Assert.Equal(["depth"], service.Read(context, ["depth"]).Selected.Select(arm => arm.Id));
-        Assert.Equal(["charge", "depth"], service.Read(context, ["depth,charge"]).Selected.Select(arm => arm.Id));
+        Assert.Equal(["charge", "depth"], (await service.ReadAsync(context, null, TestContext.Current.CancellationToken)).Selected.Select(arm => arm.Id));
+        Assert.Equal(["depth"], (await service.ReadAsync(context, ["depth"], TestContext.Current.CancellationToken)).Selected.Select(arm => arm.Id));
+        Assert.Equal(["charge", "depth"], (await service.ReadAsync(context, ["depth,charge"], TestContext.Current.CancellationToken)).Selected.Select(arm => arm.Id));
     }
 
     /// <summary>No registry configured is refused, naming the setting; one configured that is not there, naming it.</summary>
     [Fact]
-    public void NoRegistry_IsRefused_NamingTheSetting()
+    public async Task NoRegistry_IsRefused_NamingTheSetting()
     {
         using var temp = new TempDirectory();
         var (unset, unsetContext) = Prepare(temp, Sweepable(new MutationSettings()));
         var (absent, absentContext) = Prepare(temp, Sweepable(new MutationSettings { Registry = "mutations/none.txt" }));
 
-        var none = Assert.Throws<HarnessException>(() => unset.Read(unsetContext, null));
-        var missing = Assert.Throws<HarnessException>(() => absent.Read(absentContext, null));
+        var none = await Assert.ThrowsAsync<HarnessException>(() => unset.ReadAsync(unsetContext, null, TestContext.Current.CancellationToken));
+        var missing = await Assert.ThrowsAsync<HarnessException>(() => absent.ReadAsync(absentContext, null, TestContext.Current.CancellationToken));
 
         Assert.Equal(
             (HarnessExit.ConfigInvalid, "check-mutations has no arms registry to sweep: set mutations.registry to the registry's path, relative to the repository root."),
@@ -87,12 +88,12 @@ public sealed class MutationServiceTests
     /// a text a row cites that is not there.
     /// </summary>
     [Fact]
-    public void ARegistryThatCannotBeReadWhole_IsRefused_NamingEveryProblem()
+    public async Task ARegistryThatCannotBeReadWhole_IsRefused_NamingEveryProblem()
     {
         using var temp = new TempDirectory();
         var (service, context) = Prepare(temp, Sweepable(), ["Z | charge | x", .. Arms]);
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.StartsWith($"The arms registry '{Registry}' cannot be swept: ", refusal.Message, StringComparison.Ordinal);
@@ -110,7 +111,7 @@ public sealed class MutationServiceTests
     [InlineData("depth.control-before", "", "line 4: the text in 'mutations/texts/depth.control-before' holds nothing, which occurs everywhere and which every run says")]
     [InlineData("depth.before", null, "line 3: text 'mutations/texts/depth.before' is not a file in the tree")]
     [InlineData("charge.after", "", null)]
-    public void ACitedTextThatCannotBeSwept_IsRefusedBeforeAnythingStarts(string text, string? holds, string? problem)
+    public async Task ACitedTextThatCannotBeSwept_IsRefusedBeforeAnythingStarts(string text, string? holds, string? problem)
     {
         using var temp = new TempDirectory();
         var (service, context) = Prepare(temp, Sweepable());
@@ -127,11 +128,11 @@ public sealed class MutationServiceTests
 
         if (problem is null)
         {
-            Assert.Equal(2, service.Read(context, null).Selected.Count);
+            Assert.Equal(2, (await service.ReadAsync(context, null, TestContext.Current.CancellationToken)).Selected.Count);
             return;
         }
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Contains("  - " + problem, refusal.Message, StringComparison.Ordinal);
@@ -151,7 +152,7 @@ public sealed class MutationServiceTests
         "  - the text directory 'mutations/texts' could not be listed, so whether every text in it is cited cannot be read: it is held by another process")]
     [InlineData(true, "mutations/texts/charge.before", "  - line 1: text 'mutations/texts/charge.before' could not be read: it is held by another process")]
     [InlineData(false, "mutations/texts/depth.control-before", "  - line 4: text 'mutations/texts/depth.control-before' could not be read: it is held by another process")]
-    public void WhatASweepReadsOfItsRegistry_AndCannot_IsRefusedAsTheRegistryIs(bool denied, string unreadable, string said)
+    public async Task WhatASweepReadsOfItsRegistry_AndCannot_IsRefusedAsTheRegistryIs(bool denied, string unreadable, string said)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -162,7 +163,7 @@ public sealed class MutationServiceTests
             harness: harness,
             files: new Unreadable(harness.FileSystem, temp.Combine(unreadable.Split('/')), raised));
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Contains(said, refusal.Message, StringComparison.Ordinal);
@@ -181,7 +182,7 @@ public sealed class MutationServiceTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void AnMRowsSite_IsComparedAsTheTreesOwnFileSystemComparesNames(bool folds)
+    public async Task AnMRowsSite_IsComparedAsTheTreesOwnFileSystemComparesNames(bool folds)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -194,11 +195,11 @@ public sealed class MutationServiceTests
 
         if (!folds)
         {
-            Assert.Equal(["src/fixture.cpp", "src/Fixture.cpp"], service.Read(context, null).Selected[0].Sites.Select(site => site.Site));
+            Assert.Equal(["src/fixture.cpp", "src/Fixture.cpp"], (await service.ReadAsync(context, null, TestContext.Current.CancellationToken)).Selected[0].Sites.Select(site => site.Site));
             return;
         }
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Contains(
@@ -209,24 +210,24 @@ public sealed class MutationServiceTests
 
     /// <summary>An arm --arms names that the registry does not declare is a usage error, naming it.</summary>
     [Fact]
-    public void AnArmTheRegistryDoesNotDeclare_IsAUsageError()
+    public async Task AnArmTheRegistryDoesNotDeclare_IsAUsageError()
     {
         using var temp = new TempDirectory();
         var (service, context) = Prepare(temp, Sweepable());
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, ["depth", "nowhere"]));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, ["depth", "nowhere"], TestContext.Current.CancellationToken));
 
         Assert.Equal((HarnessExit.UsageError, "--arms names 'nowhere', which no A row of the registry declares"), (refusal.ExitCode, refusal.Message));
     }
 
     /// <summary>A scope naming no leg is refused with the registry's other problems, as configuration.</summary>
     [Fact]
-    public void AScopeNamingNoLeg_IsRefused()
+    public async Task AScopeNamingNoLeg_IsRefused()
     {
         using var temp = new TempDirectory();
         var (service, context) = Prepare(temp, Sweepable(), [.. Arms, "S | charge | nowhere | where it is built"]);
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Contains("nowhere", refusal.Message, StringComparison.Ordinal);
@@ -237,17 +238,17 @@ public sealed class MutationServiceTests
     /// one selecting BUILD-RED arms alone runs no binary, and needs none.
     /// </summary>
     [Fact]
-    public void TestRedArmsWithoutReportArguments_AreRefused_AndBuildRedArmsNeedNone()
+    public async Task TestRedArmsWithoutReportArguments_AreRefused_AndBuildRedArmsNeedNone()
     {
         using var temp = new TempDirectory();
         var (service, context) = Prepare(temp, Sweepable(new MutationSettings { Registry = Registry, TextDirectory = "mutations/texts" }));
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.StartsWith("mutations.reportArgs is not set, and the sweep runs TEST-RED arms", refusal.Message, StringComparison.Ordinal);
         Assert.Contains("[\"--gtest_output=xml:{report}\"]", refusal.Message, StringComparison.Ordinal);
-        Assert.Equal(["depth"], service.Read(context, ["depth"]).Selected.Select(arm => arm.Id));
+        Assert.Equal(["depth"], (await service.ReadAsync(context, ["depth"], TestContext.Current.CancellationToken)).Selected.Select(arm => arm.Id));
     }
 
     /// <summary>
@@ -473,7 +474,7 @@ public sealed class MutationServiceTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void ACitedTextASyncWithholds_IsRefusedBeforeAnythingStarts(bool neverTransferred)
+    public async Task ACitedTextASyncWithholds_IsRefusedBeforeAnythingStarts(bool neverTransferred)
     {
         using var temp = new TempDirectory();
         var config = Sweepable();
@@ -482,15 +483,59 @@ public sealed class MutationServiceTests
 
         var (service, context) = Prepare(temp, config);
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Equal(
             string.Join(
                 Environment.NewLine,
                 "The arms registry 'mutations/arms.txt' cannot be swept: 1 problem(s), each to fix:",
-                "  - line 1: text 'mutations/texts/charge.diag' is withheld from every copy of the tree by a sync, so no worker would hold it"),
+                "  - line 1: text 'mutations/texts/charge.diag' is withheld from every copy of the tree by a sync - git ignores it, or "
+                + "sync.neverTransfer, sync.exclude or worktrees.root covers it - so no worker would hold it"),
             refusal.Message);
+    }
+
+    /// <summary>
+    /// What git ignores a sync leaves behind as it leaves what the configuration names, and only the tree says which
+    /// that is: a cited text git ignores is in no copy of the tree, and is refused before anything starts, with its
+    /// row's line - never each arm citing it read violated for a text nobody carried. A registry git ignores is refused
+    /// the same way, since no host sweeping a leg would hold it; one git tracks is carried whatever its rules say.
+    /// </summary>
+    [Fact]
+    public async Task ACitedTextGitIgnores_IsRefusedBeforeAnythingStarts_AsARegistryItIgnoresIs()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (service, context) = Prepare(temp, Sweepable(), harness: harness);
+        var token = TestContext.Current.CancellationToken;
+
+        temp.WriteFile(".gitignore", "*.diag\n");
+
+        var text = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, token));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, text.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "The arms registry 'mutations/arms.txt' cannot be swept: 1 problem(s), each to fix:",
+                "  - line 1: text 'mutations/texts/charge.diag' is withheld from every copy of the tree by a sync - git ignores it, or "
+                + "sync.neverTransfer, sync.exclude or worktrees.root covers it - so no worker would hold it"),
+            text.Message);
+
+        // Tracked, a file is carried whatever rule would ignore it: git ignores only what it does not track.
+        await harness.RunGitAsync(temp.Path, ["add", "--force", "mutations/texts/charge.diag"], token);
+
+        Assert.Equal(2, (await service.ReadAsync(context, null, token)).Selected.Count);
+
+        temp.WriteFile(".gitignore", "/mutations/arms.txt\n");
+
+        var registry = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, token));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, registry.ExitCode);
+        Assert.Equal(
+            "mutations.registry names 'mutations/arms.txt', which a sync withholds from every copy of the tree - git ignores it, or "
+            + "sync.neverTransfer, sync.exclude or worktrees.root covers it - so no host sweeping a leg would hold it: keep it where a sync carries it.",
+            registry.Message);
     }
 
     /// <summary>
@@ -500,12 +545,12 @@ public sealed class MutationServiceTests
     /// recorded it. Its paths are reckoned by the configured reserve, and each arm's verdict is the judge's own.
     /// </summary>
     [Fact]
-    public void ALegsSweep_IsGivenItsProject_WithWhatItsOwnBuildFetched_AndWhatThatBuildCameTo()
+    public async Task ALegsSweep_IsGivenItsProject_WithWhatItsOwnBuildFetched_AndWhatThatBuildCameTo()
     {
         using var temp = new TempDirectory();
         var config = Sweepable();
         var (service, context) = Prepare(temp, config);
-        var arms = service.Read(context, null);
+        var arms = await service.ReadAsync(context, null, TestContext.Current.CancellationToken);
         var tests = new TestConfig { All = new TestInvocation { Runner = "ctest", WorkingDirectory = "{buildDir}" } };
         var project = new ProjectConfig { Name = "app", Type = "cmake", CacheVars = { ["FOO"] = "1" }, Test = tests };
         var variant = VariantKey.For(config, config.Legs["native"], "linux");
@@ -740,6 +785,7 @@ public sealed class MutationServiceTests
     {
         harness ??= new HarnessFactory();
 
+        InitRepository(temp.Path);
         temp.WriteFile(Registry, string.Join("\n", rows ?? Arms) + "\n");
 
         foreach (var (name, text) in Texts)
@@ -811,6 +857,27 @@ public sealed class MutationServiceTests
             harness.Identity,
             TimeProvider.System,
             harness.Output);
+    }
+
+    /// <summary>
+    /// Makes <paramref name="directory"/> a repository of its own, as every tree a sweep reads is: what a sync withholds
+    /// from a copy is asked of git there.
+    /// </summary>
+    private static void InitRepository(string directory)
+    {
+        using var git = Process.Start(new ProcessStartInfo("git", ["init", "--quiet", "."])
+        {
+            WorkingDirectory = directory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+
+        var said = git.StandardError.ReadToEnd() + git.StandardOutput.ReadToEnd();
+
+        git.WaitForExit();
+
+        Assert.True(git.ExitCode == 0, said);
     }
 
     /// <summary>Where the service <see cref="Service"/> builds over <paramref name="temp"/> keeps a self-test's fixture.</summary>

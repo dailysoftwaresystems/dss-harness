@@ -95,8 +95,10 @@ public enum LegVerdict
     /// <summary>
     /// Its work was begun or due, and was stopped before it reached a verdict of its own. Something stopped its build
     /// from outside before it finished: ninja, which says why whenever it ends a build itself, said nothing of why, or
-    /// said it was interrupted. Or a mutation arm was never driven: its sweep was cancelled, no worker was left to run
-    /// it, or the unmutated run of its test binary did not pass, leaving nothing to judge its own run against. Says
+    /// said it was interrupted. Or a mutation arm was not driven to a verdict: its sweep was stopped, or ended by a
+    /// refusal of the run, while it was driven or before; its own build, or its paired control's, was stopped from
+    /// outside; no worker was left to run it; or the unmutated run of its test binary did not pass, leaving nothing to
+    /// judge its own run against. Says
     /// nothing about the code: distinct from <see cref="Failed"/>, which running again repeats, where running again
     /// finishes this one. Not a failure, and not a pass: a run whose legs include one, and nothing failed, is
     /// incomplete.
@@ -105,7 +107,7 @@ public enum LegVerdict
 
     /// <summary>
     /// A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than
-    /// the tree spells it; the text it mutates is not in its site exactly once, or is replaced by itself; its target or
+    /// the tree spells it or is no file the sweep's reading of the tree holds; the text it mutates is not in its site exactly once, or is replaced by itself; its target or
     /// its runner is not built, or no object they build depends on a site; its mutation reddened other cases than it
     /// declares, ran another number of cases, left a neighbour declared green unrun or left out its diagnostic; a
     /// mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired

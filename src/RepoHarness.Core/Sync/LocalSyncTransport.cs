@@ -394,7 +394,11 @@ public sealed class LocalSyncTransport(
                 continue;
             }
 
-            if (_claims?.HeldBy(copy.Path) is { } holder)
+            // Asked about where this machine keeps the worker, which is where the sweep that holds it claimed it: the
+            // path the caller spelt may start from a home only this machine expands, and names another file as it stands.
+            var kept = Home(copy.Path);
+
+            if (_claims?.HeldBy(kept) is { } holder)
             {
                 left.Add(new WorkerLeft(copy.Path, $"a sweep still running holds it: {holder}", InUse: true));
                 continue;
@@ -412,7 +416,7 @@ public sealed class LocalSyncTransport(
                     continue;
                 }
 
-                _claims?.Forget(copy.Path);
+                _claims?.Forget(kept);
             }
 
             removed.Add(new WorkerRemoved(copy.Path, copy.Bytes));

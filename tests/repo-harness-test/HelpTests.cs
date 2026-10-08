@@ -168,8 +168,9 @@ public sealed partial class HelpTests
             ["violated", "survived", "unattributed"],
             verdict => Assert.Contains($"  {verdict,-22} counts as failure ", result.StandardOutput, StringComparison.Ordinal));
         Assert.Contains(
-            "An arm that was due and never driven - its sweep cancelled, no worker left to run it, or the unmutated run of "
-            + "its test binary not passing - is stopped, saying why ('help mutations').",
+            "An arm not driven to a verdict - its sweep stopped, or ended by a refusal of the run, while it was driven or before; its "
+            + "own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test "
+            + "binary not passing - is stopped, saying why ('help mutations').",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
@@ -244,8 +245,13 @@ public sealed partial class HelpTests
         {
             "failed its build failed at a step that is no object depending on its site - a link, another object - or named no step that failed",
             "violated its declaration did not hold: a site or a cited text that is not there, or a site spelt otherwise than the tree "
-            + "spells it; its before-text not in its site exactly once, or replaced by itself; its target or its runner not built, or no "
-            + "object they build depending on a site;",
+            + "spells it, or that is no file the sweep's reading of the tree holds; its before-text not in its site exactly once, or "
+            + "replaced by itself; its target or its runner not built, or no object they build depending on a site;",
+            "stopped not driven to a verdict: the sweep was stopped, or ended by a refusal of the run, while it was driven or before; "
+            + "its own build, or its paired control's, was stopped from outside; no worker was left to run it; or the unmutated run of "
+            + "its binary did not pass",
+            "a cited text that is not there, or that a sync withholds from every copy of the tree - one sync.neverTransfer, sync.exclude "
+            + "or worktrees.root covers, or git ignores - as the registry itself is refused where git ignores it;",
             "An arm reaches others where nothing of its own decides: skipped-not-selected where --arms or its S row leaves it out of a "
             + "leg; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the path limit; unmeasured "
             + "where ninja's log could not be read around its build, or the report its run wrote could not be read from its file, "
@@ -665,8 +671,8 @@ public sealed partial class HelpTests
             "{compiler_C} and {compiler_CXX} name what built the leg, never what a toolchain declares: the program CMake's own record in the leg's build directory names for that language - gcc on one leg and cl on another, from one run line.",
             "A line may start with one, written alone: the leg's own compiler may run though nothing declares it under tools.",
             "A leg whose project CMake does not build is refused before anything starts, naming each leg and step, since no build of it identifies a compiler;",
-            "a name the leg's build has nothing for is refused once the leg is built, before its first step, saying which case it is - no compiler identified for that language, or one the build runs with words after it, a launcher such as ccache given its compiler or a compiler given options: the name is a program alone, so the program and the words are named and neither is filled in.",
-            "A test invocation's args, coresArgs and workingDirectory may name one too: the check made before the build lets the name stand, and it is filled in, or refused, once the leg is built.",
+            "a name the leg's build has nothing for is refused once the leg is built, before its first step, saying which case it is - no compiler identified for that language, a record of one that could not be read or that names no program, or one the build runs with words after it, a launcher such as ccache given its compiler or a compiler given options: the name is a program alone, so the program and the words are named and neither is filled in.",
+            "A test invocation's args, coresArgs and workingDirectory may name one too: the check made before the build lets the name stand, and it is filled in, or refused, once the leg is built - under test --no-build, from what the build already in its directory identified.",
         })
         {
             Assert.Contains(text, runners, StringComparison.Ordinal);
@@ -801,6 +807,25 @@ public sealed partial class HelpTests
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The worktrees topic says what becomes of the mutation workers kept beside a worktree that is deleted: asked about
+    /// before any goes, so a refusal for one a sweep holds removes nothing, and what --force leaves.
+    /// </summary>
+    [Fact]
+    public async Task WorktreesTopic_SaysWhatBecomesOfTheMutationWorkersBesideAWorktree()
+    {
+        var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "The mutation workers kept beside a worktree ('help mutations') go before it, once every check has passed. They are asked "
+            + $"about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), and workers that cannot be "
+            + $"looked for keep it too ({HarnessExit.CommandFailed}), with nothing removed. A sweep that takes one meanwhile keeps the worktree "
+            + "as well, the others gone by then, which the refusal says. --force deletes the worktree and leaves a worker still held, "
+            + "saying so; deleting the worktree again removes it once the sweep has ended.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1096,6 +1121,11 @@ public sealed partial class HelpTests
         Assert.Contains("A leg is placed only where its host has the room its build still needs", text, StringComparison.Ordinal);
         Assert.Contains("the leg's buildSpaceGiB", text, StringComparison.Ordinal);
         Assert.Contains("Commands that build nothing - sync, clean - need no room.", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "with its mutation workers' as 'workerBytes': what was removed of them - 0 where every one there was kept - or, in a dry "
+            + "run, what is there. A leg whose line carries no space - its build directory a link, locked, or not removable - carries none.",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("legs -v' says the room on each host it measured", text, StringComparison.Ordinal);
     }
 

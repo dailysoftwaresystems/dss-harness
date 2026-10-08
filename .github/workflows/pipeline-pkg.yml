@@ -279,9 +279,11 @@ jobs:
         # the commit it promoted, and the full matrix passed in Deploy: on this commit for
         # stable, and for beta on its parent, which differs only in <Version>. A run resuming a
         # commit an earlier run tagged has that run's package job behind it, which passed by
-        # this same rule before the tag was made. What is left is a run started by hand on a
-        # commit no run has packaged: a release branch moved past the rules that guard it has
-        # nothing else behind it, so the suite runs here, on Linux x86_64 alone.
+        # this same rule before the tag was made. What is left is a run started by hand that
+        # names no commit, on a commit no run has packaged: a release branch moved past the rules
+        # that guard it has nothing else behind it, so the suite runs here, on Linux x86_64 alone.
+        # A run started by hand that fills expected_sha in says Deploy promoted that commit, and
+        # is taken at its word.
         if: env.ON_NUGET != 'true' && inputs.expected_sha == '' && steps.resume.outputs.tag_exists != 'true'
         env:
           # As the test matrix sets it: a test that really builds fails where the runner lacks cmake, ninja or a

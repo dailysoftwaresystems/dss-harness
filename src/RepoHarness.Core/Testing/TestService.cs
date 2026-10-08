@@ -63,8 +63,8 @@ public sealed record TestRequest
 
     /// <summary>
     /// What a test invocation naming one of the leg's compilers - <c>{compiler_C}</c>, <c>{compiler_CXX}</c> - is filled
-    /// in with once the leg is built: what its build identified, read where the invocation first names one. Left out, an
-    /// invocation naming one is refused.
+    /// in with once the leg is built: what its build identified, read where the invocation first names one - the build
+    /// already in its directory, where the run tests without building. Left out, an invocation naming one is refused.
     /// </summary>
     public Execution.LegCompilers? Compilers { get; init; }
 
