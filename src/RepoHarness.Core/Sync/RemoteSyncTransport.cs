@@ -93,6 +93,22 @@ public sealed class RemoteSyncTransport(
                 $"{Host} did not answer which copies it keeps beside '{repositoryPath}'.");
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Asked from the home directory, as a copy's removal is: the tree the workers copy, and the directory it was kept
+    /// in, may be gone, and a host with none there answers that it removed none.
+    /// </remarks>
+    public async Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
+        => (await AskAsync<SyncWorkersAnswer>(
+                    root,
+                    measureOnly ? [SyncServe.RemoveWorkers, root, SyncServe.MeasureOnly] : [SyncServe.RemoveWorkers, root],
+                    cancellationToken,
+                    HomeDirectory)
+                .ConfigureAwait(false))?.Workers
+            ?? throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{Host} did not answer which mutation workers beside '{root}' it removed.");
+
+    /// <inheritdoc/>
     public async Task<SyncManifest> ReadManifestAsync(
         string root,
         IReadOnlyList<string> withheld,

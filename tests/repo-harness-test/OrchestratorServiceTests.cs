@@ -103,6 +103,127 @@ public sealed class OrchestratorServiceTests
         Assert.False(Directory.Exists(kit.Worktrees));
     }
 
+    /// <summary>
+    /// The mutation workers kept beside an agent's worktree are no worktrees below its orchestrator, and nothing a
+    /// removal left: they go with their agent, and one left where its agent is gone - by a build that did not remove
+    /// them - goes with the orchestrator, whose deletion it never refuses.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentsMutationWorkers_GoWithIt_AndOneLeftBehindGoesWithItsOrchestrator()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var worker = await WorkerAsync(kit, worktree + ".mutation-x86_64-gcc-debug-1");
+
+        var listed = await kit.Harness.WorktreeService.ListAsync(kit.Main, Token);
+
+        Assert.Equal(["o1/ag"], listed.Select(listing => listing.Name));
+        Assert.DoesNotContain("holds a .git entry", kit.Harness.StandardError.ToString(), StringComparison.Ordinal);
+
+        // An orchestrator whose agent is not deleted yet is refused, and changes nothing: its agent's workers stay with it.
+        var refused = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.True(Directory.Exists(worktree));
+        Assert.True(Directory.Exists(worker));
+
+        Assert.True((await kit.DeleteAsync("ag", apply: true, discard: true)).Succeeded);
+        Assert.False(Directory.Exists(worker));
+
+        var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-x86_64-gcc-debug-1");
+        var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.False(Directory.Exists(left));
+        Assert.False(Directory.Exists(kit.Worktrees));
+        Assert.Contains(
+            deleted.Details ?? [],
+            line => line.StartsWith("its agent 'old': removed 1 mutation worker(s) kept beside it, ", StringComparison.Ordinal)
+                && line.EndsWith($": '{left}'", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A worker left beside an agent that is gone is said by its agent's address, with the command that removes it; and
+    /// one a sweep still running holds never keeps its orchestrator from being deleted - it is left, and said, with what
+    /// removes it once the sweep has ended.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerLeftBesideAnAgentThatIsGone_IsSaidByItsAddress_AndOneASweepHoldsIsLeftAndSaid()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-x86_64-gcc-debug-1");
+        var copies = new RepoHarness.Core.Mutations.WorkerCopies(
+            SyncKit.Service(kit.Harness),
+            kit.Harness.LocalTransport,
+            kit.Harness.FileSystem,
+            kit.Harness.Output,
+            kit.Harness.Identity,
+            RepoHarness.Core.Mutations.MutationService.CommandName);
+        var sweep = RepoHarness.Core.Execution.RunId.New();
+
+        Assert.Empty(await kit.Harness.WorktreeService.ListAsync(kit.Main, Token));
+        Assert.Contains(
+            "list-worktree: WARN - 'o1/old.mutation-x86_64-gcc-debug-1' is a mutation worker of the worktree 'o1/old', which is gone: "
+            + "'dssharness delete-worktree o1/old' removes it.",
+            kit.Harness.StandardError.ToString(),
+            StringComparison.Ordinal);
+
+        Assert.True(copies.Claim(left, sweep, force: false).Taken);
+
+        var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.True(Directory.Exists(left));
+        Assert.Contains(
+            "its agent 'old': Worktree 'o1/old' is gone already, and a mutation worker left beside it is not yet removed: "
+            + "run 'dssharness delete-worktree o1/old' once what keeps it is gone.",
+            deleted.Details ?? []);
+        Assert.Contains(
+            deleted.Details ?? [],
+            line => line.StartsWith($"left the mutation worker '{left}' kept beside it: a sweep still running holds it: ", StringComparison.Ordinal));
+
+        copies.Release(left, sweep);
+
+        var gone = await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/old", force: false, deleteEvidence: false, cancellationToken: Token);
+
+        Assert.True(gone.Succeeded, gone.Outcome.Message);
+        Assert.False(Directory.Exists(left));
+    }
+
+    /// <summary>
+    /// A directory under the orchestrator's that is nobody's worktree is never deleted for a worker named beside it:
+    /// asked as deleting a worktree asks, unforced, it is refused and said, and it stays with what it holds.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryThatIsNoWorktree_IsNeverDeletedForAWorkerNamedBesideIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var notes = kit.Worktree("notes");
+
+        Directory.CreateDirectory(notes);
+        File.WriteAllText(Path.Combine(notes, "notes.txt"), "mine");
+        await WorkerAsync(kit, notes + ".mutation-x86_64-gcc-debug-1");
+
+        var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Equal("mine", File.ReadAllText(Path.Combine(notes, "notes.txt")));
+        Assert.Contains(deleted.Details ?? [], line => line.StartsWith("its agent 'notes': ", StringComparison.Ordinal));
+    }
+
+    /// <summary>A mutation worker as a sync makes one: marked as the harness's, a repository of its own, holding a file.</summary>
+    private static async Task<string> WorkerAsync(OrchestrationKit kit, string path)
+    {
+        await kit.Harness.LocalTransport.CreateRootAsync(path, RepoHarness.Core.Sync.CopyMark.Complete, Token);
+        Directory.CreateDirectory(Path.Combine(path, ".git"));
+        File.WriteAllText(Path.Combine(path, "main.c"), "int main;");
+
+        return path;
+    }
+
     /// <summary>list-orchestrator's JSON names each orchestrator and each agent with where it stands and where its records are.</summary>
     [Fact]
     public async Task TheListing_NamesEachAgentAndWhereItStands()

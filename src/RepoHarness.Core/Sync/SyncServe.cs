@@ -126,6 +126,38 @@ public static class SyncServe
     public const string ListCopies = "list-copies";
 
     /// <summary>
+    /// Removes the mutation workers kept beside the tree its root names, whether that tree is still there or not, as
+    /// removing the tree's copy asks first, and a clean of a leg whose copy is gone: <c>remove-workers &lt;root&gt;</c>,
+    /// and <see cref="MeasureOnly"/> after it to say what would go and remove nothing.
+    /// </summary>
+    public const string RemoveWorkers = "remove-workers";
+
+    /// <summary>What follows the root where <see cref="RemoveWorkers"/> is only to measure.</summary>
+    public const string MeasureOnly = "measure";
+
+    /// <summary>Whether a <see cref="RemoveWorkers"/> request asks only to measure.</summary>
+    /// <param name="arguments">The request's arguments, the tree's root first.</param>
+    /// <exception cref="HarnessException">
+    /// The request carries something else after its root: the two ends are different builds, and one that removed where
+    /// the other asked for something it does not know would remove what nobody asked it to.
+    /// </exception>
+    public static bool MeasuresOnly(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count <= 1)
+        {
+            return false;
+        }
+
+        return string.Equals(arguments[1], MeasureOnly, StringComparison.Ordinal)
+            ? true
+            : throw new HarnessException(
+                HarnessExit.UsageError,
+                $"sync operation '{RemoveWorkers}' takes '{MeasureOnly}' after its root, or nothing; it was given '{arguments[1]}'.");
+    }
+
+    /// <summary>
     /// The largest file one request can carry, in bytes.
     /// </summary>
     /// <remarks>
@@ -371,6 +403,45 @@ public enum CopyRemoval
     /// <summary>A directory holding no mark of the harness's: left where it is.</summary>
     NotACopy,
 }
+
+/// <summary>What removing the mutation workers kept beside a tree did.</summary>
+/// <param name="Workers">Each worker removed, and each left.</param>
+public sealed record SyncWorkersAnswer(WorkersRemoval Workers);
+
+/// <summary>
+/// What removing the mutation workers kept beside a tree did or, asked only to measure, would do: each copy of the
+/// family a sync made is removed, with what an unfinished removal of one left aside, and every other directory of the
+/// family is left, saying why.
+/// </summary>
+/// <param name="Removed">Each worker removed, or that would be, with what its files held, in the order of their paths.</param>
+/// <param name="Left">Each directory of the family left where it is, and why.</param>
+public sealed record WorkersRemoval(IReadOnlyList<WorkerRemoved> Removed, IReadOnlyList<WorkerLeft> Left)
+{
+    /// <summary>No worker beside the tree, so nothing removed and nothing left.</summary>
+    public static WorkersRemoval None { get; } = new([], []);
+
+    /// <summary>What the workers removed held together.</summary>
+    [JsonIgnore]
+    public long Bytes => Removed.Sum(worker => worker.Bytes);
+
+    /// <summary>The workers left because something is using them: what keeps their tree from being removed too.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<WorkerLeft> InUse => [.. Left.Where(worker => worker.InUse)];
+}
+
+/// <summary>One mutation worker removed, or that would be.</summary>
+/// <param name="Path">Where it was, spelt from the tree it was asked about.</param>
+/// <param name="Bytes">How many bytes its files held.</param>
+public sealed record WorkerRemoved(string Path, long Bytes);
+
+/// <summary>One directory of a tree's mutation workers left where it is.</summary>
+/// <param name="Path">Where it is.</param>
+/// <param name="Why">Why it was left, as a line says it.</param>
+/// <param name="InUse">
+/// Whether something is using it - a sweep still running holds it, or its removal stopped at a file something holds - so
+/// that asking again later removes it; <see langword="false"/> where it is nothing the harness may remove.
+/// </param>
+public sealed record WorkerLeft(string Path, string Why, bool InUse);
 
 /// <summary>The worktree copies a host keeps beside its main copy.</summary>
 /// <param name="Copies">One for each, in the order of their names.</param>

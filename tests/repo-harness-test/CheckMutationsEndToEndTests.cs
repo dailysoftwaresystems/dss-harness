@@ -124,7 +124,8 @@ public sealed class CheckMutationsEndToEndTests
     /// <summary>
     /// A self-test sweeps the fixture this tool carries through the leg's own toolchain, in a repository declaring no arm
     /// of its own: every arm reaches the verdict it is designed to reach, each passed saying so, and the leg passes. The
-    /// fixture is written among this user's own data for this tool, its workers beside it.
+    /// fixture is written among this user's own data for this tool; its workers are kept beside the leg's own tree, never
+    /// beside the fixture, and a clean of the leg removes them.
     /// </summary>
     [Fact]
     public async Task ASelfTest_HoldsEachArmOfTheFixtureToItsDesign_ThroughTheLegsToolchain()
@@ -173,7 +174,16 @@ public sealed class CheckMutationsEndToEndTests
             }
 
             Assert.All(MutationFixture.Files(), pair => Assert.Equal(pair.Value, File.ReadAllBytes(Path.Combine(fixture, pair.Key.Replace('/', Path.DirectorySeparatorChar)))));
-            Assert.True(Directory.Exists(MutationWorkers.PathOf(fixture, variant, 1)), said);
+
+            var worker = MutationWorkers.Of(repository, variant, selfTest: true).PathOf(1);
+
+            Assert.True(Directory.Exists(worker), said);
+            Assert.False(Directory.Exists(MutationWorkers.PathOf(fixture, variant, 1)), "A self-test's worker was kept beside the fixture, where every repository's would be one.");
+
+            var cleaned = await CliRunner.RunAsync(["clean", "--legs", "native", "--json", "-C", repository], token, environment: environment);
+
+            Assert.True(cleaned.ExitCode == HarnessExit.Success, cleaned.StandardError + cleaned.StandardOutput);
+            Assert.False(Directory.Exists(worker), cleaned.StandardError + cleaned.StandardOutput);
         }
         catch (Exception ex) when (!clock.Held)
         {

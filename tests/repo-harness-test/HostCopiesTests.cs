@@ -5,6 +5,7 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -384,6 +385,96 @@ public sealed class HostCopiesTests
 
         Assert.Equal(HarnessExit.Refused, nothing.Outcome.ExitCode);
         Assert.Equal("No worktree named 'feature'.", nothing.Outcome.Message);
+    }
+
+    /// <summary>
+    /// The mutation workers a host keeps beside a worktree's copy go with the copy, and its line says so; while a sweep
+    /// still running there holds one, the copy stays and is still recorded, so deleting the worktree again removes both
+    /// once the sweep has ended.
+    /// </summary>
+    [Fact]
+    public async Task DeletingAWorktree_RemovesTheWorkersBesideItsHostCopy_AndKeepsACopyASweepStillHolds()
+    {
+        using var temp = new TempDirectory();
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var layout = await LayoutAsync(harness, temp);
+        var record = Record(harness);
+
+        var onPi = hosts.Combine("pi", "repo.worktree-feature");
+        var free = onPi + ".mutation-x86_64-gcc-debug-1";
+        var held = onPi + ".mutation-x86_64-gcc-debug-2";
+
+        foreach (var made in new[] { onPi, free, held })
+        {
+            await Local(harness).CreateRootAsync(made, CopyMark.Complete, cancellationToken);
+            File.WriteAllText(Path.Combine(made, "main.c"), "int main;");
+        }
+
+        // A copy that is gone itself, with a worker a sweep left beside where it was, and a directory nobody made.
+        var onMac = hosts.Combine("mac", "repo.worktree-feature");
+        var orphan = onMac + ".mutation-x86_64-gcc-debug-1";
+        var somebodys = onMac + ".mutation-notes";
+
+        await Local(harness).CreateRootAsync(orphan, CopyMark.Complete, cancellationToken);
+        Directory.CreateDirectory(somebodys);
+        File.WriteAllText(Path.Combine(somebodys, "notes.txt"), "somebody's");
+
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "feature", useRandomName: false, cancellationToken);
+        Assert.True(created.Succeeded, created.Outcome.Message);
+        record.Claim(layout, Entry(onPi, created.Path));
+        record.Claim(layout, Entry(onMac, created.Path, Mac));
+
+        var claims = new Claims { Held = { [held] = "vps pid 4242, run 20261007-101500-abcd" } };
+        var service = Service(harness, new HashSet<HostId> { Pi, Mac }, claims: claims);
+        var size = harness.FileSystem.DirectorySize(held);
+        var orphaned = harness.FileSystem.DirectorySize(orphan);
+
+        var deleted = await service.DeleteAsync(temp.Path, "feature", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, deleted.Outcome.ExitCode);
+        Assert.False(Directory.Exists(created.Path));
+        Assert.Equal(
+            [
+                created.Path,
+                $"ssh pi: its copy at '{onPi}' stays, and is still recorded: a mutation worker kept beside it is in use - '{held}': "
+                + "a sweep still running holds it: vps pid 4242, run 20261007-101500-abcd",
+                $"ssh mac: found nothing at '{onMac}' to remove; the 1 mutation worker(s) kept beside it were removed, {DiskSpace.Size(orphaned)}; "
+                + $"left beside it: '{somebodys}', nothing there says the harness made it, so it is yours to remove",
+            ],
+            deleted.Outcome.Details);
+        Assert.True(Directory.Exists(onPi));
+        Assert.True(Directory.Exists(held));
+        Assert.False(Directory.Exists(free));
+        Assert.False(Directory.Exists(orphan));
+        Assert.True(Directory.Exists(somebodys));
+        Assert.Equal([Entry(onPi, created.Path)], record.Of(layout, "feature"));
+
+        claims.Held.Clear();
+
+        // A worker left beside the worktree itself, which is gone: deleting it again removes that too, and says both.
+        var here = created.Path + ".mutation-x86_64-gcc-debug-1";
+
+        await Local(harness).CreateRootAsync(here, CopyMark.Complete, cancellationToken);
+
+        var local = harness.FileSystem.DirectorySize(here);
+        var again = await service.DeleteAsync(temp.Path, "feature", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.True(again.Succeeded, again.Outcome.Message);
+        Assert.Equal(
+            "Worktree 'feature' is gone already; each copy of it left on a host, and the mutation workers left beside it, are dealt with.",
+            again.Outcome.Message);
+        Assert.Equal(
+            [
+                $"removed 1 mutation worker(s) kept beside it, {DiskSpace.Size(local)}: '{here}'",
+                $"ssh pi: removed its copy at '{onPi}', with the 1 mutation worker(s) kept beside it, {DiskSpace.Size(size)}",
+            ],
+            again.Outcome.Details);
+        Assert.False(Directory.Exists(onPi));
+        Assert.False(Directory.Exists(held));
+        Assert.False(Directory.Exists(here));
+        Assert.Empty(record.Of(layout, "feature"));
     }
 
     /// <summary>
@@ -983,6 +1074,281 @@ public sealed class HostCopiesTests
     }
 
     /// <summary>
+    /// A mutation worker kept beside a worktree's copy is named on from that copy's name, and is no worktree's copy: the
+    /// listing of the copies beside the main one never holds it - nor weighs it, which a build directory of gigabytes
+    /// makes slow - nor anything else spelt as no copy's name is.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerBesideAWorktreesCopy_IsNeverListedAsAWorktreesCopy_NorWeighed()
+    {
+        using var hosts = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var main = hosts.Combine("src", "repo");
+
+        await Local(harness).CreateRootAsync(main + ".worktree-alpha", CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(main + ".worktree-alpha.mutation-x86_64-gcc-debug-1", CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(main + ".worktree-lead--a1", CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(main + ".worktree-lead--a1.mutation-self-test-x86_64-gcc-debug-2", CopyMark.Complete, cancellationToken);
+        Directory.CreateDirectory(main + ".worktree-Mine");
+        Directory.CreateDirectory(main + ".worktree-a_b");
+
+        var weighed = new Weighs(harness.FileSystem);
+        var found = await Local(harness, weighed).ListCopiesAsync(main, cancellationToken);
+
+        Assert.Equal(["alpha", "lead--a1"], found.Select(copy => copy.Name));
+        Assert.Equal(["repo.worktree-alpha", "repo.worktree-lead--a1"], weighed.Weighed.Select(Path.GetFileName).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>A copy's name is lower-case letters and digits joined by hyphens, as a worktree's and an agent's are spelt, and nothing else.</summary>
+    [Theory]
+    [InlineData("alpha", true)]
+    [InlineData("a1", true)]
+    [InlineData("my-tree-2", true)]
+    [InlineData("lead--a1", true)]
+    [InlineData("", false)]
+    [InlineData("Alpha", false)]
+    [InlineData("a_b", false)]
+    [InlineData("a b", false)]
+    [InlineData("-alpha", false)]
+    [InlineData("alpha-", false)]
+    [InlineData("alpha.mutation-x86_64-gcc-debug-1", false)]
+    [InlineData("alpha.beta", false)]
+    [InlineData("alpha\n", false)]
+    public void ACopysName_IsSpeltAsAWorktreesIs(string name, bool expected)
+        => Assert.Equal(expected, HostCopies.IsCopyName(name));
+
+    /// <summary>
+    /// The mutation workers kept beside a tree go with it, of whichever variant, a self-test's among them, with what an
+    /// unfinished removal of one left aside: each a sync made is removed and its claim forgotten; one a sweep still
+    /// running holds is left, as in use; a directory nothing says the harness made is left, as somebody's; and another
+    /// tree's workers are never touched. Asked only to measure, it says the same and removes nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkersBesideATree_AreRemoved_ButForOneInUse_AndOneNobodyMade()
+    {
+        using var hosts = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = hosts.Combine("src", "repo.worktree-alpha");
+        var swept = tree + ".mutation-x86_64-gcc-debug-1";
+        var selfTest = tree + ".mutation-self-test-x86_64-gcc-debug-1";
+        var held = tree + ".mutation-x86_64-msvc-debug-1";
+        var somebodys = tree + ".mutation-notes";
+        var aside = hosts.Combine("src", ".repo.worktree-alpha.mutation-x86_64-gcc-debug-2.removing");
+        var anothers = hosts.Combine("src", "repo.mutation-x86_64-gcc-debug-1");
+        var anothersAside = hosts.Combine("src", ".repo.mutation-x86_64-gcc-debug-2.removing");
+        var nobodys = hosts.Combine("src", ".repo.worktree-alpha.mutation-.removing");
+
+        foreach (var made in new[] { swept, selfTest, held, anothers })
+        {
+            await Local(harness).CreateRootAsync(made, CopyMark.Complete, cancellationToken);
+            File.WriteAllText(Path.Combine(made, "main.c"), "int main;");
+        }
+
+        Directory.CreateDirectory(somebodys);
+        File.WriteAllText(Path.Combine(somebodys, "notes.txt"), "somebody's");
+
+        foreach (var left in new[] { aside, anothersAside, nobodys })
+        {
+            Directory.CreateDirectory(left);
+            File.WriteAllText(Path.Combine(left, "part.o"), "what a removal left");
+        }
+
+        var claims = new Claims { Held = { [held] = "run 20261007-101500-abcd, process 4242 on this machine" } };
+        var transport = Local(harness, claims: claims);
+        var sizes = new[] { selfTest, swept, aside }.Select(harness.FileSystem.DirectorySize).ToList();
+
+        var expected = new[] { selfTest, swept, aside }.Zip(sizes, (path, bytes) => new WorkerRemoved(path, bytes)).ToList();
+        var left_ = new[]
+        {
+            new WorkerLeft(somebodys, "nothing there says the harness made it, so it is yours to remove", InUse: false),
+            new WorkerLeft(held, "a sweep still running holds it: run 20261007-101500-abcd, process 4242 on this machine", InUse: true),
+        };
+
+        var measured = await transport.RemoveWorkersAsync(tree, measureOnly: true, cancellationToken);
+
+        Assert.Equal(expected, measured.Removed);
+        Assert.Equal(left_, measured.Left);
+        Assert.All(new[] { swept, selfTest, held, somebodys, aside }, path => Assert.True(Directory.Exists(path), path));
+        Assert.Empty(claims.Forgotten);
+
+        var removed = await transport.RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
+
+        Assert.Equal(expected, removed.Removed);
+        Assert.Equal(left_, removed.Left);
+        Assert.Equal(sizes.Sum(), removed.Bytes);
+        Assert.Equal([left_[1]], removed.InUse);
+        Assert.All(new[] { swept, selfTest, aside }, path => Assert.False(Directory.Exists(path), path));
+        Assert.All(new[] { held, somebodys, anothers, anothersAside, nobodys }, path => Assert.True(Directory.Exists(path), path));
+        Assert.Equal([selfTest, swept], claims.Forgotten);
+
+        // Nothing beside a tree, or no directory it would be kept in: nothing to remove, and nothing said.
+        Assert.Equal((0, 0), Counted(await transport.RemoveWorkersAsync(hosts.Combine("src", "other"), cancellationToken: cancellationToken)));
+        Assert.Equal((0, 0), Counted(await transport.RemoveWorkersAsync(hosts.Combine("nowhere", "repo"), cancellationToken: cancellationToken)));
+
+        static (int, int) Counted(WorkersRemoval removal) => (removal.Removed.Count, removal.Left.Count);
+    }
+
+    /// <summary>
+    /// The transport this machine is reached through as a host knows the claims sweeps hold too: asked to remove a
+    /// tree's workers, it leaves one a sweep still running holds.
+    /// </summary>
+    [Fact]
+    public async Task ThisMachineReachedAsAHost_LeavesAWorkerASweepHolds()
+    {
+        using var hosts = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = hosts.Combine("repo");
+        var held = tree + ".mutation-x86_64-gcc-debug-1";
+
+        await Local(harness).CreateRootAsync(held, CopyMark.Complete, cancellationToken);
+
+        var factory = new SyncTransportFactory(
+            harness.FileSystem,
+            new ManifestBuilder(harness.FileSystem, harness.Platform),
+            harness.GitClient,
+            Substitute.For<IHostCommandRunner>(),
+            harness.Platform,
+            harness.Output,
+            new Claims { Held = { [held] = "this machine pid 1, run r" } });
+
+        var removal = await factory.For(new HostReport { Host = HostId.Local }).RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
+
+        Assert.Empty(removal.Removed);
+        Assert.Equal([new WorkerLeft(held, "a sweep still running holds it: this machine pid 1, run r", InUse: true)], removal.Left);
+        Assert.True(Directory.Exists(held));
+    }
+
+    /// <summary>
+    /// A worker whose removal stops at something held is left as in use, saying what stopped it, and keeps no other
+    /// worker from going; asking again, once nothing holds it, removes the rest of it.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerWhoseRemovalStopsPartWay_IsLeftAsInUse_AndTheOthersGo()
+    {
+        using var hosts = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = hosts.Combine("repo");
+        var stuck = tree + ".mutation-x86_64-gcc-debug-1";
+        var free = tree + ".mutation-x86_64-gcc-debug-2";
+
+        await Local(harness).CreateRootAsync(stuck, CopyMark.Complete, cancellationToken);
+        Directory.CreateDirectory(Path.Combine(stuck, "build"));
+        File.WriteAllText(Path.Combine(stuck, "build", "held.o"), "held open");
+        await Local(harness).CreateRootAsync(free, CopyMark.Complete, cancellationToken);
+
+        var claims = new Claims();
+        var removal = await Local(harness, new HoldsOpen(harness.FileSystem, "build"), claims).RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
+
+        Assert.Equal([free], removal.Removed.Select(worker => worker.Path));
+
+        var left = Assert.Single(removal.Left);
+
+        Assert.Equal((stuck, true), (left.Path, left.InUse));
+        Assert.Contains($"'{stuck}' could not be removed whole", left.Why, StringComparison.Ordinal);
+        Assert.Equal([free], claims.Forgotten);
+        Assert.True(Directory.Exists(stuck));
+
+        Assert.Equal([stuck], (await Local(harness, claims: claims).RemoveWorkersAsync(tree, cancellationToken: cancellationToken)).Removed.Select(worker => worker.Path));
+        Assert.False(Directory.Exists(stuck));
+    }
+
+    /// <summary>
+    /// The removal of a tree's workers is asked of the harness on the host by the tree's own path, from the home
+    /// directory - there when the tree and the directory it was kept in are gone - saying where it is only to measure;
+    /// and one the host never answered is that host being unavailable, never read as no worker there.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalOfWorkers_NamesTheirTree_AndOneNeverAnswered_IsTheHostUnavailable()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        const string tree = "/home/dev/repo.worktree-feature";
+        var asked = new List<HostAgentRequest?>();
+        var answer = new WorkersRemoval(
+            [new WorkerRemoved(tree + ".mutation-x86_64-gcc-debug-1", 42)],
+            [new WorkerLeft(tree + ".mutation-x86_64-gcc-debug-2", "a sweep still running holds it: run r", InUse: true)]);
+
+        var answering = new ScriptedHostCommands((_, command) =>
+        {
+            asked.Add(JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions));
+            command.OnOutputLine?.Invoke(SyncServe.Answer(new SyncWorkersAnswer(answer)));
+            return HostResults.Finished(command, HarnessExit.Success);
+        });
+
+        var removed = await Remote(answering).RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
+        var measured = await Remote(answering).RemoveWorkersAsync(tree, measureOnly: true, cancellationToken);
+
+        Assert.All(new[] { removed, measured }, told =>
+        {
+            Assert.Equal(answer.Removed, told.Removed);
+            Assert.Equal(answer.Left, told.Left);
+        });
+        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, tree], asked[0]?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, tree, SyncServe.MeasureOnly], asked[1]?.Arguments);
+        Assert.All(asked, request => Assert.Equal("~", request?.Directory));
+
+        var silent = new ScriptedHostCommands((_, command) => HostResults.Finished(command, HarnessExit.Success));
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Remote(silent).RemoveWorkersAsync(tree, cancellationToken: cancellationToken));
+
+        Assert.Equal(HarnessExit.HostUnavailable, refusal.ExitCode);
+        Assert.Contains($"did not answer which mutation workers beside '{tree}' it removed", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The far side's removal of a tree's workers answers as sync-serve answers every request: it removes them, leaving
+    /// one a sweep still running on that machine holds; measures where asked only to; and refuses what it does not know.
+    /// </summary>
+    [Fact]
+    public async Task SyncServe_AnswersARemovalOfWorkers_LeavingOneASweepHolds()
+    {
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var tree = hosts.Combine("repo.worktree-feature");
+        var free = tree + ".mutation-x86_64-gcc-debug-1";
+        var held = tree + ".mutation-x86_64-gcc-debug-2";
+
+        await Local(harness).CreateRootAsync(free, CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(held, CopyMark.Complete, cancellationToken);
+
+        // Claimed by this very process, which the command line run within it finds still running.
+        var sweep = RunId.New();
+        var copies = new WorkerCopies(Sync(harness), Local(harness), harness.FileSystem, harness.Output, harness.Identity, "check-mutations");
+
+        Assert.True(copies.Claim(held, sweep, force: false).Taken);
+
+        var measured = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree, SyncServe.MeasureOnly], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, measured.ExitCode);
+        Assert.Equal([free], SyncServe.ReadAnswer<SyncWorkersAnswer>(measured.StandardOutput.Trim())?.Workers.Removed.Select(worker => worker.Path));
+        Assert.True(Directory.Exists(free));
+
+        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree], cancellationToken);
+        var answer = SyncServe.ReadAnswer<SyncWorkersAnswer>(result.StandardOutput.Trim())?.Workers;
+
+        Assert.Equal(HarnessExit.Success, result.ExitCode);
+        Assert.Equal([free], answer?.Removed.Select(worker => worker.Path));
+
+        var left = Assert.Single(answer!.Left);
+
+        Assert.Equal((held, true), (left.Path, left.InUse));
+        Assert.StartsWith("a sweep still running holds it: ", left.Why, StringComparison.Ordinal);
+        Assert.Contains($"run {sweep.Value}", left.Why, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(free));
+        Assert.True(Directory.Exists(held));
+
+        copies.Release(held, sweep);
+
+        var unknown = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree, "everything"], cancellationToken);
+
+        Assert.Equal(HarnessExit.UsageError, unknown.ExitCode);
+        Assert.True(Directory.Exists(held));
+    }
+
+    /// <summary>
     /// A listing is asked of the harness on the host by the main copy's path, from the home directory, which is there
     /// when the directory the copies are kept in is not; and one the host never answered is that host being
     /// unavailable, never read as a host keeping nothing.
@@ -1267,16 +1633,17 @@ public sealed class HostCopiesTests
     private static HostReport Answering(HostId host)
         => new() { Host = host, Os = "linux", Processor = "x86_64", Session = new HostSession(new HostConnection { Host = host }, "dssharness") };
 
-    private static WorktreeService Service(HarnessFactory harness, ISet<HostId> answering, IFileSystem? hostDisk = null, IFileSystem? record = null)
+    private static WorktreeService Service(HarnessFactory harness, ISet<HostId> answering, IFileSystem? hostDisk = null, IFileSystem? record = null, ICopyClaims? claims = null)
         => Service(
             harness,
             new RecordingInspector(host => answering.Contains(host)
                 ? Answering(host)
                 : new HostReport { Host = host, Reason = "the host could not be reached: ssh said ssh: connect to host 192.0.2.10 port 22: Connection timed out" }),
             hostDisk,
-            record);
+            record,
+            claims);
 
-    private static WorktreeService Service(HarnessFactory harness, IHostInspector inspector, IFileSystem? hostDisk = null, IFileSystem? record = null)
+    private static WorktreeService Service(HarnessFactory harness, IHostInspector inspector, IFileSystem? hostDisk = null, IFileSystem? record = null, ICopyClaims? claims = null)
         => new(
             harness.ContextLoader,
             harness.GitClient,
@@ -1284,7 +1651,8 @@ public sealed class HostCopiesTests
             harness.PathBudget,
             harness.Platform,
             harness.Output,
-            new HostCopyRemover(inspector, new LocalHosts(harness, hostDisk ?? harness.FileSystem), Lock(harness), record ?? harness.FileSystem, harness.Platform));
+            new HostCopyRemover(inspector, new LocalHosts(harness, hostDisk ?? harness.FileSystem, claims), Lock(harness), record ?? harness.FileSystem, harness.Platform),
+            harness.LocalTransport);
 
     private static RunLock Lock(HarnessFactory harness) => new(harness.FileSystem, harness.Output, harness.Identity);
 
@@ -1344,13 +1712,37 @@ public sealed class HostCopiesTests
     private static async Task<HarnessLayout> LayoutAsync(HarnessFactory harness, TempDirectory temp)
         => (await harness.ContextLoader.LoadAsync(temp.Path, TestContext.Current.CancellationToken)).Layout;
 
-    private static LocalSyncTransport Local(HarnessFactory harness, IFileSystem? disk = null)
-        => new(disk ?? harness.FileSystem, new ManifestBuilder(harness.FileSystem, harness.Platform), harness.GitClient, harness.Platform);
+    private static LocalSyncTransport Local(HarnessFactory harness, IFileSystem? disk = null, ICopyClaims? claims = null)
+        => new(disk ?? harness.FileSystem, new ManifestBuilder(harness.FileSystem, harness.Platform), harness.GitClient, harness.Platform, claims);
 
     /// <summary>Every host's copies kept on this machine's disk, reached as the host they stand for.</summary>
-    private sealed class LocalHosts(HarnessFactory harness, IFileSystem disk) : ISyncTransportFactory
+    private sealed class LocalHosts(HarnessFactory harness, IFileSystem disk, ICopyClaims? claims = null) : ISyncTransportFactory
     {
-        public ISyncTransport For(HostReport host) => new RecordingTransport(Local(harness, disk), reports: host.Host);
+        public ISyncTransport For(HostReport host) => new RecordingTransport(Local(harness, disk, claims), reports: host.Host);
+    }
+
+    /// <summary>The claims on copies a test says stand, and those forgotten, in the order they were.</summary>
+    private sealed class Claims : ICopyClaims
+    {
+        public Dictionary<string, string> Held { get; } = new(StringComparer.Ordinal);
+
+        public List<string> Forgotten { get; } = [];
+
+        public string? HeldBy(string copy) => Held.GetValueOrDefault(copy);
+
+        public void Forget(string copy) => Forgotten.Add(copy);
+    }
+
+    /// <summary>A disk that keeps which directories were weighed.</summary>
+    private sealed class Weighs(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public List<string> Weighed { get; } = [];
+
+        public override long DirectorySize(string path)
+        {
+            Weighed.Add(path);
+            return base.DirectorySize(path);
+        }
     }
 
     /// <summary>A disk on which a directory of one name is held open, so it cannot be deleted.</summary>

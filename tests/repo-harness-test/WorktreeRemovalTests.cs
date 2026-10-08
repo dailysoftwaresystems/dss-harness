@@ -855,7 +855,7 @@ public sealed class WorktreeRemovalTests
                 return null;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies)
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport)
         {
             InterruptionGrace = TimeSpan.FromMilliseconds(400),
         };
@@ -944,7 +944,7 @@ public sealed class WorktreeRemovalTests
                 return null;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies)
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport)
         {
             InterruptionGrace = TimeSpan.FromMilliseconds(400),
         };
@@ -984,7 +984,7 @@ public sealed class WorktreeRemovalTests
                 return result;
             },
         };
-        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies)
+        var service = new WorktreeService(harness.ContextLoader, git, harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.LocalTransport)
         {
             InterruptionGrace = TimeSpan.Zero,
         };
@@ -1111,7 +1111,7 @@ public sealed class WorktreeRemovalTests
     }
 
     private static WorktreeService Service(HarnessFactory harness, IGitClient git, IFileSystem? fileSystem = null)
-        => new(harness.ContextLoader, git, fileSystem ?? harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies);
+        => new(harness.ContextLoader, git, fileSystem ?? harness.FileSystem, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(fileSystem ?? harness.FileSystem));
 
     private static async Task<HarnessFactory> PrepareAsync(TempDirectory temp)
     {

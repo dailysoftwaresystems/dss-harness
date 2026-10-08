@@ -75,6 +75,11 @@ public interface IHostCopyRemover
 /// leg this machine runs there holds while it builds, so a copy one of its runs is using is never removed from
 /// under it, and forgotten before that lock is let go. A copy not dealt with - its host cannot be asked, a run
 /// holds it, or removing it failed - stays recorded, so deleting the worktree again asks once more.
+/// <para>
+/// The mutation workers a host keeps beside the copy go first, since nothing would remove them once it is gone: each a
+/// copy of it a sweep there made. One still in use - a sweep still running there holds it - says the copy is, which
+/// then stays, and is still recorded.
+/// </para>
 /// </remarks>
 /// <param name="inspector">Reaches a host, and makes sure the harness there can be asked.</param>
 /// <param name="transports">Asks the harness on a host.</param>
@@ -223,6 +228,7 @@ public sealed class HostCopyRemover(
                 }
 
                 CopyRemoval removal;
+                WorkersRemoval workers;
 
                 try
                 {
@@ -235,14 +241,23 @@ public sealed class HostCopyRemover(
                         return Stays(host, entry, report.Reason, HarnessExit.HostUnavailable);
                     }
 
-                    removal = await _transports.For(report).RemoveCopyAsync(entry.Path, cancellationToken).ConfigureAwait(false);
+                    var transport = _transports.For(report);
+
+                    workers = await transport.RemoveWorkersAsync(entry.Path, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    if (workers.InUse is [var busy, ..])
+                    {
+                        return Stays(host, entry, $"a mutation worker kept beside it is in use - '{busy.Path}': {busy.Why}", HarnessExit.Refused);
+                    }
+
+                    removal = await transport.RemoveCopyAsync(entry.Path, cancellationToken).ConfigureAwait(false);
                 }
                 catch (HarnessException ex)
                 {
                     return Stays(host, entry, ex.Message, ex.ExitCode);
                 }
 
-                var said = $"{host}: {Said(removal, entry)}";
+                var said = $"{host}: {Said(removal, entry)}{Beside(removal, workers)}";
 
                 // Forgotten before the lock is let go, so that no run of a worktree of this name can take the lock
                 // between the copy going and its entry going, make the copy again, and find it recorded already.
@@ -270,6 +285,21 @@ public sealed class HostCopyRemover(
                 CopyRemoval.Adopted => $"left '{entry.Path}' in place: the harness took that directory over, so it is yours to remove",
                 _ => $"left '{entry.Path}' in place: nothing there says the harness made it",
             };
+        }
+
+        // What was done about the mutation workers kept beside a copy, after what was done about the copy.
+        static string Beside(CopyRemoval removal, WorkersRemoval workers)
+        {
+            var gone = (workers.Removed.Count, removal) switch
+            {
+                (0, _) => string.Empty,
+                (var count, CopyRemoval.Removed) => $", with the {count} mutation worker(s) kept beside it, {DiskSpace.Size(workers.Bytes)}",
+                var (count, _) => $"; the {count} mutation worker(s) kept beside it were removed, {DiskSpace.Size(workers.Bytes)}",
+            };
+
+            return workers.Left.Count == 0
+                ? gone
+                : $"{gone}; left beside it: {string.Join("; ", workers.Left.Select(worker => $"'{worker.Path}', {worker.Why.TrimEnd('.')}"))}";
         }
 
         static (string, int?) Stays(HostId host, HostCopyEntry entry, string? why, int code)

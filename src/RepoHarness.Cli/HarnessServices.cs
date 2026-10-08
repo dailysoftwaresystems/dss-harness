@@ -179,6 +179,13 @@ internal static class HarnessServices
         // Sync. The local transport is registered as the interface because it is also what a host
         // runs on its own side, where `sync-serve` resolves exactly this one.
         services.AddSingleton<IManifestBuilder, ManifestBuilder>();
+
+        // What keeps a mutation worker's copy from being removed from under the sweep mutating it, wherever the workers
+        // kept beside a tree are removed with it: here, or on the host serving a removal.
+        services.AddSingleton(provider => MutationWorkers.CopyClaims(
+            provider.GetRequiredService<IFileSystem>(),
+            provider.GetRequiredService<IHarnessOutput>(),
+            provider.GetRequiredService<IProcessIdentity>()));
         services.AddSingleton<LocalSyncTransport>();
         services.AddSingleton<ISyncTransport>(provider => provider.GetRequiredService<LocalSyncTransport>());
         services.AddSingleton<ISyncTransportFactory, SyncTransportFactory>();

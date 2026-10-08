@@ -52,7 +52,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `init [--install-tools]` | Create `.harness-config` in the tree it runs in, a worktree's included, seed `config.json`, add ignore rules; installs tools only when asked |
 | `verify-git` | Check git is installed and this is a repository |
 | `create-worktree <name>` | Create a worktree (`--random` generates the name) |
-| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, and its copies on hosts; refuses one holding work that would be lost, a locked one, or one whose evidence directories hold measurements, without `--force` |
+| `delete-worktree <name> [--force]` | Remove a worktree and everything under it, its copies on hosts, and the mutation workers kept beside each; refuses one holding work that would be lost, a locked one, or one whose evidence directories hold measurements, without `--force` |
 | `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is |
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
 | `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
@@ -78,7 +78,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |
 | `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run |
 | `check-mutations [--legs a,b] [--arms a,b] [--self-test]` | Prove each selected leg's tests can fail: in worker copies of its tree, mutate each arm the registry declares, build it, witness every object depending on the site rebuilt, run its test binary whole and judge what reddened; `--self-test` sweeps the fixture the tool carries instead, through each leg's toolchain (`help mutations`) |
-| `clean [--legs a,b] [--dry-run]` | Remove each selected leg's build directory, and the mutation workers its sweeps keep beside its tree, wherever the leg runs, so a full disk can be freed (`help space`) |
+| `clean [--legs a,b] [--dry-run]` | Remove each selected leg's build directory, and the mutation workers its sweeps and self-tests keep beside its tree, wherever the leg runs, so a full disk can be freed (`help space`) |
 | `host-exec --ssh <name> \| --wsl [<distro>] -- <command>` | Run a DssHarness command on an ssh host or in a WSL distribution |
 | `help [topic]` | Explain exit codes, configuration, legs, disk space, heavy-leg admission, worktrees, orchestrators, anchors, layout, secrets, tools, runners, verdicts, mutation testing and CI legs |
 

@@ -74,7 +74,7 @@ internal static class DeleteWorktreeCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Remove a worktree and everything under it, and its copies on hosts; refuses one holding work that would be lost, a locked one, or one whose evidence directories hold measurements, without --force.");
+        var command = new Command(Name, "Remove a worktree and everything under it, its copies on hosts, and the mutation workers kept beside each; refuses one holding work that would be lost, a locked one, one whose evidence directories hold measurements, or one a sweep still running holds a worker of, without --force.");
         command.Arguments.Add(NameArgument);
         command.Options.Add(ForceOption);
         command.Options.Add(DeleteEvidenceOption);

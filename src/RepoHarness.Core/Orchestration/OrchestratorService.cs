@@ -1,6 +1,7 @@
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
@@ -222,9 +223,13 @@ public sealed class OrchestratorService(
             ? await new WorktreeInspector(_gitClient, _fileSystem, _platform, _output).FindWorktreesBelowAsync(layout.MainCheckoutRoot, worktreesDirectory, group, orchestrators: true, cancellationToken).ConfigureAwait(false)
             : [];
 
+        // The mutation workers left beside agents that are gone - by a build that did not remove them with their agent -
+        // are no worktrees below it: they go with it, each removed as deleting its agent's worktree again removes it.
+        var orphans = Orphans(group);
+
         // Decided and done with no other command deciding about this orchestrator meanwhile: an agent made beside this
         // deletion would be made into a directory being removed.
-        return _store.Exclusively(orchestrator, () =>
+        var outcome = _store.Exclusively(orchestrator, () =>
         {
             if (_store.ReadOrchestrator(orchestrator) is null)
             {
@@ -282,9 +287,53 @@ public sealed class OrchestratorService(
                     $"removed {orchestrator.Directory}",
                     .. agents.Count == 0 ? [] : new[] { $"with the history of {agents.Count} deleted agent(s)" },
                     .. kept.Count == 0 ? [] : new[] { $"and {kept.Sum(agent => agent.Evidence)} evidence file(s) and {kept.Sum(agent => agent.Transcripts)} transcript file(s)" },
-                    .. RemoveEmptyGroup(group),
                 ]);
         });
+
+        if (!outcome.Succeeded)
+        {
+            return outcome;
+        }
+
+        var details = new List<string>(outcome.Details ?? []);
+
+        foreach (var agent in orphans)
+        {
+            var gone = await _worktrees
+                .DeleteAsync(startDirectory, WorktreeAddress.Nested(name, agent).Name, force: false, deleteEvidence: false, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            details.AddRange(gone.Succeeded
+                ? (gone.Outcome.Details ?? []).Select(line => $"its agent '{agent}': {line}")
+                : [$"its agent '{agent}': {gone.Outcome.Message}", .. gone.Outcome.Details ?? []]);
+        }
+
+        details.AddRange(RemoveEmptyGroup(group));
+
+        return outcome with { Details = details };
+    }
+
+    /// <summary>
+    /// The agents of the orchestrator whose directory is <paramref name="group"/> that left mutation workers there, by
+    /// name - each gone itself once the orchestrator may be deleted, which is when this is used; none where the directory
+    /// cannot be looked in, which whatever looks in it next says.
+    /// </summary>
+    private IReadOnlyList<string> Orphans(string group)
+    {
+        try
+        {
+            return !_fileSystem.DirectoryExists(group)
+                ? []
+                : [.. _fileSystem.EnumerateDirectories(group)
+                    .Select(directory => MutationWorkers.TreeNamed(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))))
+                    .OfType<string>()
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
     }
 
     /// <summary>

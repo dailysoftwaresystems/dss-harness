@@ -1,5 +1,6 @@
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -188,7 +189,9 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     /// The addresses of the worktrees below <paramref name="path"/>, which is not one itself: each git records strictly
     /// inside it, and - in the directory named for an orchestrator - each directory directly in it holding a .git entry of
     /// its own, whether git still records it or not, since an orchestrator's directory holds its agents' worktrees and
-    /// nothing else. Anywhere else such a directory is a worktree's own submodule or nested repository, not a worktree.
+    /// what goes with them. Anywhere else such a directory is a worktree's own submodule or nested repository, not a
+    /// worktree. A mutation worker kept beside an agent's worktree is a copy with a repository of its own, and none
+    /// either: it goes with its agent.
     /// </summary>
     /// <param name="mainCheckoutRoot">The main checkout, whose list is read.</param>
     /// <param name="worktreesDirectory">The worktrees root, which the addresses are relative to.</param>
@@ -222,7 +225,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
                 throw new HarnessException(HarnessExit.CommandFailed, $"'{path}' could not be looked in: {ex.Message.TrimEnd('.')}");
             }
 
-            foreach (var child in children.Where(child => HoldsOwnGit(_fileSystem, child)))
+            foreach (var child in children.Where(child => HoldsOwnGit(_fileSystem, child) && !IsMutationWorker(child)))
             {
                 found.Add(AddressOf(worktreesDirectory, child));
             }
@@ -243,6 +246,11 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             => WorktreeAddress.OfTree(root, tree, _platform.PathComparison)?.Name
                 ?? Path.GetRelativePath(root, tree).Replace(Path.DirectorySeparatorChar, WorktreeAddress.Separator);
     }
+
+    /// <summary>Whether <paramref name="directory"/> is named as a mutation worker kept beside a tree is: a copy of it, never a worktree.</summary>
+    /// <param name="directory">The directory.</param>
+    public static bool IsMutationWorker(string directory)
+        => MutationWorkers.TreeNamed(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))) is not null;
 
     /// <summary>The worktree among <paramref name="worktrees"/> recorded at <paramref name="resolvedPath"/>, never the main one.</summary>
     /// <param name="worktrees">git's list.</param>

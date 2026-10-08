@@ -35,9 +35,25 @@ public static partial class HostCopies
 
     /// <summary>
     /// What a mutation worker's copy adds to the tree it is a copy of, before the worker's name: a family of copies of
-    /// its own, beside the tree, which no worktree's copy is ever named into, nor any worker's posing as one.
+    /// its own, beside the tree. No worktree's copy is named into it, since a copy's name holds no dot
+    /// (<see cref="IsCopyName"/>); and a worker kept beside a worktree's copy, whose name goes on from that copy's, is
+    /// spelt as no copy's name and so never listed as a worktree's copy.
     /// </summary>
     public const string MutationSuffix = ".mutation-";
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is spelt as the name a tree's copies are kept under (<see cref="NameOf"/>):
+    /// lower-case letters and digits, joined by hyphens. What follows <see cref="WorktreeSuffix"/> spelt any other way
+    /// is no worktree's copy - a mutation worker kept beside one, above all, whose name goes on with
+    /// <see cref="MutationSuffix"/>.
+    /// </summary>
+    /// <param name="name">What follows the suffix in a directory's name.</param>
+    public static bool IsCopyName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        return CopyName().IsMatch(name);
+    }
 
     /// <summary>
     /// Where <paramref name="host"/> keeps the copy of <paramref name="treeRoot"/>, by the repositoryPath
@@ -178,6 +194,9 @@ public static partial class HostCopies
 
     [GeneratedRegex("[^a-z0-9]+", RegexOptions.CultureInvariant)]
     private static partial Regex NotANameCharacter();
+
+    [GeneratedRegex(@"^[a-z0-9]+(-+[a-z0-9]+)*\z", RegexOptions.CultureInvariant)]
+    private static partial Regex CopyName();
 }
 
 /// <summary>One worktree's copy on one host.</summary>

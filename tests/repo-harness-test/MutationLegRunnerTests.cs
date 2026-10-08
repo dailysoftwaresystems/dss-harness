@@ -1678,6 +1678,28 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// A sweep keeps its workers in the family it is given, wherever the tree it reads is: a self-test's are listed,
+    /// claimed, made and built beside the leg's own tree, in the self-test's family, never beside the fixture it reads.
+    /// </summary>
+    [Fact]
+    public async Task ASweep_KeepsItsWorkersInTheFamilyItIsGiven_NeverBesideTheTreeItReads()
+    {
+        using var sweep = new Sweep { Workers = 2 };
+        var family = MutationWorkers.Of(Path.Combine(Path.GetDirectoryName(sweep.Tree)!, "legs-tree"), Variant, selfTest: true);
+
+        sweep.Family = family;
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Equal([family], sweep.Copies.Families);
+        Assert.Equal([family.PathOf(1), family.PathOf(2)], sweep.Copies.Synced.Select(sync => sync.Worker).Order(StringComparer.Ordinal));
+        Assert.Equal([family.PathOf(1), family.PathOf(2)], sweep.Copies.Claimed.Select(claim => claim.Worker).Order(StringComparer.Ordinal));
+        Assert.All(sweep.Builder.Builds, build => Assert.StartsWith(family.Root + "-", build.TreeRoot, StringComparison.Ordinal));
+        Assert.Equal([sweep.Tree], sweep.Reader!.Trees);
+    }
+
+    /// <summary>
     /// A worker an earlier sweep left beyond <c>mutations.workers</c> is removed before the sweep plans, so lowering it frees
     /// the room it held - unless a live sweep holds it, or no sync made it, which is said and left.
     /// </summary>
@@ -1795,13 +1817,16 @@ public sealed class MutationLegRunnerTests
 
         public SyncSource? Reading => Reader?.Reading;
 
-        public string Worker(int number) => MutationWorkers.PathOf(Tree, Variant, number);
+        /// <summary>The family the sweep keeps its workers in: the variant's own beside the tree, unless a test says another.</summary>
+        public WorkerFamily Family { get => field ?? MutationWorkers.Of(Tree, Variant); set; }
+
+        public string Worker(int number) => Family.PathOf(number);
 
         public string Records(string arm) => Path.Combine(RunDirectory, LegName, MutationRecords.ArmsDirectory, arm);
 
         /// <summary>Worker <paramref name="number"/> as a listing finds it, holding 2 KiB, its marker saying <paramref name="origin"/>.</summary>
         public WorkerCopy Copy(int number, CopyOrigin origin)
-            => new(number, new HostCopyFound($"{Variant.DirectoryName}-{number}", Worker(number), origin, 2048));
+            => new(Family.Name, number, new HostCopyFound($"{Family.Name}-{number}", Worker(number), origin, 2048));
 
         public async Task<LegEntry> RunAsync(IReadOnlyList<MutationArm> driven, IReadOnlyList<UnselectedArm>? unselected = null, CancellationToken? cancellationToken = null)
         {
@@ -1849,6 +1874,7 @@ public sealed class MutationLegRunnerTests
                 new MutationSubject
                 {
                     TreeRoot = Tree,
+                    Workers = Family,
                     Project = project,
                     Tests = Test,
                     PathReserve = PathReserve,
@@ -1901,9 +1927,13 @@ public sealed class MutationLegRunnerTests
 
         public int Reads => _reads;
 
+        /// <summary>The trees read, in the order they were.</summary>
+        public ConcurrentQueue<string> Trees { get; } = new();
+
         public Task<SyncSource> ReadAsync(string treeRoot, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _reads);
+            Trees.Enqueue(treeRoot);
             return Task.FromResult(Reading);
         }
     }
@@ -1937,8 +1967,14 @@ public sealed class MutationLegRunnerTests
 
         public Action<string> AfterSync { get; set; } = _ => { };
 
-        public Task<IReadOnlyList<WorkerCopy>> ListAsync(string treeRoot, VariantKey variant, CancellationToken cancellationToken)
-            => Task.FromResult<IReadOnlyList<WorkerCopy>>([.. Listed]);
+        /// <summary>The families a listing was asked for, in the order they were.</summary>
+        public ConcurrentQueue<WorkerFamily> Families { get; } = new();
+
+        public Task<IReadOnlyList<WorkerCopy>> ListAsync(WorkerFamily family, CancellationToken cancellationToken)
+        {
+            Families.Enqueue(family);
+            return Task.FromResult<IReadOnlyList<WorkerCopy>>([.. Listed]);
+        }
 
         public LogOwner? ReleaseAbandoned(string worker)
         {

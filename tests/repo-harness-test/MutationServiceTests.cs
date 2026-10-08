@@ -400,6 +400,7 @@ public sealed class MutationServiceTests
         var built = service.Subject(work, arms, force: true);
 
         Assert.Equal(temp.Path, built.TreeRoot);
+        Assert.Equal(MutationWorkers.Of(temp.Path, variant), built.Workers);
         Assert.Equal(
             [(FetchedSources.FullyDisconnected, "ON"), ("FETCHCONTENT_SOURCE_DIR_GOOGLETEST", googletest.Replace('\\', '/')), ("FOO", "1")],
             built.Project.CacheVars.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => (pair.Key, pair.Value)));
@@ -449,6 +450,8 @@ public sealed class MutationServiceTests
     /// A self-test of a leg sweeps the fixture kept where it was written, as the leg's variant builds it: the fixture's
     /// project, settings and arms, its binary run in its worker with nothing of the leg's tests, each worker's paths
     /// reckoned by the fixture's own build, nothing said of what a build of it comes to, and each arm held to its design.
+    /// Its workers are kept beside the leg's own tree, in the self-test's family - so two repositories self-testing with
+    /// one fixture never share a worker, and each one's are removed with its tree.
     /// </summary>
     [Fact]
     public void ASelfTest_SweepsTheFixture_AsTheLegBuilds_HoldingEachArmToItsDesign()
@@ -470,6 +473,23 @@ public sealed class MutationServiceTests
         var subject = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: true, fixture);
 
         Assert.Equal(fixture, subject.TreeRoot);
+        Assert.Equal(MutationWorkers.Of(temp.Path, variant, selfTest: true), subject.Workers);
+        Assert.Equal(temp.Path + ".mutation-self-test-" + variant.DirectoryName + "-1", subject.Workers.PathOf(1));
+
+        var elsewhere = temp.Combine("another", "repository");
+        var theirs = MutationService.SelfTestSubject(
+            new LegWork(
+                new PlacedLeg("native", config.Legs["native"], host, project, variant, elsewhere, elsewhere, variant.DirectoryUnder(elsewhere), new LocalHostConfig(), Emulated: false),
+                new HarnessContext(new HarnessLayout(elsewhere, elsewhere), config),
+                RunId.New(),
+                Path.Combine(elsewhere, "runs", "r1"),
+                Time: false),
+            MutationService.SelfTestArms(null),
+            force: false,
+            fixture);
+
+        Assert.Equal(fixture, theirs.TreeRoot);
+        Assert.Equal(elsewhere + ".mutation-self-test-" + variant.DirectoryName + "-1", theirs.Workers.PathOf(1));
         Assert.Equal((MutationFixture.DirectoryName, "cmake", "."), (subject.Project.Name, subject.Project.Type, subject.Project.Path));
         Assert.Equal(MutationFixture.Project.BuildOutputs, subject.Project.BuildOutputs);
         Assert.Null(subject.Tests);

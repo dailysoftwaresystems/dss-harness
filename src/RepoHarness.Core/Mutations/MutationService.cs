@@ -171,8 +171,8 @@ public sealed class MutationService(
                     request.Here,
                     request.RemoteArguments)
                 {
-                    // A self-test takes the leg's own sweep lock, as a sweep of the leg does: the fixture's workers are
-                    // kept where this tool's data is, which a run elsewhere cannot name, and each is claimed as it is used.
+                    // A self-test takes the leg's own sweep lock, as a sweep of the leg does: its workers are kept beside
+                    // the leg's tree as a sweep's are, in a family of their own, and a clean of the leg takes both under it.
                     Workload = request.SelfTest ? SelfTestWorkload : Workload,
                     Lock = MutationWorkers.SweepLock,
                 },
@@ -229,6 +229,7 @@ public sealed class MutationService(
         return new MutationSubject
         {
             TreeRoot = leg.TreeRoot,
+            Workers = MutationWorkers.Of(leg.TreeRoot, leg.Variant),
             Project = project.WithCacheVarsBeneath(fetched),
             Tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project),
             Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
@@ -254,7 +255,7 @@ public sealed class MutationService(
 
     /// <summary>
     /// Self-tests <paramref name="work"/>'s leg: the fixture written where this machine keeps this tool's own data, and
-    /// swept there as the leg builds.
+    /// swept as the leg builds, in workers kept beside the leg's own tree.
     /// </summary>
     /// <exception cref="HarnessException">
     /// This machine has nowhere of this user's own to keep the fixture, or it could not be written there
@@ -276,6 +277,13 @@ public sealed class MutationService(
     /// reckoned by the fixture's own build, and each arm held to the verdict it is designed to reach. Nothing says what a
     /// build of it comes to: a few megabytes, which the copy's own size is planned with.
     /// </summary>
+    /// <remarks>
+    /// Its workers are copies of the fixture kept beside the leg's own tree, in the self-test's family of that tree's
+    /// workers: one fixture serves every repository on the machine, and workers kept beside it were shared by all of
+    /// them - one repository's toolchain refusing the build directory another's had made - with nothing to remove them.
+    /// Beside the leg's tree they are that repository's, counted by its room, and go with a clean of the leg, and with
+    /// its worktree or its host's copy.
+    /// </remarks>
     internal static MutationSubject SelfTestSubject(LegWork work, SweepArms arms, bool force, string directory)
     {
         ArgumentNullException.ThrowIfNull(work);
@@ -284,6 +292,7 @@ public sealed class MutationService(
         return new MutationSubject
         {
             TreeRoot = directory,
+            Workers = MutationWorkers.Of(work.Leg.TreeRoot, work.Leg.Variant, selfTest: true),
             Project = MutationFixture.Project,
             Arms = ArmSelection.For(work.Leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = MutationFixture.SettingsFor(work.Context.Config.Mutations),

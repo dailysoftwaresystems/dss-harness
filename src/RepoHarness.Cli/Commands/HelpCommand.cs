@@ -847,7 +847,18 @@ internal static class HelpCommand
             + "one that runs fewer says so. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it, and "
             + "a claim whose sweep died is released and said. Workers an earlier sweep left beyond the count workers allows "
             + "are removed before the sweep plans, so lowering it frees their room, and a directory under a worker's name "
-            + "that no sync made is said and left. clean removes a leg's workers with its build directory.");
+            + "that no sync made is said and left.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "The workers go with their tree. clean removes a leg's with its build directory - its self-test's too, and "
+            + "those of a variant no leg of that host and tree builds any more - and where a host holds no copy of the "
+            + "tree, the host is asked to remove the workers left beside where it was. delete-worktree and delete-agent "
+            + "remove the workers kept beside the worktree first, here and beside each host's copy of it; a worker a "
+            + "sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended - or --force "
+            + "deletes the worktree and leaves that worker, which deleting it again then removes. A worker is no "
+            + "worktree, though it holds a repository of its own: list-worktree passes over it, and says one whose "
+            + "worktree is gone.");
         builder.AppendLine();
         builder.AppendLine("An arm's turn");
         builder.AppendLine();
@@ -907,10 +918,12 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName}, "
-            + "only where it differs, its workers beside it, a few megabytes each; nothing removes them, so delete them by "
-            + "hand while no self-test runs. A self-test is placed by no room a build of the leg's tree needs, its workers' "
-            + "paths are reckoned by the fixture's own longest, and a leg on a host is self-tested there with the fixture "
-            + "that host's DssHarness carries.");
+            + "only where it differs. Its workers are kept beside the leg's own tree, as a sweep's are, in a family of "
+            + $"their own - <tree>{HostCopies.MutationSuffix}{WorkerFamily.SelfTestPrefix}<variant>-<n>, a few megabytes each - so they are "
+            + "that repository's: counted by its room, built by its toolchain, and removed by a clean of the leg, and "
+            + "with its worktree or its host's copy. A self-test is placed by no room a build of the leg's tree needs, "
+            + "its workers' paths are reckoned by the fixture's own longest, and a leg on a host is self-tested there "
+            + "with the fixture that host's DssHarness carries.");
         builder.AppendLine();
         builder.AppendLine("Verdicts");
         builder.AppendLine();
@@ -1453,8 +1466,11 @@ internal static class HelpCommand
         builder.AppendLine("clean removes each selected leg's build directory where the leg runs: in this");
         builder.AppendLine("machine's tree, or in a WSL distribution's or an ssh host's copy of the tree it is");
         builder.AppendLine("typed in. The mutation workers a sweep of the leg keeps beside that tree go with");
-        builder.AppendLine("it, under the lock a sweep takes: one a live sweep claims is kept, and a directory");
-        builder.AppendLine("under a worker's name that no sync made is said and left ('help mutations').");
+        builder.AppendLine("it - its self-test's too, and those of a variant no leg there builds any more -");
+        builder.AppendLine("under the lock a sweep takes: one a live sweep claims is kept, and a directory");
+        builder.AppendLine("under a worker's name that no sync made is said and left ('help mutations'). Where");
+        builder.AppendLine("a host holds no copy of the tree, it is asked to remove the workers left beside");
+        builder.AppendLine("where the copy was.");
         builder.AppendLine();
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug,linux-arm64-release");
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug --dry-run");
@@ -1466,7 +1482,8 @@ internal static class HelpCommand
         builder.AppendLine("an interrupted removal left aside, the next clean of that leg removes. A build");
         builder.AppendLine("directory that is a link is left alone: what it holds is wherever it points. Each");
         builder.AppendLine("leg's line says what was removed and the room left on its filesystem; --dry-run says");
-        builder.AppendLine("what each holds and removes nothing; --json carries both as each leg's 'space'.");
+        builder.AppendLine("what each holds and removes nothing; --json carries both as each leg's 'space',");
+        builder.AppendLine("with what its mutation workers held as 'workerBytes'.");
         builder.AppendLine();
         builder.AppendLine("A host whose DssHarness is older than this machine's is updated first, as for any");
         builder.AppendLine("command, and the update needs room: a host that is both full and behind has to be");

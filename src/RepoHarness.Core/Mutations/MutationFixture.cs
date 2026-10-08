@@ -21,9 +21,11 @@ namespace RepoHarness.Core.Mutations;
 /// otherwise is this tool's defect, never the fixture's, and is reported violated, naming both verdicts.
 /// </para>
 /// <para>
-/// Kept among this user's own data for this tool (<see cref="MutationFixtureStore"/>), where a path stays short, its
-/// workers beside it: a fixture written once is the one every later self-test on the machine finds, its workers' builds
-/// warm. Each file is written only where it differs, so a self-test of the same build of this tool leaves it as it was.
+/// Kept among this user's own data for this tool (<see cref="MutationFixtureStore"/>): a fixture written once is the one
+/// every later self-test on the machine finds, whichever repository asks. Each file is written only where it differs, so
+/// a self-test of the same build of this tool leaves it as it was. Its workers are kept apart from it, beside the tree of
+/// the leg self-tested (<see cref="WorkerFamily.SelfTestPrefix"/>): they are that repository's, built by its toolchain,
+/// their builds warm for its next self-test, and removed with its own.
 /// </para>
 /// </remarks>
 public static class MutationFixture
@@ -255,8 +257,8 @@ public static class MutationFixture
 }
 
 /// <summary>
-/// Where this machine keeps the fixture a self-test sweeps - one per user of the machine, whichever repositories reach it,
-/// its workers beside it - and its writing there.
+/// Where this machine keeps the fixture a self-test sweeps - one per user of the machine, whichever repositories reach
+/// it - and its writing there.
 /// </summary>
 /// <param name="fileSystem">Reads and writes the fixture.</param>
 /// <param name="directory">

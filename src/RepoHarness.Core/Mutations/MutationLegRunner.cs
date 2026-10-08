@@ -23,8 +23,14 @@ namespace RepoHarness.Core.Mutations;
 /// </summary>
 internal sealed record MutationSubject
 {
-    /// <summary>The tree read once for every worker, beside which the workers are kept.</summary>
+    /// <summary>The tree read once for every worker: the leg's own, or for a self-test the fixture's.</summary>
     public required string TreeRoot { get; init; }
+
+    /// <summary>
+    /// Where the workers are kept: the family of copies beside the leg's own tree its variant's sweeps keep, or its
+    /// self-test's.
+    /// </summary>
+    public required WorkerFamily Workers { get; init; }
 
     /// <summary>The project each worker builds, as the leg's variant builds it.</summary>
     public required ProjectConfig Project { get; init; }
@@ -279,7 +285,7 @@ internal sealed class MutationLegRunner(
             var cap = WorkerRoom.Wanted(_subject.Settings.Workers, int.MaxValue, wsl);
             var wanted = WorkerRoom.Wanted(_subject.Settings.Workers, arms, wsl);
 
-            foreach (var beyond in (await _runner._copies.ListAsync(_subject.TreeRoot, _leg.Variant, cancellationToken).ConfigureAwait(false))
+            foreach (var beyond in (await _runner._copies.ListAsync(_subject.Workers, cancellationToken).ConfigureAwait(false))
                 .Where(copy => copy.Number > cap))
             {
                 await RemoveBeyondAsync(beyond, cap, cancellationToken).ConfigureAwait(false);
@@ -1113,7 +1119,7 @@ internal sealed class MutationLegRunner(
         }
 
         /// <summary>Worker <paramref name="number"/>'s copy.</summary>
-        private string Worker(int number) => MutationWorkers.PathOf(_subject.TreeRoot, _leg.Variant, number);
+        private string Worker(int number) => _subject.Workers.PathOf(number);
 
         /// <summary>Whether this is the sweep's first ask of its machine, the one ask that settles.</summary>
         private bool First() => Interlocked.Exchange(ref _asked, 1) == 0;

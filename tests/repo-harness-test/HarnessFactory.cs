@@ -5,12 +5,14 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Projects;
 using RepoHarness.Core.Repository;
+using RepoHarness.Core.Sync;
 using RepoHarness.Core.Tools;
 using RepoHarness.Core.Worktrees;
 
@@ -57,7 +59,8 @@ public sealed class HarnessFactory
             Platform,
             Output,
             new SyncedCopyToolCheck(PublishedVersions, RunningTool, new CommandOrigin(ServesAnotherMachine: false), Output));
-        WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies);
+        LocalTransport = Local(FileSystem);
+        WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport);
 
         AnchorRegistryLocator = new AnchorRegistryLocator(GitClient);
         AnchorRegistryLock = new NamedMutexAnchorRegistryLock(Platform, NamedMutexAnchorRegistryLock.DefaultTimeout);
@@ -107,7 +110,7 @@ public sealed class HarnessFactory
             Platform,
             Output,
             FilePermissions,
-            new WorktreeService(ContextLoader, GitClient, fileSystem, PathBudget, Platform, Output, HostCopies),
+            new WorktreeService(ContextLoader, GitClient, fileSystem, PathBudget, Platform, Output, HostCopies, Local(fileSystem)),
             new RunLock(fileSystem, Output, Identity),
             AnchorRegistryLocator,
             anchors,
@@ -164,6 +167,13 @@ public sealed class HarnessFactory
 
     /// <summary>What deleting a worktree does on hosts: nothing, since no host is reached from these tests.</summary>
     public IHostCopyRemover HostCopies { get; } = new NoHostCopies();
+
+    /// <summary>This machine's own transport over the real disk, which knows the claims sweeps hold on their workers.</summary>
+    public LocalSyncTransport LocalTransport { get; }
+
+    /// <summary>This machine's own transport over <paramref name="fileSystem"/>, which knows the claims sweeps hold on their workers.</summary>
+    public LocalSyncTransport Local(IFileSystem fileSystem)
+        => new(fileSystem, new ManifestBuilder(fileSystem, Platform), GitClient, Platform, MutationWorkers.CopyClaims(fileSystem, Output, Identity));
 
     public IHarnessContextLoader ContextLoader { get; }
 

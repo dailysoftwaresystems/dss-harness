@@ -534,7 +534,8 @@ An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orc
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
 orchestrator under the root is shared with plain worktrees' names, so create-worktree refuses an orchestrator's
 name and create-orchestrator a worktree's, and delete-worktree never deletes a directory holding worktrees below
-it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own counts,
+it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own counts
+- but for a mutation worker kept beside an agent's worktree, a copy of it, which goes with its agent -
 and below any other directory with none of its own only what git records - a husk's submodules are its own contents,
 which `--force` deletes with it. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
 every record last - each agent's after the rest of that agent, the orchestrator's after its agents - so a removal that
@@ -1763,7 +1764,9 @@ while a gate ran turned a green suite red, with four test processes live at once
   so a first sync that stops part way is recorded too, and is refused one another worktree of the
   same name - made by hand, or by another tool, outside the worktrees root - still holds: synced by
   both, each would replace the tree the other put there. Deleting a worktree asks each host that
-  holds one of its copies to remove it, only where the harness made it, and no other host. A host is
+  holds one of its copies to remove it, only where the harness made it, and no other host - and
+  first the mutation workers kept beside it, one of which a sweep still running there holds keeps
+  the copy, still recorded (see *Mutation testing*). A host is
   reached through the worktree's own configuration, read before it goes - its branch may declare a
   host the configuration the command runs in does not - or else through that one; a host neither
   declares is not asked, and its copy is forgotten, named. Each copy is removed under the lock a leg
@@ -1955,10 +1958,15 @@ removes from before it has removed - no sync, no lock entry, no run records.
   `space`. A leg on a host is asked of the DssHarness there, in the copy - once the copy is known
   to be there, so a tree never synced to a host has nothing removed rather than a host refusing it.
 - **A leg's mutation workers go with it.** The workers its sweeps keep beside its tree are removed
-  the same way, under the lock a sweep of the leg takes rather than its build's, and said on its
-  line with what they held: a worker a live sweep still claims is kept, one whose sweep died
-  holding it is released first, and said, and a directory under a worker's name that no sync made
-  is said and left (see *Mutation testing*).
+  the same way, and first, so the room its line says is the room once they are gone: its own
+  variant's, its self-test's, and those of a variant no leg of that host and tree builds any more,
+  which nothing else would ever remove - another leg's are that leg's. Each variant's go under the
+  lock a sweep of it takes rather than its build's, and are said on the leg's line with what they
+  held, which `--json` carries as `space.workerBytes`: a worker a live sweep still claims is kept,
+  as is one whose claim cannot be read; one whose sweep died holding it is released first, and
+  said; and a directory under a worker's name that no sync made is said and left. Where a host
+  holds no copy of the tree, nothing there can run a clean, and the host is asked instead to remove
+  the workers left beside where the copy was (see *Mutation testing*).
 
 A host whose DssHarness is older than this machine's is brought to this build first, as it is by
 every command that asks it anything, and that write needs room. A host that is both full and
@@ -2447,7 +2455,12 @@ them all.
 ### Workers
 
 A leg's workers are copies of its tree kept beside it, `<tree>.mutation-<variant>-<n>`, a family
-of copies of their own, disjoint from a worktree's. A sweep runs `mutations.workers` of them (2),
+of copies of their own. No worktree's copy is named into it, since a copy's name holds no dot; and
+a worker kept beside a worktree's copy on a host, `<repositoryPath>.worktree-<name>.mutation-...`,
+is spelt as no copy's name, so a listing of the host's worktree copies never holds it. Nor is a
+worker kept beside a worktree taken for a worktree, though it holds a repository of its own:
+`list-worktree` passes over it, and it is no worktree below an orchestrator's directory. A sweep
+runs `mutations.workers` of them (2),
 never more than the leg has arms to drive, and one in a WSL distribution, whose sweep this machine
 admits whole. The tree is read once, as a sync reads it, and every worker is synced from that one
 reading, so every arm measures the same tree however long the sweep takes, and an edit made
@@ -2469,6 +2482,17 @@ kept within this machine's path limit as a worktree's is - the worker, its build
 compile errors in files nobody touched. Workers an earlier sweep left beyond `mutations.workers` are
 removed before a sweep plans, so lowering it frees the room they held; a directory under a worker's
 name that no sync made is said and left.
+
+The workers go with their tree, since nothing would remove them once it is gone. `clean` removes a
+leg's with its build directory (see *Disk space*). `delete-worktree`, and so `delete-agent`,
+removes the workers kept beside the worktree before the worktree itself, and each host removes
+those kept beside its copy before the copy (`remove-workers`, served as every sync operation is):
+each worker a sync made, of whichever variant, with what an unfinished removal left aside. A
+worker a sweep still running holds says its tree is in use: the worktree is not deleted, nothing of
+it removed, and a host's copy stays, still recorded - or `--force` deletes the worktree and leaves
+that worker, said, which deleting the worktree again removes once the sweep has ended, as it
+removes whatever a worktree already gone left. `list-worktree` says a worker whose worktree is
+gone, with that command, and `delete-orchestrator` takes those left beside agents that are gone.
 
 ### An arm's turn
 
@@ -2564,13 +2588,17 @@ repository's own project, and hold each arm to the same design.
 
 The fixture is written where this tool keeps its own data (see *Heavy legs share a machine*), as
 `<user data>/dssharness/mutation-fixture`, each file only where it differs and under a lock every
-process on the machine takes, its workers beside it, a few megabytes each. Nothing removes them:
-they are deleted by hand while no self-test runs. A self-test asks no host about the room a build
-of the leg's tree needs, and is placed by none; its workers are measured where they are planned,
-and their paths reckoned by the fixture's own longest, in place of the leg's reserve. It takes the
-leg's sweep lock, as a sweep of the leg does, and its binary runs in its worker with what the leg's
-host gives it, nothing of the leg's tests. A leg on a host is self-tested there, with the fixture
-that host's DssHarness carries.
+process on the machine takes: one fixture for every repository on the machine. Its workers are
+kept apart from it, beside the tree of the leg self-tested, in a family of their own -
+`<tree>.mutation-self-test-<variant>-<n>`, a few megabytes each. Kept beside the fixture they were
+every repository's at once, one's toolchain refusing the build directory another's had made, with
+nothing to remove them; beside the leg's tree they are that repository's, counted by its room,
+removed by a `clean` of the leg, and with its worktree or its host's copy. A self-test asks no
+host about the room a build of the leg's tree needs, and is placed by none; its workers are
+measured where they are planned, and their paths reckoned by the fixture's own longest, in place of
+the leg's reserve. It takes the leg's sweep lock, as a sweep of the leg does, and its binary runs
+in its worker with what the leg's host gives it, nothing of the leg's tests. A leg on a host is
+self-tested there, with the fixture that host's DssHarness carries.
 
 ## Reporting
 

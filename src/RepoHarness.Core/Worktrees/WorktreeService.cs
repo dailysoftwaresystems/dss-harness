@@ -4,10 +4,12 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Core.Worktrees;
 
@@ -50,6 +52,9 @@ public interface IWorktreeService
     /// every check has passed, a worktree something holds part of is refused too, on Windows,
     /// where git's removal would stop part way on it.
     /// <paramref name="force"/> skips every check, and that look, and overrides a lock.
+    /// The mutation workers kept beside the worktree go first, and beside each host's copy of it: one a sweep still
+    /// running holds keeps the worktree, nothing of it removed, unless <paramref name="force"/> deletes it and leaves
+    /// that worker - which deleting the worktree again removes, as it removes whatever one already gone left.
     /// </summary>
     /// <remarks>
     /// <paramref name="name"/> is an address: a plain worktree's name, or <c>orchestrator/agent</c>. A plain address with
@@ -128,7 +133,8 @@ public sealed class WorktreeService(
     IPathBudget pathBudget,
     IHostPlatform platform,
     IHarnessOutput output,
-    IHostCopyRemover hostCopies) : IWorktreeService
+    IHostCopyRemover hostCopies,
+    ISyncTransport local) : IWorktreeService
 {
     /// <summary>The command a deletion reports under.</summary>
     internal const string DeleteCommand = "delete-worktree";
@@ -163,6 +169,9 @@ public sealed class WorktreeService(
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
     private readonly IHostCopyRemover _hostCopies = hostCopies;
+
+    /// <summary>This machine's own transport, which removes the mutation workers kept beside a worktree here.</summary>
+    private readonly ISyncTransport _local = local;
 
     /// <summary>
     /// How long a deletion may run after an interruption before git is stopped, just before the
@@ -511,13 +520,18 @@ public sealed class WorktreeService(
             // them again is what deleting it again is for.
             if (cleared is null)
             {
-                return await AndItsHostCopiesAsync(context, address, path, treeConfig: null, deleted: null, cancellationToken).ConfigureAwait(false);
+                var left = await RemoveWorkersAsync(worktreeName, path, cancellationToken).ConfigureAwait(false);
+
+                return await AndItsHostCopiesAsync(context, address, path, treeConfig: null, deleted: null, left.Lines, left.ExitCode, cancellationToken).ConfigureAwait(false);
             }
 
             if (cleared.Succeeded)
             {
                 await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
-                return await AndItsHostCopiesAsync(context, address, path, treeConfig: null, cleared, cancellationToken).ConfigureAwait(false);
+
+                var left = await RemoveWorkersAsync(worktreeName, path, cancellationToken).ConfigureAwait(false);
+
+                return await AndItsHostCopiesAsync(context, address, path, treeConfig: null, cleared, left.Lines, left.ExitCode, cancellationToken).ConfigureAwait(false);
             }
 
             return cleared;
@@ -622,6 +636,26 @@ public sealed class WorktreeService(
             }
         }
 
+        // The mutation workers kept beside it go first: each is a copy of this tree a sweep made, which nothing would
+        // ever remove once the tree is gone. One still in use - a sweep still running holds it - says the tree is, and
+        // keeps it; forced, the worktree goes and that worker is left, and said.
+        var workers = await RemoveWorkersAsync(worktreeName, path, cancellationToken).ConfigureAwait(false);
+
+        if (!force && workers.InUse is { } busy)
+        {
+            return WorktreeOutcome.Failed(CommandOutcome.Refused(
+                $"Worktree '{worktreeName}' was not deleted: a mutation worker kept beside it is in use - '{busy.Path}': {busy.Why.TrimEnd('.')}. "
+                + "Wait for it to end, or pass --force to delete the worktree and leave that worker. Nothing of the worktree was removed.",
+                workers.Lines));
+        }
+
+        if (!force && workers.Failure is { } failure)
+        {
+            return Failed(
+                $"The mutation workers kept beside worktree '{worktreeName}' could not be removed: {failure.TrimEnd('.')}. Nothing of the worktree "
+                + "was removed: put that right and try again, or pass --force to delete the worktree and leave them.");
+        }
+
         // The last moment an interruption can stop this cleanly. From here the deletion goes on
         // after an interruption, which is reported at once; it can still be left partly done, and
         // --force then finishes it.
@@ -662,11 +696,70 @@ public sealed class WorktreeService(
             };
         }
 
+        // A worker left here was left by --force, which chose to: said, and never what fails the deletion it asked for.
+        if (workers.Lines.Count > 0)
+        {
+            outcome = outcome with { Outcome = outcome.Outcome with { Details = [.. outcome.Outcome.Details ?? [], .. workers.Lines] } };
+        }
+
         // Only once the worktree is really gone. Forgetting it earlier would lose the record of a
         // worktree a failed removal left in place. Not cancelled: the removal is past its point of
         // no return, and a record left behind would answer for a later worktree of the same name.
         await ForgetBaseCommitAsync(layout, worktreeName, CancellationToken.None).ConfigureAwait(false);
-        return await AndItsHostCopiesAsync(context, address, path, treeConfig, outcome, cancellationToken).ConfigureAwait(false);
+        return await AndItsHostCopiesAsync(context, address, path, treeConfig, outcome, [], workersLeft: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>What removing the mutation workers kept beside a worktree did, as its deletion says it.</summary>
+    /// <param name="Lines">What was removed, and each worker left, with why.</param>
+    /// <param name="InUse">The first worker left because something is using it, or <see langword="null"/>.</param>
+    /// <param name="Failure">Why they could not be looked for or removed at all, or <see langword="null"/>.</param>
+    private sealed record WorkersGone(IReadOnlyList<string> Lines, WorkerLeft? InUse, string? Failure)
+    {
+        /// <summary>
+        /// The exit code a worker not yet removed leaves a deletion with - refused where one is in use, failed where they
+        /// could not be removed - or <see langword="null"/> where none is left that asking again would remove.
+        /// </summary>
+        public int? ExitCode => InUse is not null ? HarnessExit.Refused : Failure is not null ? HarnessExit.CommandFailed : null;
+    }
+
+    /// <summary>
+    /// Removes the mutation workers kept beside the worktree at <paramref name="path"/> - each a copy of it a sweep made,
+    /// of whichever variant - and says what it did: what was removed, and each left, with why.
+    /// </summary>
+    /// <param name="name">The worktree's address, for the command that removes what was left.</param>
+    /// <param name="path">The worktree's directory, there or gone.</param>
+    /// <param name="cancellationToken">Stops the removal between workers.</param>
+    private async Task<WorkersGone> RemoveWorkersAsync(string name, string path, CancellationToken cancellationToken)
+    {
+        var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
+        WorkersRemoval removal;
+
+        try
+        {
+            removal = await _local.RemoveWorkersAsync(path, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+        {
+            return new WorkersGone(
+                [$"the mutation workers kept beside it could not be removed: {ex.Message.TrimEnd('.')}; {again} removes them once that is put right"],
+                null,
+                ex.Message);
+        }
+
+        var lines = new List<string>();
+
+        if (removal.Removed.Count > 0)
+        {
+            lines.Add(
+                $"removed {removal.Removed.Count} mutation worker(s) kept beside it, {DiskSpace.Size(removal.Bytes)}: "
+                + string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'")));
+        }
+
+        lines.AddRange(removal.Left.Select(worker => worker.InUse
+            ? $"left the mutation worker '{worker.Path}' kept beside it: {worker.Why.TrimEnd('.')}; {again} removes it once nothing holds it"
+            : $"left '{worker.Path}', named as a mutation worker kept beside it: {worker.Why.TrimEnd('.')}"));
+
+        return new WorkersGone(lines, removal.InUse.FirstOrDefault(), null);
     }
 
     public async Task<IReadOnlyList<WorktreeListing>> ListAsync(
@@ -747,6 +840,23 @@ public sealed class WorktreeService(
             if (inspector.RecordAt(registered, resolved) is not null)
             {
                 names.Add((address, resolved));
+                return true;
+            }
+
+            // A mutation worker kept beside a worktree: a copy of it with a repository of its own, which git records
+            // nowhere and which goes with its worktree. One whose worktree is gone has nothing left to take it with, and
+            // is said, with what removes it.
+            if (MutationWorkers.TreeNamed(name) is { } copied)
+            {
+                if (!_fileSystem.DirectoryExists(Path.Combine(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(directory))!, copied)))
+                {
+                    var tree = orchestrator is null ? copied : WorktreeAddress.Nested(orchestrator, copied).Name;
+
+                    _output.Warn(
+                        ListCommand,
+                        $"'{address}' is a mutation worker of the worktree '{tree}', which is gone: '{ToolPackage.Command} {DeleteCommand} {tree}' removes it.");
+                }
+
                 return true;
             }
 
@@ -1196,6 +1306,14 @@ public sealed class WorktreeService(
     /// <param name="path">The worktree's directory, whose copies these are.</param>
     /// <param name="treeConfig">The configuration it ran on, read before it was deleted, where it could be.</param>
     /// <param name="deleted">What deleting it here did, or <see langword="null"/> when it was gone already.</param>
+    /// <param name="workers">
+    /// What removing the mutation workers left beside a worktree already gone did, said with what the hosts did; none
+    /// where the worktree was deleted here, whose own outcome says it.
+    /// </param>
+    /// <param name="workersLeft">
+    /// The exit code a worker left beside a worktree already gone leaves the command with, since asking again removes
+    /// it; <see langword="null"/> where none was, or where deleting the worktree here chose to leave it.
+    /// </param>
     /// <param name="cancellationToken">Stops the asking; a copy not yet asked about stays recorded.</param>
     /// <remarks>
     /// The worktree stays deleted whatever the hosts answer. A copy not dealt with - its host cannot be asked, a run
@@ -1208,12 +1326,14 @@ public sealed class WorktreeService(
         string path,
         HarnessConfig? treeConfig,
         WorktreeOutcome? deleted,
+        IReadOnlyList<string> workers,
+        int? workersLeft,
         CancellationToken cancellationToken)
     {
         var name = address.Name;
         var done = deleted is null ? $"Worktree '{name}' is gone already" : $"Worktree '{name}' was deleted";
         var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
-        IReadOnlyList<string> before = deleted?.Outcome.Details ?? [];
+        IReadOnlyList<string> before = [.. deleted?.Outcome.Details ?? [], .. workers];
         HostCopyRemoval removal;
 
         try
@@ -1232,7 +1352,7 @@ public sealed class WorktreeService(
                 before));
         }
 
-        if (removal.Lines.Count == 0 && !removal.Interrupted)
+        if (removal.Lines.Count == 0 && !removal.Interrupted && workers.Count == 0)
         {
             return deleted ?? Refused(removal.LeftFor is [var other, ..]
                 ? $"No worktree named '{name}' is here or in git's record. The copies kept under that name on hosts are the "
@@ -1254,7 +1374,18 @@ public sealed class WorktreeService(
                 $"{done}, and {removal.Unfinished.Count} of its copies on hosts are not yet dealt with: run {again} once "
                 + "what keeps each is gone.",
                 details),
-            _ when deleted is null => CommandOutcome.Ok($"{done}; each copy of it left on a host is dealt with.", details),
+            _ when workersLeft is { } left => CommandOutcome.Failed(
+                left,
+                $"{done}, and a mutation worker left beside it is not yet removed: run {again} once what keeps it is gone.",
+                details),
+            _ when deleted is null => CommandOutcome.Ok(
+                (removal.Lines.Count > 0, workers.Count > 0) switch
+                {
+                    (true, true) => $"{done}; each copy of it left on a host, and the mutation workers left beside it, are dealt with.",
+                    (false, _) => $"{done}; the mutation workers left beside it are dealt with.",
+                    _ => $"{done}; each copy of it left on a host is dealt with.",
+                },
+                details),
             _ => deleted.Outcome with { Details = details },
         });
 

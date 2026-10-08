@@ -30,29 +30,77 @@ public sealed class MutationWorkersTests
     [InlineData("C:/src/repo", "C:/src/repo.mutation-x86_64-gcc-debug")]
     public void AWorker_IsACopyBesideTheTree_NamedForItsVariantAndNumber(string tree, string root)
     {
-        Assert.Equal(root, MutationWorkers.RootOf(tree, Variant));
+        Assert.Equal(root, MutationWorkers.Of(tree, Variant).Root);
         Assert.Equal(root + "-1", MutationWorkers.PathOf(tree, Variant, 1));
         Assert.Equal(root + "-12", MutationWorkers.PathOf(tree, Variant, 12));
         Assert.Throws<ArgumentOutOfRangeException>(() => MutationWorkers.PathOf(tree, Variant, 0));
     }
 
     /// <summary>
-    /// A listed copy is a worker of the variant only where its name is the variant's and a number from 1: another
-    /// variant's, whose name starts alike and goes on, a number spelt otherwise, or no number, is none of its workers.
+    /// A self-test's workers are a family of their own beside the leg's tree, named for the self-test and the variant:
+    /// none of them a worker of the variant's own family, locked as the variant's sweep is, and read back from the name
+    /// they are kept under as what they are.
+    /// </summary>
+    [Fact]
+    public void ASelfTestsWorkers_AreAFamilyOfTheirOwn_LockedAsTheVariantsSweepIs()
+    {
+        const string tree = "/home/pi/repo";
+        var run = RunId.New();
+        var own = MutationWorkers.Of(tree, Variant);
+        var selfTest = MutationWorkers.Of(tree, Variant, selfTest: true);
+
+        Assert.Equal("/home/pi/repo.mutation-self-test-x86_64-gcc-debug-2", selfTest.PathOf(2));
+        Assert.Equal("self-test-x86_64-gcc-debug", selfTest.Name);
+        Assert.Equal("/home/pi/repo.mutation-self-test-x86_64-gcc-debug", selfTest.Root);
+        Assert.Equal((own.Root, own.Root), (own.SweepKey, selfTest.SweepKey));
+        Assert.Equal(selfTest, WorkerFamily.Named(tree, selfTest.Name));
+        Assert.Equal(own, WorkerFamily.Named(tree, own.Name));
+        Assert.Equal(new WorkerFamily(tree, WorkerFamily.SelfTestPrefix), WorkerFamily.Named(tree, WorkerFamily.SelfTestPrefix));
+        Assert.Equal(
+            MutationWorkers.SweepLock(HostId.Local, tree, Variant, run, "check-mutations"),
+            MutationWorkers.SweepLock(HostId.Local, selfTest, run, "check-mutations"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => selfTest.PathOf(0));
+    }
+
+    /// <summary>
+    /// A worker's name is its family's, a hyphen and its number - the last hyphen's, so a variant ending in a number is
+    /// still told from its workers' - and a name ending any other way is no worker's.
     /// </summary>
     [Theory]
-    [InlineData("x86_64-gcc-debug-1", 1)]
-    [InlineData("x86_64-gcc-debug-23", 23)]
-    [InlineData("x86_64-gcc-debug-asan-1", null)]
-    [InlineData("x86_64-gcc-debug-01", null)]
-    [InlineData("x86_64-gcc-debug-0", null)]
-    [InlineData("x86_64-gcc-debug-+1", null)]
-    [InlineData("x86_64-gcc-debug-", null)]
-    [InlineData("x86_64-gcc-debug", null)]
-    [InlineData("x86_64-gcc-debug-99999999999", null)]
-    [InlineData("arm64-gcc-debug-1", null)]
-    public void AListedCopy_IsAWorkerOfTheVariant_OnlyByItsNameAndANumber(string name, int? number)
-        => Assert.Equal(number, MutationWorkers.NumberOf(name, Variant));
+    [InlineData("x86_64-gcc-debug-1", "x86_64-gcc-debug", 1)]
+    [InlineData("self-test-x86_64-gcc-debug-12", "self-test-x86_64-gcc-debug", 12)]
+    [InlineData("x86_64-gcc-release-2-1", "x86_64-gcc-release-2", 1)]
+    [InlineData("x86_64-gcc-debug-asan-1", "x86_64-gcc-debug-asan", 1)]
+    [InlineData("x86_64-gcc-debug-23", "x86_64-gcc-debug", 23)]
+    [InlineData("x86_64-gcc-debug", null, null)]
+    [InlineData("x86_64-gcc-debug-+1", null, null)]
+    [InlineData("x86_64-gcc-debug- 1", null, null)]
+    [InlineData("x86_64-gcc-debug-01", null, null)]
+    [InlineData("x86_64-gcc-debug-0", null, null)]
+    [InlineData("x86_64-gcc-debug-", null, null)]
+    [InlineData("x86_64-gcc-debug-99999999999", null, null)]
+    [InlineData("-1", null, null)]
+    [InlineData("1", null, null)]
+    [InlineData("notes", null, null)]
+    [InlineData("", null, null)]
+    public void AWorkersName_IsItsFamilysAndItsNumber(string name, string? family, int? number)
+        => Assert.Equal(family is null ? null : (family, number!.Value), MutationWorkers.Named(name));
+
+    /// <summary>
+    /// A directory named as a mutation worker names the tree it copies, by what comes before the family's suffix; one
+    /// with no tree before it, or spelt as no worker after it, is none.
+    /// </summary>
+    [Theory]
+    [InlineData("alpha.mutation-x86_64-gcc-debug-1", "alpha")]
+    [InlineData("a1.mutation-self-test-x86_64-gcc-debug-2", "a1")]
+    [InlineData("alpha.mutation-a-1.mutation-b-2", "alpha")]
+    [InlineData("alpha.mutation-notes", null)]
+    [InlineData("alpha.mutation-", null)]
+    [InlineData(".mutation-x86_64-gcc-debug-1", null)]
+    [InlineData("alpha.worktree-x86_64-gcc-debug-1", null)]
+    [InlineData("alpha", null)]
+    public void ADirectoryNamedAsAWorker_NamesTheTreeItCopies(string name, string? tree)
+        => Assert.Equal(tree, MutationWorkers.TreeNamed(name));
 
     /// <summary>
     /// A sweep's lock is its workers' key, whole: a build holding the leg's tree and variant never meets it, and another

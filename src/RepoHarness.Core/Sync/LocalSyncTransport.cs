@@ -6,6 +6,7 @@ using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Sync;
 
@@ -17,7 +18,8 @@ public sealed class LocalSyncTransport(
     IFileSystem fileSystem,
     IManifestBuilder manifestBuilder,
     IGitClient gitClient,
-    IHostPlatform platform) : ISyncTransport
+    IHostPlatform platform,
+    ICopyClaims? claims = null) : ISyncTransport
 {
     /// <summary>
     /// The file recording that the harness made this copy, inside the copy's own harness directory,
@@ -28,6 +30,12 @@ public sealed class LocalSyncTransport(
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IManifestBuilder _manifestBuilder = manifestBuilder;
     private readonly IGitClient _gitClient = gitClient;
+
+    /// <summary>
+    /// Which run is using a copy kept beside a tree, asked before a mutation worker is removed; <see langword="null"/>
+    /// where nothing here records any, and so nothing holds one.
+    /// </summary>
+    private readonly ICopyClaims? _claims = claims;
     private readonly IHostPlatform _platform = platform;
 
     /// <inheritdoc/>
@@ -310,7 +318,7 @@ public sealed class LocalSyncTransport(
     /// walked, and a marker that cannot be read is said as that copy's, rather than ending the listing.
     /// </remarks>
     public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default)
-        => ListCopiesAsync(repositoryPath, HostCopies.WorktreeSuffix, cancellationToken);
+        => ListCopiesAsync(repositoryPath, HostCopies.WorktreeSuffix, HostCopies.IsCopyName, cancellationToken);
 
     /// <summary>
     /// The copies of <paramref name="family"/> kept beside <paramref name="root"/> - each directory named
@@ -322,7 +330,20 @@ public sealed class LocalSyncTransport(
     /// <param name="family">The family's suffix: <see cref="HostCopies.WorktreeSuffix"/> or <see cref="HostCopies.MutationSuffix"/>.</param>
     /// <param name="cancellationToken">Stops the listing between copies.</param>
     public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string root, string family, CancellationToken cancellationToken = default)
+        => ListCopiesAsync(root, family, _ => true, cancellationToken);
+
+    /// <summary>
+    /// The copies of <paramref name="family"/> kept beside <paramref name="root"/> whose names <paramref name="named"/>
+    /// takes, in the order of their names: a directory under any other name is none of the family's, and is not weighed.
+    /// </summary>
+    /// <param name="root">What the copies are kept beside.</param>
+    /// <param name="family">The family's suffix.</param>
+    /// <param name="named">Whether what follows the suffix in a directory's name is the name of a copy to list.</param>
+    /// <param name="cancellationToken">Stops the listing between copies.</param>
+    public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string root, string family, Func<string, bool> named, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(named);
+
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(family);
 
@@ -342,7 +363,7 @@ public sealed class LocalSyncTransport(
 
             var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
-            if (leaf.Length > prefix.Length && leaf.StartsWith(prefix, StringComparison.Ordinal))
+            if (leaf.Length > prefix.Length && leaf.StartsWith(prefix, StringComparison.Ordinal) && named(leaf[prefix.Length..]))
             {
                 var name = leaf[prefix.Length..];
                 found.Add(Found(name, HostCopies.InFamily(root, family, name), directory));
@@ -350,6 +371,101 @@ public sealed class LocalSyncTransport(
         }
 
         return Task.FromResult<IReadOnlyList<HostCopyFound>>([.. found.OrderBy(copy => copy.Name, StringComparer.Ordinal)]);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Each worker is removed as a copy is, by its marker, so one a removal stopped in is still the harness's to remove
+    /// when asked again. What a removal left aside (<see cref="RemovalAside"/>) was a worker a sync made, renamed with
+    /// nothing sweeping in it, and goes whatever it still holds.
+    /// </remarks>
+    public async Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
+    {
+        var removed = new List<WorkerRemoved>();
+        var left = new List<WorkerLeft>();
+
+        foreach (var copy in await ListCopiesAsync(root, HostCopies.MutationSuffix, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (copy.Origin != CopyOrigin.Made)
+            {
+                left.Add(new WorkerLeft(copy.Path, WorktreeReports.Origin(copy), InUse: false));
+                continue;
+            }
+
+            if (_claims?.HeldBy(copy.Path) is { } holder)
+            {
+                left.Add(new WorkerLeft(copy.Path, $"a sweep still running holds it: {holder}", InUse: true));
+                continue;
+            }
+
+            if (!measureOnly)
+            {
+                try
+                {
+                    await RemoveCopyAsync(copy.Path, cancellationToken).ConfigureAwait(false);
+                }
+                catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+                {
+                    left.Add(new WorkerLeft(copy.Path, ex.Message, InUse: true));
+                    continue;
+                }
+
+                _claims?.Forget(copy.Path);
+            }
+
+            removed.Add(new WorkerRemoved(copy.Path, copy.Bytes));
+        }
+
+        foreach (var aside in WorkersAside(root))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var bytes = _fileSystem.DirectorySize(aside);
+
+            if (!measureOnly)
+            {
+                try
+                {
+                    _fileSystem.DeleteDirectory(aside);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    left.Add(new WorkerLeft(aside, $"what a removal left aside could not be removed: {ex.Message}", InUse: true));
+                    continue;
+                }
+            }
+
+            removed.Add(new WorkerRemoved(aside, bytes));
+        }
+
+        return new WorkersRemoval(removed, left);
+    }
+
+    /// <summary>
+    /// What an unfinished removal of the workers beside <paramref name="root"/> left aside: each directory beside it
+    /// named as the aside of one of its mutation family, in the order of their names.
+    /// </summary>
+    private IReadOnlyList<string> WorkersAside(string root)
+    {
+        var main = Path.TrimEndingDirectorySeparator(Home(root));
+        var parent = Path.GetDirectoryName(main);
+        var prefix = Path.GetFileName(main) + HostCopies.MutationSuffix;
+
+        if (string.IsNullOrEmpty(parent) || !_fileSystem.DirectoryExists(parent))
+        {
+            return [];
+        }
+
+        return
+        [
+            .. _fileSystem.EnumerateDirectories(parent)
+                .Where(directory => RemovalAside.Was(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))) is { } was
+                    && was.Length > prefix.Length
+                    && was.StartsWith(prefix, StringComparison.Ordinal))
+                .Order(StringComparer.Ordinal),
+        ];
     }
 
     /// <summary>What the copy at <paramref name="directory"/> is, as a listing says it.</summary>
