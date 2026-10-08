@@ -4,6 +4,7 @@ using NSubstitute;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
@@ -3225,6 +3226,81 @@ public sealed class SyncServiceTests
         Assert.Equal(
             [".harness-config/runner/actions/probe/probe.yml", "src/a.c"],
             manifest.Entries.Keys.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A sync that cannot ask git what it ignores in the tree is refused, as a failure, before anything is carried: read
+    /// as a tree git ignores nothing in, every build directory and local file in it would be copied to a host.
+    /// </summary>
+    [Fact]
+    public async Task ASyncWhereGitCannotSayWhatItIgnores_IsRefused_CarryingNothing()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, _) = await PrepareAsync(temp, cancellationToken);
+        var copy = SyncKit.CopyPath(temp);
+        var git = new InterceptingGitClient(harness.GitClient)
+        {
+            InsteadOfRun = arguments => arguments is ["ls-files", "--others", "--ignored", ..] ? new GitCommandResult(128, string.Empty, "fatal: the index is locked") : null,
+        };
+
+        try
+        {
+            var refusal = await Assert.ThrowsAsync<HarnessException>(
+                () => SyncKit.Service(harness, git: git).SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken));
+
+            Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+            Assert.StartsWith("What git ignores in '", refusal.Message, StringComparison.Ordinal);
+            Assert.EndsWith(
+                "' could not be listed, so a sync cannot tell which files are local to this machine: fatal: the index is locked",
+                refusal.Message,
+                StringComparison.Ordinal);
+            Assert.False(Directory.Exists(copy));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// What git ignores is asked of the tree being synced, never of the main checkout it is a worktree of: a worktree
+    /// whose rules differ leaves behind what its own rules ignore, and carries what only the main checkout's would.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreeSync_LeavesBehindWhatTheWorktreesOwnRulesIgnore_NotTheMainCheckouts()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
+        var copy = Path.GetFullPath(SyncKit.CopyPath(temp));
+
+        try
+        {
+            await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", worktree], cancellationToken);
+
+            // The main checkout ignores a directory of drafts, which holds something there.
+            temp.WriteFile(".gitignore", "build/\ndrafts/\n");
+            temp.WriteFile(Path.Combine("drafts", "main.txt"), "the main checkout's\n");
+
+            // The worktree's own rules say otherwise: its notes are local to it, and its drafts are not.
+            File.WriteAllText(Path.Combine(worktree, ".gitignore"), "build/\n*.local\n");
+            File.WriteAllText(Path.Combine(worktree, "notes.local"), "mine\n");
+            Directory.CreateDirectory(Path.Combine(worktree, "drafts"));
+            File.WriteAllText(Path.Combine(worktree, "drafts", "kept.txt"), "carried\n");
+
+            await service.SyncAsync(worktree, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
+
+            Assert.True(File.Exists(Path.Combine(copy, "src", "a.c")));
+            Assert.False(File.Exists(Path.Combine(copy, "notes.local")), "what the worktree's own rules ignore was carried");
+            Assert.True(File.Exists(Path.Combine(copy, "drafts", "kept.txt")), "what only the main checkout's rules ignore was left behind");
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(worktree);
+        }
     }
 
     private static async Task<(HarnessFactory Harness, ISyncService Service)> PrepareAsync(

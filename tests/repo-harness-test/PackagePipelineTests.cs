@@ -27,12 +27,18 @@ public sealed class PackagePipelineTests
 
     /// <summary>
     /// A run Deploy started publishes without running the suite because of three things the workflows say, and only
-    /// while they say all three: Deploy promotes a commit once the full matrix has passed on that very commit; it starts
-    /// the package run naming the commit it promoted; and the package run publishes nothing where its branch holds
-    /// another. Without the first, what is published was tested by nothing; without the others, it need not be what was.
+    /// while they say all three: Deploy promotes a commit once the full matrix has passed on it - for beta on its
+    /// parent, which differs only in the version; it starts the package run naming the commit it promoted; and the
+    /// package run publishes nothing where its branch holds another. Without the first, what is published was tested by
+    /// nothing; without the others, it need not be what was.
     /// </summary>
+    /// <remarks>
+    /// The first holds only while the promote job works on the very commit the matrix ran on - checked out by that
+    /// commit, never by its branch, which may have moved since - and promotes what it then stands on, naming that same
+    /// commit to the package run.
+    /// </remarks>
     [Fact]
-    public void WhatDeployStarts_PublishesTheCommitTheMatrixPassedOn_AndNoOther()
+    public void WhatDeployStarts_PublishesWhatItPromoted_FromTheCommitTheMatrixPassedOn_AndNoOther()
     {
         var matrix = WorkflowFiles.Job("deploy.yml", "test");
         var promote = WorkflowFiles.Job("deploy.yml", "promote");
@@ -41,6 +47,22 @@ public sealed class PackagePipelineTests
         Assert.Contains("ref: ${{ needs.plan.outputs.sha }}", matrix);
         Assert.Contains("needs: [plan, test]", promote);
         Assert.Contains("TESTED_SHA: ${{ needs.plan.outputs.sha }}", promote);
+
+        var checkout = WorkflowFiles.StepNamed("deploy.yml", "Checkout the tested commit");
+
+        Assert.Contains(checkout, promote.Contains);
+        Assert.Equal("ref: ${{ needs.plan.outputs.sha }}", Assert.Single(checkout, line => line.StartsWith("ref:", StringComparison.Ordinal)));
+
+        var promoted = WorkflowFiles.StepNamed("deploy.yml", "Promote");
+
+        Assert.Equal("promoted=$(git rev-parse HEAD)", Assert.Single(promoted, line => line.StartsWith("promoted=", StringComparison.Ordinal)));
+        Assert.Equal(
+            ["refs=(\"$promoted:refs/heads/main\" \"$promoted:refs/heads/$TARGET\")", "refs=(\"$promoted:refs/heads/$TARGET\")"],
+            promoted.Where(line => line.StartsWith("refs=", StringComparison.Ordinal)));
+        Assert.Contains("git push --atomic origin \"${refs[@]}\"; then", promoted);
+        Assert.Equal(
+            "echo \"PROMOTED_SHA=$promoted\" >> \"$GITHUB_ENV\"",
+            Assert.Single(promoted, line => line.Contains("PROMOTED_SHA=", StringComparison.Ordinal)));
 
         var start = WorkflowFiles.StepNamed("deploy.yml", "Start the package pipeline");
 

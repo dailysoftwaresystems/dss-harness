@@ -1790,8 +1790,8 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
-    /// Two steps of one name that run on different systems are one step to each leg, which runs only its own: neither
-    /// leg is refused for the other's, as a leg is refused for no step it does not run.
+    /// Two steps of one name that run on different systems are one step to each leg, which runs only its own: the
+    /// Linux leg runs its own, and is not refused for the Windows one's, as a leg is refused for no step it does not run.
     /// </summary>
     [Fact]
     public async Task TwoStepsOfOneName_ForDifferentSystems_AreOneStepToEachLeg()
