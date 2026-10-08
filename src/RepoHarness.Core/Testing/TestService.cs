@@ -544,10 +544,11 @@ public sealed class TestService(
                 ? total
                 : null;
         }
-        catch (RegexMatchTimeoutException)
+        catch (Exception ex) when (ex is RegexMatchTimeoutException or PhaseOutputUnreadException)
         {
-            // A count never changes a verdict, so a pattern that could not be evaluated leaves the
-            // count unknown rather than failing the leg it was only ever measuring.
+            // A count never changes a verdict, so a pattern that could not be evaluated, or output that
+            // could not be read back, leaves the count unknown rather than failing the leg it was only
+            // ever measuring.
             return null;
         }
     }

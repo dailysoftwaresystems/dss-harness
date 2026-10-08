@@ -185,18 +185,59 @@ public sealed class JUnitReportTests
             JUnitReport.Read("""<testsuite><testcase name="lonely"/><testcase classname="Suite" name="Case"/></testsuite>""")!.Cases.Select(@case => @case.Id));
 
     /// <summary>
-    /// What is no report is not read as one: nothing, a report a crash cut short, text that is no XML, XML that is no
-    /// JUnit report, and one declaring a document type - whose entities could reach for other files, or expand without
-    /// end - even where the type declares nothing at all.
+    /// What is no report is not read as one, and why is said: nothing, a report a crash cut short and text that is no
+    /// XML, each with what the reader made of it; XML that is no JUnit report, naming the root it has; and one declaring
+    /// a document type - whose entities could reach for other files, or expand without end - even where the type
+    /// declares nothing at all, wherever in its prolog it stands. A document type named only inside a comment declares
+    /// none.
     /// </summary>
     [Theory]
-    [InlineData("")]
-    [InlineData("<testsuites><testsuite name=\"Fixture\"><testcase name=\"A\" classname=\"Fixture\">")]
-    [InlineData("[==========] 5 tests from 1 test suite ran.")]
-    [InlineData("<html><body>not a report</body></html>")]
-    [InlineData("<?xml version=\"1.0\"?><!DOCTYPE testsuites [<!ENTITY secret SYSTEM \"file:///etc/passwd\">]><testsuites><testsuite><testcase name=\"&secret;\"/></testsuite></testsuites>")]
-    [InlineData("<?xml version=\"1.0\"?><!DOCTYPE testsuites [<!ENTITY a \"aaaa\"><!ENTITY b \"&a;&a;&a;&a;\">]><testsuites><testsuite><testcase name=\"&b;\"/></testsuite></testsuites>")]
-    [InlineData("<?xml version=\"1.0\"?><!DOCTYPE testsuites><testsuites><testsuite><testcase name=\"A\"/></testsuite></testsuites>")]
-    public void WhatIsNoReport_IsNotReadAsOne(string text)
-        => Assert.Null(JUnitReport.Read(text));
+    [InlineData("", "it is no XML: ")]
+    [InlineData("<testsuites><testsuite name=\"Fixture\"><testcase name=\"A\" classname=\"Fixture\">", "it is no XML: ")]
+    [InlineData("[==========] 5 tests from 1 test suite ran.", "it is no XML: ")]
+    [InlineData("<testsuites><!-- <!DOCTYPE testsuites> --><testsuite>", "it is no XML: ")]
+    [InlineData("<html><body>not a report</body></html>", "its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'")]
+    [InlineData(
+        "<?xml version=\"1.0\"?><!DOCTYPE testsuites [<!ENTITY secret SYSTEM \"file:///etc/passwd\">]><testsuites><testsuite><testcase name=\"&secret;\"/></testsuite></testsuites>",
+        "it declares a document type, which no report needs and this never reads")]
+    [InlineData(
+        "<?xml version=\"1.0\"?><!DOCTYPE testsuites [<!ENTITY a \"aaaa\"><!ENTITY b \"&a;&a;&a;&a;\">]><testsuites><testsuite><testcase name=\"&b;\"/></testsuite></testsuites>",
+        "it declares a document type, which no report needs and this never reads")]
+    [InlineData(
+        "<?xml version=\"1.0\"?><!DOCTYPE testsuites><testsuites><testsuite><testcase name=\"A\"/></testsuite></testsuites>",
+        "it declares a document type, which no report needs and this never reads")]
+    [InlineData(
+        "  <?xml-stylesheet href=\"a.xsl\"?>\n<!-- written by a runner -->\n<!DOCTYPE testsuites><testsuites/>",
+        "it declares a document type, which no report needs and this never reads")]
+    public void WhatIsNoReport_IsNotReadAsOne_AndWhyIsSaid(string text, string why)
+    {
+        Assert.Null(JUnitReport.Read(text, out var problem));
+        Assert.StartsWith(why, problem, StringComparison.Ordinal);
+        Assert.True(problem!.Length > "it is no XML: ".Length, problem);
+        Assert.Null(JUnitReport.Read(text));
+    }
+
+    /// <summary>
+    /// What is no XML is said with what the reader made of it - which element a crash left open, and where the text
+    /// stops - since that is what tells a report cut short from a runner writing another format.
+    /// </summary>
+    [Fact]
+    public void WhatIsNoXml_SaysWhatTheReaderMadeOfIt()
+    {
+        const string CutShort = "<testsuites><testsuite name=\"Fixture\"><testcase name=\"A\" classname=\"Fixture\">";
+
+        var made = Assert.ThrowsAny<System.Xml.XmlException>(() => System.Xml.Linq.XDocument.Parse(CutShort));
+
+        Assert.Null(JUnitReport.Read(CutShort, out var problem));
+        Assert.Equal($"it is no XML: {made.Message}", problem);
+        Assert.Contains("testcase", problem, StringComparison.Ordinal);
+    }
+
+    /// <summary>A report that is read has nothing said against it.</summary>
+    [Fact]
+    public void AReportThatIsRead_HasNoProblem()
+    {
+        Assert.NotNull(JUnitReport.Read(GoogleTest, out var problem));
+        Assert.Null(problem);
+    }
 }

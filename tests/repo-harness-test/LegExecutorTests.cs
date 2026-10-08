@@ -540,6 +540,34 @@ public sealed class LegExecutorTests
         Assert.Equal(LegVerdict.Passed, execution.Entries.Single(entry => entry.Leg == "fine").Verdict);
     }
 
+    /// <summary>
+    /// A leg whose work needed what a phase printed, and could not read it back from its log, is unmeasured, saying
+    /// which log and why: nothing was decided on what was left of it, and it is no defect of this tool's. The other
+    /// legs still report.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseOutputCouldNotBeReadBack_IsUnmeasured_NeverPoisoned()
+    {
+        var factory = new HarnessFactory();
+        var ledger = new LegLedger(factory.Output, "test");
+
+        var execution = await Executor(factory).RunAsync(
+            new LegExecutionRequest
+            {
+                Legs = [Leg("unread"), Leg("fine")],
+                RunLeg = (leg, _) => leg.Name == "unread"
+                    ? throw new PhaseOutputUnreadException("build.log", "it was written again since")
+                    : Task.FromResult<LegEntry?>(Passed(leg)),
+            },
+            ledger,
+            TestContext.Current.CancellationToken);
+
+        var unread = execution.Entries.Single(entry => entry.Leg == "unread");
+
+        Assert.Equal((LegVerdict.Unmeasured, PhaseOutputTests.Unread.Said), (unread.Verdict, unread.Detail));
+        Assert.Equal(LegVerdict.Passed, execution.Entries.Single(entry => entry.Leg == "fine").Verdict);
+    }
+
     [Fact]
     public async Task AnInterruptedRun_ReportsWhatWasLeft()
     {

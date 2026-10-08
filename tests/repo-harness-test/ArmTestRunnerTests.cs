@@ -1,4 +1,5 @@
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Mutations;
 
 namespace RepoHarness.Tests;
@@ -54,9 +55,9 @@ public sealed class ArmTestRunnerTests
         Assert.False(File.Exists(left));
     }
 
-    /// <summary>A report written that cannot be read as one is said as written, and read as none.</summary>
+    /// <summary>A report written that is no report is said as written, and read as none, with why it is none.</summary>
     [Fact]
-    public async Task AReportThatCannotBeRead_IsWrittenAndNone()
+    public async Task AReportThatIsNoReport_IsWrittenAndNone_AndWhyIsSaid()
     {
         using var temp = new TempDirectory();
 
@@ -64,6 +65,43 @@ public sealed class ArmTestRunnerTests
 
         Assert.True(result.Run.ReportWritten);
         Assert.Null(result.Run.Report);
+        Assert.StartsWith("it is no XML: ", result.Run.ReportProblem, StringComparison.Ordinal);
+        Assert.Null(result.Run.ReportUnread);
+    }
+
+    /// <summary>
+    /// A report that is there and cannot be read - another process still holds it as the run ends - is read again, a
+    /// few times: one let go meanwhile is read as it is, and one held throughout is said as written and unread, with
+    /// why, and never as no report, which would be a finding about the binary.
+    /// </summary>
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    [InlineData(int.MaxValue, false)]
+    [InlineData(int.MaxValue, true)]
+    public async Task AReportThatCannotBeReadFromItsFile_IsReadAgain_AndSaidAsUnread_NeverAsNoReport(int heldFor, bool denied)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var held = new HeldReport(harness.FileSystem, heldFor, denied);
+
+        var result = await RunAsync(Child("write-file", temp.Combine("arms", "charge-bound"), "{report}", Report), fileSystem: held);
+
+        Assert.True(result.Run.ReportWritten);
+        Assert.Null(result.Run.ReportProblem);
+
+        if (heldFor == int.MaxValue)
+        {
+            Assert.Null(result.Run.Report);
+            Assert.Equal("'report.xml' is held by another process", result.Run.ReportUnread);
+            Assert.Equal(ArmTestRunner.ReadAttempts, held.Reads);
+        }
+        else
+        {
+            Assert.Equal(["Fixture.Charge"], result.Run.Report?.Reds);
+            Assert.Null(result.Run.ReportUnread);
+            Assert.Equal(heldFor + 1, held.Reads);
+        }
     }
 
     /// <summary>A run past its bound is stopped and said as one, with the bound and the factor it had.</summary>
@@ -128,12 +166,41 @@ public sealed class ArmTestRunnerTests
     }
 
     /// <summary>Runs <paramref name="request"/> as a sweep runs an arm's binary.</summary>
-    private static Task<ArmRunResult> RunAsync(ArmRunRequest request, CancellationToken? cancellationToken = null)
+    private static Task<ArmRunResult> RunAsync(ArmRunRequest request, CancellationToken? cancellationToken = null, IFileSystem? fileSystem = null)
     {
         var harness = new HarnessFactory();
 
-        return new ArmTestRunner(new PhaseRunner(harness.ProcessRunner, harness.FileSystem, harness.Output), harness.FileSystem, TimeProvider.System)
+        return new ArmTestRunner(new PhaseRunner(harness.ProcessRunner, harness.FileSystem, harness.Output), fileSystem ?? harness.FileSystem, TimeProvider.System)
             .RunAsync(request, cancellationToken ?? TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// The real file system, save that a run's report cannot be read the first <paramref name="heldFor"/> times it is
+    /// tried, as one another process holds cannot - or, where <paramref name="denied"/>, as one this user may not read.
+    /// </summary>
+    private sealed class HeldReport(IFileSystem inner, int heldFor, bool denied) : PassThroughFileSystem(inner)
+    {
+        private int _reads;
+
+        /// <summary>How many times the report was read, or tried.</summary>
+        public int Reads => _reads;
+
+        public override string ReadAllText(string path)
+        {
+            if (Path.GetFileName(path) != ArmTestRunner.ReportFileName)
+            {
+                return base.ReadAllText(path);
+            }
+
+            if (Interlocked.Increment(ref _reads) > heldFor)
+            {
+                return base.ReadAllText(path);
+            }
+
+            const string Held = "'report.xml' is held by another process";
+
+            throw denied ? new UnauthorizedAccessException(Held) : new IOException(Held);
+        }
     }
 
     /// <summary>

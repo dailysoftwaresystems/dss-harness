@@ -439,6 +439,14 @@ public sealed class TestServiceTests
     }
 
     /// <summary>
+    /// A count never changes a verdict: output that could not be read back leaves the count unknown, and the leg it was
+    /// only ever measuring with the verdict it reached.
+    /// </summary>
+    [Fact]
+    public void ACountOfOutputThatCouldNotBeReadBack_IsUnknown()
+        => Assert.Null(TestService.CountFrom(TestService.CompileCountPattern(@"(?<total>\d+) tests? ran"), new PhaseOutputTests.Unread()));
+
+    /// <summary>
     /// A runner named by a relative path is the tree's own, read from the tree root as every other
     /// relative path in the test settings is - never from wherever this process began, which for a
     /// leg on a worktree is the main checkout and its copy of the script.

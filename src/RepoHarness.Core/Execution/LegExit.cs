@@ -74,8 +74,8 @@ public static class LegExit
     public const int NotAdmitted = 7;
 
     /// <summary>
-    /// A mutation arm's run failed, and nothing ties the failure to a case: the runner wrote no report, or an unreadable
-    /// one, or exited failing with a report naming no failing case, or ran past its bound, or printed nothing for as long
+    /// A mutation arm's run failed, and nothing ties the failure to a case: the runner wrote no report, or one that is
+    /// no JUnit report, or exited failing with a report naming no failing case, or ran past its bound, or printed nothing for as long
     /// as a phase may, and was stopped. Remedy:
     /// contain the crash or hang in the case, or make the runner write its report. Distinct from a survived arm, whose
     /// run passed: here something failed, and the evidence of what is missing.

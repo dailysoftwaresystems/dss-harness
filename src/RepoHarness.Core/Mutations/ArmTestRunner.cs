@@ -72,6 +72,10 @@ internal interface IArmTestRunner
 /// that turns a loop endless can keep printing. A run past its bound is stopped and said as one; the sweep stopped
 /// meanwhile is the sweep's to say. What it said is read from its log, a line at a time, and never held whole.
 /// </para>
+/// <para>
+/// Its report is read once it ends, and read again where its file cannot be: a report that is no report is the
+/// binary's, said with why it is none, and one this could not read is this tool's, said as that.
+/// </para>
 /// </remarks>
 internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSystem, TimeProvider clock) : IArmTestRunner
 {
@@ -80,6 +84,15 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
 
     /// <summary>The name a run's report is kept under.</summary>
     public const string ReportFileName = "report.xml";
+
+    /// <summary>How many times a report that is there is read before it is said to be unread.</summary>
+    public const int ReadAttempts = 5;
+
+    /// <summary>
+    /// How long a read of a report waits before it is tried again: what holds a report as its run ends - the binary's
+    /// own child still closing it, a scanner reading it - lets go within moments.
+    /// </summary>
+    public static readonly TimeSpan ReadRetry = TimeSpan.FromMilliseconds(200);
 
     private readonly PhaseRunner _phaseRunner = phaseRunner;
     private readonly IFileSystem _fileSystem = fileSystem;
@@ -156,6 +169,7 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
         }
 
         var written = _fileSystem.FileExists(report);
+        var read = written ? await ReadAsync(report, cancellationToken).ConfigureAwait(false) : default;
 
         return new ArmRunResult(
             new ArmRun
@@ -164,7 +178,9 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
                 Bound = request.Bound ?? TimeSpan.Zero,
                 Factor = request.Factor,
                 ReportWritten = written,
-                Report = written ? Read(report) : null,
+                Report = read.Report,
+                ReportProblem = read.Problem,
+                ReportUnread = read.Unread,
                 DiagnosticSaid = request.Diagnostic is { } diagnostic && DiagWindow.Appears(diagnostic, phase.Output.Lines()),
             },
             phase.Duration,
@@ -172,16 +188,30 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
             report);
     }
 
-    /// <summary>The report at <paramref name="path"/>, or <see langword="null"/> where it cannot be read, as one that is no report cannot.</summary>
-    private JUnitReport? Read(string path)
+    /// <summary>
+    /// The report at <paramref name="path"/>, which is there: itself; why it is no report; or why its file could not be
+    /// read, tried <see cref="ReadAttempts"/> times, <see cref="ReadRetry"/> apart. The two are never said as one: a
+    /// file this could not read is the harness's own failure, and what it holds may be a report naming every case.
+    /// </summary>
+    private async Task<(JUnitReport? Report, string? Problem, string? Unread)> ReadAsync(string path, CancellationToken cancellationToken)
     {
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            return JUnitReport.Read(_fileSystem.ReadAllText(path));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
+            try
+            {
+                var report = JUnitReport.Read(_fileSystem.ReadAllText(path), out var problem);
+
+                return (report, problem, null);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == ReadAttempts)
+                {
+                    return (null, null, ex.Message);
+                }
+            }
+
+            await Task.Delay(ReadRetry, _clock, cancellationToken).ConfigureAwait(false);
         }
     }
 }

@@ -2,6 +2,7 @@ using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Processes;
+using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Mutations;
 
@@ -53,7 +54,9 @@ internal interface IArmBuilder
     /// <param name="config">The whole configuration.</param>
     /// <param name="request">The build, as it last ran in the worker.</param>
     /// <param name="cancellationToken">Stops ninja.</param>
-    /// <exception cref="Results.HarnessException">ninja could not answer for the build's dependency records.</exception>
+    /// <exception cref="Results.HarnessException">
+    /// ninja could not answer for the build's dependency records, or its manifest could not be read whole.
+    /// </exception>
     Task<IWorkerGraph> ReadGraphAsync(HarnessConfig config, BuildRequest request, CancellationToken cancellationToken);
 
     /// <summary>What <paramref name="buildDirectory"/>'s <c>.ninja_log</c> says now, or <see langword="null"/> where it has none ninja wrote.</summary>
@@ -96,6 +99,16 @@ internal sealed class ArmBuilder(
             .ReadRecordsAsync(_processRunner, buildDirectory, request.ProgramDirectories, program, environment, cancellationToken)
             .ConfigureAwait(false);
         var manifest = NinjaManifest.Read(_fileSystem, buildDirectory);
+
+        if (manifest.PassedOver.Count > 0)
+        {
+            // Read with what was left, the manifest says the build builds less than it does: a target no line builds, a
+            // site no object depends on - each an arm violated, the registry blamed for a file this could not read.
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"ninja's manifest in '{buildDirectory}' could not be read whole, so what the build there builds is not known: "
+                + string.Join("; ", manifest.PassedOver.Select(file => $"'{file.File}' {file.Why}")) + ".");
+        }
 
         return new NinjaWorkerGraph(
             new NinjaRebuildGraph(buildDirectory, manifest, records, _fileSystem, PathCase.In(_fileSystem, buildDirectory)),

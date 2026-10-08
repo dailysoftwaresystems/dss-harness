@@ -38,8 +38,10 @@ public enum LegVerdict
 
     /// <summary>
     /// Whether those files held still could not be established. Never reported as passed: an
-    /// unreadable snapshot is not evidence that nothing moved. Of a mutation arm: ninja's log could
-    /// not be read around its build, so nothing witnessed what it rebuilt.
+    /// unreadable snapshot is not evidence that nothing moved. Nor is anything decided on a phase's
+    /// output that could not be read back whole from its log. Of a mutation arm: ninja's log could
+    /// not be read around its build, so nothing witnessed what it rebuilt; or the report its run wrote
+    /// could not be read from its file, so nothing says which cases failed.
     /// </summary>
     Unmeasured,
 
@@ -120,7 +122,7 @@ public enum LegVerdict
 
     /// <summary>
     /// A mutation arm's run failed, and nothing ties the failure to a case: the runner wrote no report, or one that
-    /// cannot be read, or exited failing with a report naming no failing case - a crash after it was written, a leak
+    /// is no JUnit report, or exited failing with a report naming no failing case - a crash after it was written, a leak
     /// checker at exit - or ran past its bound, or printed nothing for as long as a phase may, and was stopped. Something
     /// failed, and nothing says which case did.
     /// </summary>
@@ -136,7 +138,14 @@ public enum LegVerdict
 /// not reported as failed even if its tests failed, because what failed was a tree that never existed.
 /// </param>
 /// <param name="ExitCode">The process exit code a run reports when this verdict decides it.</param>
-public sealed record VerdictInfo(LegVerdict Verdict, string Display, bool IsFailure, int Rank, int ExitCode);
+public sealed record VerdictInfo(LegVerdict Verdict, string Display, bool IsFailure, int Rank, int ExitCode)
+{
+    /// <summary>
+    /// Whether only a sweep of mutation arms reaches it - what an arm's judge alone decides - so that no build, test or
+    /// run ever exits with its code, and that code is free to mean something else of theirs.
+    /// </summary>
+    public bool OfASweep { get; init; }
+}
 
 /// <summary>
 /// A verdict together with the sentence that explains it, produced so that a leg which reached no
@@ -200,9 +209,9 @@ public static class Verdicts
         [LegVerdict.RefusedLocked] = new(LegVerdict.RefusedLocked, "refused-locked", true, 5, HarnessExit.Refused),
         [LegVerdict.NotAdmitted] = new(LegVerdict.NotAdmitted, "not-admitted", true, 6, LegExit.NotAdmitted),
         [LegVerdict.Failed] = new(LegVerdict.Failed, "failed", true, 7, HarnessExit.CommandFailed),
-        [LegVerdict.Violated] = new(LegVerdict.Violated, "violated", true, 8, LegExit.Violated),
-        [LegVerdict.Survived] = new(LegVerdict.Survived, "survived", true, 9, LegExit.Survived),
-        [LegVerdict.Unattributed] = new(LegVerdict.Unattributed, "unattributed", true, 10, LegExit.Unattributed),
+        [LegVerdict.Violated] = new(LegVerdict.Violated, "violated", true, 8, LegExit.Violated) { OfASweep = true },
+        [LegVerdict.Survived] = new(LegVerdict.Survived, "survived", true, 9, LegExit.Survived) { OfASweep = true },
+        [LegVerdict.Unattributed] = new(LegVerdict.Unattributed, "unattributed", true, 10, LegExit.Unattributed) { OfASweep = true },
         [LegVerdict.Unwitnessed] = new(LegVerdict.Unwitnessed, "unwitnessed", true, 11, LegExit.Unwitnessed),
 
         // Above the skips, since its leg's work was begun or due and was stopped, where theirs never began.
@@ -315,6 +324,27 @@ public static class Verdicts
         }
 
         return worst ?? LegVerdict.Passed;
+    }
+
+    /// <summary>
+    /// The verdict work that ended in <paramref name="exception"/> comes to - a leg's, or a unit's of a sweep - where the
+    /// exception neither stopped it nor refuses the run: the verdict a refusal names; <c>unmeasured</c> where what a
+    /// phase printed could not be read back from its log, since nothing is decided on what is left of one; and
+    /// <c>failed</c> where its cause is one this build can name. <see langword="null"/> where nobody named it, which is
+    /// <c>poisoned</c>, said by whoever caught it in its own words.
+    /// </summary>
+    /// <param name="exception">What the work raised.</param>
+    public static ReachedVerdict? ForFailure(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        return exception switch
+        {
+            HarnessException refused => ReachedVerdict.Of(ForRefusal(refused.ExitCode), refused.Message),
+            PhaseOutputUnreadException unread => ReachedVerdict.Of(LegVerdict.Unmeasured, unread.Message),
+            _ when KnownCauses.Names(exception) => ReachedVerdict.Of(LegVerdict.Failed, exception.Message),
+            _ => null,
+        };
     }
 
     /// <summary>

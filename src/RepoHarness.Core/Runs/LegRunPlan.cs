@@ -317,18 +317,21 @@ public static class LegRunPlan
     /// run would have recorded for it.
     /// </summary>
     /// <param name="skipped">The line each leg would have had.</param>
+    /// <param name="unavailable">
+    /// What the command exits with where no failure turned a leg away (<see cref="LegRunRequest.NothingRunsExit"/>).
+    /// </param>
     /// <remarks>
     /// A leg turned away by a defect in this tool keeps that defect's exit code even though nothing
     /// ran: "no selected leg can run" and nothing else would send the reader to the hosts.
     /// </remarks>
-    public static CommandOutcome NothingRuns(IReadOnlyList<LegEntry> skipped)
+    public static CommandOutcome NothingRuns(IReadOnlyList<LegEntry> skipped, int unavailable = LegsExit.Unavailable)
     {
         ArgumentNullException.ThrowIfNull(skipped);
 
         var worst = Verdicts.Describe(Verdicts.Worst(skipped.Select(entry => entry.Verdict)));
 
         return CommandOutcome.Failed(
-            worst.IsFailure ? worst.ExitCode : LegsExit.Unavailable,
+            worst.IsFailure ? worst.ExitCode : unavailable,
             "no selected leg can run",
             [.. skipped.Select(entry => $"{entry.Leg}: {Verdicts.Display(entry.Verdict)}: {entry.Detail}")]);
     }

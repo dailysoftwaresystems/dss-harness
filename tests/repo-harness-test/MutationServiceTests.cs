@@ -138,6 +138,42 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A registry, a text directory or a cited text that is there and cannot be read - held open by another process, or
+    /// not this user's to read - is the registry's refusal, exit 12, naming it and why, with every other problem beside
+    /// it. Left to escape, it ended the command as a defect of this tool, exit 70, naming no row.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "mutations/arms.txt", "mutations.registry names 'mutations/arms.txt', which could not be read: it is held by another process")]
+    [InlineData(true, "mutations/arms.txt", "mutations.registry names 'mutations/arms.txt', which could not be read: it is held by another process")]
+    [InlineData(
+        false,
+        "mutations/texts",
+        "  - the text directory 'mutations/texts' could not be listed, so whether every text in it is cited cannot be read: it is held by another process")]
+    [InlineData(true, "mutations/texts/charge.before", "  - line 1: text 'mutations/texts/charge.before' could not be read: it is held by another process")]
+    [InlineData(false, "mutations/texts/depth.control-before", "  - line 4: text 'mutations/texts/depth.control-before' could not be read: it is held by another process")]
+    public void WhatASweepReadsOfItsRegistry_AndCannot_IsRefusedAsTheRegistryIs(bool denied, string unreadable, string said)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        Exception raised = denied ? new UnauthorizedAccessException("it is held by another process") : new IOException("it is held by another process");
+        var (service, context) = Prepare(
+            temp,
+            Sweepable(),
+            harness: harness,
+            files: new Unreadable(harness.FileSystem, temp.Combine(unreadable.Split('/')), raised));
+
+        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains(said, refusal.Message, StringComparison.Ordinal);
+
+        if (said.StartsWith("  - ", StringComparison.Ordinal))
+        {
+            Assert.StartsWith($"The arms registry '{Registry}' cannot be swept: ", refusal.Message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// An M row's site is compared with its arm's other sites as the tree's own file system compares names: one naming
     /// the arm's own file in another case is that file again where the file system folds case - two edits taken and put
     /// back over each other - and is refused, naming how the arm spells it; where it does not fold, it is another file.
@@ -351,6 +387,32 @@ public sealed class MutationServiceTests
         Assert.Equal(HarnessExit.Success, onAHost.ExitCode);
         Assert.Contains("the sweep drives no arm on this leg; 2 arm(s): 2 skipped-not-selected", Assert.Single(onAHost.Data), StringComparison.Ordinal);
         Assert.DoesNotContain("runs on none of the selected legs", harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A sweep none of whose selected legs can run is incomplete, exit 21, naming why each cannot: nothing failed, and no
+    /// leg reached a verdict. A build, a test and a run give 1 there, which of a sweep is an arm violated - so a caller
+    /// sorting by exit code was sent to fix an arm's declaration by a sweep that drove none.
+    /// </summary>
+    [Fact]
+    public async Task ASweepNoSelectedLegCanRun_IsIncomplete_NeverWhatAnArmViolatedExitsWith()
+    {
+        using var temp = new TempDirectory();
+        var (service, _) = Prepare(temp, Sweepable());
+
+        var outcome = await service.RunAsync(new MutationRequest(temp.Path, ["native"], null, Json: true), RunId.New(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Incomplete, outcome.ExitCode);
+        Assert.NotEqual(Verdicts.ExitCodeFor(LegVerdict.Violated), outcome.ExitCode);
+        Assert.Equal("no selected leg can run", outcome.Message);
+
+        using var document = System.Text.Json.JsonDocument.Parse(Assert.Single(outcome.Data));
+        var root = document.RootElement;
+
+        Assert.Equal(HarnessExit.Incomplete, root.GetProperty("exitCode").GetInt32());
+        Assert.False(root.GetProperty("passed").GetBoolean());
+        Assert.False(root.GetProperty("complete").GetBoolean());
+        Assert.Equal("skipped-unavailable", Assert.Single(root.GetProperty("legs").EnumerateArray()).GetProperty("verdict").GetString());
     }
 
     /// <summary>
@@ -762,5 +824,16 @@ public sealed class MutationServiceTests
     {
         public override bool DirectoryExists(string path)
             => path != root && string.Equals(path, root, StringComparison.OrdinalIgnoreCase) ? folds : base.DirectoryExists(path);
+    }
+
+    /// <summary>The real file system, save that <paramref name="path"/> is there and every read of it raises <paramref name="raised"/>.</summary>
+    private sealed class Unreadable(IFileSystem inner, string path, Exception raised) : PassThroughFileSystem(inner)
+    {
+        public override string ReadAllText(string read) => read == path ? throw raised : base.ReadAllText(read);
+
+        public override byte[] ReadAllBytes(string read) => read == path ? throw raised : base.ReadAllBytes(read);
+
+        public override IEnumerable<string> EnumerateFiles(string listed, bool recursive)
+            => listed == path ? throw raised : base.EnumerateFiles(listed, recursive);
     }
 }

@@ -1329,18 +1329,16 @@ internal sealed class MutationLegRunner(
         => exception is HarnessException refusal && HarnessExit.RefusesTheRun(refusal.ExitCode);
 
     /// <summary>
-    /// The verdict a failure that neither stops the sweep nor refuses the run comes to, as a leg whose own work ends in it
-    /// is judged: the verdict its refusal names; <c>failed</c> where its cause is one this build can name; and otherwise
+    /// The verdict a failure that neither stops the sweep nor refuses the run comes to, read where a leg whose own work
+    /// ends in it reads it (<see cref="Verdicts.ForFailure"/>): the verdict its refusal names, <c>unmeasured</c> where a
+    /// phase's output could not be read back, <c>failed</c> where its cause is one this build can name; and otherwise
     /// <c>poisoned</c> - nobody named it - saying <paramref name="unnamed"/>, then its type and what it said.
     /// </summary>
     /// <param name="exception">What was raised.</param>
     /// <param name="unnamed">What the sweep could not do, as a line begins where nothing named why.</param>
-    private static ReachedVerdict Failure(Exception exception, string unnamed) => exception switch
-    {
-        HarnessException refused => ReachedVerdict.Of(Verdicts.ForRefusal(refused.ExitCode), refused.Message),
-        _ when KnownCauses.Names(exception) => ReachedVerdict.Of(LegVerdict.Failed, exception.Message),
-        _ => ReachedVerdict.Of(LegVerdict.Poisoned, $"{unnamed}, {exception.GetType().Name}: {exception.Message.TrimEnd('.')}"),
-    };
+    private static ReachedVerdict Failure(Exception exception, string unnamed)
+        => Verdicts.ForFailure(exception)
+            ?? ReachedVerdict.Of(LegVerdict.Poisoned, $"{unnamed}, {exception.GetType().Name}: {exception.Message.TrimEnd('.')}");
 
     /// <summary>Where <paramref name="cited"/>, as a row spells it, is in <paramref name="worker"/>'s copy.</summary>
     private static string InWorker(string worker, string cited) => Path.Combine(worker, cited.Replace('/', Path.DirectorySeparatorChar));

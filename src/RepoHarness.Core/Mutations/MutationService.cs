@@ -82,6 +82,14 @@ public sealed class MutationService(
     public const string CommandName = "check-mutations";
 
     /// <summary>
+    /// What a sweep exits with where no selected leg can run and no failure turned one away: incomplete, which is what
+    /// such a run is - nothing failed, and no leg reached a verdict. The 1 a build, a test and a run give there is, of a
+    /// sweep, an arm <c>violated</c>: a caller sorting by exit code would be sent to fix an arm's declaration by a sweep
+    /// that drove none.
+    /// </summary>
+    public const int NothingRuns = HarnessExit.Incomplete;
+
+    /// <summary>
     /// What a sweep has each leg do: build, as a leg builds, in workers of its own, each arm asking its machine to take it
     /// as it starts rather than the leg taking a slot for the whole of a sweep of hours.
     /// </summary>
@@ -171,6 +179,7 @@ public sealed class MutationService(
                     // the leg's tree as a sweep's are, in a family of their own, and a clean of the leg takes both under it.
                     Workload = request.SelfTest ? SelfTestWorkload : Workload,
                     Lock = MutationWorkers.SweepLock,
+                    NothingRunsExit = NothingRuns,
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
@@ -330,8 +339,20 @@ public sealed class MutationService(
             throw new HarnessException(HarnessExit.ConfigInvalid, $"mutations.registry names '{registry}', which is not a file in '{root}'.");
         }
 
+        string rows;
+
+        try
+        {
+            rows = _fileSystem.ReadAllText(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // There, and not read: the registry's refusal, as one that is not there is - never a defect of this tool.
+            throw new HarnessException(HarnessExit.ConfigInvalid, $"mutations.registry names '{registry}', which could not be read: {ex.Message}");
+        }
+
         var reading = MutationRegistryParser.Parse(
-            MutationRegistryParser.Lines(_fileSystem.ReadAllText(file)),
+            MutationRegistryParser.Lines(rows),
             Listing(root, settings.TextDirectory),
             PathCase.In(_fileSystem, root));
         var problems = new List<string>(reading.Problems);
@@ -465,7 +486,8 @@ public sealed class MutationService(
     /// <summary>
     /// What is wrong with the text <paramref name="cited"/> on line <paramref name="line"/>, or <see langword="null"/>:
     /// no file of the tree, one <paramref name="withheld"/> says no copy of the tree would hold, or, where
-    /// <paramref name="empty"/> says a text holding nothing cannot be swept, one holding nothing.
+    /// <paramref name="empty"/> says a text holding nothing cannot be swept, one holding nothing - or one that could not
+    /// be read to tell.
     /// </summary>
     private string? TextProblem(string root, string cited, int line, bool empty, Func<string, bool> withheld)
     {
@@ -481,12 +503,27 @@ public sealed class MutationService(
             return $"line {line}: text '{cited}' is withheld from every copy of the tree by a sync, so no worker would hold it";
         }
 
-        return empty && SiteEdit.Text(_fileSystem.ReadAllBytes(file)).Length == 0
-            ? $"line {line}: the text in '{cited}' holds nothing, which occurs everywhere and which every run says"
-            : null;
+        if (!empty)
+        {
+            return null;
+        }
+
+        try
+        {
+            return SiteEdit.Text(_fileSystem.ReadAllBytes(file)).Length == 0
+                ? $"line {line}: the text in '{cited}' holds nothing, which occurs everywhere and which every run says"
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"line {line}: text '{cited}' could not be read: {ex.Message}";
+        }
     }
 
-    /// <summary>The files directly in the text directory, as the cover check reads them, or <see langword="null"/> where none is configured.</summary>
+    /// <summary>
+    /// The files directly in the text directory, as the cover check reads them - or why it could not be listed - or
+    /// <see langword="null"/> where none is configured.
+    /// </summary>
     private TextDirectoryListing? Listing(string root, string? textDirectory)
     {
         if (textDirectory is null)
@@ -495,12 +532,21 @@ public sealed class MutationService(
         }
 
         var directory = InTree(root, textDirectory);
+        var named = textDirectory.TrimEnd('/');
 
-        return new TextDirectoryListing(
-            textDirectory.TrimEnd('/'),
-            _fileSystem.DirectoryExists(directory)
-                ? [.. _fileSystem.EnumerateFiles(directory, recursive: false).Select(Path.GetFileName).OfType<string>()]
-                : null);
+        if (!_fileSystem.DirectoryExists(directory))
+        {
+            return new TextDirectoryListing(named, null);
+        }
+
+        try
+        {
+            return new TextDirectoryListing(named, [.. _fileSystem.EnumerateFiles(directory, recursive: false).Select(Path.GetFileName).OfType<string>()]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new TextDirectoryListing(named, null) { Unlisted = ex.Message };
+        }
     }
 
     /// <summary>Refuses the registry, naming every problem with it, where it has any.</summary>

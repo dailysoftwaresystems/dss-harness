@@ -4,7 +4,7 @@ namespace RepoHarness.Core.Mutations;
 
 /// <summary>What the unmutated run of one test binary on a leg decided.</summary>
 /// <param name="Leg">
-/// The leg's own verdict where the control did not pass - its build's verdict, failed, or unattributed - or
+/// The leg's own verdict where the control did not pass - its build's verdict, failed, unattributed, or unmeasured - or
 /// <see langword="null"/> where it passed.
 /// </param>
 /// <param name="Stops">Why each arm running the binary is stopped rather than driven, or <see langword="null"/> where they are driven.</param>
@@ -18,8 +18,9 @@ public sealed record PristineOutcome(ReachedVerdict? Leg, string? Stops, TimeSpa
 /// </summary>
 /// <remarks>
 /// A control that did not pass decides the leg's own verdict - its build's, <c>failed</c> where cases reddened unmutated,
-/// <c>unattributed</c> where it failed or hung and nothing ties that to a case - and stops every arm of the binary: a
-/// mutation whose cases were red before it is proof of nothing.
+/// <c>unattributed</c> where it failed or hung and nothing ties that to a case, <c>unmeasured</c> where the report it
+/// wrote could not be read from its file - and stops every arm of the binary: a mutation whose cases were red before
+/// it is proof of nothing, and nor is one of a binary nothing says is green.
 /// </remarks>
 public static class PristineJudge
 {
@@ -62,13 +63,22 @@ public static class PristineJudge
                 $"the unmutated {runner} hangs, so no run of a mutation of it can be told from a hang the mutation caused");
         }
 
+        if (run.ReportUnread is { } unread)
+        {
+            return Stopped(
+                ReachedVerdict.Of(
+                    LegVerdict.Unmeasured,
+                    $"the report of the unmutated {runner} was written and could not be read, after it exited {run.ExitCode}: {unread}"),
+                $"the report of the unmutated {runner} could not be read, so nothing says its cases pass unmutated");
+        }
+
         if (run.Report is not { } report)
         {
             return Stopped(
                 ReachedVerdict.Of(
                     LegVerdict.Unattributed,
                     run.ReportWritten
-                        ? $"the report of the unmutated {runner} could not be read, after it exited {run.ExitCode}"
+                        ? $"the report of the unmutated {runner} is no JUnit report this reads, after it exited {run.ExitCode}{ArmJudge.Why(run.ReportProblem)}"
                         : $"the unmutated {runner} exited {run.ExitCode} and wrote no report"),
                 $"the unmutated {runner} left no report to judge its arms' runs against");
         }

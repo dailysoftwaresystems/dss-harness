@@ -96,8 +96,21 @@ public sealed record ArmRun
     /// <summary>Whether the binary wrote its report at all.</summary>
     public bool ReportWritten { get; init; }
 
-    /// <summary>The report, or <see langword="null"/> where it was not written or could not be read.</summary>
+    /// <summary>The report, or <see langword="null"/> where it was not written, is no report, or could not be read from its file.</summary>
     public JUnitReport? Report { get; init; }
+
+    /// <summary>
+    /// Why what it wrote is no report this reads - no XML, no JUnit report, one declaring a document type - or
+    /// <see langword="null"/> where it is one, or none was read.
+    /// </summary>
+    public string? ReportProblem { get; init; }
+
+    /// <summary>
+    /// Why the report it wrote could not be read from its file, each time that was tried - held by another process, not
+    /// this user's to read - or <see langword="null"/> where it was read, or none was written. The harness's own
+    /// failure to read, and nothing the binary did.
+    /// </summary>
+    public string? ReportUnread { get; init; }
 
     /// <summary>Whether the run's output said the arm's diagnostic.</summary>
     public bool DiagnosticSaid { get; init; }
@@ -153,8 +166,9 @@ public enum ArmStep
 /// object was not rebuilt, and <c>passed</c> otherwise.
 /// </para>
 /// <para>
-/// A TEST-RED arm's run: past its bound, or stopped as hung for printing nothing, <c>unattributed</c>; no report, or one
-/// that cannot be read, <c>unattributed</c>;
+/// A TEST-RED arm's run: past its bound, or stopped as hung for printing nothing, <c>unattributed</c>; a report written
+/// that could not be read from its file, <c>unmeasured</c>, which is this tool's failure and no finding about the
+/// binary; no report, or one that is no JUnit report, <c>unattributed</c>, saying why it is none;
 /// a failing exit whose report names no failing case, <c>unattributed</c>; another number of cases run than declared,
 /// <c>violated</c>; no case red, <c>survived</c>; the red cases not exactly the C rows', <c>violated</c>; a G row's
 /// case not run, <c>violated</c>; its diagnostic not said, <c>violated</c>; and otherwise <c>passed</c>.
@@ -370,11 +384,20 @@ public static class ArmJudge
             return ReachedVerdict.Of(LegVerdict.Unattributed, $"printed nothing for {quiet}s, and was stopped as hung");
         }
 
+        if (run.ReportUnread is { } unread)
+        {
+            return ReachedVerdict.Of(
+                LegVerdict.Unmeasured,
+                $"its report was written and could not be read, after it exited {run.ExitCode}, so nothing says which cases failed: {unread}");
+        }
+
         if (run.Report is not { } report)
         {
             return ReachedVerdict.Of(
                 LegVerdict.Unattributed,
-                run.ReportWritten ? $"its report could not be read, after it exited {run.ExitCode}" : $"exited {run.ExitCode} and wrote no report");
+                run.ReportWritten
+                    ? $"its report is no JUnit report this reads, after it exited {run.ExitCode}{Why(run.ReportProblem)}"
+                    : $"exited {run.ExitCode} and wrote no report");
         }
 
         var reds = report.Reds;
@@ -417,6 +440,9 @@ public static class ArmJudge
             ? ReachedVerdict.Of(LegVerdict.Passed, $"ran {report.Ran} case(s), {reds.Count} red as declared, and said its diagnostic")
             : ReachedVerdict.Of(LegVerdict.Violated, $"the run did not say its diagnostic, the text in '{arm.Diagnostic}'");
     }
+
+    /// <summary>Why a report is none, as a line ends with it: <paramref name="problem"/> after a colon, or nothing where none was said.</summary>
+    internal static string Why(string? problem) => problem is null ? string.Empty : $": {problem}";
 
     /// <summary><paramref name="reached"/> with the separator its detail was built to end with taken off.</summary>
     private static ReachedVerdict TrimmedDetail(this ReachedVerdict reached) => reached with { Detail = reached.Detail.TrimEnd(';') };

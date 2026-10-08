@@ -1203,7 +1203,7 @@ from the report.
 | `failed` | Ran to completion and reported failure; or a mutation arm's build failed at a step that is no object depending on its site - a link, another object - or named no step that failed | **yes** |
 | `unwitnessed` | Exited 0, but its success pattern never matched; or a mutation arm's build, or its paired control's, passed with an object that depends on a site not rebuilt | **yes** |
 | `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, a file its host's copy needed changed or was removed after the run began, before it was carried there, and nothing of the leg ran | **yes** |
-| `unmeasured` | Whether those files held still could not be established; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt | **yes** |
+| `unmeasured` | Whether those files held still could not be established; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
 | `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, and a leg whose sweep drives no arm | no |
 | `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; git could not answer in its tree; or no worker of its sweep fits the room left or the path limit, and every arm of the leg with it | warning |
@@ -1215,7 +1215,7 @@ from the report.
 | `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a mutation arm was never driven, its sweep cancelled, no worker left to run it, or the unmutated run of its test binary not passing | no: incomplete |
 | `violated` | A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than the tree spells it; its before-text is not in its site exactly once, or is replaced by itself; its target or its runner is not built, or no object they build depends on a site; its mutation reddened other cases than its C rows, ran another number of cases, left a G row's case unrun or left out its diagnostic; a mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired control did not | **yes** |
 | `survived` | A mutation arm's mutation built and ran, and no case reddened | **yes** |
-| `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, an unreadable one, a failing exit whose report names no failing case, or a run stopped for passing its bound, or as hung for printing nothing for `defaults.stallSeconds` | **yes** |
+| `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, one that is no JUnit report, a failing exit whose report names no failing case, or a run stopped for passing its bound, or as hung for printing nothing for `defaults.stallSeconds` | **yes** |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
 "the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
@@ -2227,7 +2227,9 @@ lies outside it, or is, holds or is inside `build` (where every leg's build is k
 incremental), `.harness-config`, `.git`, what orchestrators keep or the worktrees root is refused
 when the file is read, compared ignoring case. So are a phase with a blank name and two phases of
 one runner sharing a name: each writes the log its name names, and a resumed run skips the ones its
-name says were done.
+name says were done. Two steps a leg runs whose names differ and are kept as one log are refused
+before any runs, naming both and the log: a character a file name cannot carry is kept as `-`, so
+`a/b` and `a:b` are one file's, as are two names differing only in case.
 
 **`requireBuild` gates the build, never the sync.** A leg on an ssh host or a WSL distribution runs
 from that host's own copy of the tree — the host reads `config.json` and the runner's action file
@@ -2573,6 +2575,14 @@ why, since no mutation of it could prove anything. Its run bounds theirs (see *T
 The judge is a pure function of the declaration and what was observed, the first row that applies
 deciding, in the order the steps above observe it; `help mutations` lists what each verdict means.
 
+A report is the runner's own record, and what is wrong with one is said as what it is. One that
+is no report - no XML, a root that is no `testsuites` or `testsuite`, a document type declared,
+which is never read - is `unattributed`, its line saying which: a runner writing another format
+and a report a crash cut short read differently. One that is there and cannot be read from its
+file - another process still holding it as the run ends - is read again, five times in a second,
+and then `unmeasured`, saying why: that is this tool's failure to read, and what the file holds
+may name every case. The same holds of a binary's unmutated run, whose arms are then stopped.
+
 Whatever fails is kept to what it failed in, so one failure never costs the arms already judged. A
 worker that cannot be made - its copy, its whole build - is retired alone, saying why, and the
 workers beside it drive every arm; only where none could be made are their failures the leg's own.
@@ -2678,6 +2688,16 @@ answer, though that too is read a line at a time. The same holds on a machine
 that dispatched a leg to a host, whose `--verbose` relays every line the host's steps print: the
 dispatcher keeps the end of what it relayed, and the ledger the host answers with.
 
+What is read back is read only from a log that still holds it. A phase closes its child's lines
+with an exit line saying how it ended and, to the tick, how long it ran; whatever reads the lines
+back first holds the log to its length and to that line, so a log that is gone, cut short or
+written again since is said as unread, naming it and why, before any line is handed on - never
+read as what is there, which made a build ninja failed read as one stopped from outside, and one
+step's lines as another's. Nothing is decided on what is left of such a log: work a verdict hangs
+on ends `unmeasured`, saying so - a leg's, or an arm's of a sweep, whose worker goes on - and a
+reader that only measures or explains, a test count or ctest having found no test, leaves that
+out and keeps the verdict the phase reached.
+
 Every run ends with a per-leg ledger:
 
 ```
@@ -2734,9 +2754,11 @@ with "the harness could not run", because the remedies differ.
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 
 `verify-git` keeps its own contract: `0` success, `1` git not installed,
-`2` not a git repository. `legs` exits `1` when a leg named with `--legs` cannot run,
+`2` not a git repository. `legs` and `sync` exit `1` when a leg named with `--legs` cannot run,
 or when no selected leg can, and `70` when whether a leg can run was never established, through
-a defect in this tool. `install-missing-tools` exits `1` when a tool is missing, out of
+a defect in this tool. `build`, `test`, `run` and `clean` exit `1` too when no selected leg can
+run and no failure turned one away, each leg's line saying why it cannot; `check-mutations`
+exits `21` there (see below). `install-missing-tools` exits `1` when a tool is missing, out of
 date or could not be installed, and `15` when a host could not be reached: a tool that is not
 there and a host that did not answer call for different things. `check-anchor-balance` and
 `check-anchor-citations` exit `1` on a finding, which is what they were asked to look for rather
@@ -2769,6 +2791,12 @@ Six outcomes therefore carry six codes — refused before starting, the tree mov
 run, another run in the build directory, another run holding the logs, a machine with no room
 for another heavy leg, and a zero exit code with no witness — and a mutation sweep's three
 findings three more, because a reader who cannot tell which fired cannot pick the remedy.
+
+Within one command no code has two meanings. A sweep none of whose selected legs can run
+therefore exits `21`, incomplete - which is what such a run is, nothing having failed and no leg
+having reached a verdict - and never the `1` a build, a test and a run give there: of a sweep `1`
+is an arm `violated`, and a caller sorting by exit code would be sent to fix an arm's declaration
+by a sweep that drove none. A test holds every leg-running command to it.
 
 ## Success witnesses
 

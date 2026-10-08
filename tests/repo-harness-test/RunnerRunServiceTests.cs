@@ -1691,6 +1691,47 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
+    /// Two steps whose names differ, and are kept as one log - every character a file name cannot carry is kept as a
+    /// hyphen, and a file's name is told apart whatever its case - are refused before any step runs, naming both and the
+    /// log: the second wrote the first's log over, and what the first printed was read from the second's.
+    /// </summary>
+    [Fact]
+    public async Task TwoStepsWhoseNamesAreKeptAsOneLog_AreRefused_NamingBothAndTheLog()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: 'bench: fast'
+                run: |
+                  dotnet --version
+              - name: other
+                run: |
+                  dotnet --version
+              - name: 'Bench/ fast'
+                run: |
+                  dotnet --info
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            "Runner 'corpus' names steps that would keep one log between them: 'bench: fast' and 'Bench/ fast' as 'bench- fast.log'. "
+            + "A character a file name cannot carry is kept as '-', and a file's name is told apart whatever its case, so each would "
+            + "write the other's log over, and what one printed be read as the other's. Rename one.",
+            refusal.Message);
+    }
+
+    /// <summary>
     /// A leg left with only predefined steps runs nothing of the action's own: reading inputs settles
     /// what the steps after it run, and runs none. Refused like a leg left with no step at all, where
     /// it passed on "0 step(s) passed".

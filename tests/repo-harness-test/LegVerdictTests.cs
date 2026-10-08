@@ -226,6 +226,27 @@ public sealed class LegVerdictTests
         Assert.True(Verdicts.IsFailure(reached.Verdict), "a leg that vanishes must fail the run");
     }
 
+    /// <summary>
+    /// The verdict work that ended in a failure comes to is read in one place, for a leg and for every unit of a sweep:
+    /// the verdict a refusal names, unmeasured where a phase's output could not be read back from its log, failed where
+    /// the cause is one this build can name - and none where nobody named it, which is the caller's to say as poisoned.
+    /// </summary>
+    [Fact]
+    public void AFailure_ComesToTheVerdictItsCauseNames_AndToNoneWhereNobodyNamedIt()
+    {
+        Assert.Equal(
+            ReachedVerdict.Of(LegVerdict.SkippedToolMissing, "ninja was not found"),
+            Verdicts.ForFailure(new HarnessException(HarnessExit.ToolMissing, "ninja was not found")));
+        Assert.Equal(
+            ReachedVerdict.Of(LegVerdict.Unmeasured, PhaseOutputTests.Unread.Said),
+            Verdicts.ForFailure(new PhaseOutputUnreadException("build.log", "it was written again since")));
+        Assert.Equal(
+            ReachedVerdict.Of(LegVerdict.Failed, "'bench' could not be started: Exec format error"),
+            Verdicts.ForFailure(new RepoHarness.Core.Processes.ProgramStartException("bench", "'bench' could not be started: Exec format error")));
+        Assert.Null(Verdicts.ForFailure(new InvalidOperationException("the build directory vanished")));
+        Assert.Null(Verdicts.ForFailure(new IOException("the disk went away")));
+    }
+
     [Fact]
     public void ARefusal_KeepsTheMeaningItWasRaisedWith()
     {

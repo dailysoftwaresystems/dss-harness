@@ -55,6 +55,14 @@ public sealed record LegRunRequest(
     /// a key of its own instead, so it never holds a build of the leg off for hours, nor waits for one.
     /// </summary>
     public Func<PlacedLeg, RunId, string, LockRequest>? Lock { get; init; }
+
+    /// <summary>
+    /// What the command exits with where no selected leg can run and no failure turned one away:
+    /// <see cref="LegsExit.Unavailable"/>, as <c>legs</c> answers. A command whose legs reach a verdict that already
+    /// decides that code says another, so that within the command no code has two meanings: a sweep's arms reach
+    /// <c>violated</c>, which is 1.
+    /// </summary>
+    public int NothingRunsExit { get; init; } = LegsExit.Unavailable;
 }
 
 /// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
@@ -167,7 +175,7 @@ public sealed class LegRunService(
 
         if (placed.Count == 0)
         {
-            var nothing = LegRunPlan.NothingRuns(skipped);
+            var nothing = LegRunPlan.NothingRuns(skipped, request.NothingRunsExit);
 
             // Before the run has a directory: there is none to name.
             return Stopped(request, runId, nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? [], runDirectory: null);

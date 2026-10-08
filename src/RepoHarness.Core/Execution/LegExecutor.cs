@@ -355,26 +355,22 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             // released by the finally below, as on every other path out.
             throw;
         }
-        catch (HarnessException ex)
+        catch (Exception ex) when (Verdicts.ForFailure(ex) is { } reached)
         {
-            // A refusal that is genuinely about this leg keeps its own verdict: a host that is
-            // switched off, or a tree git cannot answer in, is skipped-unavailable, neither of them
-            // a defect in the tool. The other legs still report.
-            entry = Entry(leg, ReachedVerdict.Of(Verdicts.ForRefusal(ex.ExitCode), ex.Message));
-        }
-        catch (Exception ex) when (KnownCauses.Names(ex))
-        {
-            // A cause this build can name, read from the table the command runner reads too, is not
-            // a defect in this tool: recorded as poisoned, a program that would not start read as
-            // exit 70 and sent the reader looking for a bug that was not there. Nor is it a skip. The
+            // What the failure comes to, read where every unit of work reads it. A refusal that is
+            // genuinely about this leg keeps its own verdict: a host that is switched off, or a tree
+            // git cannot answer in, is skipped-unavailable, neither of them a defect in the tool. What
+            // a phase printed that could not be read back from its log decides nothing, and says so.
+            // And a cause this build can name, read from the table the command runner reads too, is
+            // not a defect either: recorded as poisoned, a program that would not start read as exit
+            // 70 and sent the reader looking for a bug that was not there. Nor is it a skip. The
             // survey turned away, before anything started, every leg whose host lacks a program it
             // requires there; a program that still will not start once the leg is running is one it
             // could not require - a file the build was to make, a script in the tree, one a phase's
             // own PATH finds, a binary for another processor - and a leg that cannot start its own
-            // program has failed. Read
-            // as a skip, a build that never produced what its next step runs would pass a gate
-            // that accepts an incomplete run.
-            entry = Entry(leg, ReachedVerdict.Of(LegVerdict.Failed, ex.Message));
+            // program has failed. Read as a skip, a build that never produced what its next step runs
+            // would pass a gate that accepts an incomplete run. The other legs still report.
+            entry = Entry(leg, reached);
         }
         catch (Exception ex)
         {

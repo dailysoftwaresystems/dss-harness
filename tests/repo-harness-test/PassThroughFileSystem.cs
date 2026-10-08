@@ -74,6 +74,15 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
     public virtual void ProtectSecretFile(string path) => inner.ProtectSecretFile(path);
 }
 
+/// <summary>The real file system, save that <paramref name="path"/> is there and cannot be read, as a file another process holds cannot.</summary>
+/// <param name="inner">The file system every member passes through to.</param>
+/// <param name="path">The file that cannot be read.</param>
+internal sealed class Held(IFileSystem inner, string path) : PassThroughFileSystem(inner)
+{
+    public override string ReadAllText(string read)
+        => Path.GetFullPath(read) == Path.GetFullPath(path) ? throw new IOException("it is held by another process") : base.ReadAllText(read);
+}
+
 /// <summary>The real file system, whose atomic writes fail while <see cref="Full"/> says so, as a full disk's do.</summary>
 /// <param name="inner">The file system every member passes through to.</param>
 internal sealed class FullDiskFileSystem(IFileSystem inner) : PassThroughFileSystem(inner)

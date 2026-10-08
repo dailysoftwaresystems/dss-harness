@@ -28,15 +28,28 @@ public sealed class PristineJudgeTests
     }
 
     /// <summary>
-    /// An unmutated run that wrote no report, or one that cannot be read, or failed with no failing case, is
+    /// An unmutated run that wrote no report, or one that is no report, or failed with no failing case, is
     /// unattributed; one with a red case is failed, naming each: no mutation of a binary that is red unmutated proves
-    /// anything.
+    /// anything. One whose report was written and could not be read from its file is unmeasured, saying why: that is
+    /// no finding about the binary.
     /// </summary>
     [Fact]
     public void AnUnmutatedRunThatDidNotPass_IsTheLegsVerdict_AndStopsTheBinarysArms()
     {
         var nothing = PristineJudge.Judge("fixture_tests", Built, new ArmRun { ExitCode = 3 }, TimeSpan.FromSeconds(4), 10);
-        var unreadable = PristineJudge.Judge("fixture_tests", Built, new ArmRun { ExitCode = 0, ReportWritten = true }, TimeSpan.FromSeconds(4), 10);
+        var unreadable = PristineJudge.Judge(
+            "fixture_tests",
+            Built,
+            new ArmRun { ExitCode = 0, ReportWritten = true, ReportProblem = "its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'" },
+            TimeSpan.FromSeconds(4),
+            10);
+        var unsaid = PristineJudge.Judge("fixture_tests", Built, new ArmRun { ExitCode = 0, ReportWritten = true }, TimeSpan.FromSeconds(4), 10);
+        var unread = PristineJudge.Judge(
+            "fixture_tests",
+            Built,
+            new ArmRun { ExitCode = 0, ReportWritten = true, ReportUnread = "'report.xml' is held by another process" },
+            TimeSpan.FromSeconds(4),
+            10);
         var red = PristineJudge.Judge("fixture_tests", Built, Ran(1, "<failure/>", "<error/>"), TimeSpan.FromSeconds(4), 10);
         var oneRed = PristineJudge.Judge("fixture_tests", Built, Ran(0, string.Empty, "<failure/>"), TimeSpan.FromSeconds(4), 10);
         var crashed = PristineJudge.Judge("fixture_tests", Built, Ran(1, string.Empty, string.Empty), TimeSpan.FromSeconds(4), 10);
@@ -44,7 +57,19 @@ public sealed class PristineJudgeTests
         Assert.Equal(
             (ReachedVerdict.Of(LegVerdict.Unattributed, "the unmutated fixture_tests exited 3 and wrote no report"), "the unmutated fixture_tests left no report to judge its arms' runs against"),
             (nothing.Leg, nothing.Stops));
-        Assert.Equal(ReachedVerdict.Of(LegVerdict.Unattributed, "the report of the unmutated fixture_tests could not be read, after it exited 0"), unreadable.Leg);
+        Assert.Equal(
+            (ReachedVerdict.Of(
+                LegVerdict.Unattributed,
+                "the report of the unmutated fixture_tests is no JUnit report this reads, after it exited 0: its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'"),
+                "the unmutated fixture_tests left no report to judge its arms' runs against"),
+            (unreadable.Leg, unreadable.Stops));
+        Assert.Equal(ReachedVerdict.Of(LegVerdict.Unattributed, "the report of the unmutated fixture_tests is no JUnit report this reads, after it exited 0"), unsaid.Leg);
+        Assert.Equal(
+            (ReachedVerdict.Of(
+                LegVerdict.Unmeasured,
+                "the report of the unmutated fixture_tests was written and could not be read, after it exited 0: 'report.xml' is held by another process"),
+                "the report of the unmutated fixture_tests could not be read, so nothing says its cases pass unmutated"),
+            (unread.Leg, unread.Stops));
         Assert.Equal(
             (ReachedVerdict.Of(LegVerdict.Failed, "the unmutated fixture_tests has 2 red: Fixture.A, Fixture.B"), "the unmutated fixture_tests has 2 red, so no mutation of it proves anything"),
             (red.Leg, red.Stops));

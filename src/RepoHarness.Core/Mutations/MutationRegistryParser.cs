@@ -277,6 +277,12 @@ public static partial class MutationRegistryParser
                 return;
             }
 
+            if (texts.Unlisted is { } why)
+            {
+                Problems.Add($"the text directory '{texts.Directory}' could not be listed, so whether every text in it is cited cannot be read: {why}");
+                return;
+            }
+
             if (texts.Files is null)
             {
                 Problems.Add($"the text directory '{texts.Directory}' is not a directory, so whether every text in it is cited cannot be read");

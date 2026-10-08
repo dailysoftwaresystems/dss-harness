@@ -47,7 +47,9 @@ internal static class Ninja
     /// The verdict of <paramref name="phase"/>, a build ninja ran that did not pass, where ninja did not end it for a
     /// failure: <see cref="LegVerdict.Stopped"/>, naming the exit code and whether ninja said it was interrupted or said
     /// nothing; <see langword="null"/> where ninja said anything of its own that is a reason a build ends - a step that
-    /// failed, an error, a failure - or the phase exited 0 or stalled: its own verdict stands then.
+    /// failed, an error, a failure - or the phase exited 0 or stalled: its own verdict stands then. And
+    /// <see cref="LegVerdict.Unmeasured"/> where what the build printed could not be read back from its log, so nothing
+    /// tells the two apart.
     /// </summary>
     /// <param name="phase">The build phase.</param>
     /// <param name="program">
@@ -72,31 +74,41 @@ internal static class Ninja
 
         var file = Path.GetFileName(program);
         string[] names = string.IsNullOrEmpty(file) ? [OwnName] : [OwnName, file];
+        var tool = Path.GetFileNameWithoutExtension(program) is { Length: > 0 } named ? named : OwnName;
         var interrupted = false;
 
-        // Read from the log a line at a time, each divided however it divides itself, and no further than the line that
-        // decides: a build's output can be larger than any text the harness could hold.
-        foreach (var line in phase.Output.Lines().SelectMany(line => Colour.Replace(line, string.Empty).ReplaceLineEndings("\n").Split('\n')))
+        try
         {
-            if (line.StartsWith(FailedStep, StringComparison.Ordinal))
+            // Read from the log a line at a time, each divided however it divides itself, and no further than the line
+            // that decides: a build's output can be larger than any text the harness could hold.
+            foreach (var line in phase.Output.Lines().SelectMany(line => Colour.Replace(line, string.Empty).ReplaceLineEndings("\n").Split('\n')))
             {
-                return null;
-            }
+                if (line.StartsWith(FailedStep, StringComparison.Ordinal))
+                {
+                    return null;
+                }
 
-            if (Said(line, names) is not { } said || Asides.Any(aside => said.StartsWith(aside, StringComparison.Ordinal)))
-            {
-                continue;
-            }
+                if (Said(line, names) is not { } said || Asides.Any(aside => said.StartsWith(aside, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
 
-            if (!Interruptions.Any(interruption => said.StartsWith(interruption, StringComparison.Ordinal)))
-            {
-                return null;
-            }
+                if (!Interruptions.Any(interruption => said.StartsWith(interruption, StringComparison.Ordinal)))
+                {
+                    return null;
+                }
 
-            interrupted = true;
+                interrupted = true;
+            }
         }
-
-        var tool = Path.GetFileNameWithoutExtension(program) is { Length: > 0 } named ? named : OwnName;
+        catch (PhaseOutputUnreadException ex)
+        {
+            // Decided here, where the build still closes its own records: a log with nothing left in it would read as a
+            // build ninja said nothing of, which is one stopped from outside and no failure at all.
+            return ReachedVerdict.Of(
+                LegVerdict.Unmeasured,
+                $"{phase.Phase} exited {phase.ExitCode}, and whether {tool} failed it or something stopped it from outside could not be read: {ex.Message}");
+        }
 
         return ReachedVerdict.Of(
             LegVerdict.Stopped,

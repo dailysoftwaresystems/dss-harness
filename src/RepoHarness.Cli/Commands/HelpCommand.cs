@@ -262,7 +262,8 @@ internal static class HelpCommand
         builder.AppendLine("toolSearchDirectories instead.");
         builder.AppendLine();
         builder.AppendLine("A leg turned away for a missing program is 'skipped-tool-missing', and the run is");
-        builder.AppendLine($"incomplete, exit {HarnessExit.Incomplete} - or exit {LegsExit.Unavailable} when no selected leg can run at all. A leg");
+        builder.AppendLine($"incomplete, exit {HarnessExit.Incomplete} - or exit {LegsExit.Unavailable} when no selected leg can run at all, save of");
+        builder.AppendLine($"check-mutations, which stays {MutationService.NothingRuns}: its {LegsExit.Unavailable} is an arm violated. A leg");
         builder.AppendLine("that is already running when a program will not start has 'failed', naming the");
         builder.AppendLine("program and the reason the system gave: no survey could have required it - a file");
         builder.AppendLine("the build was to make, a binary for another processor. Neither is 'poisoned', which");
@@ -908,6 +909,11 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
+            $"A sweep none of whose selected legs can run is incomplete, exit {MutationService.NothingRuns}, saying why each cannot - "
+            + $"never the {LegsExit.Unavailable} a build, a test and a run give there, which of a sweep is an arm violated.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             "A sweep of a leg takes a lock of its own, keyed by its workers: it refuses another sweep of the leg's variant, "
             + "refused-locked, and never holds off a build, test or sync of the leg. --force-lock takes it, and a worker "
             + "another live sweep claims.");
@@ -962,9 +968,10 @@ internal static class HelpCommand
         builder.AppendLine("                diagnostic not said; a TEST-RED mutation that does not compile; or a");
         builder.AppendLine("                BUILD-RED one that does, or whose control does not");
         builder.AppendLine("  survived      the mutation built and ran, and no case failed");
-        builder.AppendLine("  unattributed  the run failed and nothing ties that to a case: no report, an unreadable");
-        builder.AppendLine("                one, a failing exit whose report names no failing case, or a run past");
-        builder.AppendLine("                its bound, or silent for defaults.stallSeconds, stopped as hung");
+        builder.AppendLine("  unattributed  the run failed and nothing ties that to a case: no report, one that is no");
+        builder.AppendLine("                JUnit report - its line says why - a failing exit whose report names no");
+        builder.AppendLine("                failing case, or a run past its bound, or silent for");
+        builder.AppendLine("                defaults.stallSeconds, stopped as hung");
         builder.AppendLine("  unwitnessed   the build passed and an object that depends on a site was not rebuilt");
         builder.AppendLine("  stopped       not driven to a verdict: the sweep was stopped, or ended by a refusal of the");
         builder.AppendLine("                run, while it was driven or before; no worker was left to run it; or the");
@@ -977,7 +984,8 @@ internal static class HelpCommand
             builder,
             "An arm reaches others where nothing of its own decides: skipped-not-selected where --arms or its S row leaves "
             + "it out of a leg; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the "
-            + "path limit; unmeasured where ninja's log could not be read around its build; whatever a guard of its "
+            + "path limit; unmeasured where ninja's log could not be read around its build, or the report its run wrote "
+            + "could not be read from its file, which is no finding about the binary; whatever a guard of its "
             + "build reaches, as a leg's build does - inputs-moved, contended; and whatever a failure that ends its driving "
             + "comes to, as a leg's does - skipped-tool-missing for a tool that is not there, failed for a program that "
             + "will not start.");
@@ -1168,7 +1176,7 @@ internal static class HelpCommand
         builder.AppendLine("  read-anchor, read-anchors --lint, check-anchor-balance, check-anchor-citations");
         builder.AppendLine($"    {AnchorExit.Findings,3}  an id was not found, the registries have problems, or the balance did not hold");
         builder.AppendLine();
-        builder.AppendLine("  legs");
+        builder.AppendLine("  legs, sync");
         builder.AppendLine($"    {LegsExit.Unavailable,3}  a leg named with --legs cannot run, or no selected leg can");
         builder.AppendLine($"    {HarnessExit.InternalError,3}  whether a leg can run was never established, through a defect in this tool");
         builder.AppendLine();
@@ -1180,16 +1188,23 @@ internal static class HelpCommand
         builder.AppendLine($"    {CiExit.MatrixDidNotRun,3}  the matrix did not run, which is never read as every leg passing");
         builder.AppendLine();
         builder.AppendLine("  build, test, run, check-mutations");
-        builder.AppendLine($"    {LegExit.Violated,3}  violated, check-mutations only: fix the arm's declaration, or the code it guards");
-        builder.AppendLine($"    {LegExit.Survived,3}  survived, check-mutations only: strengthen the test that should have failed");
         builder.AppendLine($"    {LegExit.InputsMoved,3}  inputs-moved or unmeasured: let the tree settle, then run again");
         builder.AppendLine($"    {LegExit.Contended,3}  contended: wait for the other run");
         builder.AppendLine($"    {LegExit.Unwitnessed,3}  unwitnessed: find out what actually ran");
         builder.AppendLine($"    {LegExit.LogHeld,3}  log-held: find out which run still owns this leg's logs");
         builder.AppendLine($"    {LegExit.NotAdmitted,3}  not-admitted: wait for the heavy legs it names, free memory or room on the");
         builder.AppendLine("         filesystem it names, or raise the machine's limits ('help admission')");
-        builder.AppendLine($"    {LegExit.Unattributed,3}  unattributed, check-mutations only: contain the crash or hang in the case, or");
-        builder.AppendLine("         make the runner write its report");
+        builder.AppendLine();
+        builder.AppendLine("  build, test, run, clean");
+        builder.AppendLine($"    {LegsExit.Unavailable,3}  no selected leg can run, and no failure turned one away");
+        builder.AppendLine();
+        builder.AppendLine("  check-mutations");
+        builder.AppendLine($"    {LegExit.Violated,3}  violated: fix the arm's declaration, or the code it guards");
+        builder.AppendLine($"    {LegExit.Survived,3}  survived: strengthen the test that should have failed");
+        builder.AppendLine($"    {LegExit.Unattributed,3}  unattributed: contain the crash or hang in the case, or make the runner write");
+        builder.AppendLine("         its report");
+        builder.AppendLine($"    {MutationService.NothingRuns,3}  no selected leg can run, and no failure turned one away: incomplete, since");
+        builder.AppendLine($"         {LegsExit.Unavailable} is an arm violated here");
         builder.AppendLine();
         builder.AppendLine("host-exec returns the exit code of the command it ran on the host, unchanged, or");
         builder.AppendLine($"{HarnessExit.HostUnavailable} when nothing ran there, or the command never reported how it finished.");

@@ -865,6 +865,61 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// An arm whose run wrote a report that could not be read from its file - held by another process each time it
+    /// was tried - is unmeasured, saying why: nothing says which cases its run reddened, which is no finding about the
+    /// binary. Its site is put back, and its worker, whose copy nothing touched, drives the next arm.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWhoseReportCouldNotBeRead_IsUnmeasured_AndItsWorkerDrivesTheNext()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.Tests.Answer = request => request.Leg == "native/arms/charge-bound"
+            ? new ArmRun { ExitCode = 1, ReportWritten = true, ReportUnread = "'report.xml' is held by another process" }
+            : Tests.Judged(request);
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
+
+        Assert.Equal(
+            [
+                (
+                    "charge-bound",
+                    LegVerdict.Unmeasured,
+                    "its report was written and could not be read, after it exited 1, so nothing says which cases failed: 'report.xml' is held by another process"),
+                ("charge-floor", LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+        Assert.All(entry.Arms, arm => Assert.Equal(1, arm.Worker));
+        Assert.Equal((null, null), (entry.Arms[0].Cases, entry.Arms[0].Reds));
+        Assert.Equal(LegVerdict.Unmeasured, entry.Verdict);
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+    }
+
+    /// <summary>
+    /// An arm whose build or run needed what a phase printed, and could not read it back from its log, is unmeasured,
+    /// saying which log and why - never poisoned, which is a defect of this tool's and retires a worker: its site is put
+    /// back, and its worker drives the next arm.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWhoseOutputCouldNotBeReadBack_IsUnmeasured_AndItsWorkerDrivesTheNext()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.Tests.Before = (request, _) => request.Leg == "native/arms/charge-bound"
+            ? throw new PhaseOutputUnreadException("build.log", "it was written again since")
+            : Task.CompletedTask;
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
+
+        Assert.Equal(
+            [
+                ("charge-bound", LegVerdict.Unmeasured, PhaseOutputTests.Unread.Said),
+                ("charge-floor", LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+            ],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Detail)));
+        Assert.All(entry.Arms, arm => Assert.Equal(1, arm.Worker));
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+    }
+
+    /// <summary>
     /// A failure nobody named around an arm - in its machine's answer, outside its own build and run - poisons that arm
     /// alone and retires its worker, whose copy nothing then vouches for; the other worker drives the rest, and every
     /// arm judged keeps its verdict.
@@ -1110,6 +1165,17 @@ public sealed class MutationLegRunnerTests
             (fewer.Verdict, fewer.Detail));
         Assert.All(fewer.Arms, arm => Assert.Equal((LegVerdict.Passed, 1), (arm.Verdict, arm.Worker)));
         Assert.Equal([one.Worker(1), one.Worker(2)], one.Copies.Released.Order(StringComparer.Ordinal));
+
+        // A worker whose build's records could not be read whole judges nothing: it is no worker, and says why.
+        const string Unread = "ninja's manifest in 'build' could not be read whole, so what the build there builds is not known: 'build.ninja' could not be read: it is held.";
+
+        using var unread = new Sweep();
+        unread.Builder.GraphThrows = request => request.Leg == "native/workers/2" ? new HarnessException(HarnessExit.CommandFailed, Unread) : null;
+
+        var read = await unread.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Passed, $"2 arm(s): 2 passed; worker 2: {Unread.TrimEnd('.')}, so it drove no arm"), (read.Verdict, read.Detail));
+        Assert.All(read.Arms, arm => Assert.Equal((LegVerdict.Passed, 1), (arm.Verdict, arm.Worker)));
 
         using var none = new Sweep();
         none.Copies.SyncFails = worker => worker == none.Worker(1) ? new UnauthorizedAccessException("Access to the path is denied.") : null;
@@ -2667,8 +2733,11 @@ public sealed class MutationLegRunnerTests
             return new BuildResult(verdict, directory, phases, null, null);
         }
 
+        /// <summary>What reading a build's graph raises, or <see langword="null"/> where it is read.</summary>
+        public Func<BuildRequest, Exception?> GraphThrows { get; set; } = _ => null;
+
         public Task<IWorkerGraph> ReadGraphAsync(HarnessConfig config, BuildRequest request, CancellationToken cancellationToken)
-            => Task.FromResult<IWorkerGraph>(Graph);
+            => GraphThrows(request) is { } failure ? Task.FromException<IWorkerGraph>(failure) : Task.FromResult<IWorkerGraph>(Graph);
 
         public NinjaLog? ReadLog(string buildDirectory)
         {

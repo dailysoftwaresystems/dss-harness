@@ -138,6 +138,24 @@ public sealed class NinjaTests
     }
 
     /// <summary>
+    /// A build that did not pass, whose log no longer holds what it printed, is unmeasured: nothing says whether ninja
+    /// failed it or something stopped it from outside. Read as a log with nothing in it, it was stopped - no failure at
+    /// all, and one running again would finish.
+    /// </summary>
+    [Fact]
+    public void ABuildWhoseOutputCouldNotBeReadBack_IsUnmeasured_NeverStopped()
+    {
+        var unread = Ninja.Stopped(Phase(1, stalled: false, "unused") with { Output = new PhaseOutputTests.Unread() }, "/usr/bin/samu");
+
+        Assert.Equal(
+            ReachedVerdict.Of(
+                LegVerdict.Unmeasured,
+                $"build exited 1, and whether samu failed it or something stopped it from outside could not be read: {PhaseOutputTests.Unread.Said}"),
+            unread);
+        Assert.Null(Ninja.Stopped(Phase(0, stalled: false, "unused") with { Output = new PhaseOutputTests.Unread() }, program: null));
+    }
+
+    /// <summary>
     /// What ninja said is read from the build's log a line at a time, and no further than the line that decides: a build's
     /// output can be larger than any text the harness could hold, and the line naming a failed step settles it.
     /// </summary>

@@ -253,11 +253,15 @@ public sealed class PhaseRunner(
 
         long end;
 
+        // What closes the child's own lines in the log, which the log is held to wherever they are read back: it says
+        // how the phase ended and, to the tick, how long it ran, so a log another phase wrote since does not hold it.
+        var exit = $"# exit {(result.TimedOut ? "(stopped)" : result.ExitCode.ToString(CultureInfo.InvariantCulture))} after {clock.Elapsed}";
+
         lock (gate)
         {
             // Where the child's own lines end: what follows is the exit line this run writes.
             end = log.BaseStream.Position;
-            log.WriteLine($"# exit {(result.TimedOut ? "(stopped)" : result.ExitCode.ToString(CultureInfo.InvariantCulture))} after {clock.Elapsed}");
+            log.WriteLine(exit);
         }
 
         return new PhaseResult(
@@ -276,7 +280,7 @@ public sealed class PhaseRunner(
             // The child's lines as the log keeps them, already masked: read back from there by whatever
             // needs more of them than was read above, never held as text. A redaction every reader of
             // the output had to remember is one a new reader would not.
-            Output: PhaseOutput.InLog(request.LogFile, start, end))
+            Output: PhaseOutput.InLog(request.LogFile, start, end, Utf8NoBom.GetBytes(exit + LogLineEnding)))
         {
             // In the order the lines came, masked as each came, whichever stream carried each.
             LastLines = reading.LastLines,

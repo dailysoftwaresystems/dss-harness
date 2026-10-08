@@ -63,6 +63,8 @@ public sealed class NinjaManifest
     /// <summary>The build lines read, each with what it is evaluated with once every file is read.</summary>
     private readonly List<(BuildStatement Line, Rule? Rule, Dictionary<string, string> Bindings, Scope Scope)> _read = [];
 
+    private readonly List<(string File, string Why)> _passedOver = [];
+
     private NinjaManifest()
     {
     }
@@ -73,6 +75,7 @@ public sealed class NinjaManifest
     /// <remarks>
     /// A file the manifest names that is not there, or cannot be read, is passed over: what it would
     /// have declared is simply not known, and no object it would have said how to build is excused.
+    /// Each is named in <see cref="PassedOver"/>.
     /// </remarks>
     public static NinjaManifest Read(IFileSystem fileSystem, string buildDirectory)
     {
@@ -109,6 +112,14 @@ public sealed class NinjaManifest
 
         return _edges.GetValueOrDefault(Normalize(output));
     }
+
+    /// <summary>
+    /// Each file the manifest was to be read from and was not, as the manifest names it, with why: <c>build.ninja</c>
+    /// itself, or a file it includes, that is not there or could not be read. What such a file would have declared is not
+    /// known, so a reader to whom not knowing is no answer - one that reads what a build builds, and would take a rule
+    /// never read for a target never built - asks here first.
+    /// </summary>
+    public IReadOnlyList<(string File, string Why)> PassedOver => _passedOver;
 
     /// <summary>Every path a build line produces, as ninja canonicalizes it, the implicit outputs too.</summary>
     public IReadOnlyCollection<string> Outputs => _edges.Keys;
@@ -327,8 +338,14 @@ public sealed class NinjaManifest
     {
         var path = Path.GetFullPath(Path.Combine(buildDirectory, name));
 
-        if (!read.Add(path) || !fileSystem.FileExists(path))
+        if (!read.Add(path))
         {
+            return;
+        }
+
+        if (!fileSystem.FileExists(path))
+        {
+            _passedOver.Add((name, "is not there"));
             return;
         }
 
@@ -344,6 +361,7 @@ public sealed class NinjaManifest
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            _passedOver.Add((name, $"could not be read: {ex.Message}"));
             return;
         }
 

@@ -60,14 +60,94 @@ public sealed class PhaseOutputTests
         Assert.Empty(PhaseOutput.InLog(log, start, start).Lines());
     }
 
-    /// <summary>A log shorter than the range the phase left in it - cut short since - reads as what is there.</summary>
+    /// <summary>
+    /// A log that no longer holds what its phase left in it - gone, cut short, or written again since - is said as
+    /// unread, naming it and why, before any line of it is handed on: read as what is there, a build ninja failed read
+    /// as one stopped from outside, and a step's lines as another's. A reader that stops at its first line is told too.
+    /// </summary>
+    [Theory]
+    [InlineData("gone", "could not be read back from its log")]
+    [InlineData("cut short", "byte(s), fewer than the")]
+    [InlineData("written again", "it no longer holds what the phase wrote after its last line: it was written again since")]
+    public async Task ALogThatNoLongerHoldsWhatItsPhaseLeft_IsSaidAsUnread_BeforeAnyLineIsHandedOn(string how, string why)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        var log = temp.Combine("build.log");
+
+        var result = await new PhaseRunner(factory.ProcessRunner, factory.FileSystem, factory.Output).RunAsync(
+            Child("echo-crlf", log, "first", "second", "last"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["first", "second", "last"], result.Output.Lines());
+
+        var written = await File.ReadAllBytesAsync(log, TestContext.Current.CancellationToken);
+
+        switch (how)
+        {
+            case "gone":
+                File.Delete(log);
+                break;
+
+            case "cut short":
+                await File.WriteAllBytesAsync(log, written[..^8], TestContext.Current.CancellationToken);
+                break;
+
+            default:
+                // As long as it was, and every byte another step's.
+                await File.WriteAllBytesAsync(log, [.. written.Select(_ => (byte)'x')], TestContext.Current.CancellationToken);
+                break;
+        }
+
+        var whole = Assert.Throws<PhaseOutputUnreadException>(() => result.Output.Lines().ToList());
+        var first = Assert.Throws<PhaseOutputUnreadException>(() => result.Output.Lines().First());
+
+        Assert.Equal(log, whole.LogFile);
+        Assert.StartsWith($"what the phase printed could not be read back from its log '{log}': ", whole.Message, StringComparison.Ordinal);
+        Assert.Contains(why, whole.Message, StringComparison.Ordinal);
+        Assert.Equal(whole.Message, first.Message);
+    }
+
+    /// <summary>A range past the end of its log is said as unread too, where nothing says what closed it.</summary>
     [Fact]
-    public void ALogShorterThanItsRange_ReadsAsWhatIsThere()
+    public void ALogShorterThanItsRange_IsSaidAsUnread()
     {
         using var temp = new TempDirectory();
         var log = temp.WriteFile("short.log", "one\ntwo\n");
 
-        Assert.Equal(["one", "two"], PhaseOutput.InLog(log, 0, 1_000).Lines());
+        var unread = Assert.Throws<PhaseOutputUnreadException>(() => PhaseOutput.InLog(log, 0, 1_000).Lines().ToList());
+
+        Assert.Contains("it holds 8 byte(s), fewer than the 1000 the phase left in it", unread.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A log cut short while it is read - whole as it was opened - is said as unread at the read that finds it so: never
+    /// read as what was left, nor read on for ever waiting for bytes that will not come.
+    /// </summary>
+    [Fact]
+    public void ALogCutShortWhileItIsRead_IsSaidAsUnread()
+    {
+        using var temp = new TempDirectory();
+        var log = temp.WriteFile("long.log", string.Concat(Enumerable.Range(0, 40_000).Select(index => $"line {index:D6}\n")));
+
+        using var lines = PhaseOutput.InLog(log, 0, new FileInfo(log).Length).Lines().GetEnumerator();
+
+        Assert.True(lines.MoveNext());
+        Assert.Equal("line 000000", lines.Current);
+
+        using (var cut = new FileStream(log, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete))
+        {
+            cut.SetLength(100_000);
+        }
+
+        var unread = Assert.Throws<PhaseOutputUnreadException>(() =>
+        {
+            while (lines.MoveNext())
+            {
+            }
+        });
+
+        Assert.Contains("it was cut short while it was read", unread.Message, StringComparison.Ordinal);
     }
 
     /// <summary>A reader that stops early reads no further and leaves the log free: nothing still holds it open.</summary>
@@ -112,6 +192,15 @@ public sealed class PhaseOutputTests
             Environment = request.Environment,
             LogFile = logFile,
         };
+    }
+
+    /// <summary>Output whose log no longer holds it: every read of it is said as unread.</summary>
+    internal sealed class Unread : PhaseOutput
+    {
+        /// <summary>What every read of it says.</summary>
+        public const string Said = "what the phase printed could not be read back from its log 'build.log': it was written again since";
+
+        public override IEnumerable<string> Lines() => throw new PhaseOutputUnreadException("build.log", "it was written again since");
     }
 
     /// <summary>

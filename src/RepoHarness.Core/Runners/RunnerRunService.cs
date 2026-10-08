@@ -498,7 +498,9 @@ public sealed class RunnerRunService(
     /// <remarks>
     /// A step whose <c>run</c> block holds several lines is named <c>step (1/2)</c>, and that slash
     /// is a directory separator on every platform this tool runs on. Replaced rather than stripped,
-    /// so two steps whose names differ only in such a character still name two different files.
+    /// so a name keeps its length and its shape. Two names that differ only in such characters are
+    /// then one file's, as are two that differ only in case where a file system folds it: steps
+    /// named so are refused before any of them runs.
     /// </remarks>
     /// <param name="phase">The step's name, as the ledger shows it.</param>
     public static string LogNameFor(string phase) => FileNames.SafeFor(phase);
@@ -738,13 +740,17 @@ public sealed class RunnerRunService(
         };
     }
 
-    /// <summary>Refuses <paramref name="names"/> where two of them are one step's name.</summary>
+    /// <summary>
+    /// Refuses <paramref name="names"/> where two of them are one step's name, or are kept as one log
+    /// (<see cref="LogNameFor"/>).
+    /// </summary>
     /// <param name="runnerName">The runner, as the refusal names it.</param>
     /// <param name="names">The names of the steps one leg runs.</param>
-    /// <exception cref="HarnessException">A name is given more than once.</exception>
+    /// <exception cref="HarnessException">A name is given more than once, or two names are one file's.</exception>
     private static void RefuseRepeatedNames(string runnerName, IEnumerable<string> names)
     {
-        var repeated = names
+        var given = names.ToList();
+        var repeated = given
             .GroupBy(name => name, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1)
             .Select(group => group.Key)
@@ -757,6 +763,21 @@ public sealed class RunnerRunService(
                 $"Runner '{runnerName}' names step(s) {string.Join(", ", repeated)} more than "
                 + "once. Two steps sharing a name write one log, and a resumed run cannot tell which "
                 + "of them it already did.");
+        }
+
+        var sharing = given
+            .GroupBy(LogNameFor, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .Select(group => $"{string.Join(" and ", group.Select(name => $"'{name}'"))} as '{group.Key}.log'")
+            .ToList();
+
+        if (sharing.Count > 0)
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"Runner '{runnerName}' names steps that would keep one log between them: {string.Join("; ", sharing)}. "
+                + "A character a file name cannot carry is kept as '-', and a file's name is told apart whatever its case, "
+                + "so each would write the other's log over, and what one printed be read as the other's. Rename one.");
         }
     }
 

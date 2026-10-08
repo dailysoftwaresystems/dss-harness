@@ -4,6 +4,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
+using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
 
@@ -114,6 +115,49 @@ public sealed class ArmBuilderTests
 
         Assert.Equal(["-C", build, "-t", "deps"], sent.Arguments.TakeLast(4));
         Assert.Equal(Path.GetFullPath(ninja), Path.GetFullPath(sent.FileName));
+    }
+
+    /// <summary>
+    /// A worker's graph whose manifest could not be read whole - <c>build.ninja</c>, or the rules it includes, held by
+    /// another process the instant after the build, or not there - is no graph: it is refused, naming each file and why.
+    /// Read with what was left, it said the build builds less than it does, and every arm the worker drew was violated
+    /// for a target no line builds or a site nothing depends on - the registry blamed for a file this could not read.
+    /// </summary>
+    [Theory]
+    [InlineData("build.ninja", true, "'build.ninja' could not be read: it is held by another process")]
+    [InlineData("CMakeFiles/rules.ninja", true, "'CMakeFiles/rules.ninja' could not be read: it is held by another process")]
+    [InlineData("CMakeFiles/rules.ninja", false, "'CMakeFiles/rules.ninja' is not there")]
+    public async Task AWorkersGraphWhoseManifestCouldNotBeReadWhole_IsRefused_NamingEachFileAndWhy(string file, bool held, string said)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var worker = temp.Combine("tree.mutation-x86_64-gcc-debug-1");
+        var build = Variant.DirectoryUnder(worker);
+        var path = Path.Combine(build, file.Replace('/', Path.DirectorySeparatorChar));
+
+        WriteBuild(temp, build);
+        File.WriteAllText(
+            Path.Combine(build, NinjaDependencyCheck.ManifestFileName),
+            "include CMakeFiles/rules.ninja\n" + File.ReadAllText(Path.Combine(build, NinjaDependencyCheck.ManifestFileName)));
+
+        if (held || file == NinjaDependencyCheck.ManifestFileName)
+        {
+            Directory.CreateDirectory(Path.Combine(build, "CMakeFiles"));
+            File.WriteAllText(Path.Combine(build, "CMakeFiles", "rules.ninja"), "rule extra\n  command = true\n");
+        }
+
+        IFileSystem files = held ? new Held(harness.FileSystem, path) : harness.FileSystem;
+        var builder = new ArmBuilder(
+            NSubstitute.Substitute.For<IBuildService>(),
+            new Answering($"{FixtureObject}: #deps 1, deps mtime 1 (VALID)\n    {temp.Combine("src", "fixture.cpp").Replace('\\', '/')}\n"),
+            new BuildDirectoryGuard(harness.FileSystem, harness.Platform, harness.FilePermissions),
+            files);
+        var request = new BuildRequest("native/workers/1", worker, new ProjectConfig { Name = "app", Type = "cmake" }, Variant, harness.Platform.PlatformKey, 2, temp.Combine("runs"));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => builder.ReadGraphAsync(new HarnessConfig(), request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+        Assert.Equal($"ninja's manifest in '{build}' could not be read whole, so what the build there builds is not known: {said}.", refusal.Message);
     }
 
     /// <summary>A worker's ninja log is read as ninja wrote it; one it did not write, or of a version not read, is none.</summary>

@@ -6,6 +6,7 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
@@ -247,10 +248,13 @@ public sealed partial class HelpTests
             + "object they build depending on a site;",
             "An arm reaches others where nothing of its own decides: skipped-not-selected where --arms or its S row leaves it out of a "
             + "leg; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the path limit; unmeasured "
-            + "where ninja's log could not be read around its build; whatever a guard of its build reaches, as a leg's build does - "
+            + "where ninja's log could not be read around its build, or the report its run wrote could not be read from its file, "
+            + "which is no finding about the binary; whatever a guard of its build reaches, as a leg's build does - "
             + "inputs-moved, contended; and whatever a failure that ends its driving comes to, as a leg's does - skipped-tool-missing "
             + "for a tool that is not there, failed for a program that will not start.",
             "one that does not pass - a build that does not pass, a red case, no report, a failing exit, a hang - decides the leg's own verdict",
+            "unattributed the run failed and nothing ties that to a case: no report, one that is no JUnit report - its line says why - a "
+            + "failing exit whose report names no failing case, or a run past its bound, or silent for defaults.stallSeconds, stopped as hung",
             "ARMS, below the table, names each arm selected that did not pass, and why;",
             "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build, or the "
             + "main checkout's, last recorded",
@@ -263,6 +267,29 @@ public sealed partial class HelpTests
         }
 
         Assert.DoesNotContain("upstream of every object", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Help says what a command exits with where no selected leg can run, wherever it speaks of it: 1 of a build, a test
+    /// and a run, and of a sweep incomplete, whose 1 is an arm violated - each code read from the code.
+    /// </summary>
+    [Fact]
+    public async Task Help_SaysWhatASweepGives_WhereNoSelectedLegCanRun()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var mutations = Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+        var tools = Words((await CliRunner.RunAsync(["help", "tools"], cancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            $"A sweep none of whose selected legs can run is incomplete, exit {MutationService.NothingRuns}, saying why each cannot - never the "
+            + $"{LegsExit.Unavailable} a build, a test and a run give there, which of a sweep is an arm violated.",
+            mutations,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"and the run is incomplete, exit {HarnessExit.Incomplete} - or exit {LegsExit.Unavailable} when no selected leg can run at all, save of "
+            + $"check-mutations, which stays {MutationService.NothingRuns}: its {LegsExit.Unavailable} is an arm violated.",
+            tools,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

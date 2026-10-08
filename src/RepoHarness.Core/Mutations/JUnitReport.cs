@@ -41,14 +41,23 @@ public sealed class JUnitReport
     /// <summary>The cases that failed, by name, each once, in the order the report names them.</summary>
     public IReadOnlyList<string> Reds => [.. Cases.Where(@case => @case.Red).Select(@case => @case.Id).Distinct(StringComparer.Ordinal)];
 
+    /// <summary>Reads <paramref name="xml"/>; <see langword="null"/> where it is no report.</summary>
+    /// <param name="xml">The report's text.</param>
+    public static JUnitReport? Read(string xml) => Read(xml, out _);
+
     /// <summary>
     /// Reads <paramref name="xml"/>; <see langword="null"/> where it is no XML, no JUnit report, or declares a document
-    /// type, which a report never needs and an entity in one could make reading it reach for other files.
+    /// type, which a report never needs and an entity in one could make reading it reach for other files -
+    /// <paramref name="problem"/> saying which, as a verdict's line can say it: a runner writing another format, and a
+    /// report a crash cut short, are told apart by what the reader made of each.
     /// </summary>
     /// <param name="xml">The report's text.</param>
-    public static JUnitReport? Read(string xml)
+    /// <param name="problem">Why it is no report, or <see langword="null"/> where it is one.</param>
+    public static JUnitReport? Read(string xml, out string? problem)
     {
         ArgumentNullException.ThrowIfNull(xml);
+
+        problem = null;
 
         XDocument document;
 
@@ -60,13 +69,20 @@ public sealed class JUnitReport
 
             document = XDocument.Load(reader);
         }
-        catch (XmlException)
+        catch (XmlException ex)
         {
+            // Said in this tool's words where the reader refused a document type: its own message says how to make a
+            // reader take one, which is nothing a report's author can do.
+            problem = DeclaresDocumentType(xml)
+                ? "it declares a document type, which no report needs and this never reads"
+                : $"it is no XML: {ex.Message}";
+
             return null;
         }
 
         if (document.Root is not { Name.LocalName: "testsuites" or "testsuite" } root)
         {
+            problem = $"its root is '{document.Root?.Name.LocalName}', and a JUnit report's is 'testsuites' or 'testsuite'";
             return null;
         }
 
@@ -77,6 +93,42 @@ public sealed class JUnitReport
                 !string.Equals((string?)@case.Attribute("status"), "notrun", StringComparison.Ordinal),
                 @case.Elements().Any(child => child.Name.LocalName is "failure" or "error"))),
         ]);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="xml"/> declares a document type: one follows its prolog - white space, processing
+    /// instructions and comments - which is where a reader that takes none stops. One named inside a comment, or
+    /// below the root, declares nothing.
+    /// </summary>
+    private static bool DeclaresDocumentType(ReadOnlySpan<char> xml)
+    {
+        while (true)
+        {
+            xml = xml.TrimStart();
+
+            if (xml.StartsWith("<!DOCTYPE", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var closes = xml.StartsWith("<?", StringComparison.Ordinal) ? "?>"
+                : xml.StartsWith("<!--", StringComparison.Ordinal) ? "-->"
+                : null;
+
+            if (closes is null)
+            {
+                return false;
+            }
+
+            var end = xml.IndexOf(closes, StringComparison.Ordinal);
+
+            if (end < 0)
+            {
+                return false;
+            }
+
+            xml = xml[(end + closes.Length)..];
+        }
     }
 
     /// <summary><c>classname.name</c>, or the name alone where the case has no class.</summary>

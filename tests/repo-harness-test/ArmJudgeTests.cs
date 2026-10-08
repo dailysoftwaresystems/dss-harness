@@ -103,10 +103,18 @@ public sealed class ArmJudgeTests
             new ArmRun { ExitCode = -1073741819, DiagnosticSaid = true },
             LegVerdict.Unattributed,
             "exited -1073741819 and wrote no report"),
-        ["12 a report that cannot be read"] = (
+        ["12 a report this could not read from its file"] = (
+            new ArmRun { ExitCode = 1, ReportWritten = true, ReportUnread = "'report.xml' is held by another process", DiagnosticSaid = true },
+            LegVerdict.Unmeasured,
+            "its report was written and could not be read, after it exited 1, so nothing says which cases failed: 'report.xml' is held by another process"),
+        ["12 a report that is no report"] = (
+            new ArmRun { ExitCode = 1, ReportWritten = true, ReportProblem = "its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'", DiagnosticSaid = true },
+            LegVerdict.Unattributed,
+            "its report is no JUnit report this reads, after it exited 1: its root is 'html', and a JUnit report's is 'testsuites' or 'testsuite'"),
+        ["12 a report that is none, nothing said of why"] = (
             new ArmRun { ExitCode = 1, ReportWritten = true, DiagnosticSaid = true },
             LegVerdict.Unattributed,
-            "its report could not be read, after it exited 1"),
+            "its report is no JUnit report this reads, after it exited 1"),
         ["13 a failing exit and no failing case"] = (
             Ran(1, Report([], ["Fixture.Charge", "Fixture.Depth", "Fixture.Other"])),
             LegVerdict.Unattributed,

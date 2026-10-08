@@ -27,6 +27,14 @@ public sealed class CtestTests
         => Assert.Equal(foundNone, Ctest.FoundNone(runner, PhaseOutput.Of(output)));
 
     /// <summary>
+    /// Output that could not be read back says nothing of ctest having found no test: the phase's own verdict stands,
+    /// unexplained, and never ends as a defect of this tool's over a sentence that only explains it.
+    /// </summary>
+    [Fact]
+    public void FoundNone_IsNotSaidOfOutputThatCouldNotBeReadBack()
+        => Assert.False(Ctest.FoundNone("ctest", new PhaseOutputTests.Unread()));
+
+    /// <summary>
     /// ctest's summary settles that tests ran, and nothing after it is read: a suite's output can be larger than any text
     /// the harness could hold.
     /// </summary>
