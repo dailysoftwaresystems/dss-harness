@@ -259,6 +259,121 @@ public sealed class WorkerCopiesTests
     }
 
     /// <summary>
+    /// A worker is given the dependency sources the sweep read, each by content under its dependency's name and never
+    /// the clone's own .git, so the leg's own going - cleaned from under it - takes nothing of the worker's. A sync of
+    /// the tree into the worker neither carries nor deletes them; what it keeps of a dependency no longer given is
+    /// removed, down to none, while one given again is left as it is; and sources holding no file a copy carries are
+    /// still a directory the worker is configured with.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerIsGivenTheDependencySourcesRead_ByContent_AndKeepsNoneNoLongerGiven()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var service = SyncKit.Service(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var googletest = temp.Combine("legs-build", "_deps", "googletest-src");
+        var json = temp.Combine("opt", "json");
+
+        temp.WriteFile(Path.Combine("legs-build", "_deps", "googletest-src", "CMakeLists.txt"), "project(googletest)\n");
+        temp.WriteFile(Path.Combine("legs-build", "_deps", "googletest-src", "src", "gtest.cc"), "int gtest;\n");
+        temp.WriteFile(Path.Combine("legs-build", "_deps", "googletest-src", ".git", "HEAD"), "ref: refs/heads/main\n");
+        temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        IReadOnlyList<FetchedReading> read =
+        [
+            new(new FetchedSource("GOOGLETEST", googletest), await copies.ReadFetchedAsync(googletest, cancellationToken)),
+            new(new FetchedSource("JSON", json), await copies.ReadFetchedAsync(json, cancellationToken)),
+        ];
+
+        Assert.Equal(["CMakeLists.txt", "src/gtest.cc"], read[0].Files.Paths);
+        Assert.Equal("project(googletest)\n".Length + "int gtest;\n".Length, read[0].Bytes);
+
+        await copies.SyncFetchedAsync(read, worker, cancellationToken);
+
+        var kept = FetchedSources.KeptIn(worker, "GOOGLETEST");
+
+        Assert.Equal("project(googletest)\n", File.ReadAllText(Path.Combine(kept, "CMakeLists.txt")));
+        Assert.Equal("int gtest;\n", File.ReadAllText(Path.Combine(kept, "src", "gtest.cc")));
+        Assert.False(Directory.Exists(Path.Combine(kept, ".git")));
+        Assert.Equal("#pragma once\n", File.ReadAllText(Path.Combine(FetchedSources.KeptIn(worker, "JSON"), "json.hpp")));
+
+        // The leg's own are gone, as a clean of the leg takes them: the worker's stay, and a sync of the tree leaves them.
+        Directory.Delete(googletest, recursive: true);
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        Assert.Equal("int gtest;\n", File.ReadAllText(Path.Combine(kept, "src", "gtest.cc")));
+
+        // Given one of the two again: what it keeps of the other goes, and what it keeps of this one is left as it
+        // is, never removed to be made again.
+        var header = Path.Combine(FetchedSources.KeptIn(worker, "JSON"), "json.hpp");
+        var written = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
+        File.SetLastWriteTimeUtc(header, written);
+        await copies.SyncFetchedAsync([read[1]], worker, cancellationToken);
+
+        Assert.False(Directory.Exists(kept));
+        Assert.Equal(written, File.GetLastWriteTimeUtc(header));
+
+        // Given none, it keeps none: the directory it kept them in goes with them.
+        await copies.SyncFetchedAsync([], worker, cancellationToken);
+
+        Assert.False(Directory.Exists(FetchedSources.KeptIn(worker)));
+
+        // A worker that keeps none is given none, and nothing is made in it.
+        var other = MutationWorkers.PathOf(tree, Variant, 2);
+
+        await copies.SyncAsync(await service.ReadSourceAsync(tree, cancellationToken), other, cancellationToken);
+        await copies.SyncFetchedAsync([], other, cancellationToken);
+
+        Assert.False(Directory.Exists(FetchedSources.KeptIn(other)));
+
+        // Sources that hold no file a copy carries - a clone's own .git alone - are a directory the leg's build has all
+        // the same, and the worker is configured with its own: so it is made, empty.
+        var bare = temp.Combine("opt", "bare");
+
+        temp.WriteFile(Path.Combine("opt", "bare", ".git", "HEAD"), "ref: refs/heads/main\n");
+        await copies.SyncFetchedAsync([new(new FetchedSource("BARE", bare), await copies.ReadFetchedAsync(bare, cancellationToken))], other, cancellationToken);
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(FetchedSources.KeptIn(other, "BARE")));
+    }
+
+    /// <summary>
+    /// Dependency sources that moved since the sweep read them stop the worker being given them, as a tree that moved
+    /// stops its copy; and ones that are gone are never read as none.
+    /// </summary>
+    [Fact]
+    public async Task DependencySourcesThatMovedSinceTheyWereRead_AreNotGiven_AndOnesGoneAreNotReadAsNone()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var json = temp.Combine("opt", "json");
+        var header = temp.WriteFile(Path.Combine("opt", "json", "json.hpp"), "#pragma once\n");
+
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+
+        var read = new FetchedReading(new FetchedSource("JSON", json), await copies.ReadFetchedAsync(json, cancellationToken));
+
+        File.WriteAllText(header, "#pragma twice\n");
+
+        var moved = await Assert.ThrowsAsync<HarnessException>(() => copies.SyncFetchedAsync([read], worker, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, moved.ExitCode);
+        Assert.Contains($"'json.hpp' changed after '{json}' was read for this command", moved.Message, StringComparison.Ordinal);
+
+        Directory.Delete(json, recursive: true);
+
+        Assert.Equal(LegExit.InputsMoved, (await Assert.ThrowsAsync<HarnessException>(() => copies.ReadFetchedAsync(json, cancellationToken))).ExitCode);
+    }
+
+    /// <summary>
     /// A claim that cannot be removed with its worker claims nothing once the worker is gone: it is said, with its
     /// file, and the removal that went through is still the answer.
     /// </summary>

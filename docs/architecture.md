@@ -2465,9 +2465,8 @@ never more than the leg has arms to drive, and one in a WSL distribution, whose 
 admits whole. The tree is read once, as a sync reads it, and every worker is synced from that one
 reading, so every arm measures the same tree however long the sweep takes, and an edit made
 meanwhile reaches none of them. A worker stays between sweeps and is synced again by content - so
-its build directory stays warm, and a site a killed sweep left mutated is put back - configured
-with the dependency sources the leg's own build fetched, read from its CMake cache and pointed at
-where they are, and built whole as the leg builds before it drives an arm. A worker is claimed while
+its build directory stays warm, and a site a killed sweep left mutated is put back - and built
+whole as the leg builds before it drives an arm. A worker is claimed while
 a sweep uses it, in `<worker>.claim.json` beside it, by the claim a run takes on its log directory,
 which never makes the copy it claims: the sync that makes a copy refuses a directory it did not
 make. A claim whose sweep died is released and said; the copy it held is synced again, as every
@@ -2493,6 +2492,38 @@ it removed, and a host's copy stays, still recorded - or `--force` deletes the w
 that worker, said, which deleting the worktree again removes once the sweep has ended, as it
 removes whatever a worktree already gone left. `list-worktree` says a worker whose worktree is
 gone, with that command, and `delete-orchestrator` takes those left beside agents that are gone.
+
+### Fetched sources
+
+A worker builds the dependency sources the leg's own build fetched: each `FETCHCONTENT_SOURCE_DIR_<NAME>`
+entry of the leg's CMake cache whose sources are there - in `<FETCHCONTENT_BASE_DIR>/<name>-src`,
+or where the entry names - and with every declared dependency found, fetching is turned off, so a
+worker the network cannot reach still configures. One not found is fetched by the worker as the leg
+would fetch it.
+
+They are carried into each worker rather than pointed at where they are. They sit in the leg's own
+build directory, which the sweep's lock deliberately leaves to a `clean` or a `build` of the leg:
+pointed at in place, a clean mid-sweep failed every later arm's build, and a build that fetched
+again measured later arms against other sources than the arms before them - each blamed on the arm.
+So they are read once, as the tree is, by size and hash, and each worker is given its own copy by
+content, in `<worker>/.harness-config/deps/<name>`: the harness's own directory, which no sync of
+the tree carries or deletes and no build from clean removes, under no longer a path than a build
+directory keeps them under. A file that moved since the reading stops that worker being made, as a
+tree that moved stops its copy, and the other workers go on. What a worker keeps of a dependency it
+is no longer given is removed. Their files are carried, never a clone's own `.git`, as no copy of a
+tree carries one; a link among them is carried by no copy, and is said on the leg's line.
+
+Sources the tree itself holds - a directory of it the leg was pointed at - are the worker's own
+copy of that directory, which its sites are mutated in; and a dependency the project's own
+`cacheVars` point at is the project's to say, in a worker as in the leg. Named there in another case
+than FetchContent reads - a name of the configuration compares ignoring case, a cache variable's
+does not - it is left to the project still, and fetching stays on, so the worker fetches it as the
+leg's build did.
+
+Every configure of a worker first removes each dependency's source directory, and what turns
+fetching off, from its cache (`-U`), then sets what this sweep gives: a build directory kept between
+sweeps would otherwise go on holding what an earlier sweep's configure gave it - a directory the
+worker no longer keeps.
 
 ### An arm's turn
 

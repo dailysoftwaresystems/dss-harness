@@ -1593,6 +1593,41 @@ public sealed class BuildServiceTests
         Assert.Empty(failed.Compilers);
     }
 
+    /// <summary>
+    /// A build asked to unset cache entries first removes them before it sets its own, in the one configure: what an
+    /// earlier configure of the directory was given, and this one is not, is the project's own default again, never
+    /// what the cache still held. A build asked to unset nothing removes none.
+    /// </summary>
+    [Fact]
+    public async Task ABuildAskedToUnsetCacheEntriesFirst_RemovesThemBeforeItSetsItsOwn()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (factory, request) = await TrackedTreeAsync(temp, cancellationToken);
+        var runner = new ConfiguringRunner("GNU", "13.2.0");
+        var asked = request with
+        {
+            Project = request.Project.WithCacheVarsBeneath(new Dictionary<string, string> { ["FETCHCONTENT_SOURCE_DIR_JSON"] = "/w/json" }),
+            UnsetFirst = ["FETCHCONTENT_SOURCE_DIR_*", "FETCHCONTENT_FULLY_DISCONNECTED"],
+        };
+
+        await Service(factory, exitCode: 0, phases: runner).BuildAsync(Config(), asked, cancellationToken);
+
+        var configure = runner.Started.Single(arguments => arguments is ["-S", ..]).ToList();
+
+        Assert.Equal(["-UFETCHCONTENT_SOURCE_DIR_*", "-UFETCHCONTENT_FULLY_DISCONNECTED"], configure.Where(argument => argument.StartsWith("-U", StringComparison.Ordinal)));
+        Assert.Contains("-DFETCHCONTENT_SOURCE_DIR_JSON=/w/json", configure);
+        Assert.True(
+            configure.FindLastIndex(argument => argument.StartsWith("-U", StringComparison.Ordinal)) < configure.FindIndex(argument => argument.StartsWith("-D", StringComparison.Ordinal)),
+            string.Join(' ', configure));
+
+        var plain = new ConfiguringRunner("GNU", "13.2.0");
+
+        await Service(factory, exitCode: 0, phases: plain).BuildAsync(Config(), request, cancellationToken);
+
+        Assert.DoesNotContain(plain.Started.Single(arguments => arguments is ["-S", ..]), argument => argument.StartsWith("-U", StringComparison.Ordinal));
+    }
+
     /// <summary>The compiler the toolchain declares, as CMake spells it or not, passes the build through.</summary>
     [Fact]
     public async Task TheDeclaredCompiler_PassesTheBuildThrough()

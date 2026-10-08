@@ -489,6 +489,128 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
+    /// A directory that is no tree of its own is read and carried as a tree's files are: by content, a file the copy
+    /// holds as it was read never rewritten, one changed written, and one the reading has none of deleted with the
+    /// directory it leaves empty - and never a repository's own .git. A directory named build is carried as any other:
+    /// only a tree's configuration withholds one. The copy is given no marker and no repository of its own.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryThatIsNoTree_IsCarriedByContent_ButForARepositorysOwnGit()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var service = SyncKit.Service(harness);
+        var source = temp.Combine("deps", "json-src");
+        var copy = temp.Combine("worker", ".harness-config", "deps", "json");
+
+        temp.WriteFile(Path.Combine("deps", "json-src", "CMakeLists.txt"), "project(json)\n");
+        temp.WriteFile(Path.Combine("deps", "json-src", "build", "cmake", "config.cmake"), "set(X 1)\n");
+        temp.WriteFile(Path.Combine("deps", "json-src", "include", "json.hpp"), "#pragma once\n");
+        temp.WriteFile(Path.Combine("deps", "json-src", ".git", "HEAD"), "ref: refs/heads/main\n");
+
+        var reading = await service.ReadDirectoryAsync(source, cancellationToken);
+
+        Assert.Equal(source, reading.Root);
+        Assert.Equal(["CMakeLists.txt", "build/cmake/config.cmake", "include/json.hpp"], reading.Paths);
+
+        await service.SyncDirectoryAsync(reading, SyncKit.Transport(harness), copy, cancellationToken);
+
+        Assert.Equal("project(json)\n", File.ReadAllText(Path.Combine(copy, "CMakeLists.txt")));
+        Assert.Equal("set(X 1)\n", File.ReadAllText(Path.Combine(copy, "build", "cmake", "config.cmake")));
+        Assert.Equal(["CMakeLists.txt", "build", "include"], Directory.EnumerateFileSystemEntries(copy).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+
+        // Synced again from a later reading.
+        var kept = Path.Combine(copy, "CMakeLists.txt");
+        var written = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
+        File.SetLastWriteTimeUtc(kept, written);
+        File.WriteAllText(Path.Combine(source, "include", "json.hpp"), "#pragma once\n#define JSON 2\n");
+        Directory.Delete(Path.Combine(source, "build"), recursive: true);
+        File.WriteAllText(Path.Combine(copy, "stray.txt"), "nobody's");
+
+        await service.SyncDirectoryAsync(await service.ReadDirectoryAsync(source, cancellationToken), SyncKit.Transport(harness), copy, cancellationToken);
+
+        Assert.Equal(written, File.GetLastWriteTimeUtc(kept));
+        Assert.Equal("#pragma once\n#define JSON 2\n", File.ReadAllText(Path.Combine(copy, "include", "json.hpp")));
+        Assert.Equal(["CMakeLists.txt", "include"], Directory.EnumerateFileSystemEntries(copy).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A file of such a directory that no longer holds what was read of it stops its sync, naming it, as a tree that
+    /// moved stops a tree's; a file gone as the directory is read is a directory that moved; and a directory that is
+    /// gone is never read as an empty one, which every copy made of it would be emptied to match.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryThatMovedSinceItWasRead_StopsItsSync_AndOneThatIsGoneIsNotReadAsEmpty()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var service = SyncKit.Service(harness);
+        var source = temp.Combine("deps", "json-src");
+        var copy = temp.Combine("worker", ".harness-config", "deps", "json");
+        var file = temp.WriteFile(Path.Combine("deps", "json-src", "CMakeLists.txt"), "project(json)\n");
+
+        var reading = await service.ReadDirectoryAsync(source, cancellationToken);
+
+        // An edit of the same size: its size alone would not tell it.
+        File.WriteAllText(file, "project(JSON)\n");
+
+        var moved = await Assert.ThrowsAsync<HarnessException>(() => service.SyncDirectoryAsync(reading, SyncKit.Transport(harness), copy, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, moved.ExitCode);
+        Assert.Equal(
+            $"{HostId.Local}: 'CMakeLists.txt' changed after '{source}' was read for this command, before it was carried to '{copy}', so "
+            + "that copy cannot be made what was read. It is left part made, until it is synced again. Let it settle, then run again.",
+            moved.Message);
+
+        var opened = await Assert.ThrowsAsync<HarnessException>(
+            () => SyncKit.Service(harness, fileSystem: new GoneWhenOpened(harness.FileSystem, file)).ReadDirectoryAsync(source, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, opened.ExitCode);
+        Assert.Contains("changed while it was read", opened.Message, StringComparison.Ordinal);
+
+        Directory.Delete(source, recursive: true);
+
+        var gone = await Assert.ThrowsAsync<HarnessException>(() => service.ReadDirectoryAsync(source, cancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, gone.ExitCode);
+        Assert.Equal($"'{source}' is no longer there to be read. Let it settle, then run again.", gone.Message);
+    }
+
+    /// <summary>
+    /// A copy of such a directory that does not hold what was read, once its sync has written it, fails the sync, as
+    /// a tree's copy does - saying the directory it was to be a copy of, which is no tree.
+    /// </summary>
+    [Fact]
+    public async Task ACopyOfADirectoryThatDoesNotHoldWhatWasRead_FailsItsSync()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var service = SyncKit.Service(harness);
+        var source = temp.Combine("deps", "json-src");
+        var copy = temp.Combine("worker", ".harness-config", "deps", "json");
+
+        temp.WriteFile(Path.Combine("deps", "json-src", "CMakeLists.txt"), "project(json)\n");
+        temp.WriteFile(Path.Combine("deps", "json-src", "include", "json.hpp"), "#pragma once\n");
+
+        var reading = await service.ReadDirectoryAsync(source, cancellationToken);
+
+        // Everything the real transport does, except that the reading its verification compares comes back a file short.
+        var transport = new RecordingTransport(SyncKit.Transport(harness), losesAFileWhenVerifying: true);
+
+        var unmatched = await Assert.ThrowsAsync<HarnessException>(() => service.SyncDirectoryAsync(reading, transport, copy, cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, unmatched.ExitCode);
+        Assert.Equal(
+            $"The copy at '{copy}' on {HostId.Local} does not match what was read of '{source}' after the sync: 1 file(s) still differ: "
+            + "CMakeLists.txt. Nothing should be run against it.",
+            unmatched.Message);
+    }
+
+    /// <summary>
     /// The sync command reads its tree once, for every host, so two hosts' copies are never two moments of a tree that
     /// moved in between: a file that changed once the first host's copy was made fails the second's sync, as the
     /// command's own failure, naming the host, the file and the copy, after what it did for the first.

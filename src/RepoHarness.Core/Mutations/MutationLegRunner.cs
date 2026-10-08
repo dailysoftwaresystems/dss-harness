@@ -36,6 +36,12 @@ internal sealed record MutationSubject
     public required ProjectConfig Project { get; init; }
 
     /// <summary>
+    /// The dependency sources the leg's own build fetched, which each worker is given its own copy of and configured
+    /// with; none for a self-test, whose fixture fetches nothing.
+    /// </summary>
+    public FetchedSet Fetched { get; init; } = FetchedSet.None;
+
+    /// <summary>
     /// The test settings each binary's run starts by - in the directory the leg's tests start in, with their environment
     /// over its host's - or <see langword="null"/> where it starts in the worker with what the leg's host gives it.
     /// </summary>
@@ -188,6 +194,16 @@ internal sealed class MutationLegRunner(
         private readonly ConcurrentDictionary<int, ReachedVerdict> _unmade = new();
         private readonly ConcurrentQueue<ReachedVerdict> _own = new();
         private SyncSource _reading = null!;
+
+        /// <summary>The dependencies each worker is configured with the sources of: what the leg's build fetched, but for what its project points at itself.</summary>
+        private FetchedSet _given = FetchedSet.None;
+
+        /// <summary>The sources each worker is given its own copy of, as the sweep read them, once.</summary>
+        private IReadOnlyList<FetchedReading> _fetched = [];
+
+        /// <summary>Where each worker has the sources its own copy of the tree holds, by their dependency's name, relative to the worker.</summary>
+        private IReadOnlyDictionary<string, string> _inTree = new Dictionary<string, string>(StringComparer.Ordinal);
+
         private ArmQueue _queue = null!;
         private CancellationTokenSource _unasked = null!;
         private RefusedArm? _refused;
@@ -209,6 +225,7 @@ internal sealed class MutationLegRunner(
             _work.Progress($"reading '{_subject.TreeRoot}', once for every worker");
             _reading = await _runner._source.ReadAsync(_subject.TreeRoot, cancellationToken).ConfigureAwait(false);
 
+            var unlinked = await ReadFetchedAsync(cancellationToken).ConfigureAwait(false);
             var (plan, needs) = await PlanAsync(driven.Count, cancellationToken).ConfigureAwait(false);
 
             if (plan.Count == 0)
@@ -219,7 +236,12 @@ internal sealed class MutationLegRunner(
                 return Line([turned], [.. driven.Select(arm => (arm, Undriven(arm, turned))), .. unselected], []);
             }
 
-            var notes = new List<string>();
+            var notes = new List<string>(unlinked);
+
+            foreach (var note in unlinked)
+            {
+                _runner._output.Warn(_runner._commandName, $"{_leg.Name}: {note}");
+            }
 
             if (plan.Fewer is { } fewer)
             {
@@ -275,6 +297,65 @@ internal sealed class MutationLegRunner(
         }
 
         /// <summary>
+        /// Reads, once for every worker, the dependency sources the leg's own build fetched: each the tree's reading does
+        /// not carry, which every worker is given its own copy of. Those it does carry are each worker's already, in its
+        /// copy of the tree, and what the project points at itself is the project's to say, in a worker as in the leg.
+        /// What is to be said of them on the leg's line: the links among them, which no copy carries.
+        /// </summary>
+        private async Task<IReadOnlyList<string>> ReadFetchedAsync(CancellationToken cancellationToken)
+        {
+            var given = _subject.Fetched.Found
+                .Where(source => !_subject.Project.CacheVars.ContainsKey(BuildDirectoryGuard.FetchContentSource + source.Name))
+                .ToList();
+
+            // A name of the configuration compares ignoring case, and the build system reads a cache variable by its
+            // exact spelling: a dependency the project names in another case is left to it all the same, and that name
+            // points the dependency nowhere - the worker fetches it as the leg's build did. Fetching is turned off only
+            // where every dependency is one the worker has the sources of by a name that is read.
+            var pointed = _subject.Fetched.Found.Count(source => _subject.Project.CacheVars.Keys.Contains(BuildDirectoryGuard.FetchContentSource + source.Name, StringComparer.Ordinal));
+
+            _given = new FetchedSet(given, _subject.Fetched.Every && given.Count + pointed == _subject.Fetched.Found.Count);
+
+            var names = PathCase.In(_runner._fileSystem, _subject.TreeRoot);
+            var inTree = new Dictionary<string, string>(StringComparer.Ordinal);
+            var fetched = new List<FetchedReading>();
+            var unlinked = new List<string>();
+
+            foreach (var source in given)
+            {
+                if (FetchedSources.CarriedAt(source, _subject.TreeRoot, _reading.Files, names) is { } within)
+                {
+                    inTree[source.Name] = within;
+                    continue;
+                }
+
+                _work.Progress($"reading the sources of '{source.Name}' the leg's build fetched, '{source.Directory}', once for every worker");
+
+                var read = new FetchedReading(source, await _runner._copies.ReadFetchedAsync(source.Directory, cancellationToken).ConfigureAwait(false));
+
+                fetched.Add(read);
+
+                if (read.Files.Links.Count > 0)
+                {
+                    unlinked.Add(
+                        $"the sources of '{source.Name}' the leg's build fetched hold {read.Files.Links.Count} link(s), which no worker is given: "
+                        + ReportText.Listed(read.Files.Links));
+                }
+            }
+
+            _inTree = inTree;
+            _fetched = fetched;
+
+            return unlinked;
+        }
+
+        /// <summary>Where <paramref name="worker"/> has the sources of <paramref name="source"/>: in its own copy of the tree, or among what it is given.</summary>
+        private string Kept(string worker, FetchedSource source)
+            => _inTree.TryGetValue(source.Name, out var within)
+                ? Path.Combine(worker, within.Replace('/', Path.DirectorySeparatorChar))
+                : FetchedSources.KeptIn(worker, source.Name);
+
+        /// <summary>
         /// How many workers the sweep runs, and what each still needs of the room: removing first each worker an earlier
         /// sweep left beyond <c>mutations.workers</c>, so lowering it frees the room they held; and running none whose build
         /// would pass this machine's path limit.
@@ -300,7 +381,8 @@ internal sealed class MutationLegRunner(
                 return (new WorkerPlan(0, wanted, TooLong(1), null), []);
             }
 
-            var copy = _reading.Files.Entries.Values.Sum(entry => entry.Size);
+            // A worker's copy is the tree and the dependency sources it is given, as the sweep's readings count them.
+            var copy = _reading.Files.Entries.Values.Sum(entry => entry.Size) + _fetched.Sum(read => read.Bytes);
             var needs = Enumerable.Range(1, fit)
                 .Select(number =>
                 {
@@ -331,26 +413,49 @@ internal sealed class MutationLegRunner(
         /// <summary>
         /// Whether worker <paramref name="number"/>'s build stays within this machine's path limit, reckoned as a worktree's
         /// is: the worker, its build directory below it, and below that the longest path a build of the project makes -
-        /// <c>worktrees.pathBudgetReserve</c>, or the subject's own - with <c>worktrees.pathBudgetMargin</c> to spare.
+        /// <c>worktrees.pathBudgetReserve</c>, or the subject's own - with <c>worktrees.pathBudgetMargin</c> to spare. The
+        /// dependency sources it is given are within the limit too, and reckon it where the longest path among them is the
+        /// longer.
         /// </summary>
         private PathBudgetResult Budget(int number)
         {
             var worker = Worker(number);
             var settings = _config.Worktrees;
 
-            // The build directory below the worker, the separator before it counted: what a worktree's check counts for the
-            // longest variant this machine builds.
-            var below = _leg.Variant.DirectoryUnder(worker).Length - Path.TrimEndingDirectorySeparator(worker).Length;
-
-            return _runner._pathBudget.Check(worker, below + (_subject.PathReserve ?? settings.PathBudgetReserve), settings.PathBudgetMargin, settings.PathLimit);
+            return _runner._pathBudget.Check(worker, Math.Max(BuildBelow(worker), GivenBelow(worker)), settings.PathBudgetMargin, settings.PathLimit);
         }
+
+        /// <summary>
+        /// The longest path <paramref name="worker"/>'s build makes below it: its build directory, the separator before it
+        /// counted - what a worktree's check counts for the longest variant this machine builds - and below that the
+        /// longest path a build of the project makes.
+        /// </summary>
+        private int BuildBelow(string worker)
+            => _leg.Variant.DirectoryUnder(worker).Length - Path.TrimEndingDirectorySeparator(worker).Length
+                + (_subject.PathReserve ?? _config.Worktrees.PathBudgetReserve);
+
+        /// <summary>
+        /// The longest path below <paramref name="worker"/> among the dependency sources it is given, the separator
+        /// before it counted; nothing where it is given none.
+        /// </summary>
+        /// <remarks>
+        /// Sources FetchContent fetched into the leg's build directory are kept in a worker under no longer a path than
+        /// its own build directory would keep them under, so the build's longest covers them; sources the leg was pointed
+        /// at elsewhere are as deep as whoever keeps them made them.
+        /// </remarks>
+        private int GivenBelow(string worker)
+            => _fetched
+                .Select(read => FetchedSources.KeptIn(worker, read.Source.Name).Length - Path.TrimEndingDirectorySeparator(worker).Length
+                    + 1 + read.Files.Entries.Keys.Select(path => path.Length).DefaultIfEmpty(0).Max())
+                .DefaultIfEmpty(0)
+                .Max();
 
         /// <summary>Why worker <paramref name="number"/> is not run: its build would pass this machine's path limit.</summary>
         private string TooLong(int number)
         {
             var budget = Budget(number);
-            var reckoned = _subject.PathReserve is { } reserve
-                ? $"as the {reserve} its project's build makes below its build directory and worktrees.pathBudgetMargin reckon them"
+            var reckoned = GivenBelow(Worker(number)) > BuildBelow(Worker(number)) ? "as the longest path among the dependency sources it is given and worktrees.pathBudgetMargin reckon them"
+                : _subject.PathReserve is { } reserve ? $"as the {reserve} its project's build makes below its build directory and worktrees.pathBudgetMargin reckon them"
                 : "as worktrees.pathBudgetReserve and pathBudgetMargin reckon them";
 
             return $"worker {number} would be kept at '{Worker(number)}', where its build needs paths of {budget.RequiredLength} "
@@ -502,10 +607,11 @@ internal sealed class MutationLegRunner(
 
             try
             {
+                var copied = _fetched.Count == 0 ? "its copy of the tree" : "its copy of the tree, and of the dependency sources the leg's build fetched";
                 var room = need > 0
                     ? new RoomNeed(
                         need,
-                        _subject.ExpectedBuildBytes is null ? "its copy of the tree" : $"its copy of the tree, and its build {_subject.ExpectedBuildSource}",
+                        _subject.ExpectedBuildBytes is null ? copied : $"{copied}, and its build {_subject.ExpectedBuildSource}",
                         worker,
                         string.Empty)
                     : null;
@@ -520,6 +626,15 @@ internal sealed class MutationLegRunner(
 
                 _work.Progress($"worker {number}: making '{worker}' the tree as it was read");
                 await _runner._copies.SyncAsync(_reading, worker, cancellationToken).ConfigureAwait(false);
+
+                // What it keeps of dependency sources is made what this sweep read, as its copy of the tree was: each given
+                // again by content, and what an earlier sweep left of one no longer given removed.
+                if (_fetched.Count > 0)
+                {
+                    _work.Progress($"worker {number}: giving it the dependency sources the leg's build fetched");
+                }
+
+                await _runner._copies.SyncFetchedAsync(_fetched, worker, cancellationToken).ConfigureAwait(false);
 
                 _work.Progress($"worker {number}: building it whole");
                 var request = Request(number, worker, $"{MutationRecords.WorkersDirectory}/{number}", _subject.Project);
@@ -1085,11 +1200,22 @@ internal sealed class MutationLegRunner(
         }
 
         /// <summary>A build in worker <paramref name="number"/>, logged under <paramref name="records"/> within the leg's records.</summary>
+        /// <remarks>
+        /// Configured with the dependency sources the worker has, beneath what the project sets itself: never those in the
+        /// leg's own build directory, which a clean of the leg removes and a build of it may fetch again meanwhile. What an
+        /// earlier sweep's configure gave the worker's build directory is removed from its cache first, so it holds
+        /// nothing a sweep no longer gives.
+        /// </remarks>
         private BuildRequest Request(int number, string worker, string records, ProjectConfig project)
-            => _leg.BuildRequestFor(_config, _work.RunDirectory, project, _work.Time) with
+            => _leg.BuildRequestFor(
+                _config,
+                _work.RunDirectory,
+                project.WithCacheVarsBeneath(FetchedSources.CacheVarsFor(_given, source => Kept(worker, source))),
+                _work.Time) with
             {
                 Leg = $"{_leg.Name}/{records}",
                 TreeRoot = worker,
+                UnsetFirst = FetchedSources.Unset,
             };
 
         /// <summary>

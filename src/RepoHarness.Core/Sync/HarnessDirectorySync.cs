@@ -45,6 +45,8 @@ public static class HarnessDirectorySync
 
     private const string HostCopies = HarnessLayout.HostCopiesDirectoryRelative;
 
+    private const string DependencySources = HarnessLayout.DependencySourcesDirectoryRelative;
+
     /// <summary>
     /// Whether <paramref name="relativePath"/> is inside the harness's own directory and is never
     /// carried by an ordinary sync, nor deleted by one.
@@ -76,16 +78,16 @@ public static class HarnessDirectorySync
 
     /// <summary>
     /// Whether <paramref name="relativePath"/> is, or is inside, what the harness writes into its own directory as it
-    /// works: each run's records, the record of the copies hosts keep, and each action's own <c>build</c> and
-    /// <c>artifacts</c>, at whatever depth the action is grouped. The run state of whichever machine made it, which no
-    /// sync carries, and which no one edits by hand.
+    /// works: each run's records, the record of the copies hosts keep, the dependency sources a mutation worker is
+    /// given, and each action's own <c>build</c> and <c>artifacts</c>, at whatever depth the action is grouped. The run
+    /// state of whichever machine made it, which no sync carries, and which no one edits by hand.
     /// </summary>
     /// <param name="relativePath">A path relative to the tree root, with forward separators.</param>
     public static bool IsRunState(string relativePath)
     {
         ArgumentNullException.ThrowIfNull(relativePath);
 
-        return IsAt(relativePath, Runs) || IsAt(relativePath, HostCopies) || InAnActionsRunState(relativePath);
+        return IsAt(relativePath, Runs) || IsAt(relativePath, HostCopies) || IsAt(relativePath, DependencySources) || InAnActionsRunState(relativePath);
     }
 
     private static bool InAnActionsRunState(string relativePath)

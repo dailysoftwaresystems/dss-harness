@@ -70,6 +70,31 @@ internal interface IWorkerCopies
     /// <param name="cancellationToken">Stops the sync.</param>
     Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Reads the dependency sources at <paramref name="directory"/> as each worker is given them, once for every
+    /// worker: every file by size and hash, never a clone's own <c>.git</c>.
+    /// </summary>
+    /// <param name="directory">Where the leg's own build has them.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    /// <exception cref="HarnessException">They are gone, or changed while they were read (<see cref="LegExit.InputsMoved"/>).</exception>
+    Task<SyncManifest> ReadFetchedAsync(string directory, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Makes the dependency sources <paramref name="worker"/> keeps those <paramref name="fetched"/> read, each by
+    /// content under its dependency's name (<see cref="FetchedSources.KeptIn(string, string)"/>), and removes what it
+    /// keeps of any other: a dependency the leg's build no longer declares, or one the worker now has in its own copy
+    /// of the tree. Sources holding no file a copy carries are an empty directory all the same, since the worker is
+    /// configured with it.
+    /// </summary>
+    /// <param name="fetched">The sweep's one reading of each dependency's sources.</param>
+    /// <param name="worker">The worker's copy.</param>
+    /// <param name="cancellationToken">Stops the sync.</param>
+    /// <exception cref="HarnessException">
+    /// A file no longer holds what was read of it (<see cref="LegExit.InputsMoved"/>): what the worker keeps is left
+    /// part made, until a sweep syncs it again.
+    /// </exception>
+    Task SyncFetchedAsync(IReadOnlyList<FetchedReading> fetched, string worker, CancellationToken cancellationToken);
+
     /// <summary>Removes <paramref name="worker"/>'s copy and its claim, where the copy is one a sweep made.</summary>
     /// <param name="worker">The worker's copy.</param>
     /// <param name="cancellationToken">Stops the removal.</param>
@@ -151,6 +176,7 @@ internal sealed class WorkerCopies(
 {
     private readonly ISyncService _syncService = syncService;
     private readonly LocalSyncTransport _transport = transport;
+    private readonly IFileSystem _fileSystem = fileSystem;
     private readonly WorkerClaims _claims = new(fileSystem, output, identity, commandName);
 
     /// <inheritdoc/>
@@ -202,6 +228,47 @@ internal sealed class WorkerCopies(
     /// <inheritdoc/>
     public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)
         => _syncService.SyncAsync(source, _transport, worker, new SyncOptions(), cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<SyncManifest> ReadFetchedAsync(string directory, CancellationToken cancellationToken)
+        => _syncService.ReadDirectoryAsync(directory, cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task SyncFetchedAsync(IReadOnlyList<FetchedReading> fetched, string worker, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fetched);
+
+        var kept = FetchedSources.KeptIn(worker);
+
+        // What it keeps of a dependency it is no longer given goes first, as a file the tree no longer has goes from its
+        // copy: left, it would be room nothing counts, and sources nothing builds. Given none, it keeps none, and the
+        // directory it kept them in goes with them.
+        if (_fileSystem.DirectoryExists(kept))
+        {
+            var given = fetched
+                .Select(read => Path.GetFileName(FetchedSources.KeptIn(worker, read.Source.Name)))
+                .ToHashSet(StringComparer.Ordinal);
+            IReadOnlyList<string> stale = given.Count == 0
+                ? [kept]
+                : [.. _fileSystem.EnumerateDirectories(kept).Where(directory => !given.Contains(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))))];
+
+            foreach (var directory in stale)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _fileSystem.DeleteDirectory(directory);
+            }
+        }
+
+        foreach (var read in fetched)
+        {
+            var directory = FetchedSources.KeptIn(worker, read.Source.Name);
+
+            // Made even where no file is carried into it: the worker is configured with the directory either way, and a
+            // configure pointed at one that is not there fails.
+            _fileSystem.CreateDirectory(directory);
+            await _syncService.SyncDirectoryAsync(read.Files, _transport, directory, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     /// <inheritdoc/>
     public async Task<CopyRemoval> RemoveAsync(string worker, CancellationToken cancellationToken)

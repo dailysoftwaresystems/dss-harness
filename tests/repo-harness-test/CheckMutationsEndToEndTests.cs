@@ -191,6 +191,91 @@ public sealed class CheckMutationsEndToEndTests
         }
     }
 
+    /// <summary>
+    /// A leg whose build fetches a dependency has each worker of its sweep given its own copy of what that build
+    /// fetched, and configured with it, fetching nothing: so the worker's build reads nothing of the leg's own build
+    /// directory, and a sweep after that directory is gone - cleaned from under it - still drives its arm, the worker
+    /// then fetching as the leg would, and keeping nothing it is no longer given.
+    /// </summary>
+    [Fact]
+    public async Task AWorker_IsBuiltFromItsOwnCopyOfWhatTheLegsBuildFetched_NeverTheLegsBuildDirectory()
+    {
+        var harness = new HarnessFactory();
+
+        SkipUnlessThisMachineBuilds(harness);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        using var clock = new ClockWatch();
+
+        var repository = temp.Combine("r");
+        Directory.CreateDirectory(repository);
+
+        await harness.InitializeHarnessAsync(repository, token, Config(harness.Platform, MutationFixture.SettingsFor(new MutationSettings())));
+
+        foreach (var (path, bytes) in MutationFixture.Files())
+        {
+            var file = Path.Combine(repository, path.Replace('/', Path.DirectorySeparatorChar));
+
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllBytes(file, bytes);
+        }
+
+        // A dependency FetchContent fetches from a directory of the tree, so nothing is asked of the network: it lands in
+        // the build directory, as one fetched from anywhere does.
+        Directory.CreateDirectory(Path.Combine(repository, "vendor", "plumb", "include"));
+        File.WriteAllText(Path.Combine(repository, "vendor", "plumb", "CMakeLists.txt"), "add_library(plumb INTERFACE)\ntarget_include_directories(plumb INTERFACE include)\n");
+        File.WriteAllText(Path.Combine(repository, "vendor", "plumb", "include", "plumb.hpp"), "#pragma once\n");
+        File.AppendAllText(
+            Path.Combine(repository, "CMakeLists.txt"),
+            "\ninclude(FetchContent)\nFetchContent_Declare(plumb URL \"${CMAKE_CURRENT_SOURCE_DIR}/vendor/plumb\")\n"
+            + "FetchContent_MakeAvailable(plumb)\ntarget_link_libraries(fixture PUBLIC plumb)\n");
+        File.AppendAllText(Path.Combine(repository, ".gitignore"), "build/\n");
+        await harness.CommitAllAsync(repository, "the fixture, fetching a dependency", token);
+
+        var context = await harness.ContextLoader.LoadAsync(repository, token);
+        var variant = VariantKey.For(context.Config, context.Config.Legs["native"], harness.Platform.PlatformKey);
+        var legsBuild = variant.DirectoryUnder(context.Layout.RepositoryRoot);
+        var worker = MutationWorkers.PathOf(context.Layout.RepositoryRoot, variant, 1);
+        var kept = FetchedSources.KeptIn(worker, "PLUMB");
+
+        try
+        {
+            var built = await CliRunner.RunAsync(["build", "--legs", "native", "--json", "-C", repository], token);
+
+            Assert.True(built.ExitCode == HarnessExit.Success, built.StandardError + built.StandardOutput);
+            Assert.True(File.Exists(Path.Combine(legsBuild, "_deps", "plumb-src", "CMakeLists.txt")), "The leg's build fetched nothing into its build directory.");
+
+            var swept = await CliRunner.RunAsync(["check-mutations", "--legs", "native", "--arms", "charge-bound", "--json", "-C", repository], token);
+            var said = swept.StandardError + swept.StandardOutput;
+
+            Assert.True(swept.ExitCode == HarnessExit.Success, said);
+            Assert.Equal("#pragma once\n", File.ReadAllText(Path.Combine(kept, "include", "plumb.hpp")));
+
+            var cache = File.ReadAllLines(Path.Combine(variant.DirectoryUnder(worker), BuildDirectoryGuard.CMakeCacheFileName));
+            var pointed = Assert.Single(cache, line => line.StartsWith("FETCHCONTENT_SOURCE_DIR_PLUMB:", StringComparison.Ordinal));
+
+            Assert.EndsWith("/.harness-config/deps/plumb", pointed, StringComparison.Ordinal);
+            Assert.Contains(cache, line => line.StartsWith("FETCHCONTENT_FULLY_DISCONNECTED:", StringComparison.Ordinal) && line.EndsWith("=ON", StringComparison.Ordinal));
+            Assert.False(Directory.Exists(Path.Combine(variant.DirectoryUnder(worker), "_deps", "plumb-src")), "The worker fetched what it was given.");
+
+            // The leg's build directory gone, as a clean of the leg leaves it: nothing says what its build fetched, so the
+            // worker is given nothing, keeps nothing, and fetches as the leg would.
+            harness.FileSystem.DeleteDirectory(legsBuild);
+
+            var again = await CliRunner.RunAsync(["check-mutations", "--legs", "native", "--arms", "charge-bound", "--json", "-C", repository], token);
+
+            Assert.True(again.ExitCode == HarnessExit.Success, again.StandardError + again.StandardOutput);
+            Assert.False(Directory.Exists(FetchedSources.KeptIn(worker)), "The worker kept dependency sources it was no longer given.");
+            Assert.True(File.Exists(Path.Combine(variant.DirectoryUnder(worker), "_deps", "plumb-src", "CMakeLists.txt")), "The worker did not fetch as the leg would.");
+        }
+        catch (Exception ex) when (!clock.Held)
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
     /// <summary>Skips the test where this machine lacks a program a real build of the fixture needs.</summary>
     private static void SkipUnlessThisMachineBuilds(HarnessFactory harness)
         => Assert.SkipUnless(

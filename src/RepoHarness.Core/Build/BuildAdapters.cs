@@ -279,6 +279,13 @@ public sealed class CMakeAdapter : IBuildAdapter
             configure.Add(generator);
         }
 
+        // Removed before anything is set, as CMake takes its arguments in order: an entry this configure sets is set
+        // again below, and one it does not is the project's own default once more.
+        foreach (var pattern in request.UnsetFirst)
+        {
+            configure.Add($"-U{pattern}");
+        }
+
         if (BuildTypeOf(config, request.Variant.Config) is { Length: > 0 } buildType)
         {
             configure.Add($"-DCMAKE_BUILD_TYPE={buildType}");

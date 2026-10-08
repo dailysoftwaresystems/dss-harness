@@ -354,10 +354,10 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
-    /// A leg's sweep is given its tree; its project, configured with the dependency sources the leg's own build fetched
-    /// beneath what the project sets itself - none for a leg never built; the test settings its tests start by; the arms
-    /// it drives; and what a build of its variant is expected to come to, as the leg's own last build recorded it. Its
-    /// paths are reckoned by the configured reserve, and each arm's verdict is the judge's own.
+    /// A leg's sweep is given its tree; its project, as the leg builds it; the dependency sources the leg's own build
+    /// fetched, which each worker is given its own copy of - none for a leg never built; the test settings its tests
+    /// start by; the arms it drives; and what a build of its variant is expected to come to, as the leg's own last build
+    /// recorded it. Its paths are reckoned by the configured reserve, and each arm's verdict is the judge's own.
     /// </summary>
     [Fact]
     public void ALegsSweep_IsGivenItsProject_WithWhatItsOwnBuildFetched_AndWhatThatBuildCameTo()
@@ -381,6 +381,7 @@ public sealed class MutationServiceTests
         var unbuilt = service.Subject(work, arms, force: false);
 
         Assert.Equal([("FOO", "1")], unbuilt.Project.CacheVars.Select(pair => (pair.Key, pair.Value)));
+        Assert.Same(FetchedSet.None, unbuilt.Fetched);
         Assert.Same(tests, unbuilt.Tests);
         Assert.Null(unbuilt.PathReserve);
         Assert.Null(unbuilt.Hold);
@@ -401,9 +402,11 @@ public sealed class MutationServiceTests
 
         Assert.Equal(temp.Path, built.TreeRoot);
         Assert.Equal(MutationWorkers.Of(temp.Path, variant), built.Workers);
-        Assert.Equal(
-            [(FetchedSources.FullyDisconnected, "ON"), ("FETCHCONTENT_SOURCE_DIR_GOOGLETEST", googletest.Replace('\\', '/')), ("FOO", "1")],
-            built.Project.CacheVars.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => (pair.Key, pair.Value)));
+        // Nothing of the leg's own build directory is in the project a worker builds: each worker is pointed at its own copy.
+        Assert.Equal([("FOO", "1")], built.Project.CacheVars.Select(pair => (pair.Key, pair.Value)));
+        Assert.Equal([new FetchedSource("GOOGLETEST", Path.Combine(Path.Combine(build, "_deps").Replace('\\', '/'), "googletest-src"))], built.Fetched.Found);
+        Assert.True(built.Fetched.Every);
+        Assert.True(Directory.Exists(googletest));
         Assert.Equal(4096, built.ExpectedBuildBytes);
         Assert.Equal("what its last build there came to", built.ExpectedBuildSource);
         Assert.Equal(["charge", "depth"], built.Arms.Driven.Select(arm => arm.Id));

@@ -80,6 +80,12 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public const string HostCopiesDirectoryName = "host-copies";
 
     /// <summary>
+    /// Name of the directory a mutation worker keeps the dependency sources its leg's own build fetched in, one
+    /// directory to each: never carried by a sync, nor deleted by one, nor removed by a build from clean.
+    /// </summary>
+    public const string DependencySourcesDirectoryName = "deps";
+
+    /// <summary>
     /// Where one run of an action writes while it runs, relative to a tree root.
     /// </summary>
     /// <param name="actionDirectory">The action's own directory, relative to the actions directory.</param>
@@ -302,6 +308,9 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>The host copies' record directory, relative to the main checkout's root, with forward separators.</summary>
     public const string HostCopiesDirectoryRelative = DirectoryName + "/" + HostCopiesDirectoryName;
+
+    /// <summary>A mutation worker's dependency sources directory, relative to the worker's root, with forward separators.</summary>
+    public const string DependencySourcesDirectoryRelative = DirectoryName + "/" + DependencySourcesDirectoryName;
 
     /// <summary>
     /// Where the values actions read live, resolved against the main checkout because they are

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using RepoHarness.Core.Ci;
 using RepoHarness.Core.Anchors;
+using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Git;
@@ -836,8 +837,19 @@ internal static class HelpCommand
             "Each leg is swept in worker copies of its tree, kept beside it as <tree>.mutation-<variant>-<n>, numbered from "
             + "1: as many as workers, never more than the leg has arms to drive, and one in a WSL distribution. Before every "
             + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
-            + "killed sweep left mutated is put back - configured with the dependency sources the leg's own build fetched, "
-            + "read from its CMake cache, and built whole before it drives an arm. The tree itself is only ever read.");
+            + "killed sweep left mutated is put back - and built whole before it drives an arm. The tree itself is only "
+            + "ever read.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A worker builds the dependency sources the leg's own build fetched, read from its CMake cache "
+            + $"({BuildDirectoryGuard.FetchContentSource}<NAME>), and never fetches where every one was found. They are read "
+            + "once, as the tree is, and each worker is given its own copy by content, kept in its "
+            + $"{HarnessLayout.DependencySourcesDirectoryRelative}/<name> - their files, never a clone's own .git, nor a link - "
+            + "and configured with it: so a clean of the leg, or a build of it that fetches again, while a sweep runs "
+            + "changes nothing a worker builds. Sources the tree itself holds are the worker's own copy of them, and what "
+            + "the project's cacheVars point at is the project's to say. A dependency not found is fetched by the worker "
+            + "as the leg would fetch it.");
         builder.AppendLine();
         AppendWrapped(
             builder,

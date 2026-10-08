@@ -223,14 +223,14 @@ public sealed class MutationService(
             leg.Leg,
             BuildRecord.BytesIn(_fileSystem, leg.BuildDirectory),
             BuildRecord.BytesIn(_fileSystem, leg.Variant.DirectoryUnder(work.Context.Layout.MainCheckoutRoot)));
-        var fetched = FetchedSources.CacheVarsFor(_buildDirectoryGuard.Read(leg.BuildDirectory), _fileSystem);
         var project = leg.BuildableProject();
 
         return new MutationSubject
         {
             TreeRoot = leg.TreeRoot,
             Workers = MutationWorkers.Of(leg.TreeRoot, leg.Variant),
-            Project = project.WithCacheVarsBeneath(fetched),
+            Project = project,
+            Fetched = FetchedSources.Of(_buildDirectoryGuard.Read(leg.BuildDirectory), _fileSystem),
             Tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project),
             Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = work.Context.Config.Mutations,

@@ -1616,6 +1616,49 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// The dependency sources a worker is given are within its path limit too: where the longest path among them, below
+    /// the worker, is longer than its build's, the worker is reckoned by it, and one past the limit says which it was.
+    /// </summary>
+    [Fact]
+    public async Task APathLimit_IsReckonedByTheDependencySourcesAWorkerIsGiven_WhereTheyAreTheLonger()
+    {
+        var settings = new WorktreeSettings { PathBudgetReserve = 100, PathBudgetMargin = 7, PathLimit = 4000 };
+        var deep = "include/" + new string('d', 300) + ".hpp";
+
+        using var shallow = new Sweep { Worktrees = settings };
+        shallow.Fetched = new FetchedSet([new FetchedSource("GOOGLETEST", Path.Combine(shallow.Tree, "..", "googletest"))], Every: true);
+
+        await shallow.RunAsync([DepthType]);
+
+        // Shorter than its build's longest: reckoned as it always was.
+        shallow.Budget.Received().Check(shallow.Worker(1), Variant.DirectoryUnder(shallow.Worker(1)).Length - shallow.Worker(1).Length + 100, 7, 4000);
+
+        using var sweep = new Sweep { Worktrees = settings };
+        sweep.Fetched = shallow.Fetched;
+        sweep.Copies.FetchedPath = deep;
+
+        await sweep.RunAsync([DepthType]);
+
+        var below = FetchedSources.KeptIn(sweep.Worker(1), "GOOGLETEST").Length - sweep.Worker(1).Length + 1 + deep.Length;
+
+        sweep.Budget.Received().Check(sweep.Worker(1), below, 7, 4000);
+
+        using var past = new Sweep { Worktrees = new WorktreeSettings { PathBudgetReserve = 100, PathBudgetMargin = 7, PathLimit = 200 } };
+        past.Budget = new PathBudget(past.Harness.Platform);
+        past.Fetched = shallow.Fetched;
+        past.Copies.FetchedPath = deep;
+
+        var turned = await past.RunAsync([DepthType]);
+
+        Assert.Equal(LegVerdict.SkippedUnavailable, turned.Verdict);
+        Assert.Contains(
+            " characters, as the longest path among the dependency sources it is given and worktrees.pathBudgetMargin reckon them, and every "
+            + "path must stay under 200: ",
+            turned.Detail,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A subject that says how long a path its own build makes - the self-test's fixture - has each worker's paths reckoned
     /// by it in place of <c>worktrees.pathBudgetReserve</c>, the leg's own project's, and a worker past the limit says so.
     /// </summary>
@@ -1675,6 +1718,158 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(
             (LegVerdict.Stopped, "the unmutated fixture_tests has 1 red, so no mutation of it proves anything"),
             (Assert.Single(unheld.Arms).Verdict, unheld.Arms[0].Detail));
+    }
+
+    /// <summary>
+    /// The dependency sources the leg's own build fetched are read once, for every worker, and each worker is given its
+    /// own copy before it builds, and configured with it: so no build of a worker reads the leg's own build directory,
+    /// which a clean of the leg removes and a build of it may fetch again while the sweep runs. Sources the tree's own
+    /// reading carries are the worker's already, in its copy of the tree, and are read no second time; and what the
+    /// project points at itself is the project's to say. A worker's room is its copy of both.
+    /// </summary>
+    [Fact]
+    public async Task EachWorker_IsGivenItsOwnCopyOfWhatTheLegsBuildFetched_AndIsConfiguredWithIt()
+    {
+        using var sweep = new Sweep();
+        var legsBuild = Variant.DirectoryUnder(sweep.Tree);
+        var googletest = Path.Combine(legsBuild, "_deps", "googletest-src");
+
+        sweep.CacheVars["FETCHCONTENT_SOURCE_DIR_OWN"] = "/opt/own";
+        sweep.Fetched = new FetchedSet(
+            [
+                new FetchedSource("GOOGLETEST", googletest),
+                new FetchedSource("OWN", "/opt/own"),
+                new FetchedSource("VENDORED", Path.Combine(sweep.Tree, "src")),
+            ],
+            Every: true);
+        sweep.Builder.Throws = request => sweep.Copies.FetchedGiven.Any(given => given.Worker == request.TreeRoot)
+            ? null
+            : new InvalidOperationException("built before it was given its dependency sources");
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal((LegVerdict.Passed, "2 arm(s): 2 passed"), (entry.Verdict, entry.Detail));
+        Assert.Equal([googletest], sweep.Copies.FetchedRead);
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.FetchedGiven.Select(given => given.Worker).Order(StringComparer.Ordinal));
+        Assert.All(
+            sweep.Copies.FetchedGiven,
+            given => Assert.Equal([("GOOGLETEST", googletest, (long)Copies.FetchedBytes)], given.Fetched.Select(read => (read.Source.Name, read.Files.Root, read.Bytes))));
+
+        Assert.NotEmpty(sweep.Builder.Builds);
+        Assert.All(sweep.Builder.Builds, build =>
+        {
+            var worker = build.TreeRoot;
+
+            Assert.Equal(
+                [
+                    ("FETCHCONTENT_FULLY_DISCONNECTED", "ON"),
+                    ("FETCHCONTENT_SOURCE_DIR_GOOGLETEST", FetchedSources.KeptIn(worker, "GOOGLETEST").Replace('\\', '/')),
+                    ("FETCHCONTENT_SOURCE_DIR_OWN", "/opt/own"),
+                    ("FETCHCONTENT_SOURCE_DIR_VENDORED", Path.Combine(worker, "src").Replace('\\', '/')),
+                ],
+                build.Project.CacheVars.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => (pair.Key, pair.Value)));
+            Assert.DoesNotContain(build.Project.CacheVars.Values, value => value.StartsWith(legsBuild.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+        });
+
+        var room = sweep.Admissions.Single(unit => unit.Unit == "worker-1").Room!;
+
+        Assert.Equal(TreeFiles.Values.Sum(text => (long)text.Length) + Copies.FetchedBytes, room.Bytes);
+        Assert.Equal("its copy of the tree, and of the dependency sources the leg's build fetched", room.Source);
+
+        // Said as it is done: the one reading, which a large dependency makes a wait, and each worker's being given it.
+        Assert.Single(sweep.Said, said => said == $"reading the sources of 'GOOGLETEST' the leg's build fetched, '{googletest}', once for every worker");
+        Assert.Contains("worker 1: giving it the dependency sources the leg's build fetched", sweep.Said);
+        Assert.Contains("worker 2: giving it the dependency sources the leg's build fetched", sweep.Said);
+    }
+
+    /// <summary>
+    /// A dependency the project's cacheVars name in another case than FetchContent reads is still the project's to say,
+    /// as every name of the configuration compares, so no worker is given it; but the name the project spelt points no
+    /// dependency anywhere, in a worker as in the leg, so fetching stays on and the worker fetches it as the leg's
+    /// build did - turned off, its configure would find no sources at all.
+    /// </summary>
+    [Fact]
+    public async Task ADependencyTheProjectNamesInAnotherCase_IsLeftToIt_AndFetchingStaysOn()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var legsBuild = Variant.DirectoryUnder(sweep.Tree);
+        var googletest = Path.Combine(legsBuild, "_deps", "googletest-src");
+        var json = Path.Combine(legsBuild, "_deps", "json-src");
+
+        sweep.CacheVars["fetchcontent_source_dir_json"] = "/opt/nothing-reads-this";
+        sweep.Fetched = new FetchedSet([new FetchedSource("GOOGLETEST", googletest), new FetchedSource("JSON", json)], Every: true);
+
+        var entry = await sweep.RunAsync([ChargeBound]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Equal([googletest], sweep.Copies.FetchedRead);
+        Assert.NotEmpty(sweep.Builder.Builds);
+        Assert.All(sweep.Builder.Builds, build => Assert.Equal(
+            [
+                ("FETCHCONTENT_SOURCE_DIR_GOOGLETEST", FetchedSources.KeptIn(build.TreeRoot, "GOOGLETEST").Replace('\\', '/')),
+                ("fetchcontent_source_dir_json", "/opt/nothing-reads-this"),
+            ],
+            build.Project.CacheVars.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => (pair.Key, pair.Value))));
+    }
+
+    /// <summary>
+    /// A worker of a leg whose build fetched nothing is still made what the sweep read: whatever it kept of dependency
+    /// sources from an earlier sweep is removed, and it is configured with none.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerOfALegThatFetchedNothing_KeepsNoDependencySources_AndIsConfiguredWithNone()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+
+        var entry = await sweep.RunAsync([ChargeBound]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Empty(sweep.Copies.FetchedRead);
+        Assert.Equal([(sweep.Worker(1), 0)], sweep.Copies.FetchedGiven.Select(given => (given.Worker, given.Fetched.Count)));
+        Assert.All(sweep.Builder.Builds, build => Assert.Empty(build.Project.CacheVars));
+        Assert.Equal("its copy of the tree", sweep.Admissions.Single(unit => unit.Unit == "worker-1").Room!.Source);
+        Assert.DoesNotContain(sweep.Said, said => said.Contains("dependency sources", StringComparison.Ordinal));
+
+        // Whatever an earlier sweep's configure gave the worker's build directory is removed from its cache by every
+        // configure, before it is given this sweep's: given nothing now, it holds nothing a sweep gave.
+        Assert.All(sweep.Builder.Builds, build => Assert.Equal(["FETCHCONTENT_SOURCE_DIR_*", "FETCHCONTENT_FULLY_DISCONNECTED"], build.UnsetFirst));
+    }
+
+    /// <summary>
+    /// A worker that cannot be given the dependency sources as they were read - they moved since - is retired alone,
+    /// saying so, and the other drives every arm; sources that cannot be read at all end the sweep before any worker is
+    /// made, as a tree that cannot be read does; and links among them, which no copy carries, are said on the leg's line.
+    /// </summary>
+    [Fact]
+    public async Task DependencySourcesThatMoved_RetireTheWorkerNotGivenThem_AndOnesThatCannotBeReadEndTheSweep()
+    {
+        using var sweep = new Sweep();
+        var googletest = Path.Combine(Variant.DirectoryUnder(sweep.Tree), "_deps", "googletest-src");
+
+        sweep.Fetched = new FetchedSet([new FetchedSource("GOOGLETEST", googletest)], Every: false);
+        sweep.Copies.FetchedLinks = ["docs/latest", "docs/stable"];
+        sweep.Copies.FetchedFails = worker => worker == sweep.Worker(2) ? new HarnessException(LegExit.InputsMoved, "its sources moved") : null;
+
+        var fewer = await sweep.RunAsync([ChargeBound, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            (LegVerdict.Passed,
+                "2 arm(s): 2 passed; the sources of 'GOOGLETEST' the leg's build fetched hold 2 link(s), which no worker is given: docs/latest, docs/stable; "
+                + "worker 2: its sources moved, so it drove no arm"),
+            (fewer.Verdict, fewer.Detail));
+        Assert.All(fewer.Arms, arm => Assert.Equal(1, arm.Worker));
+        Assert.All(sweep.Builder.Builds, build => Assert.DoesNotContain("FETCHCONTENT_FULLY_DISCONNECTED", build.Project.CacheVars.Keys));
+        Assert.Contains("hold 2 link(s), which no worker is given", sweep.Harness.StandardError.ToString(), StringComparison.Ordinal);
+
+        using var unread = new Sweep();
+
+        unread.Fetched = sweep.Fetched;
+        unread.Copies.FetchedReadFails = _ => new HarnessException(LegExit.InputsMoved, "they changed while they were read");
+
+        var moved = await Assert.ThrowsAsync<HarnessException>(() => unread.RunAsync([ChargeBound]).WaitAsync(Patience, TestContext.Current.CancellationToken));
+
+        Assert.Equal(LegExit.InputsMoved, moved.ExitCode);
+        Assert.Empty(unread.Copies.Synced);
     }
 
     /// <summary>
@@ -1813,6 +2008,15 @@ public sealed class MutationLegRunnerTests
 
         public ConcurrentQueue<UnitAdmission> Admissions { get; } = new();
 
+        /// <summary>Each line of progress the sweep said of its leg, in the order said.</summary>
+        public ConcurrentQueue<string> Said { get; } = new();
+
+        /// <summary>The dependency sources the leg's own build fetched; none unless a test says.</summary>
+        public FetchedSet Fetched { get; set; } = FetchedSet.None;
+
+        /// <summary>The cache variables the leg's project sets itself.</summary>
+        public Dictionary<string, string> CacheVars { get; } = new(StringComparer.Ordinal);
+
         public Source? Reader { get; private set; }
 
         public SyncSource? Reading => Reader?.Reading;
@@ -1835,6 +2039,11 @@ public sealed class MutationLegRunnerTests
             var config = new HarnessConfig { Worktrees = Worktrees, Mutations = settings };
             var context = new HarnessContext(new HarnessLayout(Tree, Tree), config);
             var project = new ProjectConfig { Name = "app", Type = "cmake", Test = Test };
+
+            foreach (var (name, value) in CacheVars)
+            {
+                project.CacheVars[name] = value;
+            }
             var host = new HostReport { Host = Host, Os = os, Processor = Variant.Processor };
             var leg = new PlacedLeg(
                 LegName,
@@ -1857,6 +2066,7 @@ public sealed class MutationLegRunnerTests
                     Admissions.Enqueue(unit);
                     return AdmitAsync is { } asked ? asked(unit, token) : Task.FromResult(Admit(unit));
                 },
+                Progress = Said.Enqueue,
             };
 
             var runner = new MutationLegRunner(
@@ -1876,6 +2086,7 @@ public sealed class MutationLegRunnerTests
                     TreeRoot = Tree,
                     Workers = Family,
                     Project = project,
+                    Fetched = Fetched,
                     Tests = Test,
                     PathReserve = PathReserve,
                     Hold = Hold,
@@ -2018,6 +2229,60 @@ public sealed class MutationLegRunnerTests
             Synced.Enqueue((source, worker));
             AfterSync(worker);
 
+            return Task.CompletedTask;
+        }
+
+        /// <summary>The dependency sources read, in the order they were.</summary>
+        public ConcurrentQueue<string> FetchedRead { get; } = new();
+
+        /// <summary>What each worker was given of them, in the order they were.</summary>
+        public ConcurrentQueue<(string Worker, IReadOnlyList<FetchedReading> Fetched)> FetchedGiven { get; } = new();
+
+        /// <summary>The links every dependency's sources are read as holding.</summary>
+        public IReadOnlyList<string> FetchedLinks { get; set; } = [];
+
+        /// <summary>What reading a dependency's sources raises, where it raises anything.</summary>
+        public Func<string, Exception?> FetchedReadFails { get; set; } = _ => null;
+
+        /// <summary>What giving a worker its dependency sources raises, where it raises anything.</summary>
+        public Func<string, Exception?> FetchedFails { get; set; } = _ => null;
+
+        /// <summary>What each dependency's sources are read as coming to.</summary>
+        public const int FetchedBytes = 1000;
+
+        /// <summary>The file each dependency's sources are read as holding, beside one of the shortest path.</summary>
+        public string FetchedPath { get; set; } = "CMakeLists.txt";
+
+        public Task<SyncManifest> ReadFetchedAsync(string directory, CancellationToken cancellationToken)
+        {
+            FetchedRead.Enqueue(directory);
+
+            if (FetchedReadFails(directory) is { } failure)
+            {
+                throw failure;
+            }
+
+            // Two files, the shorter path of nothing: the longest is the one a path limit is reckoned by.
+            var files = new Dictionary<string, SyncEntry>(StringComparer.Ordinal)
+            {
+                [FetchedPath] = new(FetchedPath, FetchedBytes, "read"),
+                ["x"] = new("x", 0, "empty"),
+            };
+
+            return Task.FromResult(new SyncManifest(directory, files) { Links = FetchedLinks });
+        }
+
+        public Task SyncFetchedAsync(IReadOnlyList<FetchedReading> fetched, string worker, CancellationToken cancellationToken)
+        {
+            // Given into a worker that is the tree already: its copy comes first.
+            Assert.Contains(Synced, sync => sync.Worker == worker);
+
+            if (FetchedFails(worker) is { } failure)
+            {
+                throw failure;
+            }
+
+            FetchedGiven.Enqueue((worker, fetched));
             return Task.CompletedTask;
         }
 
