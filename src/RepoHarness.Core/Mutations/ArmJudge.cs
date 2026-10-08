@@ -8,11 +8,35 @@ namespace RepoHarness.Core.Mutations;
 /// <param name="Count">How many times it occurs there, overlapping occurrences counted.</param>
 public sealed record TextCount(string Text, string Site, int Count);
 
+/// <summary>A site a row spells otherwise than the tree spells the file it names.</summary>
+/// <param name="Site">The site, as the registry names it.</param>
+/// <param name="Tree">The file, as the sweep's reading of the tree spells it.</param>
+public sealed record SiteSpelling(string Site, string Tree);
+
+/// <summary>A replacement that leaves its site as it was: what replaces the text is that text again.</summary>
+/// <param name="Before">The file holding the text replaced, as the registry cites it.</param>
+/// <param name="After">The file holding what replaces it, as the registry cites it.</param>
+/// <param name="Site">The site, as the registry names it.</param>
+public sealed record UnchangedSite(string Before, string After, string Site);
+
 /// <summary>What an arm's pre-flight read, before anything is built: the sites, the texts, the target and what depends on the sites.</summary>
 public sealed record ArmPreflight
 {
+    /// <summary>
+    /// Each site the sweep's reading of the tree holds under another spelling - its letters in another case - which a file
+    /// system that folds case would find, and one that does not would not.
+    /// </summary>
+    public IReadOnlyList<SiteSpelling> MisspeltSites { get; init; } = [];
+
     /// <summary>Each site the worker's copy does not hold as a file.</summary>
     public IReadOnlyList<string> MissingSites { get; init; } = [];
+
+    /// <summary>
+    /// Each site the sweep's reading of the tree does not hold as its row spells it, which nothing could be checked
+    /// against once it was put back: one of the <see cref="MisspeltSites"/> or the <see cref="MissingSites"/>, each said
+    /// first, or a file the worker's copy holds that a build made there, or that sync leaves out.
+    /// </summary>
+    public IReadOnlyList<string> UnreadSites { get; init; } = [];
 
     /// <summary>
     /// What is wrong with each text the arm cites that cannot be used as the worker's copy holds it, as a line says it:
@@ -25,6 +49,12 @@ public sealed record ArmPreflight
     /// control's in its pristine site.
     /// </summary>
     public IReadOnlyList<TextCount> Counts { get; init; } = [];
+
+    /// <summary>
+    /// Each replacement that would leave its site as it was - the arm's own, an M row's, or a paired control's - its
+    /// after-text being its before-text once both have the site's line endings.
+    /// </summary>
+    public IReadOnlyList<UnchangedSite> Unchanged { get; init; } = [];
 
     /// <summary>Whether the leg's build manifest has a build line for the arm's target.</summary>
     public bool TargetBuilt { get; init; } = true;
@@ -106,10 +136,11 @@ public enum ArmStep
 /// </summary>
 /// <remarks>
 /// <para>
-/// Pre-flight, before anything is built: a site the copy does not hold; a text it cites that the copy does not hold, or a
-/// before-text holding nothing; a before-text that does not occur exactly once - the arm's, an M row's, or a paired
-/// control's in the pristine site; a target the leg's build does not build, or a runner building no program; and no
-/// object the arm's build builds depending on a site - each <c>violated</c>.
+/// Pre-flight, before anything is built or written: a site the tree spells otherwise, one the copy does not hold, or one
+/// it holds that the sweep's reading of the tree does not; a text it cites that the copy does not hold, or a before-text
+/// holding nothing; a before-text that does not occur exactly once - the arm's, an M row's, or a paired control's in the
+/// pristine site - or a replacement that changes nothing; a target the leg's build does not build, or a runner building
+/// no program; and no object the arm's build builds depending on a site - each <c>violated</c>.
 /// </para>
 /// <para>
 /// The mutated build: <c>stopped</c> where it was stopped, and the verdict of a guard of the build where one reached
@@ -208,9 +239,26 @@ public static class ArmJudge
 
     private static ReachedVerdict? Preflight(MutationArm arm, ArmPreflight preflight)
     {
+        // Before a missing site: where names are compared exactly, a site spelt otherwise than the tree spells it is
+        // missing too, and saying only that would send its reader looking for a file that is there.
+        if (preflight.MisspeltSites.FirstOrDefault() is { } misspelt)
+        {
+            return ReachedVerdict.Of(
+                LegVerdict.Violated,
+                $"site '{misspelt.Site}' is spelt '{misspelt.Tree}' in the tree, and a row names a file as the tree spells it");
+        }
+
         if (preflight.MissingSites.FirstOrDefault() is { } missing)
         {
             return ReachedVerdict.Of(LegVerdict.Violated, $"site '{missing}' is not a file in the worker's copy of the tree");
+        }
+
+        if (preflight.UnreadSites.FirstOrDefault() is { } unread)
+        {
+            return ReachedVerdict.Of(
+                LegVerdict.Violated,
+                $"site '{unread}' is no file the sweep's reading of the tree holds - one a build makes there, or one sync leaves out - "
+                + "so nothing vouches for what it holds");
         }
 
         if (preflight.TextProblems.FirstOrDefault() is { } text)
@@ -223,6 +271,13 @@ public static class ArmJudge
             return ReachedVerdict.Of(
                 LegVerdict.Violated,
                 $"the text in '{miscounted.Text}' occurs {miscounted.Count} time(s) in '{miscounted.Site}', where it must occur exactly once");
+        }
+
+        if (preflight.Unchanged.FirstOrDefault() is { } unchanged)
+        {
+            return ReachedVerdict.Of(
+                LegVerdict.Violated,
+                $"the text in '{unchanged.After}' is the text in '{unchanged.Before}', so replacing one with the other changes nothing in '{unchanged.Site}'");
         }
 
         if (!preflight.TargetBuilt)

@@ -96,6 +96,21 @@ public sealed class SiteEditTests
     }
 
     /// <summary>
+    /// An edit says where it changes nothing of its site: an after-text that is the before-text - as its file holds it,
+    /// or once each is given the site's line endings - puts the one occurrence back as it was. One that is not made, its
+    /// before-text there no times or twice, is never said to: its count says what is wrong with it.
+    /// </summary>
+    [Theory]
+    [InlineData("return a < b;\n", "a < b", "a <= b", false)]
+    [InlineData("return a < b;\n", "a < b", "a < b", true)]
+    [InlineData("x\r\na\r\nb\r\n", "a\nb", "a\r\nb", true)]
+    [InlineData("x\na\nb\n", "a\r\nb", "a\nb", true)]
+    [InlineData("return a > b;\n", "a < b", "a < b", false)]
+    [InlineData("a < b; a < b;\n", "a < b", "a < b", false)]
+    public void AnEdit_SaysWhereItChangesNothingOfItsSite(string site, string before, string after, bool changesNothing)
+        => Assert.Equal(changesNothing, SiteEdit.Apply(Bytes(site), Bytes(before), Bytes(after)).ChangesNothing);
+
+    /// <summary>
     /// An arm with several sites edits each alone: a text found in one site is counted there only, and editing one site
     /// leaves what another holds as it was.
     /// </summary>

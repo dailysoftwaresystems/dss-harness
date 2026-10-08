@@ -54,10 +54,11 @@ internal sealed record SweepArms(MutationRegistry Registry, IReadOnlyList<Mutati
 /// </summary>
 /// <remarks>
 /// <para>
-/// A registry that cannot be read whole, an arm <c>--arms</c> names that it does not declare, a scope naming no leg, and
-/// a leg built without the Ninja generator are refused before anything starts, each naming its fix: refused from inside
-/// a leg, the same refusal would end the run once its hosts were measured and its slots taken. A host sweeping one of
-/// the legs reads its own copy's registry the same way, and sweeps it with its own workers and its own admission.
+/// A registry that cannot be read whole, an arm <c>--arms</c> names that it does not declare, a scope naming no leg, a
+/// leg built without the Ninja generator, and a selection none of whose arms runs on any of its legs are refused before
+/// anything starts, each naming its fix: refused from inside a leg, the same refusal would end the run once its hosts
+/// were measured and its slots taken. A host sweeping one of the legs reads its own copy's registry the same way, and
+/// sweeps it with its own workers and its own admission.
 /// </para>
 /// <para>
 /// A self-test sweeps the fixture this tool carries instead (<see cref="MutationFixture"/>), on each selected leg as the
@@ -116,8 +117,8 @@ public sealed class MutationService(
     /// <param name="runId">The run, begun and said by the command before anything could refuse it.</param>
     /// <param name="cancellationToken">Stops the sweep: every site is put back, here and on every host.</param>
     /// <exception cref="HarnessException">
-    /// The registry, its texts, its scopes or <c>--arms</c> cannot be swept, or a selected leg cannot be: each refused
-    /// before any host is touched.
+    /// The registry, its texts, its scopes or <c>--arms</c> cannot be swept, a selected leg cannot be, or no selected arm
+    /// runs on a selected leg: each refused before any host is touched.
     /// </exception>
     public async Task<CommandOutcome> RunAsync(MutationRequest request, RunId runId, CancellationToken cancellationToken = default)
     {
@@ -130,9 +131,19 @@ public sealed class MutationService(
 
         RequireSweepable(context.Config, legs, request.SelfTest);
 
-        foreach (var arm in ArmSelection.DrivenNowhere([.. legs.Select(leg => leg.Name)], arms.Selected, arms.Scopes))
+        // The whole selection is this machine's to judge only where the command was typed on it: a host sweeping one leg
+        // of a run is given that leg alone and the run's arms, and an arm among them that runs on another of the run's
+        // legs is driven there, as the machine that selected them has already seen.
+        if (request.Here is null)
         {
-            _output.Warn(CommandName, $"arm '{arm.Id}' runs on none of the selected legs: its S row, line {arm.Scope!.Line}, names {string.Join(", ", arm.Scope.Legs)}");
+            IReadOnlyList<string> selected = [.. legs.Select(leg => leg.Name)];
+
+            ArmSelection.RequireDriven(selected, arms.Selected, arms.Scopes);
+
+            foreach (var arm in ArmSelection.DrivenNowhere(selected, arms.Selected, arms.Scopes))
+            {
+                _output.Warn(CommandName, $"arm '{arm.Id}' runs on none of the selected legs: its S row, line {arm.Scope!.Line}, names {string.Join(", ", arm.Scope.Legs)}");
+            }
         }
 
         var runner = new MutationLegRunner(
@@ -312,7 +323,10 @@ public sealed class MutationService(
             throw new HarnessException(HarnessExit.ConfigInvalid, $"mutations.registry names '{registry}', which is not a file in '{root}'.");
         }
 
-        var reading = MutationRegistryParser.Parse(MutationRegistryParser.Lines(_fileSystem.ReadAllText(file)), Listing(root, settings.TextDirectory));
+        var reading = MutationRegistryParser.Parse(
+            MutationRegistryParser.Lines(_fileSystem.ReadAllText(file)),
+            Listing(root, settings.TextDirectory),
+            PathCase.In(_fileSystem, root));
         var problems = new List<string>(reading.Problems);
 
         if (reading.Valid)

@@ -55,9 +55,16 @@ public sealed class ArmJudgeTests
     /// <summary>Each refusal of the pre-flight, by its row and what it found.</summary>
     private static readonly Dictionary<string, (ArmPreflight Preflight, string Detail)> PreflightRefusals = new()
     {
+        ["1 a site spelt otherwise than the tree spells it"] = (
+            Ready with { MisspeltSites = [new SiteSpelling("src/Fixture.cpp", "src/fixture.cpp")] },
+            "site 'src/Fixture.cpp' is spelt 'src/fixture.cpp' in the tree, and a row names a file as the tree spells it"),
         ["1 a missing site"] = (
             Ready with { MissingSites = ["src/fixture.cpp"] },
             "site 'src/fixture.cpp' is not a file in the worker's copy of the tree"),
+        ["1 a site the reading of the tree does not hold"] = (
+            Ready with { UnreadSites = ["src/gen/fixture.cpp"] },
+            "site 'src/gen/fixture.cpp' is no file the sweep's reading of the tree holds - one a build makes there, or one sync leaves out - "
+            + "so nothing vouches for what it holds"),
         ["1 a text the copy does not hold"] = (
             Ready with { TextProblems = ["text 'texts/charge.after' is not a file in the worker's copy of the tree"] },
             "text 'texts/charge.after' is not a file in the worker's copy of the tree"),
@@ -67,6 +74,9 @@ public sealed class ArmJudgeTests
         ["2 a text there twice"] = (
             Ready with { Counts = [new TextCount("texts/charge.before", "src/fixture.cpp", 2)] },
             "the text in 'texts/charge.before' occurs 2 time(s) in 'src/fixture.cpp', where it must occur exactly once"),
+        ["2 a mutation that changes nothing"] = (
+            Ready with { Unchanged = [new UnchangedSite("texts/charge.before", "texts/charge.after", "src/fixture.cpp")] },
+            "the text in 'texts/charge.after' is the text in 'texts/charge.before', so replacing one with the other changes nothing in 'src/fixture.cpp'"),
         ["3 a target not built"] = (
             Ready with { TargetBuilt = false },
             "target 'fixture' is built by no line of the leg's build"),
@@ -154,26 +164,39 @@ public sealed class ArmJudgeTests
     }
 
     /// <summary>
-    /// The pre-flight's rows are read in order: a missing site before a text the copy cannot give, before a miscount,
-    /// before the target, before the dependents.
+    /// The pre-flight's rows are read in order: a site spelt otherwise than the tree spells it - which is missing too where
+    /// names are compared exactly - before a missing one, before one the reading does not hold, before a text the copy
+    /// cannot give, before a miscount, before a replacement that changes nothing, before the target, before the dependents.
     /// </summary>
     [Fact]
     public void ThePreflightsRows_AreReadInOrder()
     {
         var everything = new ArmPreflight
         {
+            MisspeltSites = [new SiteSpelling("src/Gone.cpp", "src/gone.cpp")],
             MissingSites = ["src/gone.cpp"],
+            UnreadSites = ["src/made.cpp"],
             TextProblems = ["the text in 'texts/charge.before' holds nothing, and a text holding nothing occurs everywhere"],
             Counts = [new TextCount("texts/charge.before", "src/fixture.cpp", 0)],
+            Unchanged = [new UnchangedSite("texts/m.before", "texts/m.after", "src/budget.hpp")],
             TargetBuilt = false,
             RunnerProblem = "runner 'fixture_tests' builds no program",
         };
+        var spelt = everything with { MisspeltSites = [] };
+        var held = spelt with { MissingSites = [] };
+        var read = held with { UnreadSites = [] };
+        var cited = read with { TextProblems = [] };
+        var counted = cited with { Counts = [] };
+        var changed = counted with { Unchanged = [] };
 
-        Assert.StartsWith("site 'src/gone.cpp'", Detail(TestRed, everything), StringComparison.Ordinal);
-        Assert.EndsWith("holds nothing, and a text holding nothing occurs everywhere", Detail(TestRed, everything with { MissingSites = [] }), StringComparison.Ordinal);
-        Assert.EndsWith("where it must occur exactly once", Detail(TestRed, everything with { MissingSites = [], TextProblems = [] }), StringComparison.Ordinal);
-        Assert.StartsWith("target 'fixture'", Detail(TestRed, everything with { MissingSites = [], TextProblems = [], Counts = [] }), StringComparison.Ordinal);
-        Assert.StartsWith("runner", Detail(TestRed, everything with { MissingSites = [], TextProblems = [], Counts = [], TargetBuilt = true }), StringComparison.Ordinal);
+        Assert.StartsWith("site 'src/Gone.cpp' is spelt", Detail(TestRed, everything), StringComparison.Ordinal);
+        Assert.Equal("site 'src/gone.cpp' is not a file in the worker's copy of the tree", Detail(TestRed, spelt));
+        Assert.StartsWith("site 'src/made.cpp' is no file the sweep's reading", Detail(TestRed, held), StringComparison.Ordinal);
+        Assert.EndsWith("holds nothing, and a text holding nothing occurs everywhere", Detail(TestRed, read), StringComparison.Ordinal);
+        Assert.EndsWith("where it must occur exactly once", Detail(TestRed, cited), StringComparison.Ordinal);
+        Assert.EndsWith("changes nothing in 'src/budget.hpp'", Detail(TestRed, counted), StringComparison.Ordinal);
+        Assert.StartsWith("target 'fixture'", Detail(TestRed, changed), StringComparison.Ordinal);
+        Assert.StartsWith("runner", Detail(TestRed, changed with { TargetBuilt = true }), StringComparison.Ordinal);
         Assert.Equal(
             "no object target 'fixture' or runner 'fixture_tests' builds depends on 'src/fixture.cpp', 'src/budget.hpp'",
             Detail(TestRed with { Coupled = [new MutationSite("src/budget.hpp", "texts/m.before", "texts/m.after", 4)] }, new ArmPreflight()));

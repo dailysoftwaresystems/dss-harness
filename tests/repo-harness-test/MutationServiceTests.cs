@@ -2,6 +2,7 @@ using NSubstitute;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
@@ -136,6 +137,40 @@ public sealed class MutationServiceTests
         Assert.Contains("  - " + problem, refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// An M row's site is compared with its arm's other sites as the tree's own file system compares names: one naming
+    /// the arm's own file in another case is that file again where the file system folds case - two edits taken and put
+    /// back over each other - and is refused, naming how the arm spells it; where it does not fold, it is another file.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnMRowsSite_IsComparedAsTheTreesOwnFileSystemComparesNames(bool folds)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var (service, context) = Prepare(
+            temp,
+            Sweepable(),
+            [.. Arms, "M | charge | src/Fixture.cpp | mutations/texts/charge.before | mutations/texts/charge.after | the header moves with it"],
+            harness,
+            files: new CaseOf(harness.FileSystem, temp.Path, folds));
+
+        if (!folds)
+        {
+            Assert.Equal(["src/fixture.cpp", "src/Fixture.cpp"], service.Read(context, null).Selected[0].Sites.Select(site => site.Site));
+            return;
+        }
+
+        var refusal = Assert.Throws<HarnessException>(() => service.Read(context, null));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Contains(
+            "  - line 5: arm 'charge' already mutates 'src/Fixture.cpp', as 'src/fixture.cpp' at line 1: two edits to one file would be taken and put back over each other, so a coupled site is another file",
+            refusal.Message,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>An arm --arms names that the registry does not declare is a usage error, naming it.</summary>
     [Fact]
     public void AnArmTheRegistryDoesNotDeclare_IsAUsageError()
@@ -235,7 +270,7 @@ public sealed class MutationServiceTests
     /// <summary>
     /// An arm whose S row names none of the legs a sweep selected is said before any leg is swept, naming its row and the
     /// legs it names: it is driven nowhere this run, which the legs' lines alone would never show. An arm driven on a
-    /// selected leg is not said.
+    /// selected leg is not said, and the sweep goes on to drive it.
     /// </summary>
     [Fact]
     public async Task AnArmItsScopeKeepsFromEverySelectedLeg_IsSaidBeforeAnyLegIsSwept()
@@ -246,14 +281,76 @@ public sealed class MutationServiceTests
 
         config.Legs["other"] = config.Legs["native"];
 
-        var (service, _) = Prepare(temp, config, [.. Arms, "S | charge | other | only the other leg builds the charge"], harness);
+        // Every host measured as one the leg runs on, so the leg is placed and its sweep starts - and what had been said
+        // by then is kept: a host is measured before any leg is swept.
+        string? saidBefore = null;
+        var inspector = new RecordingInspector(host =>
+        {
+            saidBefore ??= harness.StandardError.ToString();
+
+            return new HostReport { Host = host, Os = "linux", Processor = "x86_64" };
+        });
+        var (service, _) = Prepare(temp, config, [.. Arms, "S | charge | other | only the other leg builds the charge"], harness, inspector);
 
         await service.RunAsync(new MutationRequest(temp.Path, ["native"], null), RunId.New(), TestContext.Current.CancellationToken);
 
-        var said = harness.StandardError.ToString();
+        Assert.Contains("arm 'charge' runs on none of the selected legs: its S row, line 5, names other", saidBefore, StringComparison.Ordinal);
+        Assert.Contains("starting 1 leg(s)", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("arm 'depth'", harness.StandardError.ToString(), StringComparison.Ordinal);
+    }
 
-        Assert.Contains("arm 'charge' runs on none of the selected legs: its S row, line 5, names other", said, StringComparison.Ordinal);
-        Assert.DoesNotContain("arm 'depth'", said, StringComparison.Ordinal);
+    /// <summary>
+    /// A sweep none of whose selected arms runs on a selected leg is refused as a usage error before any host is measured,
+    /// naming each arm and where it runs - every leg would be skipped, and the run would pass having swept nothing - and
+    /// warned of nothing besides. A host sweeping one leg of a run another machine dispatched is given that run's arms,
+    /// and refuses nothing and warns of nothing: an arm among them runs on another of the run's legs, which only the
+    /// machine that selected them can tell, and this leg's line says it drove none.
+    /// </summary>
+    [Fact]
+    public async Task ASweepDrivingNoArmOnAnySelectedLeg_IsRefusedBeforeAnyHostIsMeasured_SaveOnAHostSweepingOneLegOfARun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+
+        config.Legs["other"] = config.Legs["native"];
+        config.Hosts.Wsl["Example-Linux"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" };
+
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "x86_64" });
+        var (service, _) = Prepare(
+            temp,
+            config,
+            [.. Arms, "S | charge | other | only the other leg builds the charge", "S | depth | other | nor the depth"],
+            harness,
+            inspector);
+
+        var every = await Assert.ThrowsAsync<HarnessException>(
+            () => service.RunAsync(new MutationRequest(temp.Path, ["native"], null), RunId.New(), TestContext.Current.CancellationToken));
+        var one = await Assert.ThrowsAsync<HarnessException>(
+            () => service.RunAsync(new MutationRequest(temp.Path, ["native"], ["depth"]), RunId.New(), TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.UsageError, every.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "The sweep would drive no arm, so nothing was run: no arm selected runs on a selected leg (native), and a sweep that drove none would pass having proved nothing.",
+                "  - arm 'charge' runs where its S row, line 5, names: other",
+                "  - arm 'depth' runs where its S row, line 6, names: other",
+                "Name a leg an arm runs on with --legs, or an arm these legs run with --arms."),
+            every.Message);
+        Assert.Equal(HarnessExit.UsageError, one.ExitCode);
+        Assert.DoesNotContain("arm 'charge'", one.Message, StringComparison.Ordinal);
+        Assert.Empty(inspector.Inspected);
+        Assert.DoesNotContain("runs on none of the selected legs", harness.StandardError.ToString(), StringComparison.Ordinal);
+
+        var onAHost = await service.RunAsync(
+            new MutationRequest(temp.Path, ["native"], null, Json: true, Here: HostId.Wsl("Example-Linux")),
+            RunId.New(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, onAHost.ExitCode);
+        Assert.Contains("the sweep drives no arm on this leg; 2 arm(s): 2 skipped-not-selected", Assert.Single(onAHost.Data), StringComparison.Ordinal);
+        Assert.DoesNotContain("runs on none of the selected legs", harness.StandardError.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -466,9 +563,16 @@ public sealed class MutationServiceTests
     /// <summary>
     /// The service over a repository in <paramref name="temp"/> holding the registry - <paramref name="rows"/>, or the two
     /// arms with their rows - and every text it cites, with the context a run of it loads; writing where
-    /// <paramref name="harness"/> writes, or a harness of its own.
+    /// <paramref name="harness"/> writes, or a harness of its own, its hosts measured by <paramref name="inspector"/>, or
+    /// as ones no leg runs on.
     /// </summary>
-    private static (MutationService Service, HarnessContext Context) Prepare(TempDirectory temp, HarnessConfig config, string[]? rows = null, HarnessFactory? harness = null)
+    private static (MutationService Service, HarnessContext Context) Prepare(
+        TempDirectory temp,
+        HarnessConfig config,
+        string[]? rows = null,
+        HarnessFactory? harness = null,
+        IHostInspector? inspector = null,
+        IFileSystem? files = null)
     {
         harness ??= new HarnessFactory();
 
@@ -482,16 +586,17 @@ public sealed class MutationServiceTests
         var loader = HostDoubles.Loader(config, temp.Path, temp.Path);
 
         return (
-            Service(harness, temp, loader, new RecordingInspector(host => new HostReport { Host = host })),
+            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files),
             new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config));
     }
 
     /// <summary>
     /// The service as the command builds it, its hosts measured by <paramref name="inspector"/>, nothing able to reach one,
     /// every build it starts failing without building, and a self-test's fixture kept in <paramref name="temp"/>, never
-    /// among the data of the user running the tests.
+    /// among the data of the user running the tests - reading the repository through <paramref name="files"/>, or the
+    /// harness's own file system.
     /// </summary>
-    private static MutationService Service(HarnessFactory harness, TempDirectory temp, IHarnessContextLoader loader, IHostInspector inspector)
+    private static MutationService Service(HarnessFactory harness, TempDirectory temp, IHarnessContextLoader loader, IHostInspector inspector, IFileSystem? files = null)
     {
         var processes = Substitute.For<IProcessRunner>();
         var builds = Substitute.For<IBuildService>();
@@ -531,7 +636,7 @@ public sealed class MutationServiceTests
             new BuildDirectoryGuard(harness.FileSystem, harness.Platform, harness.FilePermissions),
             new PhaseRunner(processes, harness.FileSystem, harness.Output),
             harness.PathBudget,
-            harness.FileSystem,
+            files ?? harness.FileSystem,
             new MutationFixtureStore(harness.FileSystem, Fixture(temp)),
             harness.Identity,
             TimeProvider.System,
@@ -540,4 +645,14 @@ public sealed class MutationServiceTests
 
     /// <summary>Where the service <see cref="Service"/> builds over <paramref name="temp"/> keeps a self-test's fixture.</summary>
     private static string Fixture(TempDirectory temp) => temp.Combine("state", MutationFixture.DirectoryName);
+
+    /// <summary>
+    /// The real file system, save that it finds <paramref name="root"/> by its name in another case only where
+    /// <paramref name="folds"/> says so: a file system that folds case, or one that does not, whatever this machine's does.
+    /// </summary>
+    private sealed class CaseOf(IFileSystem inner, string root, bool folds) : PassThroughFileSystem(inner)
+    {
+        public override bool DirectoryExists(string path)
+            => path != root && string.Equals(path, root, StringComparison.OrdinalIgnoreCase) ? folds : base.DirectoryExists(path);
+    }
 }

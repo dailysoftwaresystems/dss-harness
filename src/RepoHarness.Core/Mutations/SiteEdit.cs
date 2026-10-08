@@ -3,7 +3,15 @@ namespace RepoHarness.Core.Mutations;
 /// <summary>A mutation of one site: how many times its before-text occurs there, and the site's bytes with it replaced.</summary>
 /// <param name="Occurrences">How many times the before-text occurs, overlapping occurrences counted.</param>
 /// <param name="Edited">The site with the before-text replaced, where it occurs exactly once; otherwise <see langword="null"/>.</param>
-public sealed record SiteEditResult(int Occurrences, byte[]? Edited);
+public sealed record SiteEditResult(int Occurrences, byte[]? Edited)
+{
+    /// <summary>
+    /// Whether the edit was made and leaves the site holding what it held: what replaces the before-text is that text
+    /// again, once both have the site's line endings - a mutation of nothing, which builds and runs as the unmutated tree
+    /// does and would read as one no test caught. Never so of an edit that was not made, which its count says.
+    /// </summary>
+    public bool ChangesNothing { get; init; }
+}
 
 /// <summary>
 /// A byte-exact replacement of one text in a site: the text must occur exactly once, and every other byte of the file
@@ -18,7 +26,9 @@ public sealed record SiteEditResult(int Occurrences, byte[]? Edited);
 /// </para>
 /// <para>
 /// Occurrences overlap: <c>aa</c> occurs twice in <c>aaa</c>. Zero means the site moved under the arm, and two or more
-/// that the arm does not know which one it hits; either is the arm's declaration failing, never a guess.
+/// that the arm does not know which one it hits; either is the arm's declaration failing, never a guess. So is an edit
+/// that changes nothing, its after-text its before-text again: a mutation of nothing reddens no test, and would read as
+/// one the tests let live.
 /// </para>
 /// </remarks>
 public static class SiteEdit
@@ -98,7 +108,8 @@ public static class SiteEdit
 
     /// <summary>
     /// <paramref name="site"/> with <paramref name="before"/> replaced by <paramref name="after"/>, both given the site's
-    /// line endings, where <paramref name="before"/> occurs exactly once; otherwise how many times it does.
+    /// line endings, where <paramref name="before"/> occurs exactly once - saying where that changes nothing of the site -
+    /// and otherwise how many times it does.
     /// </summary>
     /// <param name="site">The site's bytes.</param>
     /// <param name="before">The text replaced, as <see cref="Text"/> reads it.</param>
@@ -116,8 +127,12 @@ public static class SiteEdit
         }
 
         var at = site.AsSpan().IndexOf(needle);
+        var replacement = Adapted(after, site);
 
-        return new SiteEditResult(1, [.. site.AsSpan(0, at), .. Adapted(after, site), .. site.AsSpan(at + needle.Length)]);
+        return new SiteEditResult(1, [.. site.AsSpan(0, at), .. replacement, .. site.AsSpan(at + needle.Length)])
+        {
+            ChangesNothing = needle.AsSpan().SequenceEqual(replacement),
+        };
     }
 
     /// <summary><paramref name="text"/> with every CRLF made LF.</summary>

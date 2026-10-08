@@ -811,7 +811,8 @@ internal static class HelpCommand
             + "a row of no kind it reads; an arm id outside [A-Za-z0-9_-], or one another reads as ignoring case; a path outside "
             + "[A-Za-z0-9_./-], absolute, climbing out with '..', ending in '/', or with an empty or '.' segment; a target or "
             + "runner outside [A-Za-z0-9_.+-]; a row naming an arm no A row above it declares; a case both red and green, or "
-            + "declared twice; an M row mutating a file its arm already mutates; an S row naming neither a leg nor a leg set; "
+            + "declared twice; an M row mutating a file its arm already mutates, as the tree's own file system compares their "
+            + "names; an S row naming neither a leg nor a leg set; "
             + "a text no row cites in textDirectory, a mutation nobody drives; a cited text that is not there; and a "
             + "before-text, a control's before-text or a diagnostic holding nothing, which would match everywhere, or be said "
             + "by every run. Rows R, X, I, F and T are refused, each naming what "
@@ -823,8 +824,10 @@ internal static class HelpCommand
             builder,
             $"--arms names the arms to drive, as --legs names legs, and an unknown one is refused ({HarnessExit.UsageError}). "
             + "On each leg the arms its S row does not name, and those --arms does not, are skipped-not-selected; an arm "
-            + "selected and named by no selected leg's S row is named in a warning before the sweep starts. Only a leg built "
-            + "by CMake with the Ninja generator can be swept: ninja's own records say which objects a mutation rebuilt.");
+            + "selected whose S row names no selected leg is named in a warning before the sweep starts, and a sweep whose "
+            + $"every selected arm is such a one is refused ({HarnessExit.UsageError}), naming each and where it runs: it would drive "
+            + "no arm, and pass having proved nothing. Only a leg built by CMake with the Ninja generator can be swept: "
+            + "ninja's own records say which objects a mutation rebuilt.");
         builder.AppendLine();
         builder.AppendLine("Workers");
         builder.AppendLine();

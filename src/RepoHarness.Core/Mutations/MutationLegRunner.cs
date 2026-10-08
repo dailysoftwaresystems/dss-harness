@@ -124,7 +124,11 @@ internal sealed class MutationLegRunner(
     /// <param name="Declared">The site as the registry declares it.</param>
     /// <param name="Path">Where it is in the worker's copy.</param>
     /// <param name="Pristine">What it holds unmutated, or <see langword="null"/> where it is no file.</param>
-    private sealed record SiteState(MutationSite Declared, string Path, byte[]? Pristine)
+    /// <param name="Read">
+    /// The file as the sweep's reading of the tree holds it, under the very spelling the registry names it by, which its
+    /// putting back is checked against; <see langword="null"/> where the reading holds none so spelt.
+    /// </param>
+    private sealed record SiteState(MutationSite Declared, string Path, byte[]? Pristine, SyncEntry? Read)
     {
         /// <summary>What the mutation makes it, where its before-text occurs exactly once.</summary>
         public byte[]? Mutated { get; set; }
@@ -529,7 +533,13 @@ internal sealed class MutationLegRunner(
         {
             var worker = Worker(number);
             var buildDirectory = _leg.Variant.DirectoryUnder(worker);
-            var sites = arm.Sites.Select(declared => new SiteState(declared, InWorker(worker, declared.Site), _runner._site.Read(InWorker(worker, declared.Site)))).ToList();
+            var sites = arm.Sites
+                .Select(declared => new SiteState(
+                    declared,
+                    InWorker(worker, declared.Site),
+                    _runner._site.Read(InWorker(worker, declared.Site)),
+                    _reading.Files.Entries.GetValueOrDefault(declared.Site)))
+                .ToList();
             var (preflight, control, diagnostic, builds, outputs) = Preflight(arm, worker, sites, graph);
             var observation = new ArmObservation(preflight);
 
@@ -636,6 +646,7 @@ internal sealed class MutationLegRunner(
         {
             var problems = new List<string>();
             var counts = new List<TextCount>();
+            var unchanged = new List<UnchangedSite>();
 
             byte[]? Text(string cited, bool before)
             {
@@ -672,6 +683,11 @@ internal sealed class MutationLegRunner(
 
                 state.Mutated = edit.Edited;
                 counts.Add(new TextCount(state.Declared.Before, state.Declared.Site, edit.Occurrences));
+
+                if (edit.ChangesNothing)
+                {
+                    unchanged.Add(new UnchangedSite(state.Declared.Before, state.Declared.After, state.Declared.Site));
+                }
             }
 
             byte[]? control = null;
@@ -687,6 +703,11 @@ internal sealed class MutationLegRunner(
 
                     control = edit.Edited;
                     counts.Add(new TextCount(paired.Before, arm.Own.Site, edit.Occurrences));
+
+                    if (edit.ChangesNothing)
+                    {
+                        unchanged.Add(new UnchangedSite(paired.Before, paired.After, arm.Own.Site));
+                    }
                 }
             }
 
@@ -700,12 +721,22 @@ internal sealed class MutationLegRunner(
             var builds = ArmJudge.Builds(arm);
             var outputs = builds.SelectMany(graph.OutputsOf).Distinct(StringComparer.Ordinal).ToList();
 
+            // A site the reading does not hold as the row spells it, by how the reading does spell it where only the case
+            // of its letters differs: found there by a file system that folds case, and by no other.
+            var unread = sites
+                .Where(state => state.Read is null)
+                .Select(state => (State: state, Tree: _reading.Files.Paths.FirstOrDefault(path => string.Equals(path, state.Declared.Site, StringComparison.OrdinalIgnoreCase))))
+                .ToList();
+
             return (
                 new ArmPreflight
                 {
+                    MisspeltSites = [.. unread.Where(site => site.Tree is not null).Select(site => new SiteSpelling(site.State.Declared.Site, site.Tree!))],
                     MissingSites = [.. sites.Where(state => state.Pristine is null).Select(state => state.Declared.Site)],
+                    UnreadSites = [.. unread.Select(site => site.State.Declared.Site)],
                     TextProblems = problems,
                     Counts = counts,
+                    Unchanged = unchanged,
                     TargetBuilt = graph.OutputsOf(arm.Target).Count > 0,
                     RunnerProblem = arm.Kind == RedKind.TestRed ? graph.ProgramOf(arm.Runner).Problem : null,
                     Dependents = graph.DependentObjects(builds, [.. sites.Select(state => state.Path)]),
@@ -838,10 +869,12 @@ internal sealed class MutationLegRunner(
         /// built, and checks every site against the sweep's reading of the tree by its hash; what is wrong, or
         /// <see langword="null"/> where nothing is. Never stopped: a sweep stopped part way still puts its sites back.
         /// </summary>
+        /// <param name="sites">The sites of an arm past its pre-flight: each a file the worker held, as the reading spells it.</param>
+        /// <param name="buildDirectory">The worker's build directory.</param>
         private async Task<string?> RestoreAsync(IReadOnlyList<SiteState> sites, string buildDirectory)
         {
             var problems = new List<string>();
-            var touched = sites.Where(state => state.Touched && state.Pristine is not null).ToList();
+            var touched = sites.Where(state => state.Touched).ToList();
 
             if (touched.Count > 0)
             {
@@ -860,7 +893,7 @@ internal sealed class MutationLegRunner(
                 }
             }
 
-            foreach (var state in sites.Where(state => state.Pristine is not null))
+            foreach (var state in sites)
             {
                 var held = _runner._site.Read(state.Path);
 
@@ -868,11 +901,7 @@ internal sealed class MutationLegRunner(
                 {
                     problems.Add($"'{state.Declared.Site}' is gone");
                 }
-                else if (!_reading.Files.Entries.TryGetValue(state.Declared.Site, out var read))
-                {
-                    problems.Add($"'{state.Declared.Site}' is no file the sweep's reading of the tree holds, so nothing vouches for what it holds");
-                }
-                else if (!string.Equals(FileContentHash.Of(held), read.ContentHash, StringComparison.Ordinal))
+                else if (!string.Equals(FileContentHash.Of(held), state.Read!.ContentHash, StringComparison.Ordinal))
                 {
                     problems.Add($"'{state.Declared.Site}' does not hold what the tree held when the sweep read it");
                 }

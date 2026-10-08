@@ -190,6 +190,38 @@ public sealed class MutationRegistryParserTests
     }
 
     /// <summary>
+    /// An M row's site is compared with the sites its arm already mutates as the tree's own file system compares names: one
+    /// differing only in the case of its letters is the same file where that folds case - refused, naming the spelling the
+    /// arm already mutates it under and its line - and another file where it does not.
+    /// </summary>
+    [Fact]
+    public void AnMRowsSite_IsComparedAsTheTreesFileSystemComparesNames()
+    {
+        string[] rows =
+        [
+            TestRedArm,
+            "C | charge | Fixture.A | why",
+            "M | charge | SRC/Charge.cpp | t/m.before | t/m.after | why",
+            "M | charge | src/other.cpp | t/m2.before | t/m2.after | why",
+            "M | charge | src/Other.cpp | t/m3.before | t/m3.after | why",
+        ];
+
+        var folding = MutationRegistryParser.Parse(rows, texts: null, StringComparer.OrdinalIgnoreCase);
+        var exact = MutationRegistryParser.Parse(rows, texts: null, StringComparer.Ordinal);
+
+        Assert.Equal(
+            [
+                "line 3: arm 'charge' already mutates 'SRC/Charge.cpp', as 'src/charge.cpp' at line 1: two edits to one file would be taken and put back over each other, so a coupled site is another file",
+                "line 5: arm 'charge' already mutates 'src/Other.cpp', as 'src/other.cpp' at line 4: two edits to one file would be taken and put back over each other, so a coupled site is another file",
+            ],
+            folding.Problems);
+        Assert.Equal(["src/charge.cpp", "src/other.cpp"], folding.Registry.Arms[0].Sites.Select(site => site.Site));
+        Assert.Empty(exact.Problems);
+        Assert.Equal(["src/charge.cpp", "SRC/Charge.cpp", "src/other.cpp", "src/Other.cpp"], exact.Registry.Arms[0].Sites.Select(site => site.Site));
+        Assert.Empty(MutationRegistryParser.Parse(rows, texts: null).Problems);
+    }
+
+    /// <summary>
     /// The rows of an arm whose A row was refused are passed over, not refused again for naming no arm: one mistake is
     /// one problem.
     /// </summary>

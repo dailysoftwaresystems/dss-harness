@@ -145,7 +145,8 @@ public static class ArmSelection
 
     /// <summary>
     /// The arms in <paramref name="selected"/> whose S row names none of <paramref name="legs"/>: arms the sweep was
-    /// asked for and drives nowhere, which its closing line names rather than let them pass unseen.
+    /// asked for and drives nowhere, each named in a warning before the sweep starts rather than let pass unseen - and
+    /// the sweep refused where they are every arm selected (<see cref="RequireDriven"/>).
     /// </summary>
     /// <param name="legs">Every leg the sweep selected.</param>
     /// <param name="selected">The arms <c>--arms</c> selected.</param>
@@ -160,6 +161,48 @@ public static class ArmSelection
         ArgumentNullException.ThrowIfNull(scopes);
 
         return [.. selected.Where(arm => !legs.Any(leg => InScope(arm, leg, scopes)))];
+    }
+
+    /// <summary>
+    /// Refuses a selection that drives no arm: every arm in <paramref name="selected"/> scoped away from every one of
+    /// <paramref name="legs"/>, by <c>--arms</c> naming only arms that run elsewhere or <c>--legs</c> only legs no arm
+    /// runs on.
+    /// </summary>
+    /// <param name="legs">Every leg the sweep selected.</param>
+    /// <param name="selected">The arms <c>--arms</c> selected.</param>
+    /// <param name="scopes">Each scoped arm's legs, from <see cref="Scopes"/>.</param>
+    /// <exception cref="HarnessException">
+    /// No selected arm runs on a selected leg (<see cref="HarnessExit.UsageError"/>): each is named, with the legs its S
+    /// row names.
+    /// </exception>
+    /// <remarks>
+    /// Every leg of such a sweep would be skipped-not-selected, which is no failure, and the run would exit as a pass
+    /// having driven nothing - what an empty registry is refused for. Asked of the whole selection, by the machine it
+    /// was typed on: a host sweeping one leg of a run is given that run's arms, and an arm of them that runs on another
+    /// of the run's legs is driven there.
+    /// </remarks>
+    public static void RequireDriven(
+        IReadOnlyCollection<string> legs,
+        IReadOnlyCollection<MutationArm> selected,
+        IReadOnlyDictionary<string, IReadOnlySet<string>> scopes)
+    {
+        var nowhere = DrivenNowhere(legs, selected, scopes);
+
+        if (nowhere.Count < selected.Count)
+        {
+            return;
+        }
+
+        throw new HarnessException(
+            HarnessExit.UsageError,
+            string.Join(
+                Environment.NewLine,
+                [
+                    $"The sweep would drive no arm, so nothing was run: no arm selected runs on a selected leg ({string.Join(", ", legs)}), "
+                    + "and a sweep that drove none would pass having proved nothing.",
+                    .. nowhere.Select(arm => $"  - arm '{arm.Id}' runs where its S row, line {arm.Scope!.Line}, names: {string.Join(", ", arm.Scope.Legs)}"),
+                    "Name a leg an arm runs on with --legs, or an arm these legs run with --arms.",
+                ]));
     }
 
     private static bool InScope(MutationArm arm, string leg, IReadOnlyDictionary<string, IReadOnlySet<string>> scopes)

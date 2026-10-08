@@ -2418,11 +2418,13 @@ its workers' builds and its test binaries' controls - and its arms' (see *Verdic
 ### The registry
 
 `mutations.registry` names the repository's own file, one row to a line, its fields separated by
-`|` and trimmed, `#` starting a comment, nothing escaped and the last field taking the rest of the
-line. An A row declares an arm - its site, the files holding its before- and after-text, its red
-kind, its target and runner, its case count and its diagnostic - and C, G, B, M and S rows, each
-following the A row of its arm, add a case that must redden, a neighbour that must run and stay
-green, a BUILD-RED arm's paired control, another site mutated with it, and the legs it runs on. A
+`|` and trimmed, a line whose first character that is not blank is `#` a comment, nothing escaped
+and the last field taking the rest of the line. An A row declares an arm - its site, the files
+holding its before- and after-text, its red kind, its target and runner, its case count and its
+diagnostic - and C, G, B, M and S rows, each following the A row of its arm, add a case that must
+redden, a neighbour that must run and stay green, a BUILD-RED arm's paired control, another site
+mutated with it - another file, as the tree's own file system compares names - and the legs it
+runs on. A
 text is a file in `mutations.textDirectory`, read as it is held, less one line ending at its end,
 and given the site's line endings where the site ends its lines otherwise, so one registry serves
 a checkout with either.
@@ -2435,7 +2437,12 @@ leg's own tree, project and variant; sync's exclusions; the variant's configure;
 sources the leg's own build fetched; and ninja's records. A leg built by anything but CMake with the
 Ninja generator is refused too, naming the fix: only ninja's records say, for one configuration
 alone, which objects a mutation rebuilt. `--arms` selects arms as `--legs` selects legs, and an arm
-neither it nor the leg's S row selects is `skipped-not-selected` on that leg.
+it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg. An arm
+selected whose S row names no selected leg is warned of before the sweep starts; and a selection
+whose every arm is such a one is refused, exit 10, naming each and where it runs, before any host
+is touched: every leg would be skipped, and the run would pass having swept nothing. A host sweeping
+one leg of a run refuses nothing of the kind, since only the machine that selected the legs sees
+them all.
 
 ### Workers
 
@@ -2472,11 +2479,15 @@ prove anything. Its run bounds theirs (see *Timeouts*). Workers drain one queue 
 
 1. is admitted as a unit of its own, where its machine declares admission (see *Heavy legs share
    a machine*);
-2. is pre-flighted against the worker's copy and the ninja records of its whole build: its sites
-   and texts there, each before-text occurring exactly once - its own, an M row's, and a paired
-   control's in the site as it was - its target and runner built, and some object its build builds
-   depending on a site, through ninja's dependency records, so headers and precompiled headers
-   count;
+2. is pre-flighted against the worker's copy, the sweep's reading of the tree and the ninja records
+   of the worker's whole build, before anything is written: its sites there, each spelt as the tree
+   spells it - a file system that folds case would find one spelt otherwise, and nothing could then
+   vouch for it once put back - and held by the reading, never a file a build made in the worker;
+   its texts there; each before-text occurring exactly once - its own, an M row's, and a paired
+   control's in the site as it was - and each replacement changing something, since a mutation of
+   nothing reddens no test and would read as one that survived; its target and runner built; and
+   some object its build builds depending on a site, through ninja's dependency records, so headers
+   and precompiled headers count;
 3. is mutated, each site written dated past the newest file the worker's last build wrote, and the
    build waits until the clock is past that, so no object is ever dated before its source;
 4. is built - its target, and a TEST-RED arm's runner beside it, so the binary run links the

@@ -70,11 +70,15 @@ public static partial class MutationRegistryParser
     /// </summary>
     /// <param name="lines">The registry's lines, in order: line numbers count from 1.</param>
     /// <param name="texts">The text directory as listed, or <see langword="null"/> where none is configured.</param>
-    public static MutationRegistryReading Parse(IReadOnlyList<string> lines, TextDirectoryListing? texts)
+    /// <param name="sites">
+    /// How the tree's own file system compares the names of its files (<see cref="FileSystem.PathCase.In"/>), which says
+    /// whether two sites one arm names are one file; <see langword="null"/> for exactly, as a registry read from no tree is.
+    /// </param>
+    public static MutationRegistryReading Parse(IReadOnlyList<string> lines, TextDirectoryListing? texts, StringComparer? sites = null)
     {
         ArgumentNullException.ThrowIfNull(lines);
 
-        var reading = new Reading();
+        var reading = new Reading(sites ?? StringComparer.Ordinal);
 
         for (var index = 0; index < lines.Count; index++)
         {
@@ -156,8 +160,10 @@ public static partial class MutationRegistryParser
     private static string Article(string kind) => kind is "A" or "F" or "I" or "M" or "R" or "S" or "X" ? "an" : "a";
 
     /// <summary>The registry as it is read, row by row.</summary>
-    private sealed class Reading
+    /// <param name="sites">How the tree's file system compares the names of its files.</param>
+    private sealed class Reading(StringComparer sites)
     {
+        private readonly StringComparer _sites = sites;
         private readonly Dictionary<string, ArmDraft> _byId = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Ids of A rows refused, whose other rows are passed over rather than refused again for naming no arm.</summary>
@@ -502,11 +508,14 @@ public static partial class MutationRegistryParser
                 return;
             }
 
-            if (arm.Own.Site == fields[2] || arm.Coupled.Any(site => site.Site == fields[2]))
+            // As the tree's own file system compares names: where it folds case, a site differing only in the case of its
+            // letters is the file the arm already mutates, however differently the two rows spell it.
+            if (arm.Coupled.Prepend(arm.Own).FirstOrDefault(site => _sites.Equals(site.Site, fields[2])) is { } mutated)
             {
                 Problems.Add(
-                    $"line {line}: arm '{arm.Id}' already mutates '{fields[2]}': two edits to one file would be taken and put "
-                    + "back over each other, so a coupled site is another file");
+                    $"line {line}: arm '{arm.Id}' already mutates '{fields[2]}'"
+                    + (mutated.Site == fields[2] ? string.Empty : $", as '{mutated.Site}' at line {mutated.Line}")
+                    + ": two edits to one file would be taken and put back over each other, so a coupled site is another file");
                 return;
             }
 

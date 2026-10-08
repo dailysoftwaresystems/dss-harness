@@ -44,6 +44,9 @@ public sealed class MutationLegRunnerTests
         ["texts/depth.control-before"] = "int depth = 3",
         ["texts/depth.control-after"] = "int depth = 4",
         ["texts/empty.before"] = string.Empty,
+        ["texts/charge.same"] = "c <= b",
+        ["texts/depth.control-same"] = "int depth = 3",
+        ["texts/twice.before"] = "int c",
     };
 
     /// <summary>A TEST-RED arm whose mutation reddens one case of three, and says its diagnostic.</summary>
@@ -376,12 +379,10 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
-    /// A site is put back only as the sweep's reading of the tree vouches for it: one gone once its writing back failed is
-    /// said gone, and one the reading never held - made in the worker after the tree was read - is vouched for by nothing.
-    /// Either poisons its arm.
+    /// A site gone once its writing back failed cannot be put back as the tree held it: said gone, it poisons its arm.
     /// </summary>
     [Fact]
-    public async Task ASiteGone_OrOneTheReadingNeverHeld_PoisonsItsArm()
+    public async Task ASiteGone_PoisonsItsArm()
     {
         using var gone = new Sweep { Workers = 1 };
         gone.SiteFiles = new FailingRestore(gone.Harness.FileSystem, "fixture.cpp", TreeFiles["src/fixture.cpp"]);
@@ -401,19 +402,138 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(
             (LegVerdict.Poisoned, "a site could not be put back as it was, so its worker drives no other arm: writing it back failed: the disk went away; 'src/fixture.cpp' is gone"),
             (lost.Arms[0].Verdict, lost.Arms[0].Detail));
+    }
 
-        using var unread = new Sweep { Workers = 1 };
-        unread.Copies.AfterSync = worker =>
+    /// <summary>
+    /// A site a row spells otherwise than the tree spells it - found all the same where the file system folds case, and
+    /// then nothing its putting back could be checked against - is violated before it is written, naming the tree's
+    /// spelling, on every machine alike: its own site, or a coupled one. Its worker is not retired, and drives the next arm.
+    /// </summary>
+    [Fact]
+    public async Task ASiteSpeltInAnotherCase_IsViolatedBeforeItIsWritten()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(sweep.Harness.FileSystem);
+        sweep.SiteFiles = writes;
+
+        var shouted = ChargeBound with { Id = "charge-shouted", Own = ChargeBound.Own with { Site = "src/Fixture.cpp" } };
+        var coupled = ChargeBound with { Id = "charge-coupled", Line = 2, Coupled = [new MutationSite("SRC/budget.hpp", "texts/depth.control-before", "texts/depth.control-after", 3)] };
+
+        var entry = await sweep.RunAsync([shouted, coupled, ChargeFloor]);
+
+        Assert.Equal(
+            [
+                (LegVerdict.Violated, "site 'src/Fixture.cpp' is spelt 'src/fixture.cpp' in the tree, and a row names a file as the tree spells it"),
+                (LegVerdict.Violated, "site 'SRC/budget.hpp' is spelt 'src/budget.hpp' in the tree, and a row names a file as the tree spells it"),
+                (LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.Equal(["native/arms/charge-floor"], sweep.Builder.Builds.Select(build => build.Leg).Where(leg => leg.Contains("/arms/", StringComparison.Ordinal)));
+
+        // Written twice, both for the arm that was driven: mutated, and put back.
+        Assert.Equal(2, writes.Written.Count);
+    }
+
+    /// <summary>
+    /// A site its worker holds that the sweep's reading of the tree does not - a file a build made there after the tree
+    /// was read - is violated before it is written: nothing could vouch for what it held once it was put back. Its worker
+    /// is not retired.
+    /// </summary>
+    [Fact]
+    public async Task ASiteTheReadingNeverHeld_IsViolatedBeforeItIsWritten()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(sweep.Harness.FileSystem);
+        sweep.SiteFiles = writes;
+        sweep.Copies.AfterSync = worker =>
         {
             Directory.CreateDirectory(Path.Combine(worker, "src", "gen"));
             File.WriteAllText(Path.Combine(worker, "src", "gen", "fixture.cpp"), TreeFiles["src/fixture.cpp"]);
         };
 
-        var made = await unread.RunAsync([ChargeBound with { Own = ChargeBound.Own with { Site = "src/gen/fixture.cpp" } }]);
+        var entry = await sweep.RunAsync([ChargeBound with { Id = "charge-made", Own = ChargeBound.Own with { Site = "src/gen/fixture.cpp" } }, ChargeFloor]);
 
         Assert.Equal(
-            (LegVerdict.Poisoned, "a site could not be put back as it was, so its worker drives no other arm: 'src/gen/fixture.cpp' is no file the sweep's reading of the tree holds, so nothing vouches for what it holds"),
-            (made.Arms[0].Verdict, made.Arms[0].Detail));
+            [
+                (LegVerdict.Violated, "site 'src/gen/fixture.cpp' is no file the sweep's reading of the tree holds - one a build makes there, or one sync leaves out - so nothing vouches for what it holds"),
+                (LegVerdict.Passed, "ran 3 case(s), 1 red as declared, and said its diagnostic"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.Equal(2, writes.Written.Count);
+        Assert.All(writes.Written, path => Assert.EndsWith(Path.Combine("src", "fixture.cpp"), path, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A mutation that changes nothing - its after-text its before-text again - is violated before anything of the arm is
+    /// built or written: built and run it would redden nothing, and read as a mutation no test caught. So is a paired
+    /// control that changes nothing, which would build as the unmutated tree builds and prove nothing of the site.
+    /// </summary>
+    [Fact]
+    public async Task AMutationThatChangesNothing_IsViolated_BeforeAnythingIsBuilt()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(sweep.Harness.FileSystem);
+        sweep.SiteFiles = writes;
+
+        var same = ChargeBound with { Id = "charge-same", Own = ChargeBound.Own with { After = "texts/charge.same" } };
+        var idle = DepthType with { Id = "depth-idle", Line = 9, Control = new PairedControl("texts/depth.control-before", "texts/depth.control-same", 10) };
+
+        var entry = await sweep.RunAsync([same, idle]);
+
+        Assert.Equal(
+            [
+                (LegVerdict.Violated, "the text in 'texts/charge.same' is the text in 'texts/charge.before', so replacing one with the other changes nothing in 'src/fixture.cpp'"),
+                (LegVerdict.Violated, "the text in 'texts/depth.control-same' is the text in 'texts/depth.control-before', so replacing one with the other changes nothing in 'src/budget.hpp'"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
+        Assert.Empty(writes.Written);
+    }
+
+    /// <summary>
+    /// A before-text its site does not hold exactly once is violated before anything of the arm is built or written,
+    /// saying how often it occurs and nothing else: no times, where the site moved under the arm; twice, where the arm
+    /// does not say which it hits; and a paired control's, counted in the site as the tree holds it.
+    /// </summary>
+    [Fact]
+    public async Task ABeforeTextNotThereExactlyOnce_IsViolated_SayingHowOften()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(sweep.Harness.FileSystem);
+        sweep.SiteFiles = writes;
+
+        var moved = DepthType with { Id = "depth-moved", Own = DepthType.Own with { Before = "texts/depth.after", After = "texts/depth.before" } };
+        var twice = ChargeBound with { Id = "charge-twice", Line = 6, Own = ChargeBound.Own with { Before = "texts/twice.before" } };
+        var control = DepthType with { Id = "depth-control", Line = 9, Control = new PairedControl("texts/depth.after", "texts/depth.control-after", 10) };
+
+        var entry = await sweep.RunAsync([moved, twice, control]);
+
+        Assert.Equal(
+            [
+                (LegVerdict.Violated, "the text in 'texts/depth.after' occurs 0 time(s) in 'src/budget.hpp', where it must occur exactly once"),
+                (LegVerdict.Violated, "the text in 'texts/twice.before' occurs 2 time(s) in 'src/fixture.cpp', where it must occur exactly once"),
+                (LegVerdict.Violated, "the text in 'texts/depth.after' occurs 0 time(s) in 'src/budget.hpp', where it must occur exactly once"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
+        Assert.Empty(writes.Written);
+    }
+
+    /// <summary>
+    /// A site that is no file at all - the worker's copy does not hold it, and the sweep's reading of the tree holds it
+    /// under no spelling - is violated before anything of the arm is built, said missing and nothing else.
+    /// </summary>
+    [Fact]
+    public async Task ASiteThatIsNoFile_IsViolated_SaidMissing()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+
+        var entry = await sweep.RunAsync([ChargeBound with { Id = "charge-nowhere", Own = ChargeBound.Own with { Site = "src/nowhere.cpp" } }]);
+
+        Assert.Equal(
+            (LegVerdict.Violated, "site 'src/nowhere.cpp' is not a file in the worker's copy of the tree"),
+            (entry.Arms[0].Verdict, entry.Arms[0].Detail));
+        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -1282,6 +1402,18 @@ public sealed class MutationLegRunnerTests
                 ReportWritten = true,
                 Report = JUnitReport.Read($"<testsuites><testsuite name=\"Fixture\">{cases}</testsuite></testsuites>"),
             };
+        }
+    }
+
+    /// <summary>The real file system, recording each file written through it.</summary>
+    private sealed class RecordingWrites(IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public ConcurrentQueue<string> Written { get; } = new();
+
+        public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        {
+            Written.Enqueue(path);
+            return base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
         }
     }
 

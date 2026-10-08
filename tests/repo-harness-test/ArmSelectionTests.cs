@@ -119,4 +119,33 @@ public sealed class ArmSelectionTests
         Assert.Equal(["spare"], ArmSelection.DrivenNowhere(["linux-x64", "linux-arm64"], every, scopes).Select(arm => arm.Id));
         Assert.Empty(ArmSelection.DrivenNowhere(["linux-x64", "windows-x64"], every, scopes));
     }
+
+    /// <summary>
+    /// A selection none of whose arms runs on any selected leg is a usage error, naming each arm with the legs its S row
+    /// names: every leg would be skipped, and the sweep would pass having driven nothing. One that drives an arm
+    /// somewhere is not refused, whatever arms it drives nowhere.
+    /// </summary>
+    [Fact]
+    public void ASelectionDrivingNoArmOnAnySelectedLeg_IsAUsageError_NamingEachArmAndWhereItRuns()
+    {
+        var scopes = ArmSelection.Scopes(Config, Registry, []);
+        var scoped = ArmSelection.Resolve(Registry, ["depth,spare"]);
+
+        var refusal = Assert.Throws<HarnessException>(() => ArmSelection.RequireDriven(["windows-x64"], ArmSelection.Resolve(Registry, ["depth"]), scopes));
+        var both = Assert.Throws<HarnessException>(() => ArmSelection.RequireDriven([], scoped, scopes));
+
+        Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "The sweep would drive no arm, so nothing was run: no arm selected runs on a selected leg (windows-x64), and a sweep that drove none would pass having proved nothing.",
+                "  - arm 'depth' runs where its S row, line 5, names: linux",
+                "Name a leg an arm runs on with --legs, or an arm these legs run with --arms."),
+            refusal.Message);
+        Assert.Contains("  - arm 'depth' runs where its S row, line 5, names: linux", both.Message, StringComparison.Ordinal);
+        Assert.Contains("  - arm 'spare' runs where its S row, line 8, names: windows-x64", both.Message, StringComparison.Ordinal);
+
+        ArmSelection.RequireDriven(["windows-x64"], scoped, scopes);
+        ArmSelection.RequireDriven(["linux-x64"], ArmSelection.Resolve(Registry, null), scopes);
+    }
 }
