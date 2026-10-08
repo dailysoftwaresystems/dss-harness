@@ -24,7 +24,7 @@ public sealed class FetchedSourcesTests
         var deps = temp.Combine("build", "_deps");
         var googletest = Directory.CreateDirectory(Path.Combine(deps, "googletest-src")).FullName;
         var json = Directory.CreateDirectory(temp.Combine("opt", "json")).FullName;
-        var worker = temp.Combine("repo.mutation-x86_64-gcc-debug-1");
+        var worker = temp.Combine("repo.mutation-357e24cw-1");
 
         var fetched = FetchedSources.Of(Record(deps, ("JSON", json), ("GOOGLETEST", string.Empty)), harness.FileSystem);
 

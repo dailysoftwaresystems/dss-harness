@@ -10,8 +10,8 @@ public sealed class RemovalAsideTests
     public void ADirectorysAside_IsBesideIt_HiddenUnderItsOwnName()
     {
         using var temp = new TempDirectory();
-        var directory = temp.Combine("repo.mutation-x86_64-gcc-debug-1");
-        var aside = temp.Combine(".repo.mutation-x86_64-gcc-debug-1.removing");
+        var directory = temp.Combine("repo.mutation-357e24cw-1");
+        var aside = temp.Combine(".repo.mutation-357e24cw-1.removing");
 
         Assert.Equal(aside, RemovalAside.Of(directory));
         Assert.Equal(aside, RemovalAside.Of(directory + Path.DirectorySeparatorChar));

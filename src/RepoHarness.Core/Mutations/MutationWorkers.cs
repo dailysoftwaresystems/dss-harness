@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
@@ -11,28 +13,46 @@ namespace RepoHarness.Core.Mutations;
 
 /// <summary>
 /// One family of the mutation workers kept beside a tree: those a sweep of one variant keeps there, or those a self-test
-/// of that variant does - each <c>&lt;tree&gt;.mutation-&lt;name&gt;-&lt;n&gt;</c>, numbered from 1, the name the
-/// variant's own or, for a self-test's, <see cref="SelfTestPrefix"/> and the variant's.
+/// of that variant does - each <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, numbered from 1: the key
+/// its variant's (<see cref="MutationWorkers.KeyOf"/>), the mark <see cref="OwnMark"/> for the variant's own workers
+/// and <see cref="SelfTestMark"/> for its self-test's.
 /// </summary>
 /// <param name="TreeRoot">The tree the workers are kept beside.</param>
-/// <param name="Variant">The variant's directory name.</param>
+/// <param name="Key">The variant's key: <see cref="KeyLength"/> hexadecimal digits, in lower case.</param>
 /// <param name="SelfTest">Whether they are a self-test's, copies of the fixture this tool carries rather than of the tree.</param>
-public sealed record WorkerFamily(string TreeRoot, string Variant, bool SelfTest = false)
+/// <remarks>
+/// A key, never the variant's name: a worker is a second tree, built as deep as the first, so on a machine whose paths
+/// are bounded every character its name adds is one the tree's own path must leave free. Spelt out, a variant's name
+/// stood in a worker's path twice - in its name, and in the build directory within it - and a repository whose path
+/// budget is reckoned to the character had room for neither. A worker's name adds the same few characters whatever
+/// its variant is called, and which leg a worker is the lines of the sweep that makes it, and of the clean that
+/// removes it, say.
+/// </remarks>
+public sealed record WorkerFamily(string TreeRoot, string Key, bool SelfTest = false)
 {
-    /// <summary>What a self-test's family adds before its variant's name, which no variant's starts with: a processor's name comes first in one.</summary>
-    public const string SelfTestPrefix = "self-test-";
+    /// <summary>How many characters a variant's key is.</summary>
+    public const int KeyLength = 7;
 
-    /// <summary>The name its workers are kept under, before each one's number.</summary>
-    public string Name => SelfTest ? SelfTestPrefix + Variant : Variant;
+    /// <summary>What follows the key in the name of a variant's own workers, which its sweep drives its arms in.</summary>
+    public const char OwnMark = 'w';
+
+    /// <summary>What follows the key in the name of the workers of a variant's self-test.</summary>
+    public const char SelfTestMark = 's';
+
+    /// <summary>The digits a key is written in.</summary>
+    private const string KeyDigits = "0123456789abcdef";
+
+    /// <summary>The name its workers are kept under, before each one's number: the variant's key, then the family's mark.</summary>
+    public string Name => Key + (SelfTest ? SelfTestMark : OwnMark);
 
     /// <summary>What every worker of the family is named after: its path, before the hyphen and the worker's number.</summary>
     public string Root => HostCopies.InFamily(TreeRoot, HostCopies.MutationSuffix, Name);
 
     /// <summary>
-    /// The key a sweep of the variant is locked by, its self-test with it: what the variant's own workers are named
-    /// after, so a sweep and a self-test of one leg never run at once.
+    /// The key a sweep of the variant is locked by, its self-test with it: the variant's key with no mark, which no
+    /// worker is named, so a sweep and a self-test of one leg never run at once.
     /// </summary>
-    public string SweepKey => HostCopies.InFamily(TreeRoot, HostCopies.MutationSuffix, Variant);
+    public string SweepKey => HostCopies.InFamily(TreeRoot, HostCopies.MutationSuffix, Key);
 
     /// <summary>Where worker <paramref name="number"/> of the family is kept.</summary>
     /// <param name="number">The worker's number, from 1.</param>
@@ -43,29 +63,35 @@ public sealed record WorkerFamily(string TreeRoot, string Variant, bool SelfTest
         return Root + "-" + number.ToString(CultureInfo.InvariantCulture);
     }
 
-    /// <summary>The family of <paramref name="treeRoot"/> whose workers are kept under <paramref name="name"/>.</summary>
+    /// <summary>
+    /// The family of <paramref name="treeRoot"/> whose workers are kept under <paramref name="name"/>, or
+    /// <see langword="null"/> where it is spelt as no family's: a key and one of the two marks, and nothing else, so a
+    /// family's name is spelt one way.
+    /// </summary>
     /// <param name="treeRoot">The tree the workers are kept beside.</param>
     /// <param name="name">The name the workers are kept under, before each one's number.</param>
-    public static WorkerFamily Named(string treeRoot, string name)
+    public static WorkerFamily? Named(string treeRoot, string name)
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        return name.StartsWith(SelfTestPrefix, StringComparison.Ordinal) && name.Length > SelfTestPrefix.Length
-            ? new WorkerFamily(treeRoot, name[SelfTestPrefix.Length..], SelfTest: true)
-            : new WorkerFamily(treeRoot, name);
+        return name.Length == KeyLength + 1
+            && name.AsSpan(0, KeyLength).IndexOfAnyExcept(KeyDigits) < 0
+            && name[KeyLength] is OwnMark or SelfTestMark
+            ? new WorkerFamily(treeRoot, name[..KeyLength], name[KeyLength] == SelfTestMark)
+            : null;
     }
 }
 
 /// <summary>
 /// Where a leg's mutation workers are kept, and the lock a sweep of the leg takes: each worker a copy beside the leg's
-/// tree, named for the leg's variant and the worker's number, in a family of copies of its own.
+/// tree, named by the key of the leg's variant and the worker's number, in a family of copies of its own.
 /// </summary>
 /// <remarks>
 /// <para>
-/// A worker is <c>&lt;tree&gt;.mutation-&lt;variant&gt;-&lt;n&gt;</c>, numbered from 1, its build directory the variant's
+/// A worker is <c>&lt;tree&gt;.mutation-&lt;key&gt;w-&lt;n&gt;</c>, numbered from 1, its build directory the variant's
 /// own within it, as the leg's is within the tree. It stays between sweeps, synced again by content before each, so its
 /// build is warm: the sweep only ever reads the tree, and builds and mutates in its workers alone. A self-test's workers
-/// are kept the same way, in a family of their own (<see cref="WorkerFamily.SelfTestPrefix"/>): copies of the fixture
+/// are kept the same way, in a family of their own (<see cref="WorkerFamily.SelfTestMark"/>): copies of the fixture
 /// this tool carries, beside the tree of the leg whose toolchain builds them.
 /// </para>
 /// <para>
@@ -111,16 +137,30 @@ public static class MutationWorkers
     public static ICopyClaims CopyClaims(IFileSystem fileSystem, IHarnessOutput output, IProcessIdentity identity)
         => new WorkerClaims(fileSystem, output, identity, MutationService.CommandName);
 
+    /// <summary>
+    /// The key <paramref name="variant"/>'s workers are named by: the first <see cref="WorkerFamily.KeyLength"/>
+    /// hexadecimal digits, in lower case, of the SHA-256 of the name its build directory is kept under.
+    /// </summary>
+    /// <param name="variant">The leg's variant.</param>
+    /// <remarks>
+    /// Derived from the name alone, so the machine that dispatches a leg and the host that sweeps it name its workers
+    /// alike. Two variants of one tree whose names come to one key - a chance in hundreds of millions for a pair - share
+    /// their workers and their lock, and neither is judged on the other's: each sweep syncs a worker again by content
+    /// and builds in its own variant's directory within it, and a sweep of one holds off the other's, saying whose it is.
+    /// </remarks>
+    public static string KeyOf(VariantKey variant)
+    {
+        ArgumentNullException.ThrowIfNull(variant);
+
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(variant.DirectoryName)))[..WorkerFamily.KeyLength];
+    }
+
     /// <summary>The family of workers a sweep of <paramref name="variant"/> keeps beside <paramref name="treeRoot"/>, or its self-test does.</summary>
     /// <param name="treeRoot">The tree the workers are kept beside.</param>
     /// <param name="variant">The leg's variant.</param>
     /// <param name="selfTest">Whether the family is the self-test's.</param>
     public static WorkerFamily Of(string treeRoot, VariantKey variant, bool selfTest = false)
-    {
-        ArgumentNullException.ThrowIfNull(variant);
-
-        return new WorkerFamily(treeRoot, variant.DirectoryName, selfTest);
-    }
+        => new(treeRoot, KeyOf(variant), selfTest);
 
     /// <summary>Where worker <paramref name="number"/> of <paramref name="variant"/> copies <paramref name="treeRoot"/>.</summary>
     /// <param name="treeRoot">The tree the worker copies.</param>
@@ -130,8 +170,9 @@ public static class MutationWorkers
 
     /// <summary>
     /// The family and the number of the worker kept under <paramref name="name"/> in the mutation family - what follows
-    /// <see cref="HostCopies.MutationSuffix"/> - or <see langword="null"/> where it is spelt as no worker: its name ends
-    /// in a hyphen and its number, in digits alone and never a leading zero, so a worker's name is spelt one way.
+    /// <see cref="HostCopies.MutationSuffix"/> - or <see langword="null"/> where it is spelt as no worker: its family's
+    /// name (<see cref="WorkerFamily.Named"/>), a hyphen and its number, in digits alone and never a leading zero, so a
+    /// worker's name is spelt one way.
     /// </summary>
     /// <param name="name">The name the copy is kept under.</param>
     public static (string Family, int Number)? Named(string name)
@@ -145,21 +186,23 @@ public static class MutationWorkers
             && hyphen < name.Length - 1
             && name[hyphen + 1] != '0'
             && int.TryParse(name[(hyphen + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            && WorkerFamily.Named(string.Empty, name[..hyphen]) is not null
             ? (name[..hyphen], number)
             : null;
     }
 
     /// <summary>
-    /// The name of the tree a directory named <paramref name="name"/> is a mutation worker of - what comes before
-    /// <see cref="HostCopies.MutationSuffix"/> in it - or <see langword="null"/> where it is named as no worker. So a
-    /// worker kept beside a worktree, a copy with a repository of its own, is never taken for a worktree.
+    /// The name of the tree a directory named <paramref name="name"/> is a mutation worker of - what comes before the
+    /// last <see cref="HostCopies.MutationSuffix"/> in it, a worker's name holding none - or <see langword="null"/>
+    /// where it is named as no worker. So a worker kept beside a worktree, a copy with a repository of its own, is never
+    /// taken for a worktree.
     /// </summary>
     /// <param name="name">A directory's own name, with no path before it.</param>
     public static string? TreeNamed(string name)
     {
         ArgumentNullException.ThrowIfNull(name);
 
-        var at = name.IndexOf(HostCopies.MutationSuffix, StringComparison.Ordinal);
+        var at = name.LastIndexOf(HostCopies.MutationSuffix, StringComparison.Ordinal);
 
         return at > 0 && Named(name[(at + HostCopies.MutationSuffix.Length)..]) is not null ? name[..at] : null;
     }

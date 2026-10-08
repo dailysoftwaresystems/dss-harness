@@ -294,8 +294,8 @@ public sealed class WorktreeServiceTests
         var created = await harness.WorktreeService.CreateAsync(temp.Path, "wt", useRandomName: false, token);
         Assert.True(created.Succeeded, created.Outcome.Message);
 
-        await WorkerAsync(harness, created.Path + ".mutation-x86_64-gcc-debug-1", token);
-        await WorkerAsync(harness, Path.Combine(Path.GetDirectoryName(created.Path)!, "gone.mutation-self-test-x86_64-gcc-debug-2"), token);
+        await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", token);
+        await WorkerAsync(harness, Path.Combine(Path.GetDirectoryName(created.Path)!, "gone.mutation-357e24cs-2"), token);
 
         // What the listing itself says, with the detail it gives when asked for it: of a worker, nothing.
         var before = (Out: harness.StandardOutput.ToString().Length, Error: harness.StandardError.ToString().Length);
@@ -306,7 +306,7 @@ public sealed class WorktreeServiceTests
         Assert.DoesNotContain("wt.mutation-", said, StringComparison.Ordinal);
         Assert.DoesNotContain("holds a .git entry", said, StringComparison.Ordinal);
         Assert.Contains(
-            "list-worktree: WARN - 'gone.mutation-self-test-x86_64-gcc-debug-2' is a mutation worker of the worktree 'gone', which is gone: "
+            "list-worktree: WARN - 'gone.mutation-357e24cs-2' is a mutation worker of the worktree 'gone', which is gone: "
             + "'dssharness delete-worktree gone' removes it.",
             said,
             StringComparison.Ordinal);
@@ -327,9 +327,9 @@ public sealed class WorktreeServiceTests
 
         Assert.True(created.Succeeded && other.Succeeded, created.Outcome.Message + other.Outcome.Message);
 
-        var selfTest = await WorkerAsync(harness, created.Path + ".mutation-self-test-x86_64-gcc-debug-1", cancellationToken);
-        var swept = await WorkerAsync(harness, created.Path + ".mutation-x86_64-gcc-debug-1", cancellationToken);
-        var anothers = await WorkerAsync(harness, other.Path + ".mutation-x86_64-gcc-debug-1", cancellationToken);
+        var selfTest = await WorkerAsync(harness, created.Path + ".mutation-357e24cs-1", cancellationToken);
+        var swept = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
+        var anothers = await WorkerAsync(harness, other.Path + ".mutation-357e24cw-1", cancellationToken);
         var held = harness.FileSystem.DirectorySize(selfTest) + harness.FileSystem.DirectorySize(swept);
 
         // A directory under a worker's name that no sync made is somebody's; and a claim a sweep died holding holds nothing.
@@ -374,7 +374,7 @@ public sealed class WorktreeServiceTests
 
         Assert.True(created.Succeeded, created.Outcome.Message);
 
-        var worker = await WorkerAsync(harness, created.Path + ".mutation-x86_64-gcc-debug-1", cancellationToken);
+        var worker = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
         var copies = new WorkerCopies(SyncKit.Service(harness), harness.LocalTransport, harness.FileSystem, harness.Output, harness.Identity, MutationService.CommandName);
         var sweep = RunId.New();
 
@@ -442,7 +442,7 @@ public sealed class WorktreeServiceTests
 
         Assert.True(created.Succeeded, created.Outcome.Message);
 
-        var worker = await WorkerAsync(harness, created.Path + ".mutation-x86_64-gcc-debug-1", cancellationToken);
+        var worker = await WorkerAsync(harness, created.Path + ".mutation-357e24cw-1", cancellationToken);
         var blind = new CannotWeigh(harness.FileSystem, worker);
         var service = new WorktreeService(harness.ContextLoader, harness.GitClient, blind, harness.PathBudget, harness.Platform, harness.Output, harness.HostCopies, harness.Local(blind));
 
@@ -486,8 +486,8 @@ public sealed class WorktreeServiceTests
 
         Assert.True(free.Succeeded && busy.Succeeded, free.Outcome.Message + busy.Outcome.Message);
 
-        var worker = await WorkerAsync(harness, free.Path + ".mutation-x86_64-gcc-debug-1", cancellationToken);
-        var held = await WorkerAsync(harness, busy.Path + ".mutation-x86_64-gcc-debug-1", cancellationToken);
+        var worker = await WorkerAsync(harness, free.Path + ".mutation-357e24cw-1", cancellationToken);
+        var held = await WorkerAsync(harness, busy.Path + ".mutation-357e24cw-1", cancellationToken);
         var size = harness.FileSystem.DirectorySize(worker);
         var copies = new WorkerCopies(SyncKit.Service(harness), harness.LocalTransport, harness.FileSystem, harness.Output, harness.Identity, MutationService.CommandName);
         var sweep = RunId.New();

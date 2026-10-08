@@ -96,7 +96,7 @@ public sealed class WorkerCopiesTests
 
         // By number, as it counts: the tenth after the third, where its name sorts it after the first.
         Assert.Equal([1, 2, 3, 10], workers.Select(worker => worker.Number));
-        Assert.All(workers, worker => Assert.Equal(Variant.DirectoryName, worker.Family));
+        Assert.All(workers, worker => Assert.Equal(MutationWorkers.Of(tree, Variant).Name, worker.Family));
         Assert.Equal([true, true, false, false], workers.Select(worker => worker.Made));
         Assert.Equal(MutationWorkers.PathOf(tree, Variant, 1), workers[0].Path);
         Assert.True(workers[0].Bytes > 0);
@@ -133,15 +133,19 @@ public sealed class WorkerCopiesTests
         weighed.Weighed.Clear();
 
         var every = await copies.ListBesideAsync(tree, _ => true, cancellationToken);
+        var own = MutationWorkers.Of(tree, Variant).Name;
+        var others = MutationWorkers.Of(tree, sanitized).Name;
 
+        // By the name each family's workers are kept under, as the disk sorts them, and then by number.
         Assert.Equal(
-            [(selfTest.Name, 1), (Variant.DirectoryName, 1), (Variant.DirectoryName, 2), (sanitized.DirectoryName, 1)],
+            new[] { (selfTest.Name, 1), (own, 2), (own, 1), (others, 1) }.OrderBy(worker => worker.Item1, StringComparer.Ordinal).ThenBy(worker => worker.Item2),
             every.Select(worker => (worker.Family, worker.Number)));
+        Assert.Equal(3, every.Select(worker => worker.Family).Distinct().Count());
         Assert.Equal(4, weighed.Weighed.Count);
 
         weighed.Weighed.Clear();
 
-        var asked = await copies.ListBesideAsync(tree, family => family == sanitized.DirectoryName, cancellationToken);
+        var asked = await copies.ListBesideAsync(tree, family => family == others, cancellationToken);
 
         Assert.Equal([MutationWorkers.PathOf(tree, sanitized, 1)], asked.Select(worker => worker.Path));
         Assert.Equal([Path.GetFileName(MutationWorkers.PathOf(tree, sanitized, 1))], weighed.Weighed.Select(Path.GetFileName));

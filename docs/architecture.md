@@ -2498,8 +2498,18 @@ them all.
 
 ### Workers
 
-A leg's workers are copies of its tree kept beside it, `<tree>.mutation-<variant>-<n>`, a family
-of copies of their own. No worktree's copy is named into it, since a copy's name holds no dot; and
+A leg's workers are copies of its tree kept beside it, `<tree>.mutation-<key>w-<n>`, a family
+of copies of their own. The key is the first 7 hexadecimal digits of the SHA-256 of the leg's
+variant, as its build directory is named, so the machine that dispatches a leg and the host that
+sweeps it name its workers alike - and a key, never the variant's name. A worker is a second tree,
+built as deep as the first, so where paths are bounded every character its name adds is one the
+tree's own path must leave free; spelt out, a variant's name stood in a worker's path twice, in
+its name and in the build directory within it, and a repository whose path budget is reckoned to
+the character had room for neither. A worker's name adds twenty characters whatever its variant is
+called, and the lines of a sweep and of a `clean` say which leg a worker is. Two variants of one
+tree whose names came to one key would share their workers and their lock, and neither would be
+judged on the other's: each sweep syncs a worker again by content and builds in its own variant's
+directory within it. No worktree's copy is named into the family, since a copy's name holds no dot; and
 a worker kept beside a worktree's copy on a host, `<repositoryPath>.worktree-<name>.mutation-...`,
 is spelt as no copy's name, so a listing of the host's worktree copies never holds it. Nor is a
 worker kept beside a worktree taken for a worktree, though it holds a repository of its own:
@@ -2678,7 +2688,7 @@ The fixture is written where this tool keeps its own data (see *Heavy legs share
 `<user data>/dssharness/mutation-fixture`, each file only where it differs and under a lock every
 process on the machine takes: one fixture for every repository on the machine. Its workers are
 kept apart from it, beside the tree of the leg self-tested, in a family of their own -
-`<tree>.mutation-self-test-<variant>-<n>`, a few megabytes each. Kept beside the fixture they were
+`<tree>.mutation-<key>s-<n>`, a few megabytes each. Kept beside the fixture they were
 every repository's at once, one's toolchain refusing the build directory another's had made, with
 nothing to remove them; beside the leg's tree they are that repository's, counted by its room,
 removed by a `clean` of the leg, and with its worktree or its host's copy. A self-test asks no

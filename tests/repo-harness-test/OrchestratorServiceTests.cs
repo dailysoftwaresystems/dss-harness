@@ -114,7 +114,7 @@ public sealed class OrchestratorServiceTests
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
-        var worker = await WorkerAsync(kit, worktree + ".mutation-x86_64-gcc-debug-1");
+        var worker = await WorkerAsync(kit, worktree + ".mutation-357e24cw-1");
 
         var listed = await kit.Harness.WorktreeService.ListAsync(kit.Main, Token);
 
@@ -131,7 +131,7 @@ public sealed class OrchestratorServiceTests
         Assert.True((await kit.DeleteAsync("ag", apply: true, discard: true)).Succeeded);
         Assert.False(Directory.Exists(worker));
 
-        var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-x86_64-gcc-debug-1");
+        var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-357e24cw-1");
         var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
 
         Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
@@ -153,7 +153,7 @@ public sealed class OrchestratorServiceTests
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
-        var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-x86_64-gcc-debug-1");
+        var left = await WorkerAsync(kit, kit.Worktree("old") + ".mutation-357e24cw-1");
         var copies = new RepoHarness.Core.Mutations.WorkerCopies(
             SyncKit.Service(kit.Harness),
             kit.Harness.LocalTransport,
@@ -165,7 +165,7 @@ public sealed class OrchestratorServiceTests
 
         Assert.Empty(await kit.Harness.WorktreeService.ListAsync(kit.Main, Token));
         Assert.Contains(
-            "list-worktree: WARN - 'o1/old.mutation-x86_64-gcc-debug-1' is a mutation worker of the worktree 'o1/old', which is gone: "
+            "list-worktree: WARN - 'o1/old.mutation-357e24cw-1' is a mutation worker of the worktree 'o1/old', which is gone: "
             + "'dssharness delete-worktree o1/old' removes it.",
             kit.Harness.StandardError.ToString(),
             StringComparison.Ordinal);
@@ -205,7 +205,7 @@ public sealed class OrchestratorServiceTests
 
         Directory.CreateDirectory(notes);
         File.WriteAllText(Path.Combine(notes, "notes.txt"), "mine");
-        await WorkerAsync(kit, notes + ".mutation-x86_64-gcc-debug-1");
+        await WorkerAsync(kit, notes + ".mutation-357e24cw-1");
 
         var deleted = await kit.Harness.OrchestratorService.DeleteAsync(kit.Main, "o1", deleteEvidence: true, Token);
 

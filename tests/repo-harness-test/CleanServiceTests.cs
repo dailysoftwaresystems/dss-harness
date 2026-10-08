@@ -386,7 +386,7 @@ public sealed class CleanServiceTests
                 + string.Join(", ", Sorted(own, selfTest).Select(path => $"'{path}'")),
                 said,
                 StringComparison.Ordinal);
-            Assert.Contains($"the mutation workers of '{renamed.DirectoryName}', which no leg here builds, were left, as a sweep holds them: ", said, StringComparison.Ordinal);
+            Assert.Contains($"the mutation workers keyed '{MutationWorkers.KeyOf(renamed)}', of a variant no leg here builds, were left, as a sweep holds them: ", said, StringComparison.Ordinal);
             Assert.Contains(sweep.Value, said, StringComparison.Ordinal);
             Assert.All(new[] { own, selfTest, orphanAside }, path => Assert.False(Directory.Exists(path), path));
             Assert.All(new[] { orphan, orphanSelfTest }, path => Assert.True(Directory.Exists(path), path));
@@ -568,8 +568,8 @@ public sealed class CleanServiceTests
         var hosts = new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command));
         var transport = Substitute.For<ISyncTransport>();
         var transports = Substitute.For<ISyncTransportFactory>();
-        var gone = HostTree + ".mutation-arm64-none-debug-1";
-        var held = HostTree + ".mutation-arm64-none-debug-2";
+        var gone = HostTree + ".mutation-aa1fa54w-1";
+        var held = HostTree + ".mutation-aa1fa54w-2";
 
         transport.RootExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
         transport.RemoveWorkersAsync(HostTree, dryRun, Arg.Any<CancellationToken>()).Returns(new WorkersRemoval(

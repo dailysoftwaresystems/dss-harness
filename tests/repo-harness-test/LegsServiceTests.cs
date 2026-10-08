@@ -603,7 +603,7 @@ public sealed class LegsServiceTests
     [Fact]
     public async Task ASweep_IsPlacedByTheRoomItsFirstWorkersBuildStillNeeds()
     {
-        const string Worker = "/home/pi/repo.mutation-arm64-none-debug-1/build/arm64-none-debug";
+        const string Worker = "/home/pi/repo.mutation-aa1fa54w-1/build/arm64-none-debug";
 
         var fixture = Create(
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },

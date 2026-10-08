@@ -186,7 +186,7 @@ public interface ISyncTransport
 
     /// <summary>
     /// Removes the mutation workers kept beside the tree at <paramref name="root"/> - each a copy of it a sweep made,
-    /// of whichever variant, named <c>&lt;root&gt;.mutation-&lt;name&gt;</c> - whether the tree itself is still there or
+    /// of whichever variant, named <c>&lt;root&gt;.mutation-&lt;name&gt;-&lt;n&gt;</c> - whether the tree itself is still there or
     /// not, with what an unfinished removal of one left aside. A worker a sweep still running holds is left, as is one
     /// whose removal stops at something held, and a directory nothing says the harness made; each is answered for.
     /// </summary>

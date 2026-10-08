@@ -403,8 +403,8 @@ public sealed class HostCopiesTests
         var record = Record(harness);
 
         var onPi = hosts.Combine("pi", "repo.worktree-feature");
-        var free = onPi + ".mutation-x86_64-gcc-debug-1";
-        var held = onPi + ".mutation-x86_64-gcc-debug-2";
+        var free = onPi + ".mutation-357e24cw-1";
+        var held = onPi + ".mutation-357e24cw-2";
 
         foreach (var made in new[] { onPi, free, held })
         {
@@ -414,7 +414,7 @@ public sealed class HostCopiesTests
 
         // A copy that is gone itself, with a worker a sweep left beside where it was, and a directory nobody made.
         var onMac = hosts.Combine("mac", "repo.worktree-feature");
-        var orphan = onMac + ".mutation-x86_64-gcc-debug-1";
+        var orphan = onMac + ".mutation-357e24cw-1";
         var somebodys = onMac + ".mutation-notes";
 
         await Local(harness).CreateRootAsync(orphan, CopyMark.Complete, cancellationToken);
@@ -454,7 +454,7 @@ public sealed class HostCopiesTests
         claims.Held.Clear();
 
         // A worker left beside the worktree itself, which is gone: deleting it again removes that too, and says both.
-        var here = created.Path + ".mutation-x86_64-gcc-debug-1";
+        var here = created.Path + ".mutation-357e24cw-1";
 
         await Local(harness).CreateRootAsync(here, CopyMark.Complete, cancellationToken);
 
@@ -1060,15 +1060,15 @@ public sealed class HostCopiesTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var tree = hosts.Combine("src", "repo");
 
-        await transport.CreateRootAsync(HostCopies.InFamily(tree, HostCopies.MutationSuffix, "x86_64-gcc-debug-1"), CopyMark.Complete, cancellationToken);
-        await transport.CreateRootAsync(HostCopies.InFamily(tree, HostCopies.MutationSuffix, "x86_64-gcc-debug-2"), CopyMark.Complete, cancellationToken);
+        await transport.CreateRootAsync(HostCopies.InFamily(tree, HostCopies.MutationSuffix, "357e24cw-1"), CopyMark.Complete, cancellationToken);
+        await transport.CreateRootAsync(HostCopies.InFamily(tree, HostCopies.MutationSuffix, "357e24cw-2"), CopyMark.Complete, cancellationToken);
         await transport.CreateRootAsync(HostCopies.ForWorktree(tree, "alpha"), CopyMark.Complete, cancellationToken);
 
         var workers = await transport.ListCopiesAsync(tree, HostCopies.MutationSuffix, cancellationToken);
         var worktrees = await transport.ListCopiesAsync(tree, cancellationToken);
 
-        Assert.Equal(["x86_64-gcc-debug-1", "x86_64-gcc-debug-2"], workers.Select(copy => copy.Name));
-        Assert.Equal([tree + ".mutation-x86_64-gcc-debug-1", tree + ".mutation-x86_64-gcc-debug-2"], workers.Select(copy => copy.Path));
+        Assert.Equal(["357e24cw-1", "357e24cw-2"], workers.Select(copy => copy.Name));
+        Assert.Equal([tree + ".mutation-357e24cw-1", tree + ".mutation-357e24cw-2"], workers.Select(copy => copy.Path));
         Assert.All(workers, copy => Assert.Equal(CopyOrigin.Made, copy.Origin));
         Assert.Equal(["alpha"], worktrees.Select(copy => copy.Name));
     }
@@ -1087,9 +1087,9 @@ public sealed class HostCopiesTests
         var main = hosts.Combine("src", "repo");
 
         await Local(harness).CreateRootAsync(main + ".worktree-alpha", CopyMark.Complete, cancellationToken);
-        await Local(harness).CreateRootAsync(main + ".worktree-alpha.mutation-x86_64-gcc-debug-1", CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(main + ".worktree-alpha.mutation-357e24cw-1", CopyMark.Complete, cancellationToken);
         await Local(harness).CreateRootAsync(main + ".worktree-lead--a1", CopyMark.Complete, cancellationToken);
-        await Local(harness).CreateRootAsync(main + ".worktree-lead--a1.mutation-self-test-x86_64-gcc-debug-2", CopyMark.Complete, cancellationToken);
+        await Local(harness).CreateRootAsync(main + ".worktree-lead--a1.mutation-357e24cs-2", CopyMark.Complete, cancellationToken);
         Directory.CreateDirectory(main + ".worktree-Mine");
         Directory.CreateDirectory(main + ".worktree-a_b");
 
@@ -1112,7 +1112,7 @@ public sealed class HostCopiesTests
     [InlineData("a b", false)]
     [InlineData("-alpha", false)]
     [InlineData("alpha-", false)]
-    [InlineData("alpha.mutation-x86_64-gcc-debug-1", false)]
+    [InlineData("alpha.mutation-357e24cw-1", false)]
     [InlineData("alpha.beta", false)]
     [InlineData("alpha\n", false)]
     public void ACopysName_IsSpeltAsAWorktreesIs(string name, bool expected)
@@ -1131,13 +1131,13 @@ public sealed class HostCopiesTests
         var harness = new HarnessFactory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var tree = hosts.Combine("src", "repo.worktree-alpha");
-        var swept = tree + ".mutation-x86_64-gcc-debug-1";
-        var selfTest = tree + ".mutation-self-test-x86_64-gcc-debug-1";
-        var held = tree + ".mutation-x86_64-msvc-debug-1";
+        var swept = tree + ".mutation-357e24cw-1";
+        var selfTest = tree + ".mutation-357e24cs-1";
+        var held = tree + ".mutation-c41a8a5w-1";
         var somebodys = tree + ".mutation-notes";
-        var aside = hosts.Combine("src", ".repo.worktree-alpha.mutation-x86_64-gcc-debug-2.removing");
-        var anothers = hosts.Combine("src", "repo.mutation-x86_64-gcc-debug-1");
-        var anothersAside = hosts.Combine("src", ".repo.mutation-x86_64-gcc-debug-2.removing");
+        var aside = hosts.Combine("src", ".repo.worktree-alpha.mutation-357e24cw-2.removing");
+        var anothers = hosts.Combine("src", "repo.mutation-357e24cw-1");
+        var anothersAside = hosts.Combine("src", ".repo.mutation-357e24cw-2.removing");
         var nobodys = hosts.Combine("src", ".repo.worktree-alpha.mutation-.removing");
 
         foreach (var made in new[] { swept, selfTest, held, anothers })
@@ -1162,8 +1162,8 @@ public sealed class HostCopiesTests
         var expected = new[] { selfTest, swept, aside }.Zip(sizes, (path, bytes) => new WorkerRemoved(path, bytes)).ToList();
         var left_ = new[]
         {
-            new WorkerLeft(somebodys, "nothing there says the harness made it, so it is yours to remove", InUse: false),
             new WorkerLeft(held, "a sweep still running holds it: run 20261007-101500-abcd, process 4242 on this machine", InUse: true),
+            new WorkerLeft(somebodys, "nothing there says the harness made it, so it is yours to remove", InUse: false),
         };
 
         var measured = await transport.RemoveWorkersAsync(tree, measureOnly: true, cancellationToken);
@@ -1178,7 +1178,7 @@ public sealed class HostCopiesTests
         Assert.Equal(expected, removed.Removed);
         Assert.Equal(left_, removed.Left);
         Assert.Equal(sizes.Sum(), removed.Bytes);
-        Assert.Equal([left_[1]], removed.InUse);
+        Assert.Equal([left_[0]], removed.InUse);
         Assert.All(new[] { swept, selfTest, aside }, path => Assert.False(Directory.Exists(path), path));
         Assert.All(new[] { held, somebodys, anothers, anothersAside, nobodys }, path => Assert.True(Directory.Exists(path), path));
         Assert.Equal([selfTest, swept], claims.Forgotten);
@@ -1201,7 +1201,7 @@ public sealed class HostCopiesTests
         var harness = new HarnessFactory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var tree = hosts.Combine("repo");
-        var held = tree + ".mutation-x86_64-gcc-debug-1";
+        var held = tree + ".mutation-357e24cw-1";
 
         await Local(harness).CreateRootAsync(held, CopyMark.Complete, cancellationToken);
 
@@ -1232,8 +1232,8 @@ public sealed class HostCopiesTests
         var harness = new HarnessFactory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var tree = hosts.Combine("repo");
-        var stuck = tree + ".mutation-x86_64-gcc-debug-1";
-        var free = tree + ".mutation-x86_64-gcc-debug-2";
+        var stuck = tree + ".mutation-357e24cw-1";
+        var free = tree + ".mutation-357e24cw-2";
 
         await Local(harness).CreateRootAsync(stuck, CopyMark.Complete, cancellationToken);
         Directory.CreateDirectory(Path.Combine(stuck, "build"));
@@ -1268,8 +1268,8 @@ public sealed class HostCopiesTests
         const string tree = "/home/dev/repo.worktree-feature";
         var asked = new List<HostAgentRequest?>();
         var answer = new WorkersRemoval(
-            [new WorkerRemoved(tree + ".mutation-x86_64-gcc-debug-1", 42)],
-            [new WorkerLeft(tree + ".mutation-x86_64-gcc-debug-2", "a sweep still running holds it: run r", InUse: true)]);
+            [new WorkerRemoved(tree + ".mutation-357e24cw-1", 42)],
+            [new WorkerLeft(tree + ".mutation-357e24cw-2", "a sweep still running holds it: run r", InUse: true)]);
 
         var answering = new ScriptedHostCommands((_, command) =>
         {
@@ -1308,8 +1308,8 @@ public sealed class HostCopiesTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = new HarnessFactory();
         var tree = hosts.Combine("repo.worktree-feature");
-        var free = tree + ".mutation-x86_64-gcc-debug-1";
-        var held = tree + ".mutation-x86_64-gcc-debug-2";
+        var free = tree + ".mutation-357e24cw-1";
+        var held = tree + ".mutation-357e24cw-2";
 
         await Local(harness).CreateRootAsync(free, CopyMark.Complete, cancellationToken);
         await Local(harness).CreateRootAsync(held, CopyMark.Complete, cancellationToken);

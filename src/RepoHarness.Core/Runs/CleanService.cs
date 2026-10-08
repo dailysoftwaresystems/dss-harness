@@ -321,10 +321,11 @@ public sealed class CleanService(
     /// </summary>
     private async Task<WorkersCleaned?> CleanWorkersAsync(HarnessContext context, PlacedLeg leg, bool dryRun, CancellationToken cancellationToken)
     {
-        var others = OtherLegsVariants(context.Config, leg);
+        var own = MutationWorkers.KeyOf(leg.Variant);
+        var others = OtherLegsKeys(context.Config, leg);
 
         // Its own, and those nothing else would ever remove: another leg's are left for that leg's clean.
-        bool Cleaned(string family) => !others.Contains(WorkerFamily.Named(leg.HostTreeRoot, family).Variant);
+        bool Cleaned(string family) => WorkerFamily.Named(leg.HostTreeRoot, family) is { } named && !others.Contains(named.Key);
 
         IReadOnlyList<WorkerCopy> workers;
         IReadOnlyList<string> asides;
@@ -378,9 +379,9 @@ public sealed class CleanService(
             var kept = new List<string>();
 
             // Each variant's workers, its self-test's with them, under the lock a sweep of that variant takes.
-            foreach (var swept in made.GroupBy(worker => WorkerFamily.Named(leg.HostTreeRoot, worker.Family).Variant, StringComparer.Ordinal))
+            foreach (var swept in made.GroupBy(worker => WorkerFamily.Named(leg.HostTreeRoot, worker.Family)!.Key, StringComparer.Ordinal))
             {
-                var family = WorkerFamily.Named(leg.HostTreeRoot, swept.Key);
+                var family = new WorkerFamily(leg.HostTreeRoot, swept.Key);
                 var holder = _runLock.HeldBy(context.Layout, MutationWorkers.SweepLock(leg.Host.Host, family, RunId.New(), CommandName), () =>
                 {
                     foreach (var worker in swept)
@@ -400,9 +401,9 @@ public sealed class CleanService(
 
                 if (holder is not null)
                 {
-                    kept.Add(string.Equals(swept.Key, leg.Variant.DirectoryName, StringComparison.Ordinal)
+                    kept.Add(string.Equals(swept.Key, own, StringComparison.Ordinal)
                         ? $"its mutation workers were left, as a sweep of the leg holds them: {holder}"
-                        : $"the mutation workers of '{swept.Key}', which no leg here builds, were left, as a sweep holds them: {holder}");
+                        : $"the mutation workers keyed '{swept.Key}', of a variant no leg here builds, were left, as a sweep holds them: {holder}");
                 }
             }
 
@@ -443,16 +444,16 @@ public sealed class CleanService(
     }
 
     /// <summary>
-    /// The variants the other legs configured for <paramref name="leg"/>'s host and tree build, by the names their
-    /// directories are kept under: whose mutation workers beside that tree are theirs to clean, and never this leg's.
+    /// The variants the other legs configured for <paramref name="leg"/>'s host and tree build, by the keys their
+    /// workers are named by: whose mutation workers beside that tree are theirs to clean, and never this leg's.
     /// </summary>
-    private static IReadOnlySet<string> OtherLegsVariants(HarnessConfig config, PlacedLeg leg)
+    private static IReadOnlySet<string> OtherLegsKeys(HarnessConfig config, PlacedLeg leg)
         => config.Legs.Values
             .Where(other => string.Equals(other.Wsl, leg.Leg.Wsl, StringComparison.Ordinal)
                 && string.Equals(other.Ssh, leg.Leg.Ssh, StringComparison.Ordinal)
                 && string.Equals(other.Worktree, leg.Leg.Worktree, StringComparison.Ordinal))
-            .Select(other => VariantKey.For(config, other, other.Os).DirectoryName)
-            .Where(variant => !string.Equals(variant, leg.Variant.DirectoryName, StringComparison.Ordinal))
+            .Select(other => MutationWorkers.KeyOf(VariantKey.For(config, other, other.Os)))
+            .Where(key => !string.Equals(key, MutationWorkers.KeyOf(leg.Variant), StringComparison.Ordinal))
             .ToHashSet(StringComparer.Ordinal);
 
     /// <summary>What a dry run says of the leg's workers: what each holds, and what an earlier removal left aside.</summary>

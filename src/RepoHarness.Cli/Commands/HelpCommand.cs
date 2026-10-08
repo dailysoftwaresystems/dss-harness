@@ -861,8 +861,12 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "Each leg is swept in worker copies of its tree, kept beside it as <tree>.mutation-<variant>-<n>, numbered from "
-            + "1: as many as workers, never more than the leg has arms to drive, and one in a WSL distribution. Before every "
+            $"Each leg is swept in worker copies of its tree, kept beside it as <tree>{HostCopies.MutationSuffix}<key>{WorkerFamily.OwnMark}-<n>, numbered "
+            + "from 1: as many as workers, never more than the leg has arms to drive, and one in a WSL distribution. The key "
+            + $"is the first {WorkerFamily.KeyLength} hexadecimal digits of the SHA-256 of the leg's variant, as its build "
+            + "directory is named: a worker's name adds twenty characters to its tree's path whatever the variant is "
+            + "called, since a worker is built as deep as the tree and a machine whose paths are bounded has no more to "
+            + "spare, and the lines of a sweep and of a clean say which leg a worker is. Before every "
             + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
             + "killed sweep left mutated is put back - and built whole before it drives an arm. The tree itself is only "
             + "ever read.");
@@ -968,7 +972,7 @@ internal static class HelpCommand
             builder,
             $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName}, "
             + "only where it differs. Its workers are kept beside the leg's own tree, as a sweep's are, in a family of "
-            + $"their own - <tree>{HostCopies.MutationSuffix}{WorkerFamily.SelfTestPrefix}<variant>-<n>, a few megabytes each - so they are "
+            + $"their own - <tree>{HostCopies.MutationSuffix}<key>{WorkerFamily.SelfTestMark}-<n>, a few megabytes each - so they are "
             + "that repository's: counted by its room, built by its toolchain, and removed by a clean of the leg, and "
             + "with its worktree or its host's copy. A self-test is placed by no room a build of the leg's tree needs, "
             + "its workers' paths are reckoned by the fixture's own longest, and a leg on a host is self-tested there "
