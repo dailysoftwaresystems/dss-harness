@@ -13,7 +13,8 @@ namespace RepoHarness.Core.Processes;
 /// </para>
 /// <para>
 /// Where a longest line is set, a line that runs longer is handed on in pieces, each a line of its own: one of at most that
-/// many characters as soon as it has them, then the next, and the rest of it once its line feed arrives. Holding a line whole
+/// many characters once more of the line arrives after them, then the next, and the rest of it once its line feed arrives -
+/// never as it fills, so a line exactly that long is still handed on whole. Holding a line whole
 /// until it ends is holding everything the child wrote until then, and a child that writes for gigabytes without a line feed
 /// would hold all of it. A piece never ends between the two halves of a surrogate pair, which written apart would each become a
 /// replacement character.

@@ -15,7 +15,9 @@ internal interface IWorkerSite
 
     /// <summary>
     /// When a file of the worker written now must be dated, so the build that follows sees it changed: past the newest
-    /// file the worker's last build left in <paramref name="buildDirectory"/>, and past now.
+    /// file the worker's last build left in <paramref name="buildDirectory"/>, and past now - or past now alone, where
+    /// that file is dated further ahead of the clock than a build waits for it: the clock went back from it, and the
+    /// build's own rule then starts from clean.
     /// </summary>
     /// <param name="buildDirectory">The worker's build directory.</param>
     DateTime Stamp(string buildDirectory);

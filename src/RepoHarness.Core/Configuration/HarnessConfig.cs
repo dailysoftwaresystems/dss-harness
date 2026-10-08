@@ -125,17 +125,17 @@ public sealed class HarnessConfig
     public List<string> WslDistros { get; init; } = [];
 
     /// <summary>
-    /// Patterns whose every match is pulled out of a build's output when <c>build --time</c> runs, so
-    /// timings come from what the build itself reported rather than from the harness guessing which
-    /// part of the wall clock was the build. Configured with none, <c>--time</c> measures the phases
-    /// itself.
+    /// Patterns whose every match on a line is pulled out of a build's output when <c>build --time</c>
+    /// runs - a line at a time, the first 10,000 marks of a phase - so timings come from what the build
+    /// itself reported rather than from the harness guessing which part of the wall clock was the
+    /// build. Configured with none, <c>--time</c> measures the phases itself.
     /// </summary>
     public List<string> BuildTimingRegex { get; init; } = [];
 
-    /// <summary>Patterns whose every match is pulled out of a predefined run's output under <c>--time</c>.</summary>
+    /// <summary>Patterns whose every match on a line is pulled out of a predefined run's output under <c>--time</c>, as a build's are.</summary>
     public List<string> RunTimingRegex { get; init; } = [];
 
-    /// <summary>Patterns whose every match is pulled out of a test's output under <c>--time</c>.</summary>
+    /// <summary>Patterns whose every match on a line is pulled out of a test's output under <c>--time</c>, as a build's are.</summary>
     /// <remarks>
     /// Separate from <see cref="BuildTimingRegex"/> because <c>test</c> builds first and then tests:
     /// one pattern list covering both would attribute a build's marks to the test phase, and the

@@ -49,7 +49,7 @@ internal static class TestCommand
 
     private static readonly Option<bool> ForceLockOption = new("--force-lock")
     {
-        Description = "Take a lock a run on another host holds. Always a human decision.",
+        Description = "Take a lock another run holds, on this host or another. Always a human decision.",
     };
 
     private static readonly Option<bool> UseStagedOption = DispatchOptions.UseStaged("Test");

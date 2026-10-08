@@ -23,16 +23,25 @@ public sealed record ArmEntry
     /// <summary>How long it took, from its admission to its record; zero for an arm no worker drove.</summary>
     public TimeSpan Duration { get; init; }
 
-    /// <summary>The worker that drove it, by number, or <see langword="null"/> where none did.</summary>
+    /// <summary>
+    /// The worker it was given to, by number - one that drove it, or one whose machine did not admit it - or
+    /// <see langword="null"/> where no worker reached it.
+    /// </summary>
     public int? Worker { get; init; }
 
-    /// <summary>How many cases its run ran, skipped ones included, or <see langword="null"/> where its report said none.</summary>
+    /// <summary>
+    /// How many cases its run ran, skipped ones included, or <see langword="null"/> where no report of a run was read:
+    /// an arm that ran nothing, or one whose report is missing or cannot be read.
+    /// </summary>
     public int? Cases { get; init; }
 
     /// <summary>How many cases it declares its run runs.</summary>
     public int DeclaredCases { get; init; }
 
-    /// <summary>The cases its run reddened, or <see langword="null"/> where its report said none.</summary>
+    /// <summary>
+    /// The cases its run reddened - none, where its report names none - or <see langword="null"/> where no report of a
+    /// run was read.
+    /// </summary>
     public IReadOnlyList<string>? Reds { get; init; }
 
     /// <summary>The cases it declares its mutation reddens.</summary>
@@ -40,7 +49,7 @@ public sealed record ArmEntry
 
     /// <summary>
     /// Where its records are - its builds' logs, its run's log and report, and its <c>arm.json</c> - or
-    /// <see langword="null"/> where it has none: no worker drove it.
+    /// <see langword="null"/> where it has none: no worker reached it.
     /// </summary>
     public string? Records { get; init; }
 }

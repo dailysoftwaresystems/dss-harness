@@ -17,7 +17,7 @@ namespace RepoHarness.Core.Runs;
 /// <summary>What a leg-running command was asked to do.</summary>
 /// <param name="Directory">The directory the command was invoked in.</param>
 /// <param name="LegNames">The legs named with <c>--legs</c>, or null when it was left out.</param>
-/// <param name="ForceLock">Whether to take a lock a run on another host holds.</param>
+/// <param name="ForceLock">Whether to take a lock another run holds, on this host or another.</param>
 /// <param name="Json">Whether the ledger is wanted as data rather than as a table.</param>
 /// <param name="UseStaged">Whether to act on what is already staged on a host, without syncing again.</param>
 /// <param name="Time">Whether to report the profile timing.</param>
@@ -551,8 +551,10 @@ public sealed class LegRunService(
     }
 
     /// <summary>
-    /// Asks the machine <paramref name="leg"/>'s work runs on to take it, where this process is on that machine,
-    /// the leg is heavy and the machine declares admission; <see langword="null"/> where any of those is not so.
+    /// Asks the machine <paramref name="leg"/>'s work runs on to take it, where this process is on that machine, the
+    /// machine declares admission, and the leg is heavy - or runs in a WSL distribution under a workload admitting each
+    /// unit of its work, which this machine takes whole, its units asking nothing there; <see langword="null"/> where
+    /// any of those is not so.
     /// </summary>
     /// <remarks>
     /// Asked by a process on the machine the work runs on, which outlives that work: this one, for a leg of this machine

@@ -224,15 +224,17 @@ public sealed class TestInvocation
     public Dictionary<string, string>? Env { get; init; }
 
     /// <summary>
-    /// Pattern proving the runner actually ran, matched against the runner's own output and
-    /// never against anything the harness wrote. Required: a zero exit code with no match is
+    /// Pattern proving the runner actually ran, matched against each line of the runner's own
+    /// output, one line at a time, and never against anything the harness wrote. Required: a zero
+    /// exit code with no match is
     /// reported as <c>unwitnessed</c>, because a result with no evidence behind it is
     /// indistinguishable from never having run.
     /// </summary>
     public string? SuccessPattern { get; init; }
 
     /// <summary>
-    /// Pattern whose named group <c>total</c> captures how many tests ran. Legs running the same
+    /// Pattern whose named group <c>total</c> captures how many tests ran, read from the line of the
+    /// runner's output it matches. Legs running the same
     /// tests - the same project, and the same <see cref="TestSet"/> - are compared, and one that ran
     /// a different number is marked on its line: a platform that quietly skips a group of tests
     /// passes on less evidence than its siblings.

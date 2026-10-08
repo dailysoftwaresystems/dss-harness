@@ -142,9 +142,9 @@ public sealed partial class HelpTests
         Assert.Contains($" {HarnessExit.Incomplete}  skipped-unavailable        Make what its line names available, then run again", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains($" {HarnessExit.Incomplete}  skipped-tool-missing       Install the tool its line names, then run again", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
-            "A run killed, or stopped with its machine, before it finished says nothing more: the next build, test or run in its "
-            + "tree on that machine to own its run directory says it was abandoned - its run id, process and start, and where its "
-            + "records are - and releases its claim on them.",
+            "A run killed, or stopped with its machine, before it finished says nothing more: the next build, test, run or "
+            + "check-mutations in its tree on that machine to own its run directory says it was abandoned - its run id, process "
+            + "and start, and where its records are - and releases its claim on them.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
@@ -226,6 +226,59 @@ public sealed partial class HelpTests
 
         Assert.Contains($"4  an arm not driven                               stopped: the run exits {HarnessExit.Incomplete}", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains($"a live owner                               {HarnessExit.Refused,3}  refused-locked", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The mutations topic says what the code does where a reader would otherwise guess: where a failed build makes an
+    /// arm failed, every verdict an arm can reach beside those its own judge decides, what a control that does not pass
+    /// is, which arms the ARMS block names, what a worker's build is reckoned to come to, how a text is read, and which
+    /// verdicts the fixture's arms are designed to.
+    /// </summary>
+    [Fact]
+    public async Task TheMutationsTopic_SaysWhatTheCodeDoes_WhereAReaderWouldGuess()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "mutations"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "failed its build failed at a step that is no object depending on its site - a link, another object - or named no step that failed",
+            "violated its declaration did not hold: a site or a cited text that is not there, or a site spelt otherwise than the tree "
+            + "spells it; its before-text not in its site exactly once, or replaced by itself; its target or its runner not built, or no "
+            + "object they build depending on a site;",
+            "An arm reaches others where nothing of its own decides: skipped-not-selected where --arms or its S row leaves it out of a "
+            + "leg; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the path limit; unmeasured "
+            + "where ninja's log could not be read around its build; whatever a guard of its build reaches, as a leg's build does - "
+            + "inputs-moved, contended; and whatever a failure that ends its driving comes to, as a leg's does - skipped-tool-missing "
+            + "for a tool that is not there, failed for a program that will not start.",
+            "one that does not pass - a build that does not pass, a red case, no report, a failing exit, a hang - decides the leg's own verdict",
+            "ARMS, below the table, names each arm selected that did not pass, and why;",
+            "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build, or the "
+            + "main checkout's, last recorded",
+            "each read as its file holds it, less a UTF-8 byte order mark at its start and one line ending at its end,",
+            "seven arms, one to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
+            + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two files",
+        })
+        {
+            Assert.Contains(text, said, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("upstream of every object", said, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The admission topic says a waiting leg says where it stands at least every five minutes, the minutes read from
+    /// the code, and that a poll or a settle longer than that keeps to it.
+    /// </summary>
+    [Fact]
+    public async Task TheAdmissionTopic_SaysAWaitNeverGoesSilent_WhateverThePollAndTheSettle()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "admission"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            $"It says so again, as it reads then and with how long it has waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - "
+            + "a poll longer than that is cut at it, and a settle longer than that waited whole in pieces of it - so a long wait never goes silent.",
+            said,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -586,6 +639,8 @@ public sealed partial class HelpTests
             "a developer environment, on the PATH that environment sets up for its processor -",
             "own PATH lacks is unknown for a leg in a developer environment, which this command",
             "covering no declared leg, is refused.",
+            "  check-mutations",
+            "          what build starts: each worker, and each arm, is built as the leg builds",
         })
         {
             Assert.Contains(text, tools.StandardOutput, StringComparison.Ordinal);
@@ -645,7 +700,14 @@ public sealed partial class HelpTests
         Assert.Contains("\"compilerId\": { \"C\": \"MSVC\", \"CXX\": \"MSVC\" }", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("A build CMake configured with another compiler fails before anything is built with", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("loaded: CMakeFiles/<version>/CMake<language>Compiler.cmake - where the record names", result.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains("the compiler the answer names and is no newer than the answer", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "where the record names the compiler the answer names and no configure has failed since that answer - which the error "
+            + "index CMake 4 writes in an answer's place says - since a configure that identified the compiler again and then failed "
+            + "leaves a record of one nothing built with. Never by when either was written, which a clock that steps gets wrong; "
+            + "before CMake 4 a failed configure leaves nothing of itself, and the record is read as it names it.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("no newer than the answer", Words(result.StandardOutput), StringComparison.Ordinal);
 
         // And which ssh reaches a host, what it is given, and when it is given nothing.
         Assert.Contains("The ssh that runs is the first on the PATH. It is asked first what it would do, with", result.StandardOutput, StringComparison.Ordinal);

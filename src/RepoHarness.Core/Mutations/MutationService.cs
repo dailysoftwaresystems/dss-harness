@@ -19,7 +19,7 @@ namespace RepoHarness.Core.Mutations;
 /// <param name="Directory">The directory the command was typed in.</param>
 /// <param name="LegNames">What <c>--legs</c> was given, or <see langword="null"/> where it was left out.</param>
 /// <param name="ArmNames">What <c>--arms</c> was given, or <see langword="null"/> where it was left out.</param>
-/// <param name="ForceLock">Whether to take a lock, or a worker, a run on another host holds.</param>
+/// <param name="ForceLock">Whether to take a lock, or a worker, another run holds, on this host or another.</param>
 /// <param name="Json">Whether the ledger is wanted as data rather than as a table.</param>
 /// <param name="UseStaged">Whether to sweep what is already staged on each host, without syncing again.</param>
 /// <param name="Here">The host this machine is to the machine that dispatched the legs here, or <see langword="null"/>.</param>
@@ -210,7 +210,8 @@ public sealed class MutationService(
     /// <summary>
     /// What <paramref name="work"/>'s leg sweeps: its tree; its project, configured with the dependency sources its own
     /// build fetched; the arms it drives; the test settings its tests start by; and what a build of its variant is
-    /// expected to come to, as its own build directory or the main checkout's copy of it last recorded.
+    /// expected to come to - its <c>buildSpaceGiB</c> where it declares one, else what its own build directory, or the
+    /// main checkout's copy of it, last recorded (<see cref="LegRoom.ExpectedBuildBytes"/>).
     /// </summary>
     internal MutationSubject Subject(LegWork work, SweepArms arms, bool force)
     {
@@ -367,7 +368,9 @@ public sealed class MutationService(
     /// <summary>
     /// Refuses every one of <paramref name="legs"/> whose build a sweep cannot read: one that cannot be built, or is built
     /// by anything but CMake with the Ninja generator, whose own records are what says which objects each arm rebuilt.
-    /// A self-test builds the fixture, a CMake project whatever the leg's own is, so only the leg's toolchain is asked.
+    /// A self-test builds the fixture, a CMake project whatever the leg's own is: so the leg's project is not asked to
+    /// be one, though the leg must still be one that can be built - a project to take its toolchain from where it names
+    /// none - and its toolchain's generator Ninja.
     /// </summary>
     /// <param name="config">The configuration declaring the legs.</param>
     /// <param name="legs">The selected legs.</param>

@@ -12,13 +12,17 @@ public enum LegVerdict
     /// <summary>Ran to completion, succeeded, and its success pattern matched.</summary>
     Passed,
 
-    /// <summary>Ran to completion and reported failure. The code is broken.</summary>
+    /// <summary>
+    /// Ran to completion and reported failure. The code is broken. Of a mutation arm: its build failed at a step that
+    /// is no object depending on its site - a link, another object - or named no step that failed.
+    /// </summary>
     Failed,
 
     /// <summary>
     /// Exited zero, but its success pattern never matched its own output. Measured three ways: a
     /// suite that printed <c>failed=0</c> while exiting 2, an exit code read after a pipe, and a
-    /// test command that exited zero having run no tests at all.
+    /// test command that exited zero having run no tests at all. Of a mutation arm: its build, or its
+    /// paired control's, passed with an object that depends on a site not rebuilt.
     /// </summary>
     Unwitnessed,
 
@@ -34,20 +38,25 @@ public enum LegVerdict
 
     /// <summary>
     /// Whether those files held still could not be established. Never reported as passed: an
-    /// unreadable snapshot is not evidence that nothing moved.
+    /// unreadable snapshot is not evidence that nothing moved. Of a mutation arm: ninja's log could
+    /// not be read around its build, so nothing witnessed what it rebuilt.
     /// </summary>
     Unmeasured,
 
     /// <summary>Another process used the leg's build directory while it ran.</summary>
     Contended,
 
-    /// <summary>Filtered out by <c>--legs</c>. Not a failure: nobody asked for it.</summary>
+    /// <summary>
+    /// Filtered out by <c>--legs</c>. Not a failure: nobody asked for it. Of a mutation arm: left out of
+    /// the leg by <c>--arms</c> or by its S row - and of a leg whose sweep drives no arm.
+    /// </summary>
     SkippedNotSelected,
 
     /// <summary>
     /// No host can take the leg, its host or its tree could not be reached, whether a program it
     /// starts is there could not be established, or git could not answer in its tree. A warning: a
-    /// switched-off machine is normal.
+    /// switched-off machine is normal. Of a sweep: no worker fits the room left or the path limit, and
+    /// every arm of the leg is skipped with it.
     /// </summary>
     SkippedUnavailable,
 
@@ -63,7 +72,8 @@ public enum LegVerdict
     /// <summary>
     /// A heavy leg waited as long as its machine allows for a heavy-leg slot, or holding one for the memory in use to
     /// fall below the machine's limit, or for room for its build beside what the other admitted legs claim, and nothing
-    /// of it ran. Never a failure of the code: the machine could not take it.
+    /// of it ran. Never a failure of the code: the machine could not take it. Of a sweep: a unit of it - a worker, an
+    /// arm - waited so, and each arm the sweep had left once its machine refused one.
     /// </summary>
     NotAdmitted,
 
@@ -75,7 +85,8 @@ public enum LegVerdict
 
     /// <summary>
     /// The harness could not produce a verdict. Deliberately distinct from <see cref="Failed"/>:
-    /// "your code is broken" and "the harness broke" call for different responses.
+    /// "your code is broken" and "the harness broke" call for different responses. Of a mutation arm:
+    /// a site could not be put back as it was, or a failure nobody named ended its driving.
     /// </summary>
     Poisoned,
 
@@ -91,10 +102,13 @@ public enum LegVerdict
     Stopped,
 
     /// <summary>
-    /// A mutation arm's declaration did not hold: the text it mutates was not in its site exactly once, its target does
-    /// not depend on the site, its mutation reddened other cases than it declares, ran another number of cases, or left
-    /// out its diagnostic, or a mutation declared to stop the build built. The registry's words, or the code the arm
-    /// guards, are wrong - distinct from <see cref="Survived"/>, where the declaration held and the tests did not fail.
+    /// A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than
+    /// the tree spells it; the text it mutates is not in its site exactly once, or is replaced by itself; its target or
+    /// its runner is not built, or no object they build depends on a site; its mutation reddened other cases than it
+    /// declares, ran another number of cases, left a neighbour declared green unrun or left out its diagnostic; a
+    /// mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired
+    /// control did not. The registry's words, or the code the arm guards, are wrong - distinct from
+    /// <see cref="Survived"/>, where the declaration held and the tests did not fail.
     /// </summary>
     Violated,
 
@@ -107,7 +121,8 @@ public enum LegVerdict
     /// <summary>
     /// A mutation arm's run failed, and nothing ties the failure to a case: the runner wrote no report, or one that
     /// cannot be read, or exited failing with a report naming no failing case - a crash after it was written, a leak
-    /// checker at exit - or ran past its bound and was stopped. Something failed, and nothing says which case did.
+    /// checker at exit - or ran past its bound, or printed nothing for as long as a phase may, and was stopped. Something
+    /// failed, and nothing says which case did.
     /// </summary>
     Unattributed,
 }

@@ -1200,22 +1200,22 @@ from the report.
 | Verdict | Meaning | Counts as failure |
 |---|---|---|
 | `passed` | Ran to completion, succeeded, and its success pattern matched | no |
-| `failed` | Ran to completion and reported failure | **yes** |
-| `unwitnessed` | Exited 0, but its success pattern never matched | **yes** |
+| `failed` | Ran to completion and reported failure; or a mutation arm's build failed at a step that is no object depending on its site - a link, another object - or named no step that failed | **yes** |
+| `unwitnessed` | Exited 0, but its success pattern never matched; or a mutation arm's build, or its paired control's, passed with an object that depends on a site not rebuilt | **yes** |
 | `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, a file its host's copy needed changed or was removed after the run began, before it was carried there, and nothing of the leg ran | **yes** |
-| `unmeasured` | Whether those files held still could not be established | **yes** |
+| `unmeasured` | Whether those files held still could not be established; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
-| `skipped-not-selected` | Filtered out by `--legs` | no |
-| `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; or git could not answer in its tree | warning |
+| `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, and a leg whose sweep drives no arm | no |
+| `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; git could not answer in its tree; or no worker of its sweep fits the room left or the path limit, and every arm of the leg with it | warning |
 | `skipped-tool-missing` | A required tool is not installed | warning |
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
-| `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran | **yes** |
+| `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran; or a unit of a sweep - a worker, an arm - waited so, and each arm the sweep had left once its machine refused one | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
-| `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up | **yes** |
+| `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up. A mutation arm whose site could not be put back as it was, or whose driving ended in a failure nobody named | **yes** |
 | `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a mutation arm was never driven, its sweep cancelled, no worker left to run it, or the unmutated run of its test binary not passing | no: incomplete |
-| `violated` | A mutation arm's declaration did not hold: its text was not in its site exactly once, its target does not depend on the site, its mutation reddened other cases than it declares, ran another number of cases or left out its diagnostic, or a mutation declared to stop the build built | **yes** |
+| `violated` | A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than the tree spells it; its before-text is not in its site exactly once, or is replaced by itself; its target or its runner is not built, or no object they build depends on a site; its mutation reddened other cases than its C rows, ran another number of cases, left a G row's case unrun or left out its diagnostic; a mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired control did not | **yes** |
 | `survived` | A mutation arm's mutation built and ran, and no case reddened | **yes** |
-| `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, an unreadable one, a failing exit whose report names no failing case, or a run stopped for passing its bound | **yes** |
+| `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, an unreadable one, a failing exit whose report names no failing case, or a run stopped for passing its bound, or as hung for printing nothing for `defaults.stallSeconds` | **yes** |
 
 `failed` and `poisoned` are deliberately distinct: "your code is broken" and
 "the harness broke" call for different responses. `inputs-moved`, `unmeasured`,
@@ -1380,7 +1380,11 @@ A waiting leg says where it stands as it starts each wait - who holds the slots,
 the room and who claims it - again whenever the holders or the claimants change, and again, as it reads
 then and with how long it has waited of `maxWaitMinutes`, at least every 5 minutes: a consumer's leg
 waited 39 minutes for the memory with one line, which its reader's pipe - passing each line on only
-once the next came - delivered with the leg's admission, so the wait read as a hang.
+once the next came - delivered with the leg's admission, so the wait read as a hang. No wait
+before a look runs past those five minutes, though `pollSeconds` and the settle may each be an
+hour: a poll is cut at when the next line is due, and a settle is waited whole - the memory is read
+again only once all of it has passed - in pieces of at most five minutes, the leg saying between
+them that it still waits to look.
 
 **A sweep is admitted unit by unit.** A `check-mutations` leg can run for hours, and held whole it
 would keep a slot through every arm. So no slot is held for the leg: each worker is admitted as it
@@ -2169,7 +2173,7 @@ directory here cannot drift apart.
   compared with the reading of the tree the sync was made from. A tree that still differs fails,
   names what differs, and says nothing should be run against it.
 - **Staging is the two commands, not a flag.** `sync` transfers and stops — that is all it ever
-  does — and `build`, `test` and `run` take `--use-staged` to act on what is already there without
+  does — and `build`, `test`, `run` and `check-mutations` take `--use-staged` to act on what is already there without
   syncing again. A `--stage-only` on `sync` would name a mode `sync` is always in.
 - **Artefacts come home** with `--pull`, each file hashed on the far side and checked again on
   arrival. Evidence that a binary built here runs there is not evidence if nobody checked it
@@ -2433,9 +2437,10 @@ diagnostic - and C, G, B, M and S rows, each following the A row of its arm, add
 redden, a neighbour that must run and stay green, a BUILD-RED arm's paired control, another site
 mutated with it - another file, as the tree's own file system compares names - and the legs it
 runs on. A
-text is a file in `mutations.textDirectory`, read as it is held, less one line ending at its end,
-and given the site's line endings where the site ends its lines otherwise, so one registry serves
-a checkout with either.
+text is a file in `mutations.textDirectory`, read as it is held, less a UTF-8 byte order mark at
+its start and one line ending at its end, and given the site's line endings where the site ends its
+lines otherwise, so one registry serves a checkout with either. Every file directly in that
+directory must be cited by some row; what lies below it is not listed.
 
 The whole registry is read, with every text it cites, before any host is touched, and every
 problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once
@@ -2476,8 +2481,9 @@ which never makes the copy it claims: the sync that makes a copy refuses a direc
 make. A claim whose sweep died is released and said; the copy it held is synced again, as every
 worker is before it drives an arm.
 
-A worker needs its copy of the tree and what a build of the variant comes to, as the leg's own
-build directory or the main checkout's copy of it last recorded, less what it already holds. The
+A worker needs its copy of the tree and what a build of the variant comes to - the leg's
+`buildSpaceGiB` where it declares one, else what the leg's own build directory, or the main
+checkout's copy of it, last recorded - less what it already holds. The
 sweep runs the workers that fit the room, in order, saying it runs fewer; where not even the first
 does, the leg is `skipped-unavailable`, as a leg whose build does not fit is. A worker's build is
 kept within this machine's path limit as a worktree's is - the worker, its build directory, and
@@ -2532,9 +2538,9 @@ worker no longer keeps.
 ### An arm's turn
 
 Each test binary's arms wait for its pristine control, built and run once on the leg in whichever
-worker first needs it: a control with a red case, no report, a failing exit or a hang decides the
-leg's own verdict and stops every arm of that binary, saying why, since no mutation of it could
-prove anything. Its run bounds theirs (see *Timeouts*). Workers drain one queue of arms. Each arm:
+worker first needs it: a control whose build does not pass, or with a red case, no report, a
+failing exit or a hang, decides the leg's own verdict and stops every arm of that binary, saying
+why, since no mutation of it could prove anything. Its run bounds theirs (see *Timeouts*). Workers drain one queue of arms. Each arm:
 
 1. is admitted as a unit of its own, where its machine declares admission (see *Heavy legs share
    a machine*);
@@ -2548,7 +2554,10 @@ prove anything. Its run bounds theirs (see *Timeouts*). Workers drain one queue 
    some object its build builds depending on a site, through ninja's dependency records, so headers
    and precompiled headers count;
 3. is mutated, each site written dated past the newest file the worker's last build wrote, and the
-   build waits until the clock is past that, so no object is ever dated before its source;
+   build waits until the clock is past that, so no object is dated before its source - save where
+   that file is dated more than a minute ahead of the clock, which went back from it: waiting it
+   out could take hours, so the site is dated by the clock, and the build's own rule, finding an
+   input dated no later than what its last build left, starts from clean, saying so;
 4. is built - its target, and a TEST-RED arm's runner beside it, so the binary run links the
    mutation - through the build every leg builds by, every guard included;
 5. is witnessed: a build that failed is read for the steps ninja said failed, and one that passed
@@ -2597,7 +2606,7 @@ Each arm's records are written as it ends, in `<run>/<leg>/arms/<arm>/`: `arm.js
 the ledger carries it, beside the logs of its build and its run, and of a paired control's build in
 `control/`. Each control's are in `<run>/<leg>/controls/<runner>/`, and each worker's whole build in
 `<run>/<leg>/workers/<n>/`. A leg's line counts its arms by verdict; below the table an ARMS block
-names each arm that did not pass, and why; `--json` carries every arm beneath its leg - `arm`,
+names each selected arm that did not pass, and why; `--json` carries every arm beneath its leg - `arm`,
 `verdict`, `failure`, `detail`, `durationSeconds`, `worker`, `cases`, `declaredCases`, `reds`,
 `declaredReds`, `records` - a skipped one included.
 
@@ -2659,11 +2668,13 @@ once, as it arrives, for what the phase establishes - whether its success patter
 timing marks, its last 50 lines, kept in a ring of that many - and written to the log; whatever
 reads more of the output reads it back from the log, a line at a time: ninja's last word on a
 build, the count a `countPattern` reads, ctest's word that it found no tests, the exception a
-failing step printed, the message a run check expects. Of a stream read a line at a time, the
-process runner keeps only the last 65,536 characters, for the messages that quote it, and a
+failing step printed, the message a run check expects. Of a stream whose caller takes its lines
+as they come and asks only for its end - a phase's output, what a host's steps print - the
+process runner keeps the last 65,536 characters, for the messages that quote it, and a
 line longer than 32,768 characters - a child writing gigabytes with no line feed - is kept in
 pieces of at most that many, each a line of the log, cut where no secret the run masks is
-parted; what is read whole, as git's answers are, is kept whole. The same holds on a machine
+parted; a stream its caller reads whole is kept whole, as git's answers are, and a host's
+answer, though that too is read a line at a time. The same holds on a machine
 that dispatched a leg to a host, whose `--verbose` relays every line the host's steps print: the
 dispatcher keeps the end of what it relayed, and the ledger the host answers with.
 
@@ -2768,7 +2779,10 @@ exists because a wrapper that reports success without evidence is indistinguisha
 from one that never ran, and it was measured happening three separate ways: a suite
 that printed `failed=0` while exiting 2, an exit code read after a pipe, and a test
 command that exited 0 having run no tests at all. An emulator's witness applies the same
-rule to the emulator itself. A pattern is matched against each line as the log keeps it,
+rule to the emulator itself, read its own way: the witness must exit 0 within 60 seconds, and
+its pattern is matched against all it printed at once, each line as it reads whatever ended
+it, within one second - an emulator whose witness fails any of that is unavailable, saying
+which. A phase's pattern is matched against each line as the log keeps it,
 whatever ended the line: a Windows program ends its lines with CRLF, and a `$` that matched
 before the line feed left the carriage return between the text and the end, so a pattern that
 passed on Linux and macOS never matched on a Windows leg. It is matched against one line at a
@@ -2776,15 +2790,15 @@ time, as each arrives, so one reaching across a line break - `\s+` between what 
 print - matches nothing, and a line longer than 32,768 characters is matched in the pieces its
 log keeps it in. A timing pattern is read the same way, and keeps its first 10,000 marks in a
 phase, saying so where there were more: a child printing a mark on every line of a flood would
-otherwise have the flood held again, as marks. A pattern that cannot be evaluated against a
-line in five seconds is not evidence either way: a witness that cannot is refused, naming the
-pattern, once its command has ended, and a timing pattern that cannot leaves the phase
-unmeasured by it, saying so.
+otherwise have the flood held again, as marks. A phase's pattern that cannot be evaluated
+against a line in five seconds is not evidence either way: a success pattern that cannot is
+refused, naming the pattern, once its command has ended, and a timing pattern that cannot leaves
+the phase unmeasured by it, saying so.
 
 ## Timeouts
 
-Wall-clock timeouts are not used **for phases and legs**: a time budget is a guess
-about workload size, and honest runs exceeding it get killed. Where a bound is
+Wall-clock timeouts are not used **for phases and legs**, save the one below: a time budget is a
+guess about workload size, and honest runs exceeding it get killed. Where a bound is
 needed, a phase declares a **stall** bound instead — no output for N seconds means
 hung — because output cadence stays stable even when total duration is not.
 
@@ -2792,8 +2806,8 @@ hung — because output cadence stays stable even when total duration is not.
 probes that measure a host, and an emulator's witness, each have one.
 
 A mutation arm's run is the one whole-duration bound a phase gets, and it is not a guess: a
-mutation that turns a loop endless prints nothing more, forever, and the unmutated run of the very
-same binary, measured minutes before on the same machine, says how long it takes when nothing is
-wrong. So a mutated run may take `mutations.runTimeFactor` (10) times that run, never less than it
+mutation that turns a loop endless can go on printing for ever, which no stall bound catches, and
+the unmutated run of the very same binary, measured minutes before on the same machine, says how
+long it takes when nothing is wrong. So a mutated run may take `mutations.runTimeFactor` (10) times that run, never less than it
 and a minute, and one stopped past that is `unattributed`, saying so. A stall bound applies to it as
 to every phase.

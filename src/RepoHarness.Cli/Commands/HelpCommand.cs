@@ -242,6 +242,8 @@ internal static class HelpCommand
         builder.AppendLine("  sync    nothing: a copy starts no program");
         builder.AppendLine("  clean   nothing: removing a directory starts no program");
         builder.AppendLine("  legs    what build and test start");
+        builder.AppendLine("  check-mutations");
+        builder.AppendLine("          what build starts: each worker, and each arm, is built as the leg builds");
         builder.AppendLine();
         builder.AppendLine("A missing program never moves a leg to another host: that would measure a machine");
         builder.AppendLine("nobody chose. To run a leg elsewhere, name the host in the leg ('ssh' or 'wsl').");
@@ -693,9 +695,9 @@ internal static class HelpCommand
         builder.AppendLine("is its file's. A build the harness stopped for hanging stays failed, saying it hung,");
         builder.AppendLine("and so does one under any other build tool, since only ninja's lines are read.");
         builder.AppendLine("A run killed, or stopped with its machine, before it finished says nothing more:");
-        builder.AppendLine("the next build, test or run in its tree on that machine to own its run directory");
-        builder.AppendLine("says it was abandoned - its run id, process and start, and where its records are -");
-        builder.AppendLine("and releases its claim on them.");
+        builder.AppendLine("the next build, test, run or check-mutations in its tree on that machine to own its");
+        builder.AppendLine("run directory says it was abandoned - its run id, process and start, and where its");
+        builder.AppendLine("records are - and releases its claim on them.");
         builder.AppendLine();
         builder.AppendLine("check-mutations judges each arm of a repository's mutation registry, and a leg's");
         builder.AppendLine("verdict there is the worst of its own and its arms': violated where an arm's");
@@ -798,8 +800,9 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             $"site is the file mutated. before, after, diag and a control's texts name files holding the text, so a mutation "
-            + "may span lines: each read as its file holds it, less one line ending at its end, and where the site ends its "
-            + "lines otherwise, given the site's line endings, so one registry serves a checkout with either. red kind is "
+            + "may span lines: each read as its file holds it, less a UTF-8 byte order mark at its start and one line ending "
+            + "at its end, and where the site ends its lines otherwise, given the site's line endings, so one registry serves "
+            + "a checkout with either. red kind is "
             + $"{MutationRegistryParser.TestRed} or {MutationRegistryParser.BuildRed}, declared and never inferred. target is the "
             + "build target the mutation is built as, and runner the test target whose binary runs, found through the build's "
             + "own manifest; cases is how many cases it runs, skipped ones included. A case is named as its report names it, "
@@ -855,8 +858,9 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A sweep runs the workers whose copy and build fit the room left - a build of the variant coming to what the "
-            + "leg's own build, or the main checkout's, last recorded - and whose build stays within the path limit, "
+            "A sweep runs the workers whose copy and build fit the room left - a build of the variant coming to the leg's "
+            + "buildSpaceGiB where it declares one, else to what the leg's own build, or the main checkout's, last recorded "
+            + "- and whose build stays within the path limit, "
             + "reckoned as a worktree's is; where not even the first does, the leg is skipped-unavailable, saying why, and "
             + "one that runs fewer says so. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it, and "
             + "a claim whose sweep died is released and said. Workers an earlier sweep left beyond the count workers allows "
@@ -879,7 +883,8 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "Each test binary's arms wait for its unmutated control, built and run once on the leg: one that does not pass "
-            + "- a red case, no report, a failing exit, a hang - decides the leg's own verdict and stops each of its arms. "
+            + "- a build that does not pass, a red case, no report, a failing exit, a hang - decides the leg's own verdict "
+            + "and stops each of its arms. "
             + "Its run bounds theirs: a mutated run may take runTimeFactor times as long, never less than it and a minute, "
             + "and is stopped as unattributed past that. Each arm is admitted as a unit of its own where its machine "
             + "declares admission ('help admission'), pre-flighted, mutated - its sites dated past the worker's last build "
@@ -915,17 +920,19 @@ internal static class HelpCommand
             + "the ledger carries it, beside the logs of its build and its run, and of a paired control's build in "
             + $"{MutationRecords.PairedControlDirectory}/. Each control's are in <run>/<leg>/{MutationRecords.ControlsDirectory}/<runner>/, and "
             + $"each worker's whole build in <run>/<leg>/{MutationRecords.WorkersDirectory}/<n>/. A leg's line counts its arms by verdict; "
-            + "ARMS, below the table, names each arm that did not pass and why; --json carries every arm beneath its leg: "
+            + "ARMS, below the table, names each arm selected that did not pass, and why; --json carries every arm beneath "
+            + "its leg: "
             + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds and records.");
         builder.AppendLine();
         builder.AppendLine("Self-test");
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "check-mutations --self-test sweeps the fixture this tool carries - a CMake library, a test binary that writes "
-            + "its own JUnit report, and seven arms: one to each verdict an arm's design can reach, a second that passes "
-            + "as the other red kind, and a third whose mutation is coupled across two files - in place of the repository's "
-            + "registry, which it does not need. It is built as each selected leg builds, with the leg's toolchain, "
+            "check-mutations --self-test sweeps the fixture this tool carries, in place of the repository's registry, "
+            + "which it does not need: a CMake library, a test binary that writes its own JUnit report, and seven arms, one "
+            + "to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
+            + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two "
+            + "files. It is built as each selected leg builds, with the leg's toolchain, "
             + "configuration and sanitizer, and each arm is held to the verdict it is designed to reach: one that reaches "
             + "it passed, saying so, and one that reaches another is violated, naming both - a defect of this tool's with "
             + "that compiler, never the fixture's. --arms names the fixture's arms.");
@@ -945,12 +952,15 @@ internal static class HelpCommand
         builder.AppendLine("Each arm reaches one, and a leg's is the worst of its own and its arms':");
         builder.AppendLine();
         builder.AppendLine("  passed        the arm held as declared");
-        builder.AppendLine("  failed        its build failed upstream of every object that depends on its site");
-        builder.AppendLine("  violated      its declaration did not hold: its before-text not in its site exactly");
-        builder.AppendLine("                once, its target depending on no site, other cases red than its C rows,");
-        builder.AppendLine("                another number of cases run, a G row's case not run, its diagnostic not");
-        builder.AppendLine("                said, a TEST-RED mutation that does not compile, or a BUILD-RED one");
-        builder.AppendLine("                that does, or whose control does not");
+        builder.AppendLine("  failed        its build failed at a step that is no object depending on its site - a");
+        builder.AppendLine("                link, another object - or named no step that failed");
+        builder.AppendLine("  violated      its declaration did not hold: a site or a cited text that is not there, or");
+        builder.AppendLine("                a site spelt otherwise than the tree spells it; its before-text not in its");
+        builder.AppendLine("                site exactly once, or replaced by itself; its target or its runner not");
+        builder.AppendLine("                built, or no object they build depending on a site; other cases red than");
+        builder.AppendLine("                its C rows, another number of cases run, a G row's case not run, or its");
+        builder.AppendLine("                diagnostic not said; a TEST-RED mutation that does not compile; or a");
+        builder.AppendLine("                BUILD-RED one that does, or whose control does not");
         builder.AppendLine("  survived      the mutation built and ran, and no case failed");
         builder.AppendLine("  unattributed  the run failed and nothing ties that to a case: no report, an unreadable");
         builder.AppendLine("                one, a failing exit whose report names no failing case, or a run past");
@@ -962,6 +972,15 @@ internal static class HelpCommand
         builder.AppendLine("  not-admitted  its machine did not admit it, or an arm of the sweep before it");
         builder.AppendLine("  poisoned      a site could not be put back as it was, or a failure nobody named ended");
         builder.AppendLine("                its driving");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "An arm reaches others where nothing of its own decides: skipped-not-selected where --arms or its S row leaves "
+            + "it out of a leg; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the "
+            + "path limit; unmeasured where ninja's log could not be read around its build; whatever a guard of its "
+            + "build reaches, as a leg's build does - inputs-moved, contended; and whatever a failure that ends its driving "
+            + "comes to, as a leg's does - skipped-tool-missing for a tool that is not there, failed for a program that "
+            + "will not start.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1058,9 +1077,11 @@ internal static class HelpCommand
         builder.AppendLine("While it waits, a leg says who holds each slot - tree, variant, host, leg, command,");
         builder.AppendLine("machine, process, run, and since when it asked - and, once it holds one, what the");
         builder.AppendLine("memory stands at, or the room free and who claims it. It says so again, as it reads");
-        builder.AppendLine($"then and with how long it has waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes, so a long wait never");
-        builder.AppendLine("goes silent. Its line, and admission in --json, name how long it waited, the memory");
-        builder.AppendLine("it started at and the room it claimed; --json also names the record it asked in. One");
+        builder.AppendLine($"then and with how long it has waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - a poll longer than");
+        builder.AppendLine("that is cut at it, and a settle longer than that waited whole in pieces of it - so a");
+        builder.AppendLine("long wait never goes silent. Its line, and admission in --json, name how long it");
+        builder.AppendLine("waited, the memory it started at and the room it claimed; --json also names the record");
+        builder.AppendLine("it asked in. One");
         builder.AppendLine($"that waited maxWaitMinutes is not-admitted, exit {LegExit.NotAdmitted}, naming what held the slots and");
         builder.AppendLine("where they are recorded, the memory it waited on, or the room, who claimed it and");
         builder.AppendLine("where the claims are recorded: nothing of it ran, and nothing about the code is claimed.");
@@ -1266,8 +1287,11 @@ internal static class HelpCommand
         builder.AppendLine("subproject enables - C, where a C++ project fetches googletest - comes with no id in");
         builder.AppendLine("CMake's answer, and is identified from CMake's own record of it, the one enabling it");
         builder.AppendLine("loaded: CMakeFiles/<version>/CMake<language>Compiler.cmake - where the record names");
-        builder.AppendLine("the compiler the answer names and is no newer than the answer, since a configure that");
+        builder.AppendLine("the compiler the answer names and no configure has failed since that answer - which");
+        builder.AppendLine("the error index CMake 4 writes in an answer's place says - since a configure that");
         builder.AppendLine("identified the compiler again and then failed leaves a record of one nothing built with.");
+        builder.AppendLine("Never by when either was written, which a clock that steps gets wrong; before CMake 4 a");
+        builder.AppendLine("failed configure leaves nothing of itself, and the record is read as it names it.");
         builder.AppendLine("test --no-build holds the directory it tests to it the same way. A configure that");
         builder.AppendLine("fails names no compiler, never the one an earlier configure resolved.");
         builder.AppendLine();

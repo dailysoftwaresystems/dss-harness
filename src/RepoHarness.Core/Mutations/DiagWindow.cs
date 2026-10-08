@@ -1,8 +1,10 @@
 namespace RepoHarness.Core.Mutations;
 
 /// <summary>
-/// Whether a run said an arm's diagnostic: the diagnostic's text, exactly, anywhere in the run's output, its line endings
-/// read as one - matched a line at a time as the output arrives, so a run of any length is never held whole.
+/// Whether a run said an arm's diagnostic: the diagnostic's text, exactly, anywhere in the lines of the run's output, its
+/// line endings read as one - matched a line at a time as the run's log is read back, so a run of any length is never
+/// held whole. A line longer than a log keeps whole is read in the pieces it was kept in, as every reader of a phase's
+/// output reads it, so a diagnostic lying across the end of a piece is not found.
 /// </summary>
 /// <remarks>
 /// A text of <c>n</c> lines can begin part way along one line of output and end part way along another, so it lies

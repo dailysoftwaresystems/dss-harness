@@ -144,9 +144,10 @@ public enum ArmStep
 /// </para>
 /// <para>
 /// The mutated build: <c>stopped</c> where it was stopped, and the verdict of a guard of the build where one reached
-/// one. Where it failed, a step that failed outside the objects depending on a site - or none named - is <c>failed</c>,
-/// upstream of the mutation; one within them is the mutation not compiling, <c>violated</c> for a TEST-RED arm and as
-/// declared for a BUILD-RED one. Where it built, an object depending on a site that ninja's log shows not rebuilt is
+/// one. Where it failed, a step that failed outside the objects depending on a site - another object, or a link
+/// downstream of them, as a test binary's is - or none named, is <c>failed</c>: nothing says the mutation did not
+/// compile. One within them is the mutation not compiling, <c>violated</c> for a TEST-RED arm and as declared for a
+/// BUILD-RED one. Where it built, an object depending on a site that ninja's log shows not rebuilt is
 /// <c>unwitnessed</c>, and a BUILD-RED mutation that built is <c>violated</c>. A BUILD-RED arm's paired control is then
 /// built: stopped or a guard's verdict as above, <c>violated</c> where it did not build, <c>unwitnessed</c> where an
 /// object was not rebuilt, and <c>passed</c> otherwise.
@@ -191,9 +192,9 @@ public static class ArmJudge
 
         if (build.Verdict.Verdict == LegVerdict.Failed)
         {
-            if (build.Failed.FirstOrDefault(output => !dependents.Contains(output, StringComparer.Ordinal)) is { } upstream)
+            if (build.Failed.FirstOrDefault(output => !dependents.Contains(output, StringComparer.Ordinal)) is { } elsewhere)
             {
-                return ReachedVerdict.Of(LegVerdict.Failed, $"the mutated build failed at {upstream}, which is no object that depends on the site");
+                return ReachedVerdict.Of(LegVerdict.Failed, $"the mutated build failed at {elsewhere}, which is no object that depends on the site");
             }
 
             if (build.Failed.Count == 0)

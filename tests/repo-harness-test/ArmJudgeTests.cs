@@ -267,9 +267,9 @@ public sealed class ArmJudgeTests
     }
 
     /// <summary>
-    /// A mutated build that failed at a step no object depending on the site is - or named no step - failed upstream of
-    /// the mutation, for either kind of arm; one that failed only at such objects is the mutation not compiling, which a
-    /// TEST-RED arm never declares.
+    /// A mutated build that failed at a step no object depending on the site is - or named no step - is failed, for
+    /// either kind of arm, wherever in the build that step is; one that failed only at such objects is the mutation not
+    /// compiling, which a TEST-RED arm never declares.
     /// </summary>
     [Fact]
     public void AFailedBuild_IsJudgedByWhereItFailed()
