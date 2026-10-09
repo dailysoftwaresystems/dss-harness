@@ -11,6 +11,7 @@ using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Runs;
 
@@ -115,6 +116,7 @@ public sealed class LegRunService(
     RemoteLegRunner remoteLegs,
     LegAdmission admission,
     IWslPageCache pageCache,
+    IRepositoryTrees trees,
     KeepAwake keepAwake,
     DeveloperEnvironmentProvider developerEnvironments,
     IFileSystem fileSystem,
@@ -133,6 +135,7 @@ public sealed class LegRunService(
     private readonly RemoteLegRunner _remoteLegs = remoteLegs;
     private readonly LegAdmission _admission = admission;
     private readonly IWslPageCache _pageCache = pageCache;
+    private readonly IRepositoryTrees _trees = trees;
     private readonly KeepAwake _keepAwake = keepAwake;
     private readonly DeveloperEnvironmentProvider _developerEnvironments = developerEnvironments;
     private readonly IFileSystem _fileSystem = fileSystem;
@@ -224,6 +227,10 @@ public sealed class LegRunService(
         // What each host's copy is marked, read once per copy, for a run on what is already staged there.
         var stagedMarks = new ConcurrentDictionary<string, Lazy<Task<CopyMark>>>(LegPlan.TreeKeyComparer);
 
+        // The repository's trees on this machine, listed once, as the first leg whose work runs here begins it: whose build
+        // directory a process found beside a leg works in is told by them.
+        var trees = new Lazy<Task<RepositoryTreesFound>>(() => TreesHereAsync(context, request.Here, cancellationToken));
+
         try
         {
             // A run on this machine that ended holding its own directory - most likely killed, or stopped with its
@@ -257,7 +264,7 @@ public sealed class LegRunService(
                             MaxParallelLegsTotal = context.Config.Defaults.MaxParallelLegsTotal,
                             SyncTree = syncTree,
                             RunLeg = (plan, token) => RunLegAsync(
-                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, stagedMarks, token),
+                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, stagedMarks, trees, token),
                         },
                         ledger,
                         cancellationToken)
@@ -490,6 +497,7 @@ public sealed class LegRunService(
         LegLedger ledger,
         ConcurrentDictionary<string, string> lockedTrees,
         ConcurrentDictionary<string, Lazy<Task<CopyMark>>> stagedMarks,
+        Lazy<Task<RepositoryTreesFound>> trees,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => candidate.Name == plan.Name);
@@ -558,7 +566,7 @@ public sealed class LegRunService(
                 return Ended(leg, LegVerdict.NotAdmitted, refusal, started) with { Admission = admitted.Fact };
             }
 
-            var entry = await RunTakenLegAsync(context, leg, runId, runDirectory, request, work, commandName, ledger, started, cancellationToken).ConfigureAwait(false);
+            var entry = await RunTakenLegAsync(context, leg, runId, runDirectory, request, work, commandName, ledger, trees, started, cancellationToken).ConfigureAwait(false);
 
             return admitted is null ? entry : entry with { Admission = admitted.Fact };
         }
@@ -697,6 +705,30 @@ public sealed class LegRunService(
     }
 
     /// <summary>
+    /// The repository's trees on this machine - the main checkout, or a host's copy of it, and every worktree's beside it -
+    /// or, where they could not be listed, why.
+    /// </summary>
+    private async Task<RepositoryTreesFound> TreesHereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _trees.HereAsync(context, here, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex)
+        {
+            // A host declaring nowhere to keep its copy, which nothing could have sent a leg to: said as a listing that could
+            // not be made, and no leg's work stops for it.
+            return new RepositoryTreesFound([], ex.Message.TrimEnd('.'));
+        }
+    }
+
+    /// <summary>The trees of <paramref name="trees"/> but <paramref name="leg"/>'s own: the repository's other trees here.</summary>
+    private RepositoryTreesFound Beside(RepositoryTreesFound trees, PlacedLeg leg)
+        => trees with { Trees = [.. trees.Trees.Where(tree => !string.Equals(Whole(tree.Root), Whole(leg.TreeRoot), _platform.PathComparison))] };
+
+    private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    /// <summary>
     /// <paramref name="leg"/>'s line, reaching <paramref name="verdict"/> for <paramref name="detail"/> before its own work
     /// ran, and how long it took since it was <paramref name="started"/>.
     /// </summary>
@@ -713,6 +745,7 @@ public sealed class LegRunService(
         Func<LegWork, CancellationToken, Task<LegEntry>> work,
         string commandName,
         LegLedger ledger,
+        Lazy<Task<RepositoryTreesFound>> trees,
         long started,
         CancellationToken cancellationToken)
     {
@@ -771,7 +804,11 @@ public sealed class LegRunService(
             leg = leg with { DeveloperEnvironment = setUp.Environment };
         }
 
-        var working = leg with { Floor = FloorOf(context, leg, request) };
+        var working = leg with
+        {
+            Floor = FloorOf(context, leg, request),
+            Beside = Beside(await trees.Value.ConfigureAwait(false), leg),
+        };
         var entry = await work(
                 new LegWork(working, context, runId, runDirectory, request.Time)
                 {

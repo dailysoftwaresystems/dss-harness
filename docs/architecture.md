@@ -1728,7 +1728,17 @@ while a gate ran turned a green suite red, with four test processes live at once
   `defaults.processSampleSeconds` between. A `contention.buildTools` process outside the
   harness's own process tree whose command line names the leg's build directory makes the
   verdict `contended`. A `contention.sharedResourceTools` process, one that shares a cache
-  rather than a build directory, is reported as a warning.
+  rather than a build directory, is reported as a warning, one line per tool and per whose it
+  was: a process whose command line names another leg's build directory is that leg's, and one
+  naming a build directory of another tree of the repository on the same machine - a
+  worktree's, an agent's, the main checkout's, each listed as the leg's work begins there, its
+  directories reckoned by this tree's configuration - is that tree's leg's ("worktree o1/xa's
+  leg 'linux-debug'"). A consumer's agents, each testing its own worktree on the same machines,
+  were warned of one another's test processes as nobody's - 1510 beside one leg - on every run,
+  until nobody read the warning. Only what no tree there accounts for is nobody's known, and
+  where the other trees could not be listed its line says it may be one of theirs, and why. A
+  build tool is a contender only where it names this leg's own build directory, which no other
+  tree's directory is or holds, so another tree's build never makes a leg `contended`.
 - Every sample is kept, and the report says when each process was seen: throughout, at
   the start, or at the end. A process table that could not be read is reported as
   unknown, never as nothing found.

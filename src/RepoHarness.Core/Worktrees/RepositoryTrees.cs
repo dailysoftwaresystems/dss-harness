@@ -82,7 +82,9 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
 
         if (here is not null)
         {
-            var main = HostCopies.RepositoryPathOf(context.Config, here);
+            // Spelt with this host's home where the configuration keeps the copy under it, as every host's copy is spelt
+            // where it is read: a path below a directory called '~' is nowhere.
+            var main = LocalSyncTransport.Home(HostCopies.RepositoryPathOf(context.Config, here));
 
             try
             {

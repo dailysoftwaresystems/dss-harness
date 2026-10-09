@@ -154,6 +154,7 @@ internal static class TestCommand
             LegSettings = leg.Leg,
             Project = leg.Project,
             PlatformKey = leg.Host.Os ?? string.Empty,
+            Beside = leg.Beside,
             Identity = leg.IdentityFor(work.RunId.Value),
             Product = testProduct,
             ProductProblem = testProductProblem,

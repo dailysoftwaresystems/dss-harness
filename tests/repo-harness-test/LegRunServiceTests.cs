@@ -16,6 +16,7 @@ using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -501,6 +502,40 @@ public sealed class LegRunServiceTests
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.StartsWith(Path.Combine(tree, ".harness-config", "runs") + Path.DirectorySeparatorChar, directory, StringComparison.Ordinal);
         Assert.True(Directory.Exists(directory), $"the run named '{directory}', which it never made");
+    }
+
+    /// <summary>
+    /// A leg's work here is given the repository's other trees on this machine - every tree but its own, the main
+    /// checkout among them for a worktree's leg - by which whose build directory a process found beside it works in is
+    /// told; and why they could not be listed, where they could not.
+    /// </summary>
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(true, null)]
+    [InlineData(false, "git worktree list exited 128")]
+    public async Task ALegsWorkHere_IsGivenTheRepositorysOtherTreesOnThisMachine(bool inWorktree, string? unlisted)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var feature = new RepositoryTree(temp.Combine("feature"), "worktree feature");
+        var other = new RepositoryTree(temp.Combine("other"), "worktree other");
+        var tree = inWorktree ? feature.Root : temp.Path;
+        RepositoryTreesFound? beside = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            OneLeg(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(tree, null) { Workload = LegWorkload.Copy },
+            ran: leg => beside = leg.Beside,
+            tree: tree,
+            trees: new KnownTrees { Beside = _ => [feature, other], Unlisted = unlisted });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.NotNull(beside);
+        Assert.Equal(inWorktree ? [new RepositoryTree(temp.Path, RepositoryTree.MainCheckout), other] : [feature, other], beside.Trees);
+        Assert.Equal(unlisted, beside.Unlisted);
     }
 
     /// <summary>
@@ -2208,7 +2243,8 @@ public sealed class LegRunServiceTests
         Func<LegWork, CancellationToken, Task<LegEntry>>? workAsync = null,
         CommandOrigin? origin = null,
         IFileSystem? fileSystem = null,
-        IWslPageCache? pageCache = null)
+        IWslPageCache? pageCache = null,
+        IRepositoryTrees? trees = null)
     {
         var loader = HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
 
@@ -2225,6 +2261,7 @@ public sealed class LegRunServiceTests
             // Never this machine's own record of its heavy legs: a test's slots are its own.
             admission ?? AdmissionKit.Admission(harness, AdmissionRecord(temp), new ScriptedGauge(10), new ManualClock()),
             pageCache ?? new ScriptedPageCache(),
+            trees ?? new KnownTrees(),
             new KeepAwake(keepAwake ?? new HeldProcesses(), harness.Output),
             developerEnvironments ?? NoDeveloperEnvironment(harness),
             fileSystem ?? harness.FileSystem,

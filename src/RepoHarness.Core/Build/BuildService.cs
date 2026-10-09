@@ -4,6 +4,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Build;
 
@@ -47,6 +48,12 @@ public sealed record BuildRequest(
     /// and its machine declares admission; <see langword="null"/> where it is not, and nothing stops the build for room.
     /// </summary>
     public RoomFloor? Floor { get; init; }
+
+    /// <summary>
+    /// The repository's other trees on the machine that builds, the leg's own left out, as they were listed as its work
+    /// began there: whose build directory a process found beside the build works in is told by them.
+    /// </summary>
+    public RepositoryTreesFound? Beside { get; init; }
 }
 
 /// <summary>What one leg's build did.</summary>
@@ -226,7 +233,8 @@ public sealed class BuildService(
                         request.Leg,
                         buildDirectory,
                         request.TreeRoot,
-                        request.PlatformKey),
+                        request.PlatformKey,
+                        request.Beside),
                 },
                 cancellationToken)
             .ConfigureAwait(false);

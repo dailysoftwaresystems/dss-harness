@@ -1031,6 +1031,7 @@ public sealed class MutationServiceTests
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
             AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), new ScriptedGauge(10), new ManualClock()),
             new ScriptedPageCache(),
+            trees ?? new KnownTrees(),
             new KeepAwake(new HeldProcesses(), harness.Output),
             new DeveloperEnvironmentProvider(harness.Platform, processes, harness.FileSystem, harness.Output),
             harness.FileSystem,

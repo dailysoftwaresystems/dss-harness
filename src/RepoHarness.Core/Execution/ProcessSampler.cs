@@ -30,11 +30,68 @@ public sealed record ContentionRequest
     public int SampleSeconds { get; init; }
 
     /// <summary>
-    /// Every other leg this machine could build, with its build directory, so work found beside this
-    /// leg can be said to be that leg's rather than a stranger's.
+    /// Every other build directory of the repository on this machine, with whose it is - this tree's other legs', then each
+    /// leg's in every other tree of the repository here - so work found beside this leg can be said to be that leg's
+    /// rather than a stranger's. The first that a process's command line names is its owner.
     /// </summary>
-    public IReadOnlyDictionary<string, string> OtherLegs { get; init; } = new Dictionary<string, string>();
+    public IReadOnlyList<OwnedBuildDirectory> Owned { get; init; } = [];
+
+    /// <summary>
+    /// Why the repository's other trees on this machine could not be listed, where they could not: a process no listed
+    /// directory accounts for may be working in one of theirs.
+    /// </summary>
+    public string? OthersUnlisted { get; init; }
 }
+
+/// <summary>
+/// Whose a build directory is: another leg of the tree the sampled leg builds, or a leg of another tree of its repository
+/// on the same machine - a worktree's, an agent's, the main checkout's.
+/// </summary>
+public sealed record BuildDirectoryOwner
+{
+    private BuildDirectoryOwner(string leg, string? tree)
+    {
+        Leg = leg;
+        Tree = tree;
+    }
+
+    /// <summary>The leg, as the configuration declares it.</summary>
+    public string Leg { get; }
+
+    /// <summary>
+    /// The other tree, as a line calls it - <c>worktree o1/xa</c>, <c>the main checkout</c> - or <see langword="null"/>
+    /// for the sampled leg's own tree.
+    /// </summary>
+    public string? Tree { get; }
+
+    /// <summary>Another leg of the sampled leg's own tree.</summary>
+    /// <param name="leg">The leg.</param>
+    public static BuildDirectoryOwner Sibling(string leg)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+
+        return new(leg, null);
+    }
+
+    /// <summary>A leg of another tree of the repository on the same machine, as a line calls that tree.</summary>
+    /// <param name="tree">The tree, as a line calls it.</param>
+    /// <param name="leg">The leg.</param>
+    public static BuildDirectoryOwner InTree(string tree, string leg)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+
+        return new(leg, tree);
+    }
+
+    /// <summary>The owner as a line names it: <c>leg 'x'</c>, or <c>worktree o1/xa's leg 'x'</c>.</summary>
+    public string Describe() => Tree is null ? $"leg '{Leg}'" : $"{Tree}'s leg '{Leg}'";
+}
+
+/// <summary>A build directory, and whose it is.</summary>
+/// <param name="Directory">The directory, as the machine that samples spells it.</param>
+/// <param name="Owner">The leg that builds in it.</param>
+public sealed record OwnedBuildDirectory(string Directory, BuildDirectoryOwner Owner);
 
 /// <summary>
 /// Samples the machine's process table while a leg runs, and says what else was using the leg's

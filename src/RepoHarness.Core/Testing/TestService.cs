@@ -11,6 +11,7 @@ using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Testing;
 
@@ -48,6 +49,12 @@ public sealed record TestRequest
 
     /// <summary>The operating system the tests run on, which selects the platform section.</summary>
     public required string PlatformKey { get; init; }
+
+    /// <summary>
+    /// The repository's other trees on the machine that tests, the leg's own left out, as they were listed as its work
+    /// began there: whose build directory a process found beside the tests works in is told by them.
+    /// </summary>
+    public RepositoryTreesFound? Beside { get; init; }
 
     /// <summary>
     /// Who this leg is, for a test invocation that names <c>{leg}</c>, <c>{os}</c> and the rest, or
@@ -304,14 +311,14 @@ public sealed class TestService(
                 {
                     TreeRoot = request.TreeRoot,
                     Inputs = unmeasurable is null ? LegInputs.Watch(inputs) : LegInputs.Unmeasured(unmeasurable),
-                    Contention = new ContentionRequest
-                    {
-                        Leg = request.Leg,
-                        BuildDirectory = request.BuildDirectory,
-                        BuildTools = config.Contention.BuildTools,
-                        SharedResourceTools = config.Contention.SharedResourceTools,
-                        SampleSeconds = config.Defaults.ProcessSampleSeconds,
-                    },
+                    // As a build's is: the tests of a sibling leg, or of another tree's leg, are theirs, never a stranger's.
+                    Contention = ContentionRequests.For(
+                        config,
+                        request.Leg,
+                        request.BuildDirectory,
+                        request.TreeRoot,
+                        request.PlatformKey,
+                        request.Beside),
                 },
                 cancellationToken)
             .ConfigureAwait(false);

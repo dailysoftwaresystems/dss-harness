@@ -379,6 +379,7 @@ internal static class RunCommand
             TreeRoot = leg.TreeRoot,
             WorkingDirectory = leg.TreeRoot,
             BuildDirectory = buildDirectory,
+            Beside = leg.Beside,
             Built = built,
             Identity = leg.IdentityFor(work.RunId.Value),
             Product = product,

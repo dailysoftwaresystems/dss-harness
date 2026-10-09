@@ -25,8 +25,9 @@ public static class ContentionWarnings
     /// One line per tool and per whose it was, never one per process. Measured on a consumer's gate:
     /// 778 lines for two causes, 597 of them one sibling leg's compilers, burying whatever else a
     /// reader was meant to see. And a process working in another leg's build directory is named as
-    /// that leg's, because the cause of the load - two legs on one host - is then the reader's to
-    /// see and decide about, where "outside this run" sent them after a stranger that did not exist.
+    /// that leg's - another tree's leg as that tree's - because the cause of the load - two legs on
+    /// one host - is then the reader's to see and decide about, where "outside this run" sent them
+    /// after a stranger that did not exist.
     /// </remarks>
     public static void Write(
         IHarnessOutput output,
@@ -69,17 +70,18 @@ public static class ContentionWarnings
         return [.. report.SharedResourceUsers
             .GroupBy(user => (user.Tool, user.Owner))
             .OrderBy(group => group.Key.Owner is null ? 1 : 0)
-            .ThenBy(group => group.Key.Owner, StringComparer.Ordinal)
+            .ThenBy(group => group.Key.Owner?.Describe(), StringComparer.Ordinal)
             .ThenBy(group => group.Key.Tool, StringComparer.Ordinal)
-            .Select(group => Line(leg, group.Key.Tool, group.Key.Owner, [.. group], contention))];
+            .Select(group => Line(leg, group.Key.Tool, group.Key.Owner, [.. group], contention, report.OthersUnlisted))];
     }
 
     private static string Line(
         string leg,
         string tool,
-        string? owner,
+        BuildDirectoryOwner? owner,
         IReadOnlyList<ContendingProcess> users,
-        ContentionConfig contention)
+        ContentionConfig contention,
+        string? othersUnlisted)
     {
         var ids = users.Select(user => user.Process.Id).Order().ToList();
 
@@ -92,15 +94,18 @@ public static class ContentionWarnings
 
         var whose = owner is null
             ? "which no declared leg's build directory accounts for"
-            : $"working in leg '{owner}''s build directory";
+            : $"working in the build directory of {owner.Describe()}";
 
         var state = contention.SharedState.TryGetValue(tool, out var named) && !string.IsNullOrWhiteSpace(named)
             ? $"it shares {named}"
             : "it shares state outside any build directory - say which under contention.sharedState";
 
-        var consequence = owner is null
-            ? string.Empty
-            : $", so this leg and '{owner}' load one host and contend for it";
+        var consequence = (owner, othersUnlisted) switch
+        {
+            ({ } other, _) => $", so this leg and {other.Describe()} load one host and contend for it",
+            (null, { } why) => $"; the repository's other trees here could not be listed, so it may be working in one of theirs: {why.TrimEnd('.')}",
+            _ => string.Empty,
+        };
 
         return $"{leg}: {tool} ({processes}), {whose}, ran beside this leg, seen {seen}; {state}{consequence}.";
     }

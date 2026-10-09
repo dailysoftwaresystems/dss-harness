@@ -82,6 +82,25 @@ public sealed class RepositoryTreesTests
             found.Trees);
     }
 
+    /// <summary>
+    /// On a host keeping its main copy under its home - <c>~/src/repo</c>, as a configuration shared by every host says it -
+    /// the trees are spelt with that home, where this process is: what is read of a tree there, and the paths its processes
+    /// name, are its home's, never a directory called <c>~</c> below wherever the process started.
+    /// </summary>
+    [Fact]
+    public async Task OnAHostKeepingItsMainCopyUnderItsHome_TheTreesAreSpeltWithThatHome()
+    {
+        var context = new HarnessContext(
+            new HarnessLayout("/repo", "/repo"),
+            new HarnessConfig { Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "~/src/repo" } } } });
+
+        var found = await Trees(new HarnessFactory()).HereAsync(context, HostId.Ssh("pi"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "src/repo"),
+            found.Trees[0].Root);
+    }
+
     /// <summary>A host whose copies could not be looked for says why, with its main copy still known.</summary>
     [Fact]
     public async Task OnAHostWhoseCopiesCouldNotBeLookedFor_TheyAreSaid_WithItsMainCopyStillKnown()

@@ -745,7 +745,11 @@ internal static class HelpCommand
         builder.AppendLine("warning: one line per tool and per whose it was, with a count and the range of");
         builder.AppendLine("process ids. A process working in another declared leg's build directory is named");
         builder.AppendLine("as that leg's - two legs on one host share its load, which is maxParallelLegs at");
-        builder.AppendLine("work, and yours to decide about. contention.sharedState says what each tool shares,");
+        builder.AppendLine("work, and yours to decide about - and one working in a build directory of another");
+        builder.AppendLine("tree of the repository on that machine, a worktree's, an agent's or the main");
+        builder.AppendLine("checkout's, as that tree's leg's: 'worktree o1/xa's leg 'linux-debug''. Only what no");
+        builder.AppendLine("tree there accounts for is nobody's known, and where the other trees could not be");
+        builder.AppendLine("listed the line says so. contention.sharedState says what each tool shares,");
         builder.AppendLine("in the words the warning uses:");
         builder.AppendLine();
         builder.AppendLine("  \"sharedState\": { \"ccache\": \"the per-user compiler cache\" }");

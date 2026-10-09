@@ -8,6 +8,7 @@ using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Runners;
 
@@ -77,6 +78,12 @@ public sealed record RunnerRunRequest
     /// leg and so has none. What a step's <c>watchContention</c> watches.
     /// </summary>
     public string? BuildDirectory { get; init; }
+
+    /// <summary>
+    /// The repository's other trees on the machine that runs the runner, the leg's own left out, as they were listed as
+    /// its work began there: whose build directory a process a step's <c>watchContention</c> finds works in is told by them.
+    /// </summary>
+    public RepositoryTreesFound? Beside { get; init; }
 
     /// <summary>
     /// The legs this run actually selected, for a runner that leaves its own <c>legs</c> out and so
@@ -334,7 +341,8 @@ public sealed class RunnerRunService(
                             request.Leg,
                             request.BuildDirectory!,
                             request.TreeRoot,
-                            _platform.PlatformKey)
+                            _platform.PlatformKey,
+                            request.Beside)
                         : null,
                 },
                 cancellationToken)
