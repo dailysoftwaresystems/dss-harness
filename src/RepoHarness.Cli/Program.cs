@@ -78,9 +78,9 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
         return HarnessExit.UsageError;
     }
 
-    // A command past its point of no return goes on after Ctrl+C - a deletion, a fold or a hand-over is
-    // never left half written, and a host agent can be running one for another machine - so each is
-    // waited for as long as a deletion expects. No other command is any slower to stop.
+    // A command past its point of no return goes on after Ctrl+C - a deletion, a fold, a hand-over or a
+    // move of an agent's base is never left half written, and a host agent can be running one for another
+    // machine - so each is waited for as long as a deletion expects. No other command is any slower to stop.
     var invocation = new InvocationConfiguration();
 
     if (PointOfNoReturn.Commands.Contains(parseResult.CommandResult.Command.Name))

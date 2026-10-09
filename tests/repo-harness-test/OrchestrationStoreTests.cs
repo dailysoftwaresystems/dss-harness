@@ -20,6 +20,8 @@ public sealed class OrchestrationStoreTests
     [InlineData("closed with no closing")]
     [InlineData("a session ending in a line break")]
     [InlineData("a closing whose evidence is null")]
+    [InlineData("a move of its base to that very base")]
+    [InlineData("a move of its base to no commit")]
     public async Task AnAgentRecordThatDoesNotRead_IsRefused_NamingItsFile(string how)
     {
         using var temp = new TempDirectory();
@@ -27,6 +29,7 @@ public sealed class OrchestrationStoreTests
         await kit.CreateAgentAsync("ag", session: "sess1");
         var file = kit.Layout.AgentRecordFile("ag");
         var text = File.ReadAllText(file);
+        var based = kit.Record("ag").Base;
 
         File.WriteAllText(file, how switch
         {
@@ -41,6 +44,8 @@ public sealed class OrchestrationStoreTests
                 "\"state\": \"live\"",
                 "\"state\": \"closed\",\n  \"abandoned\": false,\n  \"closing\": { \"at\": \"2026-09-29T00:00:00+00:00\", \"evidence\": null, \"stamp\": \"1:1\", \"held\": {} }",
                 StringComparison.Ordinal),
+            "a move of its base to that very base" => text.Replace("\"state\": \"live\"", $"\"state\": \"live\",\n  \"moving\": \"{based}\"", StringComparison.Ordinal),
+            "a move of its base to no commit" => text.Replace("\"state\": \"live\"", "\"state\": \"live\",\n  \"moving\": \"somewhere\"", StringComparison.Ordinal),
             _ => text.Replace("\"session\": \"sess1\"", "\"session\": \"sess1\\n\"", StringComparison.Ordinal),
         });
 

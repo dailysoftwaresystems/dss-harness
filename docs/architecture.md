@@ -575,22 +575,45 @@ tree's copy is not the one its seed records, and any other once the main tree's 
 what the agent's base holds, asked of git as a fold asks it. refresh-agent hands over every such path under the paths
 it is given, refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
 comparison asked of the agent's worktree), and seed-agent hands them besides the main tree's uncommitted state. A
-symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. Both
-say when the agent's base is not the main tree's HEAD. A path named otherwise than in UTF-8, committed or not, refuses
-any hand-over, named as git's quoting writes it: no file opens here by such a name.
+symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
+commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,
+one `cat-file --batch-check` process) - and a directory is a repository of its own only where it holds its own `.git`,
+or the index holds a submodule's entry there: named, never handed. Any other directory holds no file at its path, its
+files weighed on paths of their own, so a file the main tree turned into a directory is handed as the file's deletion
+and the directory's files, and a directory it turned into a file as the files' deletions and the file - every deletion
+made first, with the directories it empties, then every file copied. What the agent holds of its own where a hand-over
+needs room refuses it, forced or not, before anything is written (`AgentFold.InTheWayOfHanding`): a file or a link at
+a part of a handed file's path, which a copy would stop at or write through, out of its worktree, and anything in a
+directory where a handed file goes that the hand-over does not delete. Neither hands anything while a move of the
+agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base is not the main
+tree's HEAD, seed-agent --empty too. A path named otherwise than in UTF-8, committed or not, refuses any hand-over,
+named as git's quoting writes it: no file opens here by such a name.
 
 rebase-agent moves an agent's base to the main tree's HEAD (`AgentFold.MeasureRebaseAsync`). Each path the two commits
 hold differently (`git diff --name-only`, commit to commit) is shared - kept as its seed records it, since the seed,
 not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
 base holds it, and comes in as git holds it (`git checkout --no-overlay <commit>`, the paths on standard input and read
-literally), or changed by the agent - asked of git against both commits, with every file the old base does not hold
-its own, untracked, ignored or staged, and one holding the new base's bytes included - which refuses the move unless
-`--settled` names it. The new base's paths are written first, then HEAD and the index
-move (`git reset --mixed`), then the record and the worktree's base ref name the new base: a worktree standing on a
-commit the main tree's history holds that its record does not name is a move stopped part way, which rebase-agent
-finishes and fold-agent and delete-agent refuse, saying so. One standing on a commit before its base was moved back by
-hand, which no move of its base does: each refuses it, saying how to put it back. Where git cannot say which a HEAD is,
-each says so and refuses, never guessing.
+literally), or changed by the agent - asked of git against both commits, with anything where the old base holds
+nothing its own, untracked, ignored or staged, and one holding the new base's bytes included - which refuses the move
+unless `--settled` names it. What each commit holds at a path is told apart (`HeldAtAsync`): a directory the old base
+held, now a file or a submodule's entry, is held as the old base holds it while the agent's worktree holds a directory
+or nothing there, and a submodule's entry as git compares it, so neither is taken for something the agent made.
+Nothing of the agent's is written over or hidden: git removes a file or a link where a path it writes needs a
+directory, removes a directory, with all it holds, where it writes a file, and hides all a directory holds where it
+writes a submodule's entry the old base did not hold - a submodule's own checkout it leaves alone - so each refuses the
+move unless it is the old base's own, coming in with the rest - the agent's own, settled or shared, each named with
+what to do. A file or a submodule's entry where the old base held a directory is written last
+(`RebasePlan.WrittenLast`), once what was below it is: written first, git removes that, with the directories it leaves
+empty, where asked for both at once it finds that gone and stops, and a submodule's entry written first leaves it in
+place, hidden from git. The record names where the move goes (`Moving`) before anything is written, then the new
+base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
+name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
+again - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
+base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, saying
+so. Only a move its record names is ever finished, and only from its base or where it goes: a HEAD anywhere else was
+moved by hand - back, forward or beside its base, a move under way or not - or names no commit, and each command
+refuses it, saying how to put it back; one past its base that the main tree's history does not hold is a commit made
+inside the agent. Where git cannot say which a HEAD is, each fails, exit 20, saying so, never guessing.
 
 An agent's contribution is a measurement (`AgentFold`): its worktree's status, and every path it shares with the
 main tree whether its status lists it or not, less the shared paths left as they were. Each path goes in exactly one
@@ -603,9 +626,13 @@ out with other line endings is no change, and with its mode, so a sibling's chan
 what it wrote, removed and found already in as shared, so a later fold - after a review sends the agent back - weighs
 those paths against what the fold left, never against the base: the agent putting a path back as it was is its change
 to fold. A refusal of a changed main-tree path says whether a commit or an uncommitted edit changed it, since the two
-are reconciled differently. A deletion needs the same baseline proof a copy does. A path reached through a link in
-either tree, a directory - a submodule, a repository of the agent's own - and a HEAD moved past the base are
-refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
+are reconciled differently. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
+holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
+files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with
+the directories it empties, then every file written. A path reached through a link in either tree, a repository of
+its own - a submodule, or the agent's own - what the main tree holds in the way of the agent's files (a file where one
+needs a directory, or files the agent did not delete in a directory one replaces), a HEAD off the base and a move of
+the base stopped part way are refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
 against the registry the fold would otherwise have written over. `--settled` is the one way out of a path's refusal, asked before the deletion branch so a
 deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. A path the main
 tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
@@ -2953,7 +2980,7 @@ with "the harness could not run", because the remedies differ.
 | 14 | A required tool is missing, or could not be started |
 | 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
 | 20 | The wrapped command ran and failed |
-| 21 | Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold or a hand-over stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
+| 21 | Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold, a hand-over or a move of an agent's base stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 

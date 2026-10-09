@@ -1387,7 +1387,12 @@ public sealed partial class HelpTests
         Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
         Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
         Assert.Contains("refuses the move, nothing changed, unless --settled <path> names it", text, StringComparison.Ordinal);
-        Assert.Contains("run again after a move that stopped part way, it finishes it", text, StringComparison.Ordinal);
+        Assert.Contains(
+            $"a move that stopped part way, exit {HarnessExit.Incomplete}, is finished where it was going by running it again, what it wrote held as "
+            + "the new base holds it, and every other command refuses the agent until then",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("a file turned into a directory, or a directory into a file or a submodule's entry - and its own changes", text, StringComparison.Ordinal);
         Assert.Contains("never forced, and its evidence check kept, so a file written late stops it", text, StringComparison.Ordinal);
         Assert.Contains("a file changed or new since is work, left for you", text, StringComparison.Ordinal);
         Assert.Contains("one not found is said, and one found and not kept stops it before anything is closed", text, StringComparison.Ordinal);
@@ -1395,18 +1400,35 @@ public sealed partial class HelpTests
         Assert.Contains("it removes the record last, so one that stops part way finishes when run again", text, StringComparison.Ordinal);
         Assert.Contains("Seeding again hands besides every path the main tree holds otherwise than the agent shares it, committed or not.", text, StringComparison.Ordinal);
         Assert.Contains(
-            "a symbolic link the main tree committed is named and never handed. Both say when the agent's base is not the main tree's HEAD. A "
-            + "path named otherwise than in UTF-8, committed or not, refuses any hand-over, naming it as git quotes it: no file opens here by such "
-            + "a name.",
+            "a symbolic link the main tree committed is named and never handed, and so is a submodule's entry. A file the main tree turned into a "
+            + "directory, or a directory it turned into a file, is handed as git holds it: what goes is removed first, then what comes is copied.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "or a file of its own where the main tree committed one, ignored, staged or holding the same bytes included - refuses the move",
+            "refuses the hand-over, forced or not, naming each: copied, it would write over them, or through the link out of its worktree. Neither "
+            + "hands anything while a move of the agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base "
+            + "is not the main tree's HEAD. A path named otherwise than in UTF-8, committed or not, refuses any hand-over, naming it as git quotes it: "
+            + "no file opens here by such a name.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "A HEAD moved back by hand, to a commit before its base, is no such move: each refuses it, saying how to put it back, and a HEAD "
-            + "git cannot place is said to be one, never guessed at.",
+            "or anything of its own where the main tree committed a file, ignored, staged or holding the same bytes included - refuses the move",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a file or a link where the new base holds a directory, and what it keeps - its own, settled or shared - in a directory where the new "
+            + "base holds a file, or a submodule's entry that would hide it from git",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Only such a move is ever finished, and only from its base or where it goes: a HEAD moved by hand - back, forward or beside its base - "
+            + "or naming no commit is never taken for one, and each command refuses it, saying how to put it back; a commit made inside the agent "
+            + "is said to be one, and where git cannot say which a HEAD is, each says so and fails, never guessing.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "deleted, removed first, with the directories that leaves empty, so a file it turned into a directory, or a directory into a file, "
+            + "makes room for what replaced it",
             text,
             StringComparison.Ordinal);
     }

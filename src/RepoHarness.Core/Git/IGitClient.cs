@@ -82,13 +82,13 @@ public interface IGitClient
     Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// The id of the blob <paramref name="commit"/> holds at each of <paramref name="paths"/>, or <see langword="null"/>
-    /// where it holds no file there - nothing, a directory, or a submodule's entry. One git process for them all.
+    /// What <paramref name="commit"/> holds at each of <paramref name="paths"/>: a file and its blob, a directory, a
+    /// submodule's entry and the commit it names, or nothing. One git process for them all.
     /// </summary>
     /// <exception cref="HarnessException">
     /// git could not read the commit, answer for every path, or read a file the commit lists.
     /// </exception>
-    Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(
+    Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(
         string directory,
         string commit,
         IReadOnlyList<string> paths,

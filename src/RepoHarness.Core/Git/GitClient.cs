@@ -230,7 +230,7 @@ public sealed class GitClient(
         return ParseStatus(result.StandardOutput);
     }
 
-    public async Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(
+    public async Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(
         string directory,
         string commit,
         IReadOnlyList<string> paths,
@@ -239,16 +239,17 @@ public sealed class GitClient(
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
         ArgumentNullException.ThrowIfNull(paths);
 
-        var ids = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var held = new Dictionary<string, GitHeld>(StringComparer.Ordinal);
 
         if (paths.Count == 0)
         {
-            return ids;
+            return held;
         }
 
         // A line break cannot travel as a line of git's batch input, so such a path is answered from the commit's
         // listing instead, as reading files at a commit does.
-        var files = paths.Any(HoldsLineBreak) ? await FilesAtCommitAsync(directory, commit, cancellationToken).ConfigureAwait(false) : null;
+        var tree = paths.Any(HoldsLineBreak) ? await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false) : null;
+        var files = tree is null ? null : FilesIn(tree);
         var asked = paths.Where(path => !HoldsLineBreak(path)).Distinct(StringComparer.Ordinal).ToList();
 
         // The commit is asked about first, in the same process: git answers "missing" for a commit it cannot read
@@ -294,29 +295,36 @@ public sealed class GitClient(
 
         for (var index = 0; index < asked.Count; index++)
         {
-            switch (lines[index + 1].Split(' '))
+            held[asked[index]] = lines[index + 1].Split(' ') switch
             {
-                case ["blob", var id]:
-                    ids[asked[index]] = id;
-                    break;
-                case ["tree" or "commit" or "tag", _]:
-                    ids[asked[index]] = null;
-                    break;
-                default:
-                    ids[asked[index]] = null;
-                    unanswered.Add(asked[index]);
-                    break;
-            }
+                ["blob", var id] => GitHeld.File(id),
+                ["tree", _] => GitHeld.Directory,
+
+                // Only a submodule's entry names another kind of object: answered with the format asked for where this
+                // repository holds the commit it names, and as the commit and the word "submodule" where it does not.
+                ["commit" or "tag", var named] => GitHeld.Submodule(named),
+                [var named, "submodule"] => GitHeld.Submodule(named),
+                _ => Unanswered(asked[index]),
+            };
         }
 
         await RefuseListedButUnreadAsync(directory, commit, unanswered, files, cancellationToken).ConfigureAwait(false);
 
         foreach (var path in paths.Where(HoldsLineBreak))
         {
-            ids[path] = files!.GetValueOrDefault(path);
+            // The listing names files and submodules; a directory is what holds a name below it.
+            held[path] = tree!.FirstOrDefault(entry => entry.Name.IsUtf8 && entry.Name.Text == path) is { } entry
+                ? entry.IsFile ? GitHeld.File(entry.ObjectId) : GitHeld.Submodule(entry.ObjectId)
+                : tree!.Any(entry => entry.Name.IsUtf8 && entry.Name.Text.StartsWith(path + "/", StringComparison.Ordinal)) ? GitHeld.Directory : GitHeld.Nothing;
         }
 
-        return ids;
+        return held;
+
+        GitHeld Unanswered(string path)
+        {
+            unanswered.Add(path);
+            return GitHeld.Nothing;
+        }
     }
 
     public async Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(
@@ -1312,7 +1320,11 @@ public sealed class GitClient(
         string directory,
         string commit,
         CancellationToken cancellationToken)
-        => (await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false))
+        => FilesIn(await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Each file <paramref name="tree"/> lists whose name is UTF-8, with the object git holds its bytes in.</summary>
+    private static Dictionary<string, string> FilesIn(IReadOnlyList<TreeEntry> tree)
+        => tree
             .Where(entry => entry.IsFile && entry.Name.IsUtf8)
             .ToDictionary(entry => entry.Name.Text, entry => entry.ObjectId, StringComparer.Ordinal);
 

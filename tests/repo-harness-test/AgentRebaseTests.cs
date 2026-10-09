@@ -1,5 +1,9 @@
+using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Worktrees;
 
@@ -155,7 +159,8 @@ public sealed class AgentRebaseTests
 
     /// <summary>
     /// A move that stopped once the agent's worktree stood on the new base, before its record named it, is said to be one
-    /// by the fold, which refuses it, and running rebase-agent again finishes it.
+    /// by the fold, which refuses it, and running rebase-agent again finishes it - a file the new base added, which the move
+    /// wrote, held as the new base holds it, never taken for one the agent made.
     /// </summary>
     [Fact]
     public async Task AMoveThatStoppedPartWay_IsSaidToBeOne_AndRunningAgainFinishesIt()
@@ -163,24 +168,434 @@ public sealed class AgentRebaseTests
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
         OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "docs/added.md", "added\n");
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
         var to = await HeadAsync(kit.Main);
-        await kit.GitAsync(worktree, "checkout", to, "--", "b.txt");
+
+        // Where a move stops once HEAD and the index stand on the new base, and before its record names it.
+        kit.Harness.OrchestrationStore.UpdateAgent(kit.Layout, "ag", record => record with { Moving = to });
+        await kit.GitAsync(worktree, "checkout", to, "--", "b.txt", "docs/added.md");
         await kit.GitAsync(worktree, "reset", "--mixed", "--quiet", to);
 
         var fold = await kit.FoldAsync("ag", apply: false);
 
         Assert.Equal(HarnessExit.Refused, fold.ExitCode);
-        Assert.Contains("a commit the main tree's history holds", fold.Message);
-        Assert.Contains("'dssharness rebase-agent o1 ag --apply' finishes it", fold.Message);
+        Assert.Equal(
+            $"Moving the base of agent 'ag' of 'o1' from {ReportText.Commit(from)} to {ReportText.Commit(to)} stopped part way, and its worktree may hold "
+            + "part of what the new base brings: 'dssharness rebase-agent o1 ag --apply' finishes it.",
+            fold.Message);
 
         var finished = await RebaseAsync(kit, apply: true);
 
         Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
-        Assert.Contains("and 1 path(s) it holds as the new base does already, with nothing to write:", finished.Details!);
+        Assert.Contains("and 2 path(s) it holds as the new base does already, with nothing to write:", finished.Details!);
+        Assert.Contains("  docs/added.md", finished.Details!);
         Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Null(kit.Record("ag").Moving);
+        Assert.Contains("0 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
+    }
+
+    /// <summary>
+    /// An agent's HEAD moved by hand to a later commit of the main tree's, with no move of its base under way, is said to be
+    /// one by the fold and by the move, each refusing: never taken for a move stopped part way, which would move its base to
+    /// wherever a hand put its HEAD.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentHeadMovedForwardByHand_IsSaidToBeOne_NeverFinishedAsAMove()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        var to = await HeadAsync(kit.Main);
+        await kit.GitAsync(worktree, "checkout", "--quiet", "--detach", to);
+
+        foreach (var outcome in new[] { await kit.FoldAsync("ag", apply: false), await RebaseAsync(kit, apply: true) })
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.StartsWith(
+                $"Agent 'ag' of 'o1''s HEAD is {ReportText.Commit(to)}, a commit of the main tree's after its base {ReportText.Commit(from)}, though no move "
+                + "of its base is under way: it was moved there by hand",
+                outcome.Message,
+                StringComparison.Ordinal);
+            Assert.Contains($"after a checkout, 'git -C \"{worktree}\" checkout {from}'", outcome.Message);
+        }
+
+        Assert.Equal(from, kit.Record("ag").Base);
+        Assert.Equal(to, await HeadAsync(worktree));
+    }
+
+    /// <summary>
+    /// A move stopped part way whose agent's HEAD a hand then moved to another commit of the main tree's - neither its base
+    /// nor where the move goes - is never finished there, nor where the move goes: each refuses it, saying a move stands
+    /// stopped, and once its HEAD is put back the move is finished where it was going.
+    /// </summary>
+    [Fact]
+    public async Task AMoveStoppedPartWay_WhoseHeadAHandMovedElsewhere_IsNeverFinishedThere()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        var between = await HeadAsync(kit.Main);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted again\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "and again", Token);
+        var to = await HeadAsync(kit.Main);
+        kit.Harness.OrchestrationStore.UpdateAgent(kit.Layout, "ag", record => record with { Moving = to });
+        await kit.GitAsync(worktree, "checkout", "--quiet", "--detach", between);
+
+        foreach (var outcome in new[] { await kit.FoldAsync("ag", apply: false), await RebaseAsync(kit, apply: true) })
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.StartsWith(
+                $"Agent 'ag' of 'o1''s HEAD is {ReportText.Commit(between)}, a commit of the main tree's after its base {ReportText.Commit(from)}, while a "
+                + $"move of its base to {ReportText.Commit(to)} stands stopped part way: it was moved there by hand",
+                outcome.Message,
+                StringComparison.Ordinal);
+        }
+
+        Assert.Equal(from, kit.Record("ag").Base);
+        Assert.Equal(between, await HeadAsync(worktree));
+
+        await kit.GitAsync(worktree, "checkout", "--quiet", from);
+        var finished = await RebaseAsync(kit, apply: true);
+
+        Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
+        Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Null(kit.Record("ag").Moving);
+        Assert.Equal("two\ncommitted again\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
+    /// An agent's HEAD moved to a commit the main tree's history holds that is neither before its base nor after it - one
+    /// of a line merged since - is said to have been moved there by hand, never taken for a move stopped part way.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentHeadOnACommitBesideItsBase_IsSaidToHaveBeenMovedByHand()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        await kit.GitAsync(kit.Main, "checkout", "--quiet", "-b", "beside", $"{from}~1");
+        OrchestrationKit.Write(kit.Main, "beside.txt", "beside\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a line beside the agent's base", Token);
+        var beside = await HeadAsync(kit.Main);
+        await kit.GitAsync(kit.Main, "checkout", "--quiet", "-");
+        await kit.GitAsync(kit.Main, "merge", "--quiet", "--no-edit", "beside");
+        await kit.GitAsync(worktree, "checkout", "--quiet", "--detach", beside);
+
+        foreach (var outcome in new[] { await kit.FoldAsync("ag", apply: false), await RebaseAsync(kit, apply: true) })
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.StartsWith(
+                $"Agent 'ag' of 'o1''s HEAD is {ReportText.Commit(beside)}, a commit neither before nor after its base {ReportText.Commit(from)}: it was "
+                + "moved there by hand",
+                outcome.Message,
+                StringComparison.Ordinal);
+        }
+
+        Assert.Equal(from, kit.Record("ag").Base);
+    }
+
+    /// <summary>
+    /// An agent whose HEAD names no commit - a branch with none yet checked out in it - is said to be one, with what puts its
+    /// HEAD back, never taken for a commit made inside it.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentHeadNamingNoCommit_IsSaidToBeOne()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        await kit.GitAsync(worktree, "checkout", "--quiet", "--orphan", "nowhere");
+
+        foreach (var outcome in new[] { await kit.FoldAsync("ag", apply: false), await RebaseAsync(kit, apply: true) })
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.Equal(
+                $"Agent 'ag' of 'o1''s HEAD names no commit - a branch with none yet was checked out in it - so its work cannot be weighed against its "
+                + $"base {ReportText.Commit(from)}: 'git -C \"{worktree}\" reset --soft {from}' puts its HEAD back on its base, its files as they are; "
+                + "then run again.",
+                outcome.Message);
+        }
+
+        Assert.Equal(from, kit.Record("ag").Base);
+    }
+
+    /// <summary>
+    /// While a move of an agent's base stands stopped part way, every command that works with its worktree but rebase-agent
+    /// refuses it, saying so - deleting, seeding and refreshing as folding do - and so does each one an agent whose HEAD was
+    /// moved off its base; rebase-agent finishes the move, and the agent is worked with again.
+    /// </summary>
+    [Fact]
+    public async Task AMoveStoppedPartWay_OrAHeadOffItsBase_RefusesEveryCommandButTheMove()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            ResetFailure = new HarnessException(HarnessExit.CommandFailed, "fatal: Unable to create 'index.lock': File exists."),
+        };
+        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+
+        foreach (var outcome in await EveryCommandButTheMoveAsync(kit))
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.Contains("stopped part way, and its worktree may hold part of what the new base brings: 'dssharness rebase-agent o1 ag --apply' finishes it.", outcome.Message);
+        }
+
+        Assert.True((await RebaseAsync(kit, apply: true)).Succeeded);
+        OrchestrationKit.Write(worktree, "a.txt", "one\nagent edit\n");
+        await kit.Harness.CommitAllAsync(worktree, "inside the agent", Token);
+
+        foreach (var outcome in await EveryCommandButTheMoveAsync(kit))
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.Contains("a commit made inside it", outcome.Message);
+        }
+
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+        Assert.True(Directory.Exists(worktree));
+    }
+
+    /// <summary>
+    /// A file of the agent's own where the main tree has since committed a directory - a file it made, git ignores or not -
+    /// refuses the move, naming it: git, writing what the directory holds, would remove the file without a word.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheAgentMadeWhereTheMainTreeCommittedADirectory_RefusesTheMove_AndIsKept()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = ReportText.Commit(kit.Record("ag").Base!);
+        OrchestrationKit.Write(worktree, "notes/design", "the agent's own design\n");
+        OrchestrationKit.Write(kit.Main, "notes/design/overview.md", "the main tree's\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            $"  'notes/design': the agent made it, and the main tree committed 'notes/design/overview.md' under it since the agent's base {from}, which needs "
+            + "a directory there: move it aside, and run again",
+            refused.Details!);
+        Assert.Equal("the agent's own design\n", OrchestrationKit.Read(worktree, "notes/design"));
+        Assert.Equal(kit.Record("ag").Base, await HeadAsync(worktree));
+    }
+
+    /// <summary>
+    /// A directory the main tree turned into a file comes in as git holds it, the directory's files gone with it, and the
+    /// agent's fold then has nothing to remove; where the agent holds a file of its own in that directory, the move is
+    /// refused, naming it, and the file is kept: git, writing the file, would remove the directory with all it holds.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryTheMainTreeTurnedIntoAFile_ComesIn_UnlessTheAgentHoldsAFileOfItsOwnThere()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = ReportText.Commit(kit.Record("ag").Base!);
+        OrchestrationKit.Write(worktree, "docs/mine.md", "the agent's own\n");
+        Directory.Delete(Path.Combine(kit.Main, "docs"), recursive: true);
+        OrchestrationKit.Write(kit.Main, "docs", "a file now\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            $"  'docs': the main tree committed a file there since the agent's base {from}, where the agent's worktree holds a directory with files of its "
+            + "own - docs/mine.md - that writing it would remove: move them aside, and run again",
+            refused.Details!);
+        Assert.Equal("the agent's own\n", OrchestrationKit.Read(worktree, "docs/mine.md"));
+
+        File.Delete(Path.Combine(worktree, "docs", "mine.md"));
+        var applied = await RebaseAsync(kit, apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(["2 path(s) the main tree committed since came into its worktree as git holds them:", "  docs", "  docs/x.md"], applied.Details!.Take(3));
+        Assert.Equal("a file now\n", OrchestrationKit.Read(worktree, "docs"));
+        Assert.Contains("0 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
+    }
+
+    /// <summary>
+    /// A directory the agent and the main tree each turned into a file refuses the move, as any path both changed does, and
+    /// the agent's file is kept: its base held a directory there, and a file is no directory the agent holds as it did.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryTheAgentAndTheMainTreeEachTurnedIntoAFile_RefusesTheMove_AndTheAgentsIsKept()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = ReportText.Commit(kit.Record("ag").Base!);
+        Directory.Delete(Path.Combine(worktree, "docs"), recursive: true);
+        OrchestrationKit.Write(worktree, "docs", "the agent's\n");
+        Directory.Delete(Path.Combine(kit.Main, "docs"), recursive: true);
+        OrchestrationKit.Write(kit.Main, "docs", "the main tree's\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal($"  'docs': the agent changed it, and the main tree committed a change to it since the agent's base {from}", refused.Details![0]);
+        Assert.Equal("the agent's\n", OrchestrationKit.Read(worktree, "docs"));
+        Assert.Equal(kit.Record("ag").Base, await HeadAsync(worktree));
+    }
+
+    /// <summary>
+    /// What comes in over a path the agent shares with the main tree, or one it declared settled, refuses the move, each
+    /// saying what to do - a file of either where the new base needs a directory, and either in a directory where it holds a
+    /// file - and a path refused on its own line is never said again for what comes in under it.
+    /// </summary>
+    [Fact]
+    public async Task WhatComesInWhereTheAgentSharesOrSettledAPath_RefusesTheMove_SayingForEachWhatToDo()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "lib/y.md", "y\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a directory", Token);
+        OrchestrationKit.Write(kit.Main, "notes", "handed notes\n");
+        OrchestrationKit.Write(kit.Main, "docs/handed.md", "handed\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = ReportText.Commit(kit.Record("ag").Base!);
+        File.Delete(Path.Combine(kit.Main, "notes"));
+        OrchestrationKit.Write(kit.Main, "notes/a.md", "the main tree's\n");
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+        OrchestrationKit.Write(kit.Main, "a.txt/x", "the main tree's\n");
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        OrchestrationKit.Write(kit.Main, "b.txt/y", "the main tree's\n");
+        Directory.Delete(Path.Combine(kit.Main, "docs"), recursive: true);
+        OrchestrationKit.Write(kit.Main, "docs", "a file now\n");
+        Directory.Delete(Path.Combine(kit.Main, "lib"), recursive: true);
+        OrchestrationKit.Write(kit.Main, "lib", "a file now\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's\n");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nthe agent's\n");
+        OrchestrationKit.Write(worktree, "lib/y.md", "y\nthe agent's\n");
+
+        var refused = await RebaseAsync(kit, apply: true, "a.txt", "lib/y.md");
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            [
+                $"  'a.txt' was declared settled, and the main tree committed 'a.txt/x' under it since the agent's base {from}, which needs a directory there, "
+                    + "so it cannot stay as the agent's change: reconcile it by hand, and run again without --settled for it",
+                $"  'b.txt': the agent changed it, and the main tree committed a change to it since the agent's base {from}",
+                $"  'docs': the main tree committed a file there since the agent's base {from}, where the agent shares docs/handed.md with the main tree, which "
+                    + "writing it would remove: refresh-agent hands it what the main tree holds there first",
+                $"  'lib': the main tree committed a file there since the agent's base {from}, and writing it would remove lib/y.md, declared settled: "
+                    + "reconcile them by hand, and run again without --settled for them",
+                $"  'notes' is shared with the main tree - handed to the agent, or folded - and the main tree committed 'notes/a.md' under it since the "
+                    + $"agent's base {from}, which needs a directory there: refresh-agent hands it what the main tree holds there first",
+            ],
+            refused.Details!.Take(5));
+        Assert.Equal("one\nthe agent's\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal("handed\n", OrchestrationKit.Read(worktree, "docs/handed.md"));
+        Assert.Equal(kit.Record("ag").Base, await HeadAsync(worktree));
+    }
+
+    /// <summary>
+    /// A submodule the main tree moved to another commit comes in as git holds it: its entry is no directory the agent made,
+    /// and the agent's fold then has nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task ASubmoduleTheMainTreeMoved_ComesIn()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var first = await HeadAsync(kit.Main);
+        Directory.CreateDirectory(Path.Combine(kit.Main, "lib", "sub"));
+        await kit.GitAsync(kit.Main, "update-index", "--add", "--cacheinfo", $"160000,{first},lib/sub");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a submodule");
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.GitAsync(kit.Main, "update-index", "--cacheinfo", $"160000,{kit.Record("ag").Base},lib/sub");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "the submodule moved");
+
+        var applied = await RebaseAsync(kit, apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(["1 path(s) the main tree committed since came into its worktree as git holds them:", "  lib/sub"], applied.Details!.Take(2));
+        Assert.True(Directory.Exists(Path.Combine(worktree, "lib", "sub")));
         Assert.True((await kit.FoldAsync("ag", apply: false)).Succeeded);
+    }
+
+    /// <summary>
+    /// A submodule the main tree moved comes in as its entry alone where the agent's worktree holds its checkout: git moves
+    /// the entry and leaves the checkout as it is, so nothing the checkout holds is taken for anything in the way.
+    /// </summary>
+    [Fact]
+    public async Task ASubmoduleTheMainTreeMoved_ComesIn_ItsCheckoutInTheAgentLeftAsItIs()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var first = await HeadAsync(kit.Main);
+        Directory.CreateDirectory(Path.Combine(kit.Main, "lib", "sub"));
+        await kit.GitAsync(kit.Main, "update-index", "--add", "--cacheinfo", $"160000,{first},lib/sub");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a submodule");
+        var worktree = await kit.CreateAgentAsync("ag");
+        var checkout = Path.Combine(worktree, "lib", "sub");
+        await kit.GitAsync(worktree, "clone", "--quiet", "--no-checkout", kit.Main, checkout);
+        await kit.GitAsync(checkout, "checkout", "--quiet", "--detach", first);
+        await kit.GitAsync(kit.Main, "update-index", "--cacheinfo", $"160000,{kit.Record("ag").Base},lib/sub");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "the submodule moved");
+
+        var applied = await RebaseAsync(kit, apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(["1 path(s) the main tree committed since came into its worktree as git holds them:", "  lib/sub"], applied.Details!.Take(2));
+        Assert.True(File.Exists(Path.Combine(checkout, "a.txt")));
+        Assert.Equal(first, await HeadAsync(checkout));
+    }
+
+    /// <summary>
+    /// A directory the main tree turned into a submodule's entry comes in as git holds it - what the directory held gone, an
+    /// empty directory for the entry - never left in place where the entry hides it from git; where the agent holds a file
+    /// of its own in that directory, the move is refused, naming it, and the file is kept.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryTheMainTreeTurnedIntoASubmodule_ComesIn_UnlessTheAgentHoldsAFileOfItsOwnThere()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        OrchestrationKit.Write(worktree, "docs/mine.md", "the agent's own\n");
+        await kit.GitAsync(kit.Main, "rm", "-r", "--quiet", "docs");
+        Directory.CreateDirectory(Path.Combine(kit.Main, "docs"));
+        await kit.GitAsync(kit.Main, "update-index", "--add", "--cacheinfo", $"160000,{from},docs");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a submodule where a directory was");
+
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            $"  'docs': the main tree committed a submodule's entry there since the agent's base {ReportText.Commit(from)}, where the agent's worktree holds a "
+            + "directory with files of its own - docs/mine.md - that writing it would hide from git: move them aside, and run again",
+            refused.Details!);
+        Assert.Equal("the agent's own\n", OrchestrationKit.Read(worktree, "docs/mine.md"));
+
+        File.Delete(Path.Combine(worktree, "docs", "mine.md"));
+        var applied = await RebaseAsync(kit, apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(["2 path(s) the main tree committed since came into its worktree as git holds them:", "  docs", "  docs/x.md"], applied.Details!.Take(3));
+        Assert.True(Directory.Exists(Path.Combine(worktree, "docs")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(worktree, "docs")));
+        Assert.Contains("0 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
     }
 
     /// <summary>A move whose record in git cannot be written still stands, its record naming the new base, and says so.</summary>
@@ -290,8 +705,9 @@ public sealed class AgentRebaseTests
     }
 
     /// <summary>
-    /// A move git stops once what the new base brings is written, before HEAD moves, is incomplete, saying to run it again;
-    /// run again, it finishes, the paths already written held as the new base holds them.
+    /// A move git stops once what the new base brings is written, before HEAD moves, is incomplete, saying to run it again,
+    /// and its record says where it was going; run again, it finishes, the paths already written - a file the new base added
+    /// among them - held as the new base holds them.
     /// </summary>
     [Fact]
     public async Task AMoveGitStopsPartWay_IsIncomplete_SayingToRunItAgain_AndRunningAgainFinishesIt()
@@ -301,6 +717,7 @@ public sealed class AgentRebaseTests
         var worktree = await kit.CreateAgentAsync("ag");
         var from = kit.Record("ag").Base!;
         OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "docs/added.md", "added\n");
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
         var to = await HeadAsync(kit.Main);
         var git = new InterceptingGitClient(kit.Harness.GitClient)
@@ -317,15 +734,19 @@ public sealed class AgentRebaseTests
             + "'dssharness rebase-agent o1 ag --apply' again once that is dealt with, and it finishes it.",
             stopped.Message);
         Assert.Equal(from, kit.Record("ag").Base);
+        Assert.Equal(to, kit.Record("ag").Moving);
         Assert.Equal(from, await HeadAsync(worktree));
         Assert.Equal("two\ncommitted\n", OrchestrationKit.Read(worktree, "b.txt"));
 
         var finished = await RebaseAsync(kit, apply: true);
 
         Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
-        Assert.Contains("and 1 path(s) it holds as the new base does already, with nothing to write:", finished.Details!);
+        Assert.Contains("and 2 path(s) it holds as the new base does already, with nothing to write:", finished.Details!);
+        Assert.Contains("  docs/added.md", finished.Details!);
         Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Null(kit.Record("ag").Moving);
         Assert.Equal(to, await HeadAsync(worktree));
+        Assert.Contains("0 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
     }
 
     /// <summary>
@@ -364,8 +785,10 @@ public sealed class AgentRebaseTests
     }
 
     /// <summary>
-    /// A move that stopped part way is finished where it was going, though the main tree has committed again since: it says
-    /// it moved to the main tree's commit, that the main tree's HEAD is ahead of it now, and what moves its base there.
+    /// A move that stopped part way - here before HEAD moved, its new base's files written - is finished where it was going,
+    /// though the main tree has since committed a further change to one of them: what the move wrote is never taken for the
+    /// agent's change. It says it moved to the main tree's commit, that the main tree's HEAD is ahead of it now, and what
+    /// moves its base there.
     /// </summary>
     [Fact]
     public async Task FinishingAMoveTheMainTreeHasMovedPast_SaysItsHeadIsAheadNow_AndHowToMoveThere()
@@ -377,8 +800,14 @@ public sealed class AgentRebaseTests
         OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
         var to = await HeadAsync(kit.Main);
-        await kit.GitAsync(worktree, "checkout", to, "--", "b.txt");
-        await kit.GitAsync(worktree, "reset", "--mixed", "--quiet", to);
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            ResetFailure = new HarnessException(HarnessExit.CommandFailed, "fatal: Unable to create 'index.lock': File exists."),
+        };
+        Assert.Equal(
+            HarnessExit.Incomplete,
+            (await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token)).ExitCode);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\ncommitted later\n");
         OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted later\n");
         await kit.Harness.CommitAllAsync(kit.Main, "the next wave", Token);
         var head = await HeadAsync(kit.Main);
@@ -391,13 +820,20 @@ public sealed class AgentRebaseTests
             $"the main tree's HEAD is {ReportText.Commit(head)} now: run 'dssharness rebase-agent o1 ag --apply' again to move its base there",
             finished.Details!);
         Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Equal("two\ncommitted\n", OrchestrationKit.Read(worktree, "b.txt"));
         Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+
+        var again = await RebaseAsync(kit, apply: true);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.Equal(head, kit.Record("ag").Base);
+        Assert.Equal("two\ncommitted\ncommitted later\n", OrchestrationKit.Read(worktree, "b.txt"));
     }
 
     /// <summary>
-    /// Where git cannot say whether the main tree's history holds an agent's HEAD, the fold and the move each say it cannot
-    /// be told - never that the agent committed inside its worktree, nor the reset that would undo such a commit, which
-    /// for a move of its base stopped part way is the wrong remedy.
+    /// Where git cannot say how an agent's HEAD came off its base, the fold and the move each say it cannot be told - never
+    /// that the agent committed inside its worktree, nor the reset that would undo such a commit, which for a HEAD moved by
+    /// hand is the wrong remedy.
     /// </summary>
     [Fact]
     public async Task AnAgentHeadGitCannotPlace_IsSaidToBeOne_NeverGuessedAt()
@@ -409,8 +845,7 @@ public sealed class AgentRebaseTests
         OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
         var to = await HeadAsync(kit.Main);
-        await kit.GitAsync(worktree, "checkout", to, "--", "b.txt");
-        await kit.GitAsync(worktree, "reset", "--mixed", "--quiet", to);
+        await kit.GitAsync(worktree, "checkout", "--quiet", "--detach", to);
         var git = new InterceptingGitClient(kit.Harness.GitClient)
         {
             MergeBaseFailure = new HarnessException(HarnessExit.CommandFailed, "Could not find where they part: fatal: bad object."),
@@ -425,9 +860,8 @@ public sealed class AgentRebaseTests
         {
             Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
             Assert.Equal(
-                $"Agent 'ag' of 'o1''s HEAD is {ReportText.Commit(to)}, and its base is {ReportText.Commit(from)}, and whether that HEAD is a commit the "
-                + "main tree's history holds - a move of its base that stopped part way - or one made inside it cannot be told: Could not find where they "
-                + "part: fatal: bad object. Nothing was changed.",
+                $"Agent 'ag' of 'o1''s HEAD is {ReportText.Commit(to)}, and its base is {ReportText.Commit(from)}, and how its HEAD came off its base - "
+                + "moved by hand, or a commit made inside it - cannot be told: Could not find where they part: fatal: bad object. Nothing was changed.",
                 outcome.Message);
         }
 
@@ -572,8 +1006,84 @@ public sealed class AgentRebaseTests
         Assert.Equal("two\n", OrchestrationKit.Read(worktree, "docs/caf�.md"));
     }
 
+    /// <summary>
+    /// Each way a move is refused before anything is written says why, and moves nothing: a --settled naming no path in the
+    /// tree, a worktree another command holds, a path that cannot be looked at while it is measured, a main tree with no
+    /// commit to move to, and an agent whose making stopped part way.
+    /// </summary>
+    [Fact]
+    public async Task EachWayAMoveIsRefusedBeforeAnythingIsWritten_SaysWhy_AndMovesNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        OrchestrationKit.Write(kit.Main, "docs/new.md", "new\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var usage = await RebaseAsync(kit, apply: true, "../x");
+
+        Assert.Equal(HarnessExit.UsageError, usage.ExitCode);
+        Assert.Equal("--settled, '../x', is not a path relative to the tree, spelt with forward slashes", usage.Message);
+
+        var building = await kit.Harness.RunLock.TryAcquireAsync(
+            new HarnessLayout(kit.Main, kit.Main),
+            new LockRequest { Host = HostId.Local.ToString(), Tree = kit.Harness.FileSystem.ResolveLinks(worktree), Variant = "linux-x86_64-debug", Scope = LockScope.TreeShared, RunId = RunId.New(), Command = "build" },
+            Token);
+
+        await using (building.Handle)
+        {
+            var held = await RebaseAsync(kit, apply: true);
+
+            Assert.Equal(HarnessExit.Refused, held.ExitCode);
+            Assert.EndsWith("Nothing was changed; run it again once that is done.", held.Message, StringComparison.Ordinal);
+        }
+
+        var unreadable = new UnlookableFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "docs", "new.md"));
+        var unread = await kit.Harness.Agents(unreadable, kit.Harness.AnchorRegistryService, kit.Harness.GitClient).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, unread.ExitCode);
+        Assert.Equal(
+            "The base of agent 'ag' of 'o1' was not moved: what it holds cannot be read - Access to the path is denied. Nothing was changed.",
+            unread.Message);
+
+        await kit.GitAsync(kit.Main, "checkout", "--quiet", "--orphan", "nothing-yet");
+        var nothing = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, nothing.ExitCode);
+        Assert.Equal("The main tree has no commit for the base of agent 'ag' of 'o1' to move to. Nothing was changed.", nothing.Message);
+
+        File.Delete(kit.Layout.SeedFile("ag"));
+        var unmade = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, unmade.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' is not whole - making it stopped part way: ", unmade.Message, StringComparison.Ordinal);
+        Assert.Equal(from, kit.Record("ag").Base);
+        Assert.Null(kit.Record("ag").Moving);
+        Assert.Equal(from, await HeadAsync(worktree));
+        Assert.False(File.Exists(Path.Combine(worktree, "docs", "new.md")));
+    }
+
+    /// <summary>Folding, deleting, seeding and refreshing agent 'ag', each asked to write.</summary>
+    private static async Task<CommandOutcome[]> EveryCommandButTheMoveAsync(OrchestrationKit kit)
+        => [
+            await kit.FoldAsync("ag", apply: true),
+            await kit.DeleteAsync("ag", apply: true),
+            await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token),
+            await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token),
+        ];
+
     private static Task<CommandOutcome> RebaseAsync(OrchestrationKit kit, bool apply, params string[] settled)
         => kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", settled, apply, Token);
 
     private static async Task<string> HeadAsync(string tree) => (await new HarnessFactory().GitClient.ResolveCommitAsync(tree, "HEAD", Token))!;
+
+    /// <summary>The real file system, except that one path cannot be looked at, as one this process may not read.</summary>
+    private sealed class UnlookableFileSystem(IFileSystem inner, string hidden) : PassThroughFileSystem(inner)
+    {
+        public override PathKind KindOf(string path)
+            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(hidden), StringComparison.OrdinalIgnoreCase)
+                ? throw new UnauthorizedAccessException("Access to the path is denied.")
+                : base.KindOf(path);
+    }
 }

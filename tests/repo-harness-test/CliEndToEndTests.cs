@@ -61,14 +61,16 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
-    /// fold-agent and delete-agent read --new and --accept-lost as often as they are given - the second one here as well as
-    /// the first - and refuse, as usage errors before any repository is looked for, an id no anchor could have, a cell that
-    /// is not ID:cell, and either beside --discard-uncommitted.
+    /// fold-agent and delete-agent read --new and --accept-lost, and rebase-agent --settled, as often as they are given - the
+    /// second one here as well as the first - and refuse, as usage errors before any repository is looked for, an id no
+    /// anchor could have, a cell that is not ID:cell, either beside --discard-uncommitted, and a path that is not one in the
+    /// tree.
     /// </summary>
     [Theory]
     [InlineData(new[] { "fold-agent", "o1", "ag", "--accept-lost", "D-X-Y-Z:status" }, "--accept-lost 'D-X-Y-Z:status' is not <ID>:<cell>")]
     [InlineData(new[] { "delete-agent", "o1", "ag", "--new", "D-X-Y-Z", "--new", "D-X Y" }, "--new 'D-X Y' is not an anchor id")]
     [InlineData(new[] { "delete-agent", "o1", "ag", "--accept-lost", "D-X-Y-Z:closing", "--discard-uncommitted" }, "--accept-lost lets a fold through what it otherwise refuses, and --discard-uncommitted folds nothing")]
+    [InlineData(new[] { "rebase-agent", "o1", "ag", "--settled", "a.txt", "--settled", "../x" }, "--settled, '../x', is not a path relative to the tree, spelt with forward slashes")]
     public async Task WhatAFoldIsLetThrough_IsReadEachTimeGiven_AndRefusedAsAUsageErrorWhereItCannotBeOne(string[] arguments, string refusal)
     {
         using var temp = new TempDirectory();

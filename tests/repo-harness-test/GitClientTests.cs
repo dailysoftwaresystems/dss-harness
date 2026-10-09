@@ -354,9 +354,52 @@ public sealed class GitClientTests
         Assert.Empty((await harness.RunGitAsync(temp.Path, ["diff", "--cached", "--name-only"], cancellationToken)).StandardOutput.Trim());
     }
 
+    /// <summary>
+    /// What a commit holds at a path is told apart - a file with its blob, a directory, a submodule's entry whether this
+    /// repository holds the commit it names or not, and nothing - and so it is for a name holding a line break, which git
+    /// cannot be asked about line by line: a directory or a submodule answered as nothing is how a directory a commit held
+    /// was taken for one an agent made.
+    /// </summary>
+    [Fact]
+    public async Task HeldAtAsync_TellsAFileADirectoryASubmoduleAndNothingApart()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile(Path.Combine("docs", "x.md"), "x\n");
+        await harness.CommitAllAsync(temp.Path, "files", cancellationToken);
+        var held = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        var blob = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:docs/x.md"], cancellationToken)).StandardOutput.Trim();
+        var elsewhere = new string('1', held.Length);
+
+        foreach (var entry in new[] { $"160000,{held},lib/held", $"160000,{elsewhere},lib/elsewhere", $"100644,{blob},odd\nfile.md", $"100644,{blob},odd\ndir/inner.md" })
+        {
+            // Git for Windows protects the names NTFS cannot hold by refusing them, a line break among them.
+            await harness.RunGitAsync(temp.Path, ["-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", entry], cancellationToken);
+        }
+
+        await harness.RunGitAsync(temp.Path, ["commit", "-q", "-m", "entries"], cancellationToken);
+
+        var answered = await harness.GitClient.HeldAtAsync(
+            temp.Path,
+            "HEAD",
+            ["docs/x.md", "docs", "lib/held", "lib/elsewhere", "none.txt", "odd\nfile.md", "odd\ndir", "odd\nnone"],
+            cancellationToken);
+
+        Assert.Equal(GitHeld.File(blob), answered["docs/x.md"]);
+        Assert.Equal(GitHeld.Directory, answered["docs"]);
+        Assert.Equal(GitHeld.Submodule(held), answered["lib/held"]);
+        Assert.Equal(GitHeld.Submodule(elsewhere), answered["lib/elsewhere"]);
+        Assert.Equal(GitHeld.Nothing, answered["none.txt"]);
+        Assert.Equal(GitHeld.File(blob), answered["odd\nfile.md"]);
+        Assert.Equal(GitHeld.Directory, answered["odd\ndir"]);
+        Assert.Equal(GitHeld.Nothing, answered["odd\nnone"]);
+    }
+
     /// <summary>A file the commit lists that git cannot read is never answered as no file there: that would take it for one the agent added.</summary>
     [Fact]
-    public async Task BlobIdsAtAsync_RefusesAFileTheCommitListsButGitCannotRead()
+    public async Task HeldAtAsync_RefusesAFileTheCommitListsButGitCannotRead()
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -370,7 +413,7 @@ public sealed class GitClientTests
         File.SetAttributes(loose, FileAttributes.Normal);
         File.Delete(loose);
 
-        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.BlobIdsAtAsync(temp.Path, "HEAD", ["lost.txt"], cancellationToken));
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.HeldAtAsync(temp.Path, "HEAD", ["lost.txt"], cancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
         Assert.Contains("git lists 'lost.txt' at HEAD but could not read it", refused.Message, StringComparison.Ordinal);

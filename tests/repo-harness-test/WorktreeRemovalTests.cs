@@ -1234,8 +1234,8 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
         => Call(() => inner.ListNamesChangedSinceAsync(directory, commit, Token(cancellationToken)));
 
-    public Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
-        => Call(() => inner.BlobIdsAtAsync(directory, commit, paths, Token(cancellationToken)));
+    public Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.HeldAtAsync(directory, commit, paths, Token(cancellationToken)));
 
     public Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(string directory, CancellationToken cancellationToken = default)
         => ListWorktreesFailure is { } failure && (ListWorktreesFailsWhen?.Invoke() ?? true)

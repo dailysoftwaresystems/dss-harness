@@ -160,7 +160,8 @@ internal static class RebaseAgentCommand
             Name,
             "Move a live agent's base to the main tree's HEAD: what the main tree committed since comes into its worktree as git holds it, and its own "
             + "changes and what it was handed stay; refused, moving nothing, where it changed a path the main tree committed a change to since, "
-            + "unless --settled. Run again after one that stopped part way, it finishes it.");
+            + "unless --settled, or where what comes in would go over anything of its own. Run again after one that stopped part way "
+            + $"(exit {HarnessExit.Incomplete}), it finishes it.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(SettledOption);

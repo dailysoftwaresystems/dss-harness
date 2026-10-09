@@ -58,7 +58,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
 | `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again, with every path the main tree holds otherwise than the agent shares it, committed or not; refused over changes of its own without `--force` |
 | `refresh-agent <o> <a> [<path>...] [--apply]` | Copy into a live agent every path under the paths - the anchor registries' directory by default - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it |
-| `rebase-agent <o> <a> [--apply] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; refused over a path both changed unless `--settled` |
+| `rebase-agent <o> <a> [--apply] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; refused over a path both changed unless `--settled`, and over anything of its own what comes in would go over; run again after one that stopped part way, it finishes it |
 | `fold-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; its worktree is kept |
 | `delete-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
@@ -89,9 +89,9 @@ Zero means every selected leg reached a verdict and none failed. A run where not
 some leg never reported exits `21` and names those legs: a leg that did no work proves nothing
 about the code, so it is never counted among the legs that passed. A command that changes an
 orchestrator or an agent exits `21` too when it stops part way - an agent closed and its worktree
-not yet removed, a fold or a hand-over half written, an orchestrator half deleted; run again, it
-finishes.
-`dssharness help orchestrators` explains seeding, folding and deleting agents.
+not yet removed, a fold or a hand-over half written, a move of an agent's base half made, an
+orchestrator half deleted; run again, it finishes.
+`dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,
 `testTimingRegex` or `runTimingRegex`, and prints them under the ledger as a `TIMINGS` block naming

@@ -1,5 +1,6 @@
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Orchestration;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -691,6 +692,67 @@ public sealed class AgentFoldTests
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains("no record of an agent can keep a path another platform would read as somewhere else", refused.Message);
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// A file the agent turned into a directory is folded as git would hold it - the file removed, then what the directory
+    /// holds written - and so is a directory it turned into a file: what the directory held removed, with the directory,
+    /// and the file written in its place. Folded, both are shared, and a fold run again has nothing of them to write.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheAgentTurnedIntoADirectory_AndADirectoryItTurnedIntoAFile_AreFolded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(worktree, "b.txt"));
+        OrchestrationKit.Write(worktree, "b.txt/inner.txt", "inner\n");
+        Directory.Delete(Path.Combine(worktree, "docs"), recursive: true);
+        OrchestrationKit.Write(worktree, "docs", "a file now\n");
+
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("inner\n", OrchestrationKit.Read(kit.Main, "b.txt/inner.txt"));
+        Assert.Equal("a file now\n", OrchestrationKit.Read(kit.Main, "docs"));
+        Assert.Contains("4 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
+    }
+
+    /// <summary>
+    /// A file of the agent's where the main tree holds a directory of files the agent never deleted, and a file the agent made
+    /// below a path the main tree holds as a file, each refuse the fold, named, before anything is written: written, the
+    /// first would remove the main tree's files, and the second stop at its file part way. A file of its base's the agent
+    /// changed where the main tree made a directory of it is said to be one, once.
+    /// </summary>
+    [Fact]
+    public async Task WhatTheMainTreeHoldsWhereTheAgentsFilesNeedRoom_RefusesTheFold()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var at = ReportText.Commit(kit.Record("ag").Base!);
+        OrchestrationKit.Write(kit.Main, "notes/a.md", "the main tree's\n");
+        OrchestrationKit.Write(worktree, "notes", "the agent's\n");
+        OrchestrationKit.Write(kit.Main, "plan", "the main tree's plan\n");
+        OrchestrationKit.Write(worktree, "plan/step.md", "the agent's step\n");
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+        OrchestrationKit.Write(kit.Main, "a.txt/inner.txt", "the main tree's\n");
+        OrchestrationKit.Write(worktree, "a.txt", "one\nthe agent's\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            [
+                "3 problem(s), and nothing was written:",
+                $"  'a.txt' is at the agent's base {at}, and the main tree holds a directory there now",
+                "  'notes': the main tree holds a directory there with files the agent did not delete - notes/a.md - which writing it would remove",
+                "  'plan/step.md' needs a directory at 'plan', where the main tree holds a file the agent did not delete",
+            ],
+            refused.Details!.Take(4));
+        Assert.Equal("the main tree's\n", OrchestrationKit.Read(kit.Main, "notes/a.md"));
+        Assert.Equal("the main tree's plan\n", OrchestrationKit.Read(kit.Main, "plan"));
+        Assert.Equal("the main tree's\n", OrchestrationKit.Read(kit.Main, "a.txt/inner.txt"));
     }
 
     /// <summary>The real file system, except that one file is written anew just before its second read, as by an agent still at work.</summary>
