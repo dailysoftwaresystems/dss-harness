@@ -93,7 +93,8 @@ public sealed class SyncCarryTests
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var transport = SyncKit.AgentHere(new HarnessFactory());
+        var harness = new HarnessFactory();
+        var transport = SyncKit.AgentHere(harness);
         var size = 32 * 1024 * 1024;
 
         Directory.CreateDirectory(temp.Combine("copy"));
@@ -109,13 +110,16 @@ public sealed class SyncCarryTests
 
         var before = GC.GetTotalMemory(forceFullCollection: true);
         var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
+        var threadsBefore = ThreadPool.ThreadCount;
         long growth;
+        string where;
         int length;
 
         using (var heap = new HeapWatch())
         {
             length = await LengthReadAsync(transport, temp.Combine("copy"), "artifact.bin", cancellationToken);
             growth = heap.Growth;
+            where = heap.Where;
         }
 
         var allocated = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
@@ -125,13 +129,18 @@ public sealed class SyncCarryTests
         await transport.ReadFileAsync(temp.Combine("copy"), "small.bin", cancellationToken);
 
         var held = GC.GetTotalMemory(forceFullCollection: true) - before;
+        var after = $"{HeapWatch.Parts()}; {ThreadPool.ThreadCount} pool thread(s), against {threadsBefore} before; "
+            + $"{harness.StandardOutput.GetStringBuilder().Length:N0} and {harness.StandardError.GetStringBuilder().Length:N0} character(s) "
+            + "written to the output and its errors";
 
         TestContext.Current.TestOutputHelper?.WriteLine(
             $"reading {size:N0} bytes back grew the heap by at most {growth:N0}, allocated {allocated:N0}, and left {held:N0} more held");
 
         Assert.Equal(size, length);
-        Assert.True(growth <= size + HeapBound, $"the heap grew by {growth:N0} bytes while a file of {size:N0} was read, past the file and {HeapBound:N0}");
-        Assert.True(held <= HeapBound, $"the heap held {held:N0} bytes more once the file was read, past the bound of {HeapBound:N0}");
+        Assert.True(
+            growth <= size + HeapBound,
+            $"the heap grew by {growth:N0} bytes while a file of {size:N0} was read, past the file and {HeapBound:N0}: {where}; after: {after}");
+        Assert.True(held <= HeapBound, $"the heap held {held:N0} bytes more once the file was read, past the bound of {HeapBound:N0}: {after}");
         Assert.True(allocated <= 8L * size, $"reading {size:N0} bytes allocated {allocated:N0}");
     }
 

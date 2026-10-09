@@ -21,10 +21,15 @@ internal sealed class HeapWatch : IDisposable
     /// <summary>How often the heap is read, each reading a collection of its own.</summary>
     private static readonly TimeSpan Every = TimeSpan.FromMilliseconds(25);
 
+    /// <summary>The parts of the heap a collection reports on, in the order it reports them.</summary>
+    private static readonly string[] PartNames = ["generation 0", "generation 1", "generation 2", "large objects", "pinned objects"];
+
     private readonly ManualResetEventSlim _stop = new();
     private readonly Thread _reader;
     private readonly long _baseline;
+    private readonly string _baselineParts;
     private long _peak;
+    private string _peakParts;
     private long _readings;
 
     public HeapWatch()
@@ -34,7 +39,9 @@ internal sealed class HeapWatch : IDisposable
         GC.Collect();
 
         _baseline = GC.GetTotalMemory(forceFullCollection: true);
+        _baselineParts = Parts();
         _peak = _baseline;
+        _peakParts = _baselineParts;
 
         _reader = new Thread(Read)
         {
@@ -51,6 +58,33 @@ internal sealed class HeapWatch : IDisposable
 
     /// <summary>How many times the heap has been read so far.</summary>
     public long Readings => Interlocked.Read(ref _readings);
+
+    /// <summary>
+    /// Where the heap held what it held at its most, part by part, against where it held its baseline: for a bound's
+    /// failure to say what grew.
+    /// </summary>
+    public string Where => $"at its most {Volatile.Read(ref _peakParts)}; at its baseline {_baselineParts}";
+
+    /// <summary>
+    /// What each part of the heap held once the last full collection had run: each generation's live objects, and the
+    /// large and the pinned objects' - and how many objects that collection found pinned, and left to finalize.
+    /// </summary>
+    public static string Parts()
+    {
+        var collection = GC.GetGCMemoryInfo(GCKind.FullBlocking);
+        var generations = collection.GenerationInfo;
+        var parts = new List<string>();
+
+        for (var at = 0; at < Math.Min(generations.Length, PartNames.Length); at++)
+        {
+            parts.Add($"{PartNames[at]} {generations[at].SizeAfterBytes - generations[at].FragmentationAfterBytes:N0}");
+        }
+
+        parts.Add($"{collection.PinnedObjectsCount:N0} object(s) pinned");
+        parts.Add($"{collection.FinalizationPendingCount:N0} awaiting finalization");
+
+        return string.Join(", ", parts);
+    }
 
     public void Dispose()
     {
@@ -71,6 +105,7 @@ internal sealed class HeapWatch : IDisposable
             if (now > Interlocked.Read(ref _peak))
             {
                 Interlocked.Exchange(ref _peak, now);
+                Volatile.Write(ref _peakParts, Parts());
             }
 
             Interlocked.Increment(ref _readings);
