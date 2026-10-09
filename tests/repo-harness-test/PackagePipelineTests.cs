@@ -7,12 +7,13 @@ namespace RepoHarness.Tests;
 public sealed class PackagePipelineTests
 {
     /// <summary>
-    /// The suite runs only where nothing else tested the commit being published. Never in a run Deploy started, which
-    /// names the commit it promoted: the full matrix passed on that commit, or for beta on its parent, which differs
-    /// only in the version. Never in a run resuming a commit an earlier run tagged: that run's package job passed, by
-    /// this same rule, before its tag was made. And never where the version is on nuget.org already, and nothing is
-    /// built. What is left is a run started by hand that names no commit, on a commit no run has packaged - a release
-    /// branch moved past the rules that guard it has nothing else behind it.
+    /// The suite runs only where nothing else tested the commit being published. Never in a run Deploy started - told by
+    /// who started it, the workflow token Deploy starts it with, and not by anything typed: the full matrix passed on
+    /// that commit, or for beta on its parent, which differs only in the version. Never in a run resuming a commit an
+    /// earlier run tagged: that run's package job passed, by this same rule, before its tag was made. And never where
+    /// the version is on nuget.org already, and nothing is built. What is left is a run a person started, on a commit no
+    /// run has packaged - a release branch moved past the rules that guard it has nothing else behind it - whatever it
+    /// names: told by the commit it names, a person's run that filled it in was taken for Deploy's and ran no suite.
     /// </summary>
     [Fact]
     public void TheSuite_RunsOnlyForACommitNothingElseTested()
@@ -21,8 +22,11 @@ public sealed class PackagePipelineTests
 
         Assert.Equal("- name: Test", step[0]);
         Assert.Equal(
-            "if: env.ON_NUGET != 'true' && inputs.expected_sha == '' && steps.resume.outputs.tag_exists != 'true'",
+            "if: env.ON_NUGET != 'true' && github.actor != 'github-actions[bot]' && steps.resume.outputs.tag_exists != 'true'",
             Assert.Single(step, line => line.StartsWith("if:", StringComparison.Ordinal)));
+
+        // A run started with the workflow's own token is github-actions[bot]'s, and stays so when a person runs it again.
+        Assert.Contains("GH_TOKEN: ${{ github.token }}", WorkflowFiles.StepNamed("deploy.yml", "Start the package pipeline"));
     }
 
     /// <summary>

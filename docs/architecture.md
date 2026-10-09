@@ -738,13 +738,17 @@ Every change holds a machine-wide named mutex, keyed by the two registry paths, 
 of its read, decide and write. .NET supports named mutexes on Windows, Linux and macOS alike,
 and named semaphores on Windows only. A mutex must be released by the thread that took it, so
 the locked work is synchronous by construction. A change that cannot take the lock within 10
-seconds writes nothing and exits 13. A read takes the lock too, for as long as reading the two
-files takes, and one that cannot take it in time reads nothing and exits 13 as well. A lock that
-belongs to another user refuses the same way (exit 13), and one the system will not open stops
-the command (exit 15). One file needs no lock, since every write replaces a whole file in one
-rename. Two do: a move never leaves its row in neither file, but a read of the destination before
-the move's first write and of the source after its second finds it in neither, which reads as an
-anchor closed or lost, and a read the other way round finds it in both, a duplicate.
+seconds writes nothing and exits 13. Those seconds, like every wait for a machine-wide lock's,
+are kept by a clock that never steps: Linux ends a wait for a named mutex at a deadline on the
+wall clock, which a WSL clock stepping forward by 24.8 seconds passes at once, so a wait half a
+second old ended as though the whole window had passed. A read takes the lock too, for as long
+as reading the two files takes, and one that cannot take it in time reads nothing and exits 13
+as well. A lock that belongs to another user refuses the same way (exit 13), and one the system
+will not open stops the command (exit 15). One file needs no lock, since every write replaces a
+whole file in one rename. Two do: a move never leaves its row in neither file, but a read of the
+destination before the move's first write and of the source after its second finds it in
+neither, which reads as an anchor closed or lost, and a read the other way round finds it in
+both, a duplicate.
 
 ### The balance
 

@@ -279,7 +279,7 @@ public sealed class PhaseRunner(
             // The child's lines as the log keeps them, already masked: read back from there by whatever
             // needs more of them than was read above, never held as text. A redaction every reader of
             // the output had to remember is one a new reader would not.
-            Output: PhaseOutput.InLog(request.LogFile, start, end, Utf8NoBom.GetBytes(exit + LogLineEnding)))
+            Output: PhaseOutput.InLog(_fileSystem, request.LogFile, start, end, Utf8NoBom.GetBytes(exit + LogLineEnding)))
         {
             // In the order the lines came, masked as each came, whichever stream carried each.
             LastLines = reading.LastLines,

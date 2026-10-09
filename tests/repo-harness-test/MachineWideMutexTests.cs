@@ -62,6 +62,59 @@ public sealed class MachineWideMutexTests
         Assert.Contains("fix what the system said, and run the command again", refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A wait the system ends before the window has passed is waited again, for what is left of the window by a clock that
+    /// never steps. Linux ends a wait for a named mutex at a deadline on the wall clock, which a WSL clock stepping forward
+    /// by 24.8 seconds passes at once: a wait half a second old ended as though the whole window had passed.
+    /// </summary>
+    [Fact]
+    public void AWaitEndedBeforeItsWindow_IsWaitedAgain_ForWhatIsLeftOfIt()
+    {
+        var elapsed = TimeSpan.Zero;
+        var asked = new List<TimeSpan>();
+
+        var taken = MachineWideMutex.Wait(
+            slice =>
+            {
+                asked.Add(slice);
+                elapsed += TimeSpan.FromMilliseconds(500);
+                return asked.Count == 2;
+            },
+            TimeSpan.FromSeconds(10),
+            () => elapsed);
+
+        Assert.True(taken);
+        Assert.Equal([TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(9.5)], asked);
+    }
+
+    /// <summary>
+    /// A mutex nobody lets go of is given up on once the window has passed by that clock, and not before: a wait the system
+    /// ends early is waited again, and one that lasts to the end of the window is the last. A window of nothing is one try.
+    /// </summary>
+    [Theory]
+    [InlineData(10_000, new[] { 10_000.0, 9_800.0 })]
+    [InlineData(0, new[] { 0.0 })]
+    public void AMutexNobodyLetsGoOf_IsGivenUpOnOnceTheWindowHasPassed(int windowMilliseconds, double[] expected)
+    {
+        var elapsed = TimeSpan.Zero;
+        var asked = new List<TimeSpan>();
+
+        var taken = MachineWideMutex.Wait(
+            slice =>
+            {
+                asked.Add(slice);
+
+                // The first wait ended early, by a step; any after it lasts what it was given.
+                elapsed += asked.Count == 1 && slice > TimeSpan.Zero ? TimeSpan.FromMilliseconds(200) : slice;
+                return false;
+            },
+            TimeSpan.FromMilliseconds(windowMilliseconds),
+            () => elapsed);
+
+        Assert.False(taken);
+        Assert.Equal(expected.Select(TimeSpan.FromMilliseconds), asked);
+    }
+
     /// <summary>A mutex another user holds is refused at once: no retry makes it this user's.</summary>
     [Fact]
     public void AMutexAnotherUserHolds_IsRefusedAtOnce()

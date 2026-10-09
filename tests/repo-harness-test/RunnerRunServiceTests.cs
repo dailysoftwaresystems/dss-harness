@@ -182,7 +182,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -241,7 +241,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -298,7 +298,7 @@ public sealed class RunnerRunServiceTests
             ignoreArtifacts);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
             config,
@@ -335,7 +335,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -417,7 +417,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -756,7 +756,13 @@ public sealed class RunnerRunServiceTests
         Assert.Equal(4, result.Phases.Count);
     }
 
-    private static string Child => TestHost.DotnetExecutable;
+    /// <summary>
+    /// The program a step's line starts this assembly with: dotnet, by the name 'tools' declares, as an action's line has
+    /// to name a program nothing in the repository ships. Named by the path of the dotnet running this suite - as it is
+    /// where the suite was started through it, not through its own program - the line named a program nothing declared,
+    /// and was refused before it ran; the leg finds it by name, as <see cref="Request"/> says where.
+    /// </summary>
+    private const string Child = "dotnet";
 
     private const string Exec = "exec";
 
@@ -1443,7 +1449,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         // Named on the command line, or declared as the runner's own steps: the same selection either way.
         var runner = new RunnerConfig
@@ -1494,7 +1500,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
             config,
@@ -2128,7 +2134,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -2618,6 +2624,11 @@ public sealed class RunnerRunServiceTests
         Defaults = new HarnessDefaults { StallSeconds = 0 },
     };
 
+    /// <summary>
+    /// A run of <paramref name="runner"/> on the one leg, in <paramref name="temp"/>, whose host keeps its programs - as a
+    /// host's report says where they are, after its PATH - in the directory of the dotnet running this suite, so a line
+    /// naming <see cref="Child"/> starts that one where no PATH names any.
+    /// </summary>
     private static RunnerRunRequest Request(TempDirectory temp, RunnerConfig runner) => new()
     {
         RunnerName = "corpus",
@@ -2628,6 +2639,7 @@ public sealed class RunnerRunServiceTests
         SegmentId = "s1",
         TreeRoot = temp.Path,
         ResolvedLegs = [Leg],
+        ProgramDirectories = Path.IsPathFullyQualified(TestHost.DotnetExecutable) ? [Path.GetDirectoryName(TestHost.DotnetExecutable)!] : [],
     };
 
     /// <summary>

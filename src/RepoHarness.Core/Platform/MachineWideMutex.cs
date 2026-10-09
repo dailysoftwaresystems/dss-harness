@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using RepoHarness.Core.Results;
@@ -119,21 +120,65 @@ public static class MachineWideMutex
     /// <param name="timeout">How long to wait.</param>
     /// <returns>Whether it was taken, and so must be released.</returns>
     /// <remarks>
+    /// <para>
     /// A previous holder that exited while holding it passes ownership to this thread, which is a
     /// success and not a failure: everything this lock protects is written by replacing a whole
     /// file, so nothing it left can be half written.
+    /// </para>
+    /// <para>
+    /// The time is kept by a clock that never steps. On Linux the runtime ends a wait for a named mutex at a deadline on
+    /// the wall clock - a robust pthread mutex's timed lock takes no other - and a WSL clock, measured stepping back by
+    /// 24.8 seconds and forward again by as much every five seconds, passes that deadline at once: a wait half a second
+    /// old ended as though the whole window had passed, and the update was refused as one another process had held the
+    /// file through. A wait ended early is waited again for what is left. A step back lengthens a wait by as much, which
+    /// only delays giving up on a mutex nobody lets go of.
+    /// </para>
     /// </remarks>
     public static bool Wait(Mutex mutex, TimeSpan timeout)
     {
         ArgumentNullException.ThrowIfNull(mutex);
 
-        try
+        var started = Stopwatch.GetTimestamp();
+
+        return Wait(
+            slice =>
+            {
+                try
+                {
+                    return mutex.WaitOne(slice);
+                }
+                catch (AbandonedMutexException)
+                {
+                    return true;
+                }
+            },
+            timeout,
+            () => Stopwatch.GetElapsedTime(started));
+    }
+
+    /// <summary>Waits through <paramref name="waitFor"/>, for as long as <paramref name="timeout"/> allows by <paramref name="elapsed"/>.</summary>
+    /// <param name="waitFor">Waits for the mutex for at most the time it is given, and says whether it was taken.</param>
+    /// <param name="timeout">How long to wait.</param>
+    /// <param name="elapsed">How long has passed since the wait began.</param>
+    /// <returns>Whether it was taken.</returns>
+    internal static bool Wait(Func<TimeSpan, bool> waitFor, TimeSpan timeout, Func<TimeSpan> elapsed)
+    {
+        ArgumentNullException.ThrowIfNull(waitFor);
+        ArgumentNullException.ThrowIfNull(elapsed);
+
+        while (true)
         {
-            return mutex.WaitOne(timeout);
-        }
-        catch (AbandonedMutexException)
-        {
-            return true;
+            var left = timeout - elapsed();
+
+            if (waitFor(left > TimeSpan.Zero ? left : TimeSpan.Zero))
+            {
+                return true;
+            }
+
+            if (elapsed() >= timeout)
+            {
+                return false;
+            }
         }
     }
 }

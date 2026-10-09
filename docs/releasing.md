@@ -170,12 +170,14 @@ than cancelling a run that waits.
 
 Package Pipeline runs the suite only for a commit nothing else tested. A run Deploy started
 has the full matrix behind it: on that commit for stable, and for beta on its parent, which
-differs only in `<Version>`. A run resuming a commit an earlier run tagged has that run's
-package job behind it, which passed by this same rule before the tag was made. What is left
-is a run started by hand that names no commit, on a commit no run has packaged - a release
-branch moved past the rulesets has nothing else behind it - and there the suite runs, on Linux
-x86_64 only, before anything is packed. A run started by hand that fills `expected_sha` in says
-Deploy promoted that commit, and is taken at its word: leave it empty when starting one by hand.
+differs only in `<Version>`. Such a run is told by who started it: Deploy starts it with the
+workflow's own token, so its actor is `github-actions[bot]`, and stays so when a person runs it
+again. What `expected_sha` holds decides nothing here, since a person can fill it in too. A run
+resuming a commit an earlier run tagged has that run's package job behind it, which passed by
+this same rule before the tag was made. What is left is a run a person started, on a commit no
+run has packaged - a release branch moved past the rulesets has nothing else behind it - and
+there the suite runs, on Linux x86_64 only, before anything is packed, whether or not the run
+names a commit.
 
 ## Refusals worth knowing
 
