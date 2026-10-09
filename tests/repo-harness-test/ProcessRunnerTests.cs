@@ -140,34 +140,75 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
-    /// A line handler that fails is handed no more lines, and its stream is still read to the end: a child writing more
-    /// than a pipe holds would otherwise block on a pipe nobody reads, and one whose input is held open, as a host's agent's
-    /// is, would never end. What the handler raised is raised once the child has gone, and a handler of the other stream
-    /// is handed every line of it.
+    /// A line handler that fails - of the output or of the error output - is handed no more lines, and its stream is still
+    /// read to the end: a child writing more than a pipe holds would otherwise block on a pipe nobody reads, and one whose
+    /// input is held open, as a host's agent's is, would never end. What the handler raised is raised once the child has
+    /// gone, and a handler of the other stream is handed every line of it.
     /// </summary>
-    [Fact]
-    public async Task RunAsync_ALineHandlerThatFails_IsRaisedOnceTheChildHasGone_NeverLeavingItBlockedOnItsPipe()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_ALineHandlerThatFails_IsRaisedOnceTheChildHasGone_NeverLeavingItBlockedOnItsPipe(bool ofErrors)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         stop.CancelAfter(TimeSpan.FromSeconds(60));
         var handed = 0;
+        var other = 0;
+
+        void Failing(string line)
+        {
+            handed++;
+            throw new InvalidOperationException("a line this caller cannot read");
+        }
+
+        void Counting(string line) => Interlocked.Increment(ref other);
 
         var raised = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateRunner().RunAsync(
-            TestHost.ChildRequest("flood", "20000", "200") with
+            TestHost.ChildRequest("flood-both", "20000", "200") with
             {
                 StandardInput = string.Empty,
                 HoldStandardInputOpen = true,
-                OnOutputLine = _ =>
-                {
-                    handed++;
-                    throw new InvalidOperationException("a line this caller cannot read");
-                },
+                OnOutputLine = ofErrors ? Counting : Failing,
+                OnErrorLine = ofErrors ? Failing : Counting,
             },
             stop.Token));
 
         Assert.False(stop.IsCancellationRequested, "the child blocked on a pipe nobody read, until the run was stopped");
         Assert.Equal("a line this caller cannot read", raised.Message);
         Assert.Equal(1, handed);
+        Assert.Equal(20000, other);
+    }
+
+    /// <summary>
+    /// Handlers of both streams that fail are both raised: together where they failed differently - saying another thing,
+    /// or the same thing as another kind of failure; one said and the other lost would send whoever read it after half
+    /// the trouble - and once where they raised the same, one reason met on each.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task RunAsync_HandlersOfBothStreamsThatFail_AreBothRaised(bool sayingAnotherThing, bool ofAnotherKind)
+    {
+        const string Output = "an output line this caller cannot read";
+        const string Error = "an error line this caller cannot read";
+        var differently = sayingAnotherThing || ofAnotherKind;
+        var said = sayingAnotherThing ? Error : Output;
+
+        Exception Failure() => ofAnotherKind ? new FormatException(said) : new InvalidOperationException(said);
+
+        var raised = await Assert.ThrowsAnyAsync<Exception>(() => CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood-both", "100", "20") with
+            {
+                OnOutputLine = _ => throw new InvalidOperationException(Output),
+                OnErrorLine = _ => throw Failure(),
+            },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(differently, raised is AggregateException);
+        Assert.Equal(
+            differently ? [Output, said] : [Output],
+            raised is AggregateException both ? both.InnerExceptions.Select(inner => inner.Message) : [raised.Message]);
     }
 
     /// <summary>
@@ -293,7 +334,8 @@ public sealed class ProcessRunnerTests
     public async Task RunAsync_WritesStandardInput_AndClosesIt()
     {
         // The child reads its input to the end, so it can finish only once the input is closed.
-        // The text carries what a request to another host carries: spaces, quotes, non-ASCII.
+        // The text carries what a request to another host carries: spaces, quotes, non-ASCII; and
+        // nothing before it, a byte order mark included, which a child reading bytes takes for text.
         const string Input = "{\"arguments\":[\"with space\",\"quote\\\"inside\",\"João\"]}\nsecond line";
 
         var result = await CreateRunner().RunAsync(

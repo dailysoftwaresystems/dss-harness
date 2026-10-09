@@ -597,7 +597,7 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A file crosses whole, inside one request, whichever way it goes: one larger than "
+            "A file crosses whole, whichever way it goes - to a host inside one request, back in one answer: one larger than "
             + $"{SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture)} bytes is refused by name before anything is "
             + "sent. Keep the smaller thing a later step reads - a packaged build rather than a build tree.");
 
@@ -1089,13 +1089,17 @@ internal static class HelpCommand
         builder.AppendLine($"{RoomFloorWatch.Every.TotalSeconds:0} seconds, and the build is stopped once one has less free than minFreeGiB:");
         builder.AppendLine($"stopped, exit {HarnessExit.Incomplete}, naming what was free and where, and what it built left for");
         builder.AppendLine("clean - and so is a build that failed with one under it, read again as it failed,");
-        builder.AppendLine("since a full disk says nothing of its code. The room a leg claims is only what is");
-        builder.AppendLine("said of its build; this holds every build, its need said or not - a sweep's");
-        builder.AppendLine("workers' too. A WSL leg holds the drive its disk grows on as well, which this");
-        builder.AppendLine("machine names as it sends the leg and the distribution reaches through its mount");
-        builder.AppendLine("there, /mnt/c as /proc/mounts lists it; where it is mounted nowhere, the build says");
-        builder.AppendLine("only the distribution's own room is held. A room that cannot be read stops nothing,");
-        builder.AppendLine("and is said once.");
+        builder.AppendLine("since a full disk says nothing of its code, and one whose own write failed then -");
+        builder.AppendLine("a phase's log, its record. A build under it as it starts writes nothing, its");
+        builder.AppendLine("record included, and a record it has no room left for is said, the one it wrote");
+        builder.AppendLine("as it began standing. The room a leg claims is only what is said of its build; this");
+        builder.AppendLine("holds every build, its need said or not - a sweep's workers' too. A WSL leg holds");
+        builder.AppendLine("the drive its disk grows on as well, which this machine names as it sends the leg");
+        builder.AppendLine("and the distribution reaches through its mount there: /mnt/c, as /proc/mounts");
+        builder.AppendLine("lists it by the drive, or by the path its options name where an older WSL lists");
+        builder.AppendLine("what it mounts as drvfs. Where it is mounted nowhere, the build says only the");
+        builder.AppendLine("distribution's own room is held. A room that cannot be read stops nothing, and is");
+        builder.AppendLine("said once.");
         builder.AppendLine();
         builder.AppendLine("A check-mutations leg, whose sweep can last hours, is admitted unit by unit instead:");
         builder.AppendLine("each worker as it is made, claiming the room its copy and build still need, and each");
@@ -1149,12 +1153,15 @@ internal static class HelpCommand
         builder.AppendLine("idled for minutes. So a leg about to wait on the memory has that cache dropped first,");
         builder.AppendLine("as root (sync, then drop_caches) in a running distribution a WSL host of its");
         builder.AppendLine("repository reaches - at most once a minute, whichever leg asks - and reads the");
-        builder.AppendLine("memory again a minute later, once what was dropped has come back, its line");
-        builder.AppendLine("saying how much was dropped and the memory before and after. A WSL leg sent from a");
-        builder.AppendLine("machine that admits drops it as it ends, without waiting. A distribution that is");
+        builder.AppendLine("memory again once what was dropped has come back, a minute later at the most, its");
+        builder.AppendLine("line saying how much was dropped and the memory before and after, and goes on from");
+        builder.AppendLine("that reading as from any other. A WSL leg sent from a machine that admits drops it");
+        builder.AppendLine("as it ends, without waiting, its line saying so - or that WSL listed none of its");
+        builder.AppendLine("distributions running, though the leg had just run in one. A distribution that is");
         builder.AppendLine("not running is never started for it, and a drop that could not be made is said");
-        builder.AppendLine("once - a WSL host whose item cannot be read, where no other reaches one, among the");
-        builder.AppendLine("reasons.");
+        builder.AppendLine("once - a WSL host whose item cannot be read, where no other reaches one, or a list");
+        builder.AppendLine("of the distributions running that cannot be read, among the reasons; that list is");
+        builder.AppendLine("read in UTF-16 too, which an older wsl.exe writes whatever WSL_UTF8 says.");
         builder.AppendLine();
         builder.AppendLine("While it waits, a leg says who holds each slot - tree, variant, host, leg, command,");
         builder.AppendLine("process, run, and since when it asked, never the machine's name, which only the");
@@ -1167,10 +1174,12 @@ internal static class HelpCommand
         builder.AppendLine($"that waited maxWaitMinutes is not-admitted, exit {LegExit.NotAdmitted}, naming what held the slots and");
         builder.AppendLine("where they are recorded, the memory it waited on, or the room, who claimed it and");
         builder.AppendLine("where the claims are recorded: nothing of it ran, and nothing about the code is");
-        builder.AppendLine("claimed. A wait for slots only legs of its own run hold - a command's WSL leg behind");
-        builder.AppendLine("its Windows legs, asked for at once - is certain to end and does not count: its line");
-        builder.AppendLine("says they are its own, and a refusal after it says how much of the wait did not");
-        builder.AppendLine("count. On an ssh host, the legs one command sends there ask under that command's run.");
+        builder.AppendLine("claimed. A wait with only legs of its own run ahead of it - holding slots, or in");
+        builder.AppendLine("line first: a command's WSL leg behind its Windows legs, asked for at once - is");
+        builder.AppendLine("certain to end and does not count: its line says they are its own, and a refusal");
+        builder.AppendLine("after it says how much of the wait did not count. Another command's leg in line");
+        builder.AppendLine("ahead makes it count, whoever holds the slots. On an ssh host, the legs one command");
+        builder.AppendLine("sends there ask under that command's run.");
         builder.AppendLine();
         builder.AppendLine("The slots are kept in <user data>/dssharness/admission-<machine id>.json, and the");
         builder.AppendLine("room the legs claim beside them in admission-<machine id>.room.json - the user");
@@ -2333,9 +2342,10 @@ internal static class HelpCommand
         builder.AppendLine("run began with because a file in it changed first, or whose build directory another");
         builder.AppendLine("process uses, gets no pass or fail at all. Its inputs are watched only as deep as they");
         builder.AppendLine("lie - each directory holding one, for its own files - so a build in another tree below");
-        builder.AppendLine("the worktrees root, which init keeps in git by a placeholder, is never heard. Durations");
-        builder.AppendLine("that diverge between legs, or that span a clock step or a host sleep, are marked");
-        builder.AppendLine("suspect, and never change a verdict.");
+        builder.AppendLine("the worktrees root, which init keeps in git by a placeholder, is never heard: but in a");
+        builder.AppendLine($"tree whose inputs lie in more than {InputWatch.MostDirectoriesWatched} top-level directories, the root counted where it");
+        builder.AppendLine("holds one, which is watched whole. Durations that diverge between legs, or that span a");
+        builder.AppendLine("clock step or a host sleep, are marked suspect, and never change a verdict.");
         builder.AppendLine();
         builder.AppendLine("A test count countPattern reads that differs from the other legs of the same project");
         builder.AppendLine("and test set is marked on its own - 'test count differs', and testCountDiffers and");

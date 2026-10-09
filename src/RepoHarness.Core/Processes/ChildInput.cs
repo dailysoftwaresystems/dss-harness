@@ -40,7 +40,9 @@ public sealed record ChildInput
     /// <summary>What <paramref name="write"/> writes to the child's input, as it writes it.</summary>
     /// <param name="write">
     /// Writes the input to the stream it is given, and returns once it has written all of it. Run on a thread of its own,
-    /// so it may write synchronously, for as long as the child takes to read what it writes.
+    /// so it may write synchronously, for as long as the child takes to read what it writes. It may be run more than once
+    /// for one input - a call over ssh that failed before any session began is made again, and its input written again
+    /// from the start - so it writes from what it was made with, and uses up nothing it reads as it goes.
     /// </param>
     public static ChildInput WrittenBy(Action<Stream> write)
     {
@@ -66,16 +68,8 @@ public sealed record ChildInput
             return;
         }
 
-        var text = _text!;
-        var encoder = Utf8.GetEncoder();
-        var bytes = new byte[Utf8.GetMaxByteCount(TextPiece)];
+        using var writer = new StreamWriter(stream, Utf8, TextPiece, leaveOpen: true);
 
-        for (var at = 0; at < text.Length; at += TextPiece)
-        {
-            var piece = text.AsSpan(at, Math.Min(TextPiece, text.Length - at));
-            var count = encoder.GetBytes(piece, bytes, flush: at + piece.Length >= text.Length);
-
-            stream.Write(bytes, 0, count);
-        }
+        writer.Write(_text);
     }
 }

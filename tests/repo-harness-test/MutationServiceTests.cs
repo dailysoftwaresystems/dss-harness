@@ -1049,7 +1049,6 @@ public sealed class MutationServiceTests
             new BuildDirectoryGuard(harness.FileSystem, harness.Platform, harness.FilePermissions),
             new PhaseRunner(processes, harness.FileSystem, harness.Output),
             harness.PathBudget,
-            trees ?? new KnownTrees(),
             files ?? harness.FileSystem,
             new MutationFixtureStore(harness.FileSystem, Fixture(temp)),
             harness.Identity,

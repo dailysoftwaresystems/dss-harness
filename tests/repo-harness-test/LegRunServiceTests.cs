@@ -541,19 +541,23 @@ public sealed class LegRunServiceTests
     /// <summary>
     /// A leg's work here is given the repository's other trees on this machine - every tree but its own, the main
     /// checkout among them for a worktree's leg - by which whose build directory a process found beside it works in is
-    /// told; and why they could not be listed, where they could not.
+    /// told; and why they could not be listed, where they could not. Its own is told however the listing spells it - here
+    /// with a separator after it - as this platform compares paths: given as another tree, its own build directory would
+    /// be another tree's leg's.
     /// </summary>
     [Theory]
-    [InlineData(false, null)]
-    [InlineData(true, null)]
-    [InlineData(false, "git worktree list exited 128")]
-    public async Task ALegsWorkHere_IsGivenTheRepositorysOtherTreesOnThisMachine(bool inWorktree, string? unlisted)
+    [InlineData(false, null, false)]
+    [InlineData(true, null, false)]
+    [InlineData(true, null, true)]
+    [InlineData(false, "git worktree list exited 128", false)]
+    public async Task ALegsWorkHere_IsGivenTheRepositorysOtherTreesOnThisMachine(bool inWorktree, string? unlisted, bool spelledOtherwise)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var feature = new RepositoryTree(temp.Combine("feature"), "worktree feature");
         var other = new RepositoryTree(temp.Combine("other"), "worktree other");
         var tree = inWorktree ? feature.Root : temp.Path;
+        var listedFeature = spelledOtherwise ? feature with { Root = feature.Root + Path.DirectorySeparatorChar } : feature;
         RepositoryTreesFound? beside = null;
         var config = OneLeg(harness);
 
@@ -565,12 +569,52 @@ public sealed class LegRunServiceTests
             new LegRunRequest(tree, null) { Workload = LegWorkload.Copy },
             ran: leg => beside = leg.BuildRequestFor(config, temp.Path, new ProjectConfig { Name = "app", Type = "cmake" }).Beside,
             tree: tree,
-            trees: new KnownTrees { Beside = _ => [feature, other], Unlisted = unlisted });
+            trees: new KnownTrees { Beside = _ => [listedFeature, other], Unlisted = unlisted });
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.NotNull(beside);
         Assert.Equal(inWorktree ? [new RepositoryTree(temp.Path, RepositoryTree.MainCheckout), other] : [feature, other], beside.Trees);
         Assert.Equal(unlisted, beside.Unlisted);
+    }
+
+    /// <summary>
+    /// The repository's other trees here are listed as each leg's work begins, never once for the run: a worktree made
+    /// while the run's first leg worked - an agent's, made by its orchestrator - is known to every leg that begins after.
+    /// </summary>
+    [Fact]
+    public async Task TheOtherTreesHere_AreListedAsEachLegsWorkBegins()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var feature = new RepositoryTree(temp.Combine("feature"), "worktree feature");
+        var listed = new List<RepositoryTree> { feature };
+        var besides = new List<string>();
+        var config = new HarnessConfig
+        {
+            Defaults = new HarnessDefaults { MaxParallelLegs = 1 },
+            BuildConfigs = { ["debug"] = new BuildConfiguration(), ["release"] = new BuildConfiguration() },
+            Legs =
+            {
+                ["native"] = HostDoubles.Leg(harness.Platform.PlatformKey, harness.Platform.Processor),
+                ["native-release"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "release" },
+            },
+        };
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = LegWorkload.Copy },
+            ran: leg =>
+            {
+                besides.Add(string.Join(", ", leg.Beside!.Trees.Select(tree => tree.Name)));
+                listed.Add(new RepositoryTree(temp.Combine("o1", "xa"), "worktree o1/xa"));
+            },
+            trees: new KnownTrees { Beside = _ => [.. listed.Distinct()] });
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(["worktree feature", "worktree feature, worktree o1/xa"], besides);
     }
 
     /// <summary>
@@ -1087,7 +1131,7 @@ public sealed class LegRunServiceTests
             new LegRunRequest(temp.Path, null) { Workload = Heavy },
             ran: _ => during = AdmissionKit.Read(record),
             admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(12.5), new ManualClock()),
-            origin: new CommandOrigin(ServesAnotherMachine: true, new Dispatch("20261008-120000-0a1b2c3d", null)));
+            origin: CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, RunId = "20261008-120000-0a1b2c3d" })));
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal("20261008-120000-0a1b2c3d", Assert.Single(during!).RunId);
@@ -1389,18 +1433,24 @@ public sealed class LegRunServiceTests
     /// <summary>
     /// A WSL leg this machine sent has WSL's page cache dropped as it ends - what its build read and wrote, which this
     /// machine counts as in use until the virtual machine idles for minutes - where this machine admits its heavy legs by
-    /// the memory, and its line says so: without waiting for what comes back, which the next leg's wait reads. A leg of an
-    /// ssh host, and one where this machine admits nothing, drop none.
+    /// the memory, and its line says so: without waiting for what comes back, which the next leg's wait reads. Where WSL
+    /// lists no distribution a host reaches running, though the leg had just run in one, its line says nothing was dropped.
+    /// A leg of an ssh host, and one where this machine admits nothing, drop none.
     /// </summary>
     [Theory]
-    [InlineData("wsl", true, true)]
-    [InlineData("wsl", false, false)]
-    [InlineData("ssh", true, false)]
-    public async Task AWslLegsEnd_DropsWslsPageCache_WhereThisMachineAdmitsByTheMemory(string kind, bool admits, bool drops)
+    [InlineData("wsl", true, true, "as the leg ended, WSL's page cache was dropped as root in wsl Ubuntu, 1 GiB of it")]
+    [InlineData(
+        "wsl",
+        true,
+        false,
+        "as the leg ended, WSL's page cache was not dropped: WSL listed no distribution a WSL host reaches as running, though this leg had just run in one")]
+    [InlineData("wsl", false, true, null)]
+    [InlineData("ssh", true, true, null)]
+    public async Task AWslLegsEnd_DropsWslsPageCache_WhereThisMachineAdmitsByTheMemory(string kind, bool admits, bool running, string? said)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var cache = new ScriptedPageCache(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), AdmissionKit.Gibibyte));
+        var cache = new ScriptedPageCache(running ? PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), AdmissionKit.Gibibyte) : null);
 
         var config = new HarnessConfig
         {
@@ -1443,13 +1493,13 @@ public sealed class LegRunServiceTests
             hosts: hosts,
             pageCache: cache);
 
+        var printed = harness.StandardOutput.ToString() + harness.StandardError.ToString();
+
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
-        Assert.Equal(drops ? [config] : [], cache.Asked.Select(context => context.Config));
+        Assert.Equal(said is null ? [] : [config], cache.Asked.Select(context => context.Config));
         Assert.Equal(
-            drops,
-            (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Contains(
-                "remote: as the leg ended, WSL's page cache was dropped as root in wsl Ubuntu, 1 GiB of it",
-                StringComparison.Ordinal));
+            said is null ? [] : [true],
+            printed.Split('\n').Where(line => line.Contains("as the leg ended", StringComparison.Ordinal)).Select(line => line.Contains($"remote: {said}", StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -1599,7 +1649,7 @@ public sealed class LegRunServiceTests
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: true, Here: HostId.Wsl("Ubuntu")) { Workload = Heavy },
             ran: leg => held = leg.Floor,
-            origin: new CommandOrigin(ServesAnotherMachine: true, new Dispatch(RunId.New().Value, drive)),
+            origin: CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, RunId = RunId.New().Value, DiskImageDrive = drive })),
             fileSystem: new MountsListing(harness.FileSystem, mounts));
 
         Assert.NotNull(held);
@@ -1856,9 +1906,10 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
-    /// A host sent a leg of such a command admits each unit by the admission its own entry among the hosts declares:
-    /// what the machine that typed the command declares for itself says nothing of this one's memory, so a host whose
-    /// entry declares none asks nothing, whatever that machine declares.
+    /// A host sent a leg of such a command admits each unit by the admission its own entry among the hosts declares, and
+    /// holds its builds to the room that entry keeps free: what the machine that typed the command declares for itself
+    /// says nothing of this one's memory or disks, so a host whose entry declares none asks nothing and holds nothing,
+    /// whatever that machine declares.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -1871,6 +1922,7 @@ public sealed class LegRunServiceTests
         var admission = new AdmissionSettings { HeavyLegs = 2 };
         IReadOnlyList<SlotEntry>? withBoth = null;
         var taken = new List<bool>();
+        long? floor = null;
 
         var config = new HarnessConfig
         {
@@ -1896,12 +1948,14 @@ public sealed class LegRunServiceTests
 
                 taken.AddRange([first is not null, second is not null]);
                 withBoth = AdmissionKit.Read(record);
+                floor = work.Leg.Floor?.Bytes;
 
                 return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
             });
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal([declared, declared], taken);
+        Assert.Equal(declared ? 2L << 30 : null, floor);
         Assert.Equal(declared ? ["arm/first-arm", "arm/second-arm"] : [], withBoth!.Select(entry => entry.Leg));
         Assert.Empty(AdmissionKit.Read(record));
     }

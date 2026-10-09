@@ -138,9 +138,9 @@ public sealed class LegAdmissionTests
 
     /// <summary>
     /// A leg about to wait on the memory has WSL's page cache dropped first - memory this machine counts as in use and
-    /// could have back - and reads the memory again a minute later, once what the drop gives back has reached this
-    /// machine's count: its line says how much was dropped, and the memory before and after, and the leg starts at once
-    /// where that reading is below the limit.
+    /// could have back - and reads the memory again once what the drop gives back has reached this machine's count, a
+    /// minute later at the most: its line says how much was dropped, and the memory before and after, and the leg goes on
+    /// from that reading as from any other - here, with no other leg holding a slot and no room to claim, it starts on it.
     /// </summary>
     [Fact]
     public async Task ALegAboutToWaitOnTheMemory_HasWslsPageCacheDropped_AndStartsOnceWhatCameBackReadsBelowTheLimit()
@@ -374,6 +374,83 @@ public sealed class LegAdmissionTests
         Assert.False(admitted.Fact.Admitted);
         Assert.Equal(60 * 60, admitted.Fact.WaitedSeconds);
         Assert.StartsWith("not admitted after 1h00m waiting for one of this machine's 2 heavy-leg slot(s)", admitted.Refusal, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A wait with another command's leg in line ahead counts, though only legs of its own command hold the slots: that
+    /// leg takes the next slot given back, and how long it holds it is nothing the leg's own command decides.
+    /// </summary>
+    [Fact]
+    public async Task ALegWithAnotherCommandsLegInLineAhead_IsRefused_ThoughItsOwnHoldTheSlots()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        AdmissionKit.Write(
+            record,
+            AdmissionKit.Holder(harness, "windows-debug", run: "run-mine"),
+            AdmissionKit.Holder(harness, "windows-release", run: "run-mine"),
+            AdmissionKit.Holder(harness, "theirs"));
+
+        // Taken for a wait of its own, it would wait as long as they hold: three hours on, every entry goes, and it is taken.
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock, onWait: () =>
+        {
+            if (clock.Moved >= TimeSpan.FromHours(3))
+            {
+                AdmissionKit.Write(record);
+            }
+        });
+
+        using var admitted = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 2, pollSeconds: 60, maxWaitMinutes: 60), said),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(admitted.Fact.Admitted);
+        Assert.Equal(60 * 60, admitted.Fact.WaitedSeconds);
+        Assert.DoesNotContain(said, line => line.Contains("its own command's", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A leg waiting for a slot has nothing dropped for it: WSL's page cache is dropped as a leg is about to wait on the
+    /// memory, which one holding no slot does not yet do - and it is, once the leg holds one and the memory is above the
+    /// limit.
+    /// </summary>
+    [Fact]
+    public async Task ALegWaitingForASlot_HasNothingDropped_UntilItWaitsOnTheMemory()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var dropped = new List<TimeSpan>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "theirs"));
+
+        // Their leg gives its slot back ten minutes on; the memory then reads above the limit once, and below it after.
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(90, 30), clock, onWait: () =>
+        {
+            if (clock.Moved >= TimeSpan.FromMinutes(10))
+            {
+                AdmissionKit.Write(record, [.. AdmissionKit.Read(record).Where(entry => entry.Leg != "theirs")]);
+            }
+        });
+
+        using var admitted = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, settleLeast: 0, settleMost: 0, pollSeconds: 60, maxWaitMinutes: 60), []) with
+            {
+                DropPageCache = _ =>
+                {
+                    dropped.Add(clock.Moved);
+                    return Task.FromResult<PageCacheDrop?>(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), 0));
+                },
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted, admitted.Refusal);
+        Assert.Equal([TimeSpan.FromMinutes(10)], dropped);
     }
 
     /// <summary>
@@ -724,7 +801,7 @@ public sealed class LegAdmissionTests
 
         AdmissionKit.Write(
             record,
-            AdmissionKit.Holder(harness, "crashed", processId: int.MaxValue - 1),
+            AdmissionKit.Holder(harness, "crashed", machine: "the-name-it-crashed-under", processId: int.MaxValue - 1),
             AdmissionKit.Holder(harness, "renamed", machine: "the-name-it-had"));
 
         using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(10), new ManualClock())
@@ -735,6 +812,11 @@ public sealed class LegAdmissionTests
         Assert.Equal(["renamed"], AdmissionKit.Read(record).Select(entry => entry.Leg));
         Assert.Contains("Reclaimed a heavy-leg slot from '/src/crashed'", harness.StandardOutput.ToString(), StringComparison.Ordinal);
         Assert.Contains("which is no longer running", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+
+        // A holder's line names its tree, its leg, its command and its process, never its machine: only the record keeps that.
+        Assert.DoesNotContain("the-name-it-had", admitted.Refusal, StringComparison.Ordinal);
+        Assert.DoesNotContain(admitted.Fact.Holders ?? [], holder => holder.Contains("the-name-it-had", StringComparison.Ordinal));
+        Assert.DoesNotContain("the-name-it-crashed-under", harness.StandardOutput.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1350,7 +1432,7 @@ public sealed class LegAdmissionTests
         var room = new ScriptedRoom(harness.FileSystem, 40 * AdmissionKit.Gibibyte);
         var said = new List<string>();
 
-        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first"), 35 * AdmissionKit.Gibibyte, "/data"));
+        AdmissionKit.WriteClaims(record, new RoomClaim(AdmissionKit.Holder(harness, "first", machine: "a-machine-named-so"), 35 * AdmissionKit.Gibibyte, "/data"));
 
         using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), new ManualClock(), fileSystem: room)
             .AdmitAsync(
@@ -1371,6 +1453,10 @@ public sealed class LegAdmissionTests
         Assert.StartsWith("this leg needs ~10 GiB, as the test says; 40 GiB free on '/data', beside ~35 GiB claimed by '/src/first'", admitted.Fact.Room, StringComparison.Ordinal);
         Assert.Equal("first", Assert.Single(AdmissionKit.ReadClaims(record)).Holder.Leg);
         Assert.Empty(AdmissionKit.Read(record));
+
+        // A claim's line names who claimed it as a holder's does, never its machine.
+        Assert.DoesNotContain("a-machine-named-so", admitted.Refusal, StringComparison.Ordinal);
+        Assert.DoesNotContain(said, line => line.Contains("a-machine-named-so", StringComparison.Ordinal));
     }
 
     /// <summary>

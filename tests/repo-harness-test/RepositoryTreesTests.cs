@@ -14,10 +14,13 @@ public sealed class RepositoryTreesTests
     /// <summary>
     /// Where this machine holds the repository, its trees are the main checkout and every worktree git records - a plain
     /// one and an agent's - each spelt where its address puts it under the worktrees root, as a leg naming it spells its
-    /// tree, and named by that address.
+    /// tree, and named by that address: for a command typed here, and for one told it runs here as this machine's own
+    /// host, <c>local</c>, which keeps no copy.
     /// </summary>
-    [Fact]
-    public async Task HereTheTrees_AreTheMainCheckoutAndEveryWorktreeGitRecords_NamedByTheirAddresses()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HereTheTrees_AreTheMainCheckoutAndEveryWorktreeGitRecords_NamedByTheirAddresses(bool toldLocal)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -29,7 +32,7 @@ public sealed class RepositoryTreesTests
         await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", Path.Combine(root, "plain")], cancellationToken);
         await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", Path.Combine(root, "o1", "xa")], cancellationToken);
 
-        var found = await Trees(harness).HereAsync(context, here: null, cancellationToken);
+        var found = await Trees(harness).HereAsync(context, toldLocal ? HostId.Local : null, cancellationToken);
 
         Assert.Null(found.Unlisted);
         Assert.Equal(new RepositoryTree(temp.Path, RepositoryTree.MainCheckout), found.Trees[0]);

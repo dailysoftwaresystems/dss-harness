@@ -1,4 +1,3 @@
-using System.Globalization;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -19,7 +18,7 @@ public sealed record PageCacheDrop
 
     /// <summary>
     /// How long what a drop gives back takes to reach this machine's count: measured, WSL handed it back in two waves, a
-    /// quarter of it within 8 seconds and the rest 38 to 47 seconds after the drop, and nothing after.
+    /// quarter of it within 8 seconds and the rest 38 to 49 seconds after the drop, and nothing after.
     /// </summary>
     public static readonly TimeSpan HandedBackWithin = TimeSpan.FromMinutes(1);
 
@@ -27,7 +26,7 @@ public sealed record PageCacheDrop
     public bool Done { get; }
 
     /// <summary>
-    /// What was dropped, and as root in which host - <c>WSL's page cache was dropped as root in wsl Ubuntu, 22.9 GiB of
+    /// What was dropped, and as root in which host - <c>WSL's page cache was dropped as root in wsl Ubuntu, 21.8 GiB of
     /// it</c> - or why nothing was.
     /// </summary>
     public string Said { get; }
@@ -51,8 +50,9 @@ public interface IWslPageCache
     /// Has WSL's virtual machine drop its clean page cache, as root in the first distribution a host of
     /// <paramref name="context"/> reaches that is running - every distribution runs in the one virtual machine, under one
     /// kernel - and says how much it dropped, or why nothing was: a host whose item cannot be read, where no other reaches a
-    /// distribution, among the reasons; <see langword="null"/> where there was nothing to drop: this machine is not Windows,
-    /// it declares no WSL host, or no distribution one reaches runs, and a stopped one holds nothing.
+    /// distribution, and a list of the distributions running that cannot be read, among the reasons;
+    /// <see langword="null"/> where there was nothing to drop: this machine is not Windows, it declares no WSL host, or no
+    /// distribution one reaches runs, and a stopped one holds nothing.
     /// </summary>
     /// <param name="context">The repository, whose WSL hosts name the distributions this tool may run a command in.</param>
     /// <param name="cancellationToken">Stops the drop.</param>
@@ -61,8 +61,8 @@ public interface IWslPageCache
 
 /// <inheritdoc cref="IWslPageCache"/>
 /// <remarks>
-/// Measured on a Windows machine whose virtual machine held 24.2 GiB of cache: the drop took 3 seconds and left 1.3 GiB, and
-/// this machine's commit fell from 93.8 GiB to 73.9 GiB within 47 seconds - 72.1 GiB with the virtual machine idle. WSL's own
+/// Measured on a Windows machine whose virtual machine held 23.1 GiB of cache: the drop took 3 seconds and left 1.3 GiB, and
+/// this machine's commit fell from 93.8 GiB to 73.9 GiB within 49 seconds - 72.1 GiB with the virtual machine idle. WSL's own
 /// reclaim drops the cache only once the virtual machine has idled for minutes, which no machine running legs there does.
 /// Never in a distribution that is not running: starting one to drop a cache would take more memory than it gives back.
 /// </remarks>
@@ -109,8 +109,8 @@ public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner h
 
         if (reached.Count == 0)
         {
-            return items.FirstOrDefault(each => each.Read.Item is null) is { Read: not null } unread
-                ? PageCacheDrop.NotDropped($"WSL's page cache was not dropped: {unread.Host}: {unread.Read.Problem}")
+            return items.Where(each => each.Read.Item is null).Select(each => $"{each.Host}: {each.Read.Problem}").FirstOrDefault() is { } unread
+                ? PageCacheDrop.NotDropped($"WSL's page cache was not dropped: {unread}")
                 : null;
         }
 
@@ -130,9 +130,10 @@ public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner h
             return PageCacheDrop.NotDropped($"WSL's page cache was not dropped: {HostProbes.Failure("WSL did not say which distributions run", listed)}");
         }
 
-        var running = listed.StandardOutput
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (Running(listed.StandardOutput) is not { } running)
+        {
+            return PageCacheDrop.NotDropped("WSL's page cache was not dropped: WSL's list of the distributions running could not be read");
+        }
 
         if (reached.FirstOrDefault(each => running.Contains(each.Distribution!)) is not { Distribution: { } distribution } through)
         {
@@ -163,14 +164,22 @@ public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner h
     /// <see langword="null"/> where it does not say both how much was cached before and how much after.
     /// </summary>
     internal static long? DroppedBytes(string printed)
-    {
-        var cached = printed
-            .Split('\n', StringSplitOptions.TrimEntries)
-            .Where(line => line.StartsWith("Cached:", StringComparison.Ordinal))
-            .Select(line => line["Cached:".Length..].Trim().Split(' ')[0])
-            .Select(kibibytes => long.TryParse(kibibytes, NumberStyles.None, CultureInfo.InvariantCulture, out var count) ? count : (long?)null)
-            .ToList();
+        => MemoryGauge.EachKibibytes(printed, "Cached") is [{ } before, { } after] ? Math.Max(0, before - after) * 1024 : null;
 
-        return cached is [{ } before, { } after] ? Math.Max(0, before - after) * 1024 : null;
+    /// <summary>
+    /// The distributions <paramref name="listed"/> - what <c>wsl --list --running --quiet</c> printed - names, one a line,
+    /// or <see langword="null"/> where it holds what no name does: a character its bytes did not spell, or a control
+    /// character. An older wsl.exe writes UTF-16 whatever WSL_UTF8 says, which read as UTF-8 has each character of a name
+    /// followed by a NUL: those are dropped. Taken for a list of none, it said no distribution ran, and nothing said why
+    /// none was dropped.
+    /// </summary>
+    internal static IReadOnlySet<string>? Running(string listed)
+    {
+        var names = listed
+            .Replace("\0", string.Empty, StringComparison.Ordinal)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return names.Any(name => name.Any(character => character == '\uFFFD' || char.IsControl(character))) ? null : names;
     }
 }

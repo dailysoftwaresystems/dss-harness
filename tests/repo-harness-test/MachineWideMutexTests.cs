@@ -138,6 +138,40 @@ public sealed class MachineWideMutexTests
         Assert.Equal([TimeSpan.Zero], asked);
     }
 
+    /// <summary>
+    /// A mutex whose holder ended holding it - a thread here, as a process killed holding one is elsewhere - is taken, as one
+    /// let go is: everything it guards is written by replacing a whole file, so nothing its holder left is half written.
+    /// Taken once: one release lets it go, for whoever waits next. Waited for again, as one not taken, it would be this
+    /// thread's twice, and still held once the lock was let go.
+    /// </summary>
+    [Fact]
+    public void AMutexItsHolderEndedHolding_IsTakenOnce()
+    {
+        using var mutex = new Mutex();
+        var holder = new Thread(() => mutex.WaitOne());
+        var takenNext = false;
+        var next = new Thread(() =>
+        {
+            takenNext = mutex.WaitOne(0);
+
+            if (takenNext)
+            {
+                mutex.ReleaseMutex();
+            }
+        });
+
+        holder.Start();
+        holder.Join();
+
+        Assert.True(MachineWideMutex.Wait(mutex, TimeSpan.FromSeconds(5)));
+        mutex.ReleaseMutex();
+
+        next.Start();
+        next.Join();
+
+        Assert.True(takenNext, "the mutex was still held once it was let go: it had been taken twice");
+    }
+
     /// <summary>A mutex another user holds is refused at once: no retry makes it this user's.</summary>
     [Fact]
     public void AMutexAnotherUserHolds_IsRefusedAtOnce()

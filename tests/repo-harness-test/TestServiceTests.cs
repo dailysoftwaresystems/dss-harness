@@ -611,7 +611,7 @@ public sealed class TestServiceTests
         config.Legs[Leg] = new LegConfig { Os = PlatformNames.Windows, Processor = PlatformNames.X64, Config = "release" };
         config.Contention.SharedResourceTools.Add("toolcc");
         var theirs = VariantKey.For(config, config.Legs[Leg], PlatformNames.Windows).DirectoryUnder(other.Path);
-        var table = new ProcessTableHolding(new SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
+        var table = new QuietProcessTable(new SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
 
         var result = await Service(factory, processTable: table).RunAsync(
             config,

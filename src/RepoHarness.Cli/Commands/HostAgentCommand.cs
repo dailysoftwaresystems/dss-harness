@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Repository;
 
 namespace RepoHarness.Cli.Commands;
 
@@ -34,14 +35,11 @@ internal static class HostAgentCommand
         {
             // Before anything the request runs: a run request goes back through the parser, and each
             // command it starts must know it was asked for by another machine, not typed here.
-            CommandRunner.ServeAnotherMachine();
+            CommandRunner.Serve(CommandOrigin.Agent);
 
             // Never prompting here is the point, not a default: this process serves another machine,
             // its standard input already carries the request, and there is nobody at this end to ask.
-            await using var services = HarnessServices.Build(
-                parseResult.GetValue(GlobalOptions.Verbose),
-                prompting: false,
-                servesAnotherMachine: true);
+            await using var services = HarnessServices.Build(parseResult.GetValue(GlobalOptions.Verbose), prompting: false, CommandOrigin.Agent);
 
             // The request was written as UTF-8, and is read as such whatever the console's own input
             // encoding happens to be.

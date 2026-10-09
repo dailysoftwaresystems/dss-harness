@@ -123,9 +123,21 @@ public sealed class MemoryGauge(IHostPlatform platform, IFileSystem fileSystem) 
     /// <summary>A count of bytes as a line gives it, one too large to name as a size named as the largest.</summary>
     private static string Size(ulong bytes) => DiskSpace.Size((long)Math.Min(bytes, long.MaxValue));
 
-    /// <summary>The value, in KiB, a line of <c>/proc/meminfo</c> gives <paramref name="key"/>, or <see langword="null"/>.</summary>
-    private static long? Kibibytes(string meminfo, string key)
+    /// <summary>The value, in KiB, the first line of <c>/proc/meminfo</c> giving <paramref name="key"/> gives it, or <see langword="null"/>.</summary>
+    private static long? Kibibytes(string meminfo, string key) => EachKibibytes(meminfo, key).FirstOrDefault();
+
+    /// <summary>
+    /// The value, in KiB, each line of <paramref name="meminfo"/> - lines of <c>/proc/meminfo</c>, as many as it holds -
+    /// gives <paramref name="key"/>, in order: <see langword="null"/> for one whose value is no count.
+    /// </summary>
+    /// <param name="meminfo">The lines.</param>
+    /// <param name="key">What a line names before its colon: <c>MemTotal</c>.</param>
+    internal static IReadOnlyList<long?> EachKibibytes(string meminfo, string key)
     {
+        ArgumentNullException.ThrowIfNull(meminfo);
+
+        var values = new List<long?>();
+
         foreach (var line in meminfo.Split('\n'))
         {
             var colon = line.IndexOf(':', StringComparison.Ordinal);
@@ -138,10 +150,10 @@ public sealed class MemoryGauge(IHostPlatform platform, IFileSystem fileSystem) 
             var value = line[(colon + 1)..].Trim();
             var number = value.EndsWith(" kB", StringComparison.Ordinal) ? value[..^3].Trim() : value;
 
-            return long.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var kibibytes) ? kibibytes : null;
+            values.Add(long.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var kibibytes) ? kibibytes : null);
         }
 
-        return null;
+        return values;
     }
 
     private static (MemoryReading? Reading, string? Unmeasured) Windows()

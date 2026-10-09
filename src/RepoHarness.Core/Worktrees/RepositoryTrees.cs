@@ -22,8 +22,14 @@ public sealed record RepositoryTree(string Root, string Name)
     public static string Worktree(string copyName) => $"worktree {WorktreeAddress.OfCopyName(copyName)}";
 }
 
-/// <summary>The trees of a repository a machine holds, as far as they could be listed.</summary>
-/// <param name="Trees">Each tree: the main checkout's first, which is known without listing anything, then the rest.</param>
+/// <summary>
+/// The trees of a repository a machine holds, as far as they could be listed - all of them, as
+/// <see cref="IRepositoryTrees"/> finds them, or those beside one leg's own, its own left out.
+/// </summary>
+/// <param name="Trees">
+/// Each tree: the main checkout's - or a host's copy of it - first, which is known without listing anything, then the rest;
+/// none where the machine keeps no copy, said as <paramref name="Unlisted"/>.
+/// </param>
 /// <param name="Unlisted">Why the trees beside the main checkout's could not be listed, where they could not.</param>
 public sealed record RepositoryTreesFound(IReadOnlyList<RepositoryTree> Trees, string? Unlisted = null);
 
@@ -37,7 +43,8 @@ public interface IRepositoryTrees
     /// <summary>
     /// The trees of <paramref name="context"/>'s repository on this machine: where this machine holds the repository, the
     /// main checkout and every worktree git records; on a host running legs another machine sent it, the main checkout's
-    /// copy, where the configuration says this host keeps it, and each worktree's copy beside it.
+    /// copy, where the configuration says this host keeps it, and each worktree's copy beside it
+    /// (<see cref="HostCopies.KeptAs"/>).
     /// </summary>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
@@ -82,13 +89,13 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (here is not null)
+        if (HostCopies.KeptAs(here) is { } kept)
         {
             string declared;
 
             try
             {
-                declared = HostCopies.RepositoryPathOf(context.Config, here);
+                declared = HostCopies.RepositoryPathOf(context.Config, kept);
             }
             catch (HarnessException ex)
             {

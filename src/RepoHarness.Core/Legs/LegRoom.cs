@@ -46,12 +46,10 @@ public sealed record RoomNeed(long Bytes, string Source, string? At, string Wher
 /// </remarks>
 public static class LegRoom
 {
-    private const long Gibibyte = 1L << 30;
-
     /// <summary>
     /// What to ask each candidate host about the room on it: where its copies are kept, and the build
-    /// directory there of each selected leg the command builds, with the main checkout's copy of the same
-    /// variant.
+    /// directory there of each selected leg the command builds, with every other tree's copy of the same
+    /// variant there - the main checkout's and each worktree's.
     /// </summary>
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="candidates">Each selected leg, with the hosts it could be placed on.</param>
@@ -301,7 +299,7 @@ public static class LegRoom
 
         if (leg.BuildSpaceGiB is { } declared)
         {
-            return ((long)Math.Ceiling(declared * Gibibyte), string.Create(CultureInfo.InvariantCulture, $"as its buildSpaceGiB, {declared:0.###}, declares"));
+            return ((long)Math.Ceiling(declared * DiskSpace.Gibibyte), string.Create(CultureInfo.InvariantCulture, $"as its buildSpaceGiB, {declared:0.###}, declares"));
         }
 
         if (ownRecorded is { } recorded)
@@ -329,8 +327,9 @@ public static class LegRoom
     /// <summary>
     /// The paths <paramref name="leg"/> has on <paramref name="host"/>: where the host keeps the main checkout's
     /// copy, the leg's own build directory there, the build directory the command fills - the leg's own, or for a sweep
-    /// of its mutation arms its first worker's - and each other tree's copy of the same variant there, the main checkout's
-    /// first, with what a line calls that tree; or <see langword="null"/> where the host declares nowhere to keep a copy.
+    /// of its mutation arms its first worker's - and each tree's copy of the same variant there, as
+    /// <paramref name="trees"/> found them - the main checkout's first, which is known without listing anything - with
+    /// what a line calls that tree; or <see langword="null"/> where the host declares nowhere to keep a copy.
     /// </summary>
     /// <remarks>
     /// The variant for the leg's own operating system: a host of another is never given the leg, so the variant
@@ -350,23 +349,15 @@ public static class LegRoom
             var variant = VariantKey.For(context.Config, leg, leg.Os);
             var main = LegTrees.On(context, host, context.Layout.MainCheckoutRoot, comparison);
             var own = LegTrees.On(context, host, LegTrees.Here(context, leg, here), comparison);
-
-            // On a host running a leg another machine sent it, the tree here is a copy - a repository of its own, whose main
-            // checkout is itself - so the main checkout's copy, which a worktree copy's first build there is measured
-            // against, is where the configuration says this host keeps it. Measured against itself instead, that build
-            // needed nothing anyone said, and claimed no room as it was admitted.
-            var mainCopy = here is { Kind: not HostKind.Local } ? HostCopies.RepositoryPathOf(context.Config, here) : main;
-
             var built = variant.DirectoryOn(host, own);
 
-            // The main checkout's copy is known without listing anything, so it is measured whether or not the trees beside
-            // it could be listed. The leg's own tree may be among the rest: what its own build recorded is taken first, and
-            // where it recorded nothing it has nothing to add.
+            // The trees as they were found there: on a host running a leg another machine sent it, the main checkout's copy
+            // where the configuration says this host keeps it - the tree here is a copy, a repository whose main checkout
+            // is itself, and measured against itself a worktree copy's first build needed nothing anyone said. The leg's
+            // own tree may be among them: what its own build recorded is taken first, and where it recorded nothing it has
+            // nothing to add.
             IReadOnlyList<(string Tree, string Build)> siblings =
-            [
-                (RepositoryTree.MainCheckout, variant.DirectoryOn(host, mainCopy)),
-                .. (trees.GetValueOrDefault(host)?.Trees ?? []).Select(tree => (tree.Name, variant.DirectoryOn(host, tree.Root))),
-            ];
+                [.. (trees.GetValueOrDefault(host)?.Trees ?? []).Select(tree => (tree.Name, variant.DirectoryOn(host, tree.Root)))];
 
             return (main, built, sweeps ? variant.DirectoryOn(host, MutationWorkers.PathOf(own, variant, 1)) : built, siblings);
         }

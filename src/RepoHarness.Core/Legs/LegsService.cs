@@ -192,7 +192,7 @@ public sealed class LegsService(
         {
             // A host that declares nowhere to keep a copy holds none of the repository's, and is refused where a leg is
             // placed on it; this machine, running legs another machine sent it, keeps them where it declares for itself.
-            var keeper = host.Kind == HostKind.Local ? here : host;
+            var keeper = host.Kind == HostKind.Local ? HostCopies.KeptAs(here) : host;
 
             if (keeper is not null && HostCopies.DeclaredFor(context.Config, keeper)?.RepositoryPath is not { Length: > 0 })
             {

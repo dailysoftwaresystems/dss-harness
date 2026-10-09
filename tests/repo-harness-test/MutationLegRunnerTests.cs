@@ -107,7 +107,7 @@ public sealed class MutationLegRunnerTests
     [Fact]
     public async Task EveryBuildASweepMakes_IsHeldToTheLegsFloor_NamingTheLegItselfAsWhatCleansIt()
     {
-        var floor = new RoomFloor(LegName, 2L << 30, [("/mnt/c", ", where WSL keeps its disk")]);
+        var floor = RoomFloor.Beside(LegName, 2L << 30, "/mnt/c", ", where WSL keeps its disk");
         using var sweep = new Sweep { Floor = floor };
 
         var entry = await sweep.RunAsync([ChargeBound, DepthType]);

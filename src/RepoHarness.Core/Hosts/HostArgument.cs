@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -73,8 +74,32 @@ public sealed record HostArgument
         }
     }
 
-    /// <inheritdoc/>
-    public override string ToString() => Text;
+    /// <summary>
+    /// Whether <paramref name="other"/> is the same argument as the command reads it: the same text, the same bytes carried
+    /// - wherever they are held - or text that is the base64 of the bytes carried, which is what a host reads them as.
+    /// </summary>
+    /// <param name="other">Another argument.</param>
+    public bool Equals(HostArgument? other)
+        => other is not null
+            && (_text, other._text) switch
+            {
+                (null, null) => _bytes.Span.SequenceEqual(other._bytes.Span),
+                ({ } text, { } otherText) => string.Equals(text, otherText, StringComparison.Ordinal),
+                _ => string.Equals(Text, other.Text, StringComparison.Ordinal),
+            };
+
+    /// <summary>
+    /// The length of the text the command reads, which arguments the same share: reckoned for what is carried without
+    /// encoding it.
+    /// </summary>
+    public override int GetHashCode() => _text?.Length ?? ((_bytes.Length + 2) / 3 * 4);
+
+    /// <summary>
+    /// The argument as a line names it: its text, or how many bytes it carries - never their base64, which a file a sync
+    /// carries would be made whole as, what carrying it a piece at a time is for.
+    /// </summary>
+    public override string ToString()
+        => _text ?? string.Create(CultureInfo.InvariantCulture, $"{_bytes.Length} byte(s), read as their base64 text");
 }
 
 /// <summary>Reads an argument as the text it is, and writes one as <see cref="HostArgument.WriteTo"/> does.</summary>

@@ -7,6 +7,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -1046,6 +1047,38 @@ public sealed class BuildServiceTests
     }
 
     /// <summary>
+    /// A build's sampling knows the repository's other trees on the machine, as the tests' does: a shared tool working in
+    /// another tree's build directory of this leg's variant while the build runs is named as that tree's leg's, never
+    /// warned of as one no declared leg accounts for.
+    /// </summary>
+    [Fact]
+    public async Task ASharedToolWorkingInAnotherTreesBuildDirectory_IsNamedAsThatTreesLeg_WhileTheBuildRuns()
+    {
+        using var temp = new TempDirectory();
+        using var other = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var factory = new HarnessFactory();
+        var config = Config();
+        config.BuildConfigs["release"] = new BuildConfiguration();
+        config.Legs[Leg] = new LegConfig { Os = PlatformNames.Windows, Processor = PlatformNames.X64, Config = "release" };
+        config.Contention.SharedResourceTools.Add("toolcc");
+        var theirs = VariantKey.For(config, config.Legs[Leg], PlatformNames.Windows).DirectoryUnder(other.Path);
+        var table = new QuietProcessTable(new SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
+
+        await factory.InitializeGitRepositoryAsync(temp.Path, token);
+        await File.WriteAllTextAsync(temp.Combine("src.cs"), "class App;" + Environment.NewLine, token);
+        await factory.CommitAllAsync(temp.Path, "initial", token);
+
+        var result = await Service(factory, 0, processTable: table).BuildAsync(
+            config,
+            Request(temp, [App]) with { Beside = new RepositoryTreesFound([new RepositoryTree(other.Path, "worktree o1/xa")]) },
+            token);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Contains($"working in the build directory of worktree o1/xa's leg '{Leg}'", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A build that could not be shown to have had its directory to itself - here because the
     /// machine's process table could not be read - leaves objects nobody can vouch for, and the next
     /// build starts from clean, saying so rather than naming a clock step.
@@ -1472,7 +1505,7 @@ public sealed class BuildServiceTests
                 return tick.WaitAsync(cancel);
             },
             token);
-        var request = Request(temp, [App]) with { Floor = new RoomFloor(Leg, 2L << 30, []) };
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Of(Leg, 2L << 30) };
 
         var result = await service.BuildAsync(Config(), request, token);
 
@@ -1508,7 +1541,7 @@ public sealed class BuildServiceTests
             new FailingAfter(() => rooms.Space = _ => new DiskSpace(full ? 1L << 30 : 100L << 30, 200L << 30, "/data")),
             (_, cancel) => Task.Delay(Timeout.Infinite, cancel),
             token);
-        var request = Request(temp, [App]) with { Leg = $"{Leg}/workers/1", Floor = new RoomFloor(Leg, 2L << 30, []) };
+        var request = Request(temp, [App]) with { Leg = $"{Leg}/workers/1", Floor = RoomFloor.Of(Leg, 2L << 30) };
 
         var result = await service.BuildAsync(Config(), request, token);
 
@@ -1540,7 +1573,7 @@ public sealed class BuildServiceTests
                 : new DiskSpace(100L << 30, 200L << 30, "/data"),
         };
         var service = await FlooredAsync(temp, factory, rooms, new UntilStopped(() => { }), (_, cancel) => Task.Delay(Timeout.Infinite, cancel), token);
-        var request = Request(temp, [App]) with { Floor = new RoomFloor(Leg, 2L << 30, [("/mnt/c", ", where WSL keeps its disk")]) };
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Beside(Leg, 2L << 30, "/mnt/c", ", where WSL keeps its disk") };
 
         var result = await service.BuildAsync(Config(), request, token);
 
@@ -1560,7 +1593,7 @@ public sealed class BuildServiceTests
         var factory = new HarnessFactory();
         var rooms = new Rooms(factory.FileSystem) { Space = _ => throw new IOException("The volume went away.") };
         var service = await FlooredAsync(temp, factory, rooms, new ReadThrice(rooms), (_, cancel) => Task.Delay(1, cancel), token);
-        var request = Request(temp, [App]) with { Floor = new RoomFloor(Leg, 2L << 30, []) };
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Of(Leg, 2L << 30) };
 
         var result = await service.BuildAsync(Config(), request, token);
         var line = $"{Leg}: the room on '{request.Variant.DirectoryUnder(temp.Path)}' could not be read, so the build is not stopped for want of it: The volume went away";
@@ -1578,10 +1611,196 @@ public sealed class BuildServiceTests
         var token = TestContext.Current.CancellationToken;
         var factory = new HarnessFactory();
         var service = await FlooredAsync(temp, factory, new Rooms(factory.FileSystem), new QuietRunner(0), (_, cancel) => Task.Delay(Timeout.Infinite, cancel), token);
-        var request = Request(temp, [App]) with { Floor = new RoomFloor(Leg, 2L << 30, [], "the drive where WSL keeps its disk is mounted nowhere here") };
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Unwatching(Leg, 2L << 30, "the drive where WSL keeps its disk is mounted nowhere here") };
 
         Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
         Assert.Contains($"{Leg}: the drive where WSL keeps its disk is mounted nowhere here", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A write that fails while a filesystem the build fills stands under its floor - its phase's log, filled faster than the
+    /// next reading came - failed for want of room: the build is stopped, as that reading would have stopped it, and a
+    /// record of what it built it has no room to write is said, the one it wrote as it began standing - never a failure
+    /// that ends every leg of its run. With room to spare, such a failure is what it is.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AWriteThatFailsUnderItsFloor_StopsTheBuild_ForWantOfRoom(bool full)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var factory = new HarnessFactory();
+        var rooms = new Rooms(factory.FileSystem);
+        var service = await FlooredAsync(
+            temp,
+            factory,
+            rooms,
+            new UnwrittenAfter(() =>
+            {
+                rooms.Space = _ => new DiskSpace(full ? 1L << 30 : 100L << 30, 200L << 30, "/data");
+                rooms.Full = full;
+            }),
+            (_, cancel) => Task.Delay(Timeout.Infinite, cancel),
+            token);
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Of(Leg, 2L << 30) };
+
+        if (!full)
+        {
+            Assert.Equal(Unwritten, (await Assert.ThrowsAsync<IOException>(() => service.BuildAsync(Config(), request, token))).Message);
+
+            return;
+        }
+
+        var result = await service.BuildAsync(Config(), request, token);
+
+        Assert.Equal(LegVerdict.Stopped, result.Verdict.Verdict);
+        Assert.StartsWith("stopped with 1 GiB free on '/data', under the 2 GiB admission.minFreeGiB", result.Verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{Leg}: the record of what it built could not be written with this little room, so the one it wrote as it began stands: "
+            + Unwritten.TrimEnd('.'),
+            factory.StandardError.ToString(),
+            StringComparison.Ordinal);
+        Assert.True(File.Exists(RecordOf(request, temp)));
+    }
+
+    /// <summary>
+    /// A build that starts under its floor writes nothing - not its record, which would say its directory was built from a
+    /// tree no phase of it read, and not on a disk with no room for it - and is stopped before its first phase.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ABuildUnderItsFloorAsItStarts_WritesNothing_AndIsStopped(bool full)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var factory = new HarnessFactory();
+        var rooms = new Rooms(factory.FileSystem) { Space = _ => new DiskSpace(1L << 30, 200L << 30, "/data"), Full = full };
+        var phases = new CountingRunner();
+        var service = await FlooredAsync(temp, factory, rooms, phases, (_, cancel) => Task.Delay(Timeout.Infinite, cancel), token);
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Of(Leg, 2L << 30) };
+
+        var result = await service.BuildAsync(Config(), request, token);
+
+        Assert.Equal(LegVerdict.Stopped, result.Verdict.Verdict);
+        Assert.StartsWith("stopped with 1 GiB free on '/data'", result.Verdict.Detail, StringComparison.Ordinal);
+        Assert.Equal(0, phases.Started);
+        Assert.False(File.Exists(RecordOf(request, temp)));
+    }
+
+    /// <summary>
+    /// A build whose first write finds no room - the disk filled between the room's first reading and its record - is
+    /// stopped as one under its floor from the start is, writing nothing and running no phase.
+    /// </summary>
+    [Fact]
+    public async Task ABuildWhoseFirstWriteFindsNoRoom_IsStopped_WritingNothing()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var factory = new HarnessFactory();
+        var read = 0;
+        var rooms = new Rooms(factory.FileSystem)
+        {
+            Space = _ => new DiskSpace(Interlocked.Increment(ref read) == 1 ? 100L << 30 : 1L << 30, 200L << 30, "/data"),
+            Full = true,
+        };
+        var phases = new CountingRunner();
+        var service = await FlooredAsync(temp, factory, rooms, phases, (_, cancel) => Task.Delay(Timeout.Infinite, cancel), token);
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Of(Leg, 2L << 30) };
+
+        var result = await service.BuildAsync(Config(), request, token);
+
+        Assert.Equal(LegVerdict.Stopped, result.Verdict.Verdict);
+        Assert.StartsWith("stopped with 1 GiB free on '/data'", result.Verdict.Detail, StringComparison.Ordinal);
+        Assert.Equal(0, phases.Started);
+        Assert.False(File.Exists(RecordOf(request, temp)));
+    }
+
+    /// <summary>
+    /// A phase that spanned a clock step is marked in the build's record at once; a mark with no room left to write it, on a
+    /// filesystem under its floor, stops the build for want of room, as any write of its own failing then does.
+    /// </summary>
+    [Fact]
+    public async Task AClockStepsMarkWithNoRoomLeftForIt_StopsTheBuild_ForWantOfRoom()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var factory = new HarnessFactory();
+        var rooms = new Rooms(factory.FileSystem);
+        var clock = new SteppingClock();
+        var service = await FlooredAsync(
+            temp,
+            factory,
+            rooms,
+            new PassingAfter(() =>
+            {
+                clock.Step(TimeSpan.FromSeconds(25));
+                rooms.Space = _ => new DiskSpace(1L << 30, 200L << 30, "/data");
+                rooms.Full = true;
+            }),
+            (_, cancel) => Task.Delay(Timeout.Infinite, cancel),
+            token,
+            clock);
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Of(Leg, 2L << 30) };
+
+        var result = await service.BuildAsync(Config(), request, token);
+
+        Assert.Equal(LegVerdict.Stopped, result.Verdict.Verdict);
+        Assert.Contains(result.Phases, phase => phase.ClockStepped);
+        Assert.StartsWith("stopped with 1 GiB free on '/data'", result.Verdict.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A filesystem with exactly as much room as the floor keeps is not under it: the floor is the least room a build
+    /// leaves, and leaving that much stops nothing.
+    /// </summary>
+    [Fact]
+    public async Task ARoomExactlyAtItsFloor_StopsNothing()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var factory = new HarnessFactory();
+        var rooms = new Rooms(factory.FileSystem) { Space = _ => new DiskSpace(2L << 30, 200L << 30, "/data") };
+        var service = await FlooredAsync(temp, factory, rooms, new ReadThrice(rooms), (_, cancel) => Task.Delay(1, cancel), token);
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Of(Leg, 2L << 30) };
+
+        Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+        Assert.True(rooms.Asked.Count >= 3, $"the room was read {rooms.Asked.Count} time(s)");
+    }
+
+    /// <summary>
+    /// A build its caller stops while its floor stops it too is its caller's to have stopped: the stop is raised, as any
+    /// stop asked for is, never reported as a build stopped for want of room - whether or not anything the build closes as
+    /// it ends asks after the stop again, as reading its inputs a last time does where it watched any.
+    /// </summary>
+    [Theory]
+    [InlineData("src.cs")]
+    [InlineData("notes.txt")]
+    public async Task ACallersStop_WhileTheFloorStopsTheBuild_IsTheCallers(string tracked)
+    {
+        using var temp = new TempDirectory();
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var tick = new SemaphoreSlim(0);
+        var factory = new HarnessFactory();
+        var rooms = new Rooms(factory.FileSystem);
+        var service = await FlooredAsync(
+            temp,
+            factory,
+            rooms,
+            new StoppedTwice(
+                () =>
+                {
+                    rooms.Space = _ => new DiskSpace(1L << 30, 200L << 30, "/data");
+                    tick.Release();
+                },
+                caller.Cancel),
+            (_, cancel) => tick.WaitAsync(cancel),
+            TestContext.Current.CancellationToken,
+            tracked: tracked);
+        var request = Request(temp, [App]) with { Floor = RoomFloor.Of(Leg, 2L << 30) };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.BuildAsync(Config(), request, caller.Token));
     }
 
     /// <summary>A build with no floor - a light leg, or one whose machine declares no admission - never reads the room.</summary>
@@ -1601,7 +1820,8 @@ public sealed class BuildServiceTests
     /// <summary>
     /// A service over a tracked tree in <paramref name="temp"/>, its phases run by <paramref name="phases"/> - each leaving
     /// the app a build makes - its room read through <paramref name="rooms"/>, and each wait between readings of it as
-    /// <paramref name="wait"/> waits.
+    /// <paramref name="wait"/> waits. The tree tracks one file, <paramref name="tracked"/>: a source the build reads,
+    /// unless a test says otherwise.
     /// </summary>
     private static async Task<BuildService> FlooredAsync(
         TempDirectory temp,
@@ -1609,20 +1829,31 @@ public sealed class BuildServiceTests
         Rooms rooms,
         IProcessRunner phases,
         Func<TimeSpan, CancellationToken, Task> wait,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeProvider? wallClock = null,
+        string tracked = "src.cs")
     {
         await factory.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
-        await File.WriteAllTextAsync(temp.Combine("src.cs"), "class App;" + Environment.NewLine, cancellationToken);
+        await File.WriteAllTextAsync(temp.Combine(tracked), "class App;" + Environment.NewLine, cancellationToken);
         await factory.CommitAllAsync(temp.Path, "initial", cancellationToken);
 
-        return Service(factory, 0, phases: phases, fileSystem: rooms, floorWait: wait);
+        return Service(factory, 0, phases: phases, fileSystem: rooms, wallClock: wallClock, floorWait: wait);
     }
 
-    /// <summary>A file system whose room is what <see cref="Space"/> says of each path, every path asked about kept in order.</summary>
+    /// <summary>What a write says where its disk has no room left.</summary>
+    private const string Unwritten = "There is not enough space on the disk.";
+
+    /// <summary>
+    /// A file system whose room is what <see cref="Space"/> says of each path, every path asked about kept in order, and
+    /// whose every write fails once it is <see cref="Full"/>.
+    /// </summary>
     private sealed class Rooms(IFileSystem inner) : PassThroughFileSystem(inner)
     {
         /// <summary>The room at a path: plenty on '/data', where a test says nothing.</summary>
         public Func<string, DiskSpace> Space { get; set; } = _ => new DiskSpace(100L << 30, 200L << 30, "/data");
+
+        /// <summary>Whether a write fails, as one does on a disk with no room left.</summary>
+        public bool Full { get; set; }
 
         /// <summary>Every path whose room was asked about, in order.</summary>
         public System.Collections.Concurrent.ConcurrentQueue<string> Asked { get; } = new();
@@ -1632,6 +1863,16 @@ public sealed class BuildServiceTests
             Asked.Enqueue(path);
 
             return Space(path);
+        }
+
+        public override void WriteAllTextAtomic(string path, string contents)
+        {
+            if (Full)
+            {
+                throw new IOException(Unwritten);
+            }
+
+            base.WriteAllTextAtomic(path, contents);
         }
     }
 
@@ -2429,6 +2670,79 @@ public sealed class BuildServiceTests
             happening();
 
             return Task.FromResult(new ProcessResult(1, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>
+    /// Each phase does <paramref name="happening"/>, then fails to write what it printed, as one whose log is on a disk with
+    /// no room left does: the failure is raised once the child ends.
+    /// </summary>
+    private sealed class UnwrittenAfter(Action happening) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            happening();
+
+            throw new IOException(Unwritten);
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>Each phase does <paramref name="happening"/>, then passes, having printed nothing.</summary>
+    private sealed class PassingAfter(Action happening) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            happening();
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>A runner that starts nothing, counts how many phases it was asked to run, and passes each.</summary>
+    private sealed class CountingRunner : IProcessRunner
+    {
+        private int _started;
+
+        /// <summary>How many phases it was asked to run.</summary>
+        public int Started => Volatile.Read(ref _started);
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _started);
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>
+    /// Each phase does <paramref name="starting"/>, runs until something stops it - for 30 seconds at most - then does
+    /// <paramref name="stopped"/>, and is stopped: a caller asking to stop a build its floor stopped first.
+    /// </summary>
+    private sealed class StoppedTwice(Action starting, Action stopped) : IProcessRunner
+    {
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            starting();
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                stopped();
+                throw;
+            }
+
+            throw new TimeoutException("A phase that runs until it is stopped ran 30 seconds, and nothing stopped it.");
         }
 
         public string? FindExecutable(string command) => command;

@@ -84,10 +84,8 @@ internal static class SyncServeCommand
                         await transport.RemoveWorkersAsync(root, SyncServe.MeasuresOnly(arguments), cancellationToken).ConfigureAwait(false)));
 
                 case SyncServe.Manifest:
-                    var withheld = arguments[1..].Where(name => name.Length > 0).ToList();
-
                     var manifest = await transport
-                        .ReadManifestAsync(root, withheld, cancellationToken)
+                        .ReadManifestAsync(root, SyncServe.Named(arguments), cancellationToken)
                         .ConfigureAwait(false);
 
                     return Answer(new SyncManifestAnswer([.. manifest.Paths.Select(path => manifest.Entries[path])])
@@ -124,10 +122,7 @@ internal static class SyncServeCommand
                 case SyncServe.Prune:
                     return Answer(new SyncPruneAnswer(
                         await transport
-                            .RemoveEmptyDirectoriesAsync(
-                                root,
-                                [.. arguments[1..].Where(directory => directory.Length > 0)],
-                                cancellationToken)
+                            .RemoveEmptyDirectoriesAsync(root, SyncServe.Named(arguments), cancellationToken)
                             .ConfigureAwait(false)));
 
                 case SyncServe.Read:

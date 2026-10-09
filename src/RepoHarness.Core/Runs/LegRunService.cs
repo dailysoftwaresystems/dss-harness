@@ -144,7 +144,7 @@ public sealed class LegRunService(
     private readonly IHarnessOutput _output = output;
 
     /// <summary>Who the command runs for: on a host, the run of the machine that asked, which its legs' slots are recorded under.</summary>
-    private readonly CommandOrigin _origin = origin ?? new CommandOrigin(ServesAnotherMachine: false);
+    private readonly CommandOrigin _origin = origin ?? CommandOrigin.Typed;
 
     /// <summary>
     /// Runs <paramref name="work"/> on every selected leg and reports the ledger.
@@ -227,10 +227,6 @@ public sealed class LegRunService(
         // What each host's copy is marked, read once per copy, for a run on what is already staged there.
         var stagedMarks = new ConcurrentDictionary<string, Lazy<Task<CopyMark>>>(LegPlan.TreeKeyComparer);
 
-        // The repository's trees on this machine, listed once, as the first leg whose work runs here begins it: whose build
-        // directory a process found beside a leg works in is told by them.
-        var trees = new Lazy<Task<RepositoryTreesFound>>(() => _trees.HereAsync(context, request.Here, cancellationToken));
-
         try
         {
             // A run on this machine that ended holding its own directory - most likely killed, or stopped with its
@@ -264,7 +260,7 @@ public sealed class LegRunService(
                             MaxParallelLegsTotal = context.Config.Defaults.MaxParallelLegsTotal,
                             SyncTree = syncTree,
                             RunLeg = (plan, token) => RunLegAsync(
-                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, stagedMarks, trees, token),
+                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, stagedMarks, token),
                         },
                         ledger,
                         cancellationToken)
@@ -497,7 +493,6 @@ public sealed class LegRunService(
         LegLedger ledger,
         ConcurrentDictionary<string, string> lockedTrees,
         ConcurrentDictionary<string, Lazy<Task<CopyMark>>> stagedMarks,
-        Lazy<Task<RepositoryTreesFound>> trees,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => candidate.Name == plan.Name);
@@ -566,7 +561,7 @@ public sealed class LegRunService(
                 return Ended(leg, LegVerdict.NotAdmitted, refusal, started) with { Admission = admitted.Fact };
             }
 
-            var entry = await RunTakenLegAsync(context, leg, runId, runDirectory, request, work, commandName, ledger, trees, started, cancellationToken).ConfigureAwait(false);
+            var entry = await RunTakenLegAsync(context, leg, runId, runDirectory, request, work, commandName, ledger, started, cancellationToken).ConfigureAwait(false);
 
             return admitted is null ? entry : entry with { Admission = admitted.Fact };
         }
@@ -625,9 +620,7 @@ public sealed class LegRunService(
             return null;
         }
 
-        var machine = leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings;
-
-        if (AdmissionSettings.RuleFor(machine.Admission, context.Config.Defaults.Admission) is not { } rule)
+        if (AdmissionRuleOf(context, leg) is not { } rule)
         {
             return null;
         }
@@ -638,7 +631,7 @@ public sealed class LegRunService(
             .AdmitAsync(
                 new AdmissionRequest(
                     rule,
-                    _origin.Dispatched?.RunId ?? runId.Value,
+                    _origin.Dispatched?.RunId?.Value ?? runId.Value,
                     ledger.CommandName,
                     asking,
                     leg.Host.Host.ToString(),
@@ -671,25 +664,22 @@ public sealed class LegRunService(
     private RoomFloor? FloorOf(HarnessContext context, PlacedLeg leg, LegRunRequest request)
     {
         var workload = request.Workload.On(leg.Leg.Os);
-        var machine = leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings;
 
-        if (!(workload.Heavy || workload.AdmitsEachUnit)
-            || AdmissionSettings.RuleFor(machine.Admission, context.Config.Defaults.Admission) is not { MinFreeBytes: > 0 } rule)
+        if (!(workload.Heavy || workload.AdmitsEachUnit) || AdmissionRuleOf(context, leg) is not { MinFreeBytes: > 0 } rule)
         {
             return null;
         }
 
         if (request.Here is not { Kind: HostKind.Wsl })
         {
-            return new RoomFloor(leg.Name, rule.MinFreeBytes, []);
+            return RoomFloor.Of(leg.Name, rule.MinFreeBytes);
         }
 
         if (_origin.Dispatched?.DiskImageDrive is not { } drive)
         {
-            return new RoomFloor(
+            return RoomFloor.Unwatching(
                 leg.Name,
                 rule.MinFreeBytes,
-                [],
                 "the machine that sent this leg named no drive where WSL keeps this distribution's disk, so only the distribution's "
                 + "own room is held to admission.minFreeGiB");
         }
@@ -697,20 +687,27 @@ public sealed class LegRunService(
         var (mount, why) = WindowsDriveMounts.Of(_fileSystem, drive);
 
         return mount is not null
-            ? new RoomFloor(leg.Name, rule.MinFreeBytes, [(mount, ", where WSL keeps its disk")])
-            : new RoomFloor(
+            ? RoomFloor.Beside(leg.Name, rule.MinFreeBytes, mount, ", where WSL keeps its disk")
+            : RoomFloor.Unwatching(
                 leg.Name,
                 rule.MinFreeBytes,
-                [],
                 $"the drive where WSL keeps this distribution's disk, {drive}, could not be found here, so only the distribution's own "
                 + $"room is held to admission.minFreeGiB: {why}");
     }
 
+    /// <summary>
+    /// The admission rule of the machine <paramref name="leg"/>'s work runs on, or <see langword="null"/> where it declares
+    /// none: for a WSL distribution's leg, the Windows machine it runs on, whose memory its virtual machine takes and whose
+    /// drive its disk grows on. Its slots, its floor and its page cache all answer to that one rule.
+    /// </summary>
+    private static AdmissionRule? AdmissionRuleOf(HarnessContext context, PlacedLeg leg)
+        => AdmissionSettings.RuleFor(
+            (leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings).Admission,
+            context.Config.Defaults.Admission);
+
     /// <summary>The trees of <paramref name="trees"/> but <paramref name="leg"/>'s own: the repository's other trees here.</summary>
     private RepositoryTreesFound Beside(RepositoryTreesFound trees, PlacedLeg leg)
-        => trees with { Trees = [.. trees.Trees.Where(tree => !string.Equals(Whole(tree.Root), Whole(leg.TreeRoot), _platform.PathComparison))] };
-
-    private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        => trees with { Trees = [.. trees.Trees.Where(tree => !PathContainment.AreSame(tree.Root, leg.TreeRoot, _platform.PathComparison))] };
 
     /// <summary>
     /// <paramref name="leg"/>'s line, reaching <paramref name="verdict"/> for <paramref name="detail"/> before its own work
@@ -729,7 +726,6 @@ public sealed class LegRunService(
         Func<LegWork, CancellationToken, Task<LegEntry>> work,
         string commandName,
         LegLedger ledger,
-        Lazy<Task<RepositoryTreesFound>> trees,
         long started,
         CancellationToken cancellationToken)
     {
@@ -751,15 +747,18 @@ public sealed class LegRunService(
             // What a WSL leg read and wrote stays in its virtual machine's page cache, which this machine counts as in use
             // until the virtual machine idles for minutes: dropped as the leg ends - before its slot is given back - where
             // this machine admits its heavy legs by the memory. Not waited for: what comes back is the next wait's to read.
-            if (leg.Named.Kind == HostKind.Wsl
-                && AdmissionSettings.RuleFor(context.Config.Hosts.Local.Admission, context.Config.Defaults.Admission) is not null)
+            // Nothing to drop is said too: the leg had just run in a distribution a host reaches, so WSL listing none of them
+            // running leaves its cache where it was.
+            if (leg.Named.Kind == HostKind.Wsl && AdmissionRuleOf(context, leg) is not null)
             {
                 try
                 {
-                    if (await _pageCache.DropAsync(context, cancellationToken).ConfigureAwait(false) is { } dropped)
-                    {
-                        ledger.Transition(leg.Name, $"as the leg ended, {dropped.Said}");
-                    }
+                    var dropped = await _pageCache.DropAsync(context, cancellationToken).ConfigureAwait(false);
+
+                    ledger.Transition(
+                        leg.Name,
+                        "as the leg ended, " + (dropped?.Said
+                            ?? "WSL's page cache was not dropped: WSL listed no distribution a WSL host reaches as running, though this leg had just run in one"));
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -799,10 +798,12 @@ public sealed class LegRunService(
             leg = leg with { DeveloperEnvironment = setUp.Environment };
         }
 
+        // The repository's other trees here, whose build directory a process found beside the leg works in is told by,
+        // listed as its work begins: a worktree made since the run began - an agent's, by its orchestrator - is among them.
         var working = leg with
         {
             Floor = FloorOf(context, leg, request),
-            Beside = Beside(await trees.Value.ConfigureAwait(false), leg),
+            Beside = Beside(await _trees.HereAsync(context, request.Here, cancellationToken).ConfigureAwait(false), leg),
         };
         var entry = await work(
                 new LegWork(working, context, runId, runDirectory, request.Time)

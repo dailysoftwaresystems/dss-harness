@@ -6,6 +6,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 
@@ -36,31 +37,22 @@ internal sealed record CommandContext(IServiceProvider Services, ParseResult Par
 internal static class CommandRunner
 {
     /// <summary>
-    /// Whether the commands run from here on were asked for by the DssHarness on another machine,
-    /// through this one's host agent.
+    /// Who the commands run from here on are run for: somebody typing them here, where nothing has said otherwise.
     /// </summary>
     /// <remarks>
     /// Held for the flow of the request the agent serves, rather than for the process: a run request goes
     /// back through this same parser, in the host's copy, and nothing in its command line may say who
     /// asked for it without the command then answering to an argument its own user never typed.
     /// </remarks>
-    private static readonly AsyncLocal<bool> Serving = new();
+    private static readonly AsyncLocal<CommandOrigin?> Origin = new();
 
     /// <summary>
-    /// What the machine that asked for the command this flow runs says of it beside the command line: held for the
-    /// flow, as <see cref="Serving"/> is, and for the same reason.
+    /// Marks what this flow runs from here on as run for <paramref name="origin"/>: by the host agent before it serves a
+    /// request, so nothing that flow runs is taken for something typed here, and with what the machine that asked says of
+    /// a command before that command runs.
     /// </summary>
-    private static readonly AsyncLocal<Dispatch?> Dispatched = new();
-
-    /// <summary>
-    /// Marks what this flow runs from here on as asked for by another machine. Set by the host agent
-    /// before it serves a request; nothing that flow runs is then taken for something typed here.
-    /// </summary>
-    internal static void ServeAnotherMachine() => Serving.Value = true;
-
-    /// <summary>Marks what this flow runs from here on with what the machine that asked for it says of it.</summary>
-    /// <param name="dispatch">What it says: the run the command is a leg of, the drive its WSL disk grows on.</param>
-    internal static void ServeDispatch(Dispatch dispatch) => Dispatched.Value = dispatch;
+    /// <param name="origin">Who the commands are run for.</param>
+    internal static void Serve(CommandOrigin origin) => Origin.Value = origin;
 
     /// <summary>Wraps a command body into an action the parser can invoke.</summary>
     /// <param name="commandName">The command, which prefixes every line it writes.</param>
@@ -106,7 +98,7 @@ internal static class CommandRunner
         {
             var verbose = parseResult.GetValue(GlobalOptions.Verbose);
             var prompting = !parseResult.GetValue(GlobalOptions.NoPrompt);
-            await using var services = HarnessServices.Build(verbose, prompting, Serving.Value, Dispatched.Value);
+            await using var services = HarnessServices.Build(verbose, prompting, Origin.Value ?? CommandOrigin.Typed);
             var output = services.GetRequiredService<IHarnessOutput>();
             var answersWithLedger = ledger is not null && parseResult.GetValue(ledger);
 

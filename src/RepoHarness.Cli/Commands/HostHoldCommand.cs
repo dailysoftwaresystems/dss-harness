@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Cli.Commands;
@@ -42,7 +43,7 @@ internal static class HostHoldCommand
                 ? null
                 : PosixSignalRegistration.Create(PosixSignal.SIGHUP, context => context.Cancel = true);
 
-            await using var services = HarnessServices.Build(verbose: false, prompting: false);
+            await using var services = HarnessServices.Build(verbose: false, prompting: false, CommandOrigin.Typed);
 
             try
             {

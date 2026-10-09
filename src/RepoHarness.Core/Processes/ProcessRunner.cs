@@ -195,8 +195,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
 
         // What a line handler raised, now that the child has gone and every line it wrote has been read.
-        capturedOutput.Failed?.Throw();
-        capturedError.Failed?.Throw();
+        RaiseHandlerFailures(capturedOutput.Failed, capturedError.Failed);
 
         stopwatch.Stop();
 
@@ -487,6 +486,24 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
     /// <summary>A stream read to its end: what is kept of it, and what its line handler raised, where it raised anything.</summary>
     private sealed record Captured(string Text, ExceptionDispatchInfo? Failed);
+
+    /// <summary>
+    /// Raises what the line handlers raised: nothing where neither failed; the failure where one did, or where both raised
+    /// the same - of one type, saying one thing, as one reason met on each stream does; and both together where they
+    /// differ, since one said and the other lost would send whoever reads it after half the trouble.
+    /// </summary>
+    /// <param name="output">What the output's handler raised, or <see langword="null"/>.</param>
+    /// <param name="error">What the error output's handler raised, or <see langword="null"/>.</param>
+    private static void RaiseHandlerFailures(ExceptionDispatchInfo? output, ExceptionDispatchInfo? error)
+    {
+        if (output is { SourceException: var first } && error is { SourceException: var second }
+            && (first.GetType() != second.GetType() || !string.Equals(first.Message, second.Message, StringComparison.Ordinal)))
+        {
+            throw new AggregateException("The handlers of both the output and the error output failed.", first, second);
+        }
+
+        (output ?? error)?.Throw();
+    }
 
     /// <summary>
     /// Writes a child's whole input, then closes it when <paramref name="close"/> is set, which is how the

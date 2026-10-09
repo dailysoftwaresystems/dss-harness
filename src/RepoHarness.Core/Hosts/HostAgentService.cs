@@ -401,10 +401,16 @@ public sealed class HostAgentService(
             return await RefuseAsync(error, HarnessExit.UsageError, "the request names no directory to run in").ConfigureAwait(false);
         }
 
-        // A run a leg here records its heavy-leg slot under, so read as strictly as a run id is anywhere else.
-        if (request.RunId is { } dispatched && !RunId.TryParse(dispatched, out _))
+        // A run a leg here records its heavy-leg slot under, and a drive it holds its build to the floor on.
+        Dispatch dispatch;
+
+        try
         {
-            return await RefuseAsync(error, HarnessExit.UsageError, $"the request names its run as '{dispatched}', which is not a run id").ConfigureAwait(false);
+            dispatch = Dispatch.Of(request);
+        }
+        catch (HarnessException ex)
+        {
+            return await RefuseAsync(error, ex.ExitCode, ex.Message).ConfigureAwait(false);
         }
 
         var directory = ResolveDirectory(request.Directory);
@@ -437,7 +443,7 @@ public sealed class HostAgentService(
                 [.. request.KeepAwakeDirectories],
                 cancellationToken);
 
-            return await run(directory, [.. request.Arguments.Select(argument => argument.Text)], Dispatch.Of(request), cancellationToken).ConfigureAwait(false);
+            return await run(directory, [.. request.Arguments.Select(argument => argument.Text)], dispatch, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {

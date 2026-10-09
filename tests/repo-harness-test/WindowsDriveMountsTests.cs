@@ -27,6 +27,25 @@ public sealed class WindowsDriveMountsTests
     public void ADrive_IsFoundByTheLineThatMountsIt(string drive, string? mount)
         => Assert.Equal(mount, WindowsDriveMounts.In(Mounts, drive));
 
+    /// <summary>
+    /// A drive an older WSL mounts is listed by what mounts it, <c>drvfs</c>, the drive named only by the path its options
+    /// give - written as it is, or as the system writes a backslash - and is found by that path; a folder of a drive mounted
+    /// on its own is no mount of the drive.
+    /// </summary>
+    [Theory]
+    [InlineData("C:\\", "/mnt/c")]
+    [InlineData("d:", "/mnt/d")]
+    [InlineData("E:\\", null)]
+    public void ADriveAnOlderWslMounts_IsFoundByThePathItsOptionsName(string drive, string? mount)
+    {
+        const string Older =
+            "drvfs /mnt/c 9p rw,noatime,dirsync,aname=drvfs;path=C:\\;uid=1000;gid=1000;symlinkroot=/mnt/,mmap,access=client,msize=262144,trans=virtio 0 0\n"
+            + "drvfs /mnt/d 9p rw,noatime,aname=drvfs;path=D:\\134;uid=1000;gid=1000 0 0\n"
+            + "drvfs /mnt/shared 9p rw,noatime,aname=drvfs;path=E:\\shared;uid=1000;gid=1000 0 0\n";
+
+        Assert.Equal(mount, WindowsDriveMounts.In(Older, drive));
+    }
+
     /// <summary>What is mounted, read from where the system lists it; a list that cannot be read is said, with why.</summary>
     [Fact]
     public void TheMounts_AreReadWhereTheSystemListsThem_AndAListThatCannotBeReadIsSaid()

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using NSubstitute;
 using RepoHarness.Core.Execution;
@@ -488,7 +489,9 @@ public sealed class InputFingerprintTests
         var fingerprint = Create();
         var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
 
-        using var watch = fingerprint.Watch(temp.Path, inputs, before);
+        var heard = new ConcurrentQueue<string>();
+
+        using var watch = fingerprint.Watch(temp.Path, inputs, before, heard.Enqueue);
 
         if (watch.Failure is { } failure)
         {
@@ -504,7 +507,7 @@ public sealed class InputFingerprintTests
         var after = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
 
         // Heard in order: word of either write, had the watch been told of it, came before word of the edit after both.
-        Assert.Equal([".worktrees/notes.txt"], watch.HeardElsewhere);
+        Assert.Equal([".worktrees/notes.txt"], heard.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
         Assert.Equal(InputChange.Moved, InputFingerprint.Compare(before, after, watch).Change);
     }
 

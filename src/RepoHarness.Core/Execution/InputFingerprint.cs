@@ -174,7 +174,17 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
     /// counts only where it no longer stands as <paramref name="found"/> read it: see
     /// <see cref="InputWatch.ReportsEarlierWrites"/>.
     /// </remarks>
-    public InputWatch Watch(string root, IReadOnlyList<string> inputs, InputSnapshot found)
+    public InputWatch Watch(string root, IReadOnlyList<string> inputs, InputSnapshot found) => Watch(root, inputs, found, heardElsewhere: null);
+
+    /// <summary>
+    /// Watches <paramref name="inputs"/> as <see cref="Watch(string, IReadOnlyList{string}, InputSnapshot)"/> does, telling
+    /// <paramref name="heardElsewhere"/> of each path the watch hears of that no input is.
+    /// </summary>
+    /// <param name="root">The tree the paths are relative to.</param>
+    /// <param name="inputs">The inputs, relative to the tree.</param>
+    /// <param name="found">The inputs as the work found them.</param>
+    /// <param name="heardElsewhere">Told of each path no input is, relative to the tree, as the watch hears of it.</param>
+    internal InputWatch Watch(string root, IReadOnlyList<string> inputs, InputSnapshot found, Action<string>? heardElsewhere)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentNullException.ThrowIfNull(inputs);
@@ -185,7 +195,8 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
             inputs.Select(Normalize),
             Comparer,
             reportsEarlierWrites: _platform.Current == PlatformId.MacOs,
-            found.Files);
+            found.Files,
+            heardElsewhere);
     }
 
     /// <summary>
@@ -318,11 +329,11 @@ public sealed class InputWatch : IDisposable
 
     /// <summary>
     /// How many directories are watched at most. Past it, the top-level directories holding the most
-    /// directories of inputs are watched all the way down instead, one watch each, and a tree with
-    /// more top-level directories of inputs than this is watched whole: a watch per directory would
-    /// spend handles to no purpose.
+    /// directories of inputs are watched all the way down instead, one watch each, and a tree whose
+    /// inputs lie in more top-level directories than this - the root counted among them where it
+    /// holds one itself - is watched whole: a watch per directory would spend handles to no purpose.
     /// </summary>
-    private const int MostDirectoriesWatched = 64;
+    public const int MostDirectoriesWatched = 64;
 
     private readonly Lock _gate = new();
     private readonly Dictionary<string, string> _tracked;
@@ -330,17 +341,29 @@ public sealed class InputWatch : IDisposable
     private readonly HashSet<string> _changed = new(StringComparer.Ordinal);
     private readonly string _root;
     private readonly List<FileSystemWatcher> _watchers = [];
+    private readonly Action<string>? _heardElsewhere;
     private string? _failure;
-    private readonly HashSet<string> _heardElsewhere = new(StringComparer.Ordinal);
 
+    /// <summary>Watches <paramref name="inputs"/> under <paramref name="root"/>.</summary>
+    /// <param name="root">The tree the paths are relative to.</param>
+    /// <param name="inputs">The inputs, relative to the tree, as the configuration declared them.</param>
+    /// <param name="comparer">How input paths compare on this platform.</param>
+    /// <param name="reportsEarlierWrites">Whether the watch can be told of a write made before it began.</param>
+    /// <param name="found">The inputs as the work found them.</param>
+    /// <param name="heardElsewhere">
+    /// Told of each path the watch hears of that no input is, relative to the tree, under the watch's lock: what watching
+    /// only where the inputs are keeps down. Never kept here, where a long build's every file would be.
+    /// </param>
     internal InputWatch(
         string root,
         IEnumerable<string> inputs,
         StringComparer comparer,
         bool reportsEarlierWrites = false,
-        IReadOnlyList<FileFingerprint>? found = null)
+        IReadOnlyList<FileFingerprint>? found = null,
+        Action<string>? heardElsewhere = null)
     {
         ReportsEarlierWrites = reportsEarlierWrites;
+        _heardElsewhere = heardElsewhere;
         _found = (found ?? [])
             .GroupBy(file => file.Path, comparer)
             .ToDictionary(group => group.Key, group => group.First(), comparer);
@@ -502,21 +525,6 @@ public sealed class InputWatch : IDisposable
     internal IReadOnlyList<(string Directory, bool Recursive)> Watched
         => [.. _watchers.Select(watcher => (watcher.Path, watcher.IncludeSubdirectories)).OrderBy(watched => watched.Path, StringComparer.Ordinal)];
 
-    /// <summary>
-    /// Each path no input is that the watch was told of, relative to the tree, in the order of their paths: what watching only
-    /// where the inputs are keeps down.
-    /// </summary>
-    internal IReadOnlyList<string> HeardElsewhere
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return [.. _heardElsewhere.Order(StringComparer.Ordinal)];
-            }
-        }
-    }
-
     /// <summary>Why the watch cannot be trusted, or <see langword="null"/> when it can.</summary>
     public string? Failure
     {
@@ -588,7 +596,7 @@ public sealed class InputWatch : IDisposable
         {
             if (!_tracked.TryGetValue(relative, out declared))
             {
-                _heardElsewhere.Add(relative);
+                _heardElsewhere?.Invoke(relative);
                 return;
             }
 

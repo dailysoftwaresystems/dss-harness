@@ -35,6 +35,7 @@ internal static class TestChild
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
             "flood-error" => Flood(standardError, arguments),
+            "flood-both" => Flood(standardOutput, arguments) + Flood(standardError, arguments),
             "print-file" => PrintFile(standardOutput, arguments),
             "spawn-grandchild" => SpawnGrandchild(arguments),
             "print-env" => PrintEnvironment(standardOutput, arguments),
@@ -114,11 +115,13 @@ internal static class TestChild
 
     /// <summary>
     /// Reads standard input to its end and writes it back between brackets. Read as UTF-8 bytes,
-    /// for the reason output is written that way.
+    /// for the reason output is written that way, and as they came: a byte order mark it began with
+    /// is written back, never taken for how to read the rest, as a child reading its input as bytes
+    /// would read it as text.
     /// </summary>
     private static int EchoStandardInput(TextWriter output)
     {
-        using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
+        using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom, detectEncodingFromByteOrderMarks: false);
         output.Write("[" + input.ReadToEnd() + "]\n");
         return 0;
     }

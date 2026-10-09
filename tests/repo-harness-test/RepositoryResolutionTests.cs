@@ -189,7 +189,7 @@ public sealed class HarnessContextLoaderTests
                 _fileSystem,
                 new HostPlatform(),
                 output,
-                new SyncedCopyToolCheck(new PublishedVersionsDouble(), new RunningToolDouble(), new CommandOrigin(ServesAnotherMachine: false), output))
+                new SyncedCopyToolCheck(new PublishedVersionsDouble(), new RunningToolDouble(), CommandOrigin.Typed, output))
             .LoadAsync(directory, TestContext.Current.CancellationToken);
     }
 }

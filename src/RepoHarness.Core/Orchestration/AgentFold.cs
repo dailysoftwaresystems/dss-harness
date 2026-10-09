@@ -319,8 +319,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         // What the agent's files are written over in the main tree is only what the same fold removes: a file where one of
         // them needs a directory, or files in a directory where one of them stands in its place, the agent never deleted.
-        var refusedPaths = refused.Select(refusal => refusal.Path).ToHashSet(StringComparer.Ordinal);
-        var ways = InTheWay(main, [.. written.Where(path => !refusedPaths.Contains(path)).Select(path => (path, true))], deleted.ToHashSet(StringComparer.Ordinal));
+        var ways = InTheWay(main, [.. written.Select(path => (path, true))], deleted.ToHashSet(StringComparer.Ordinal));
 
         foreach (var way in ways.Where(way => !way.Below).DistinctBy(way => way.Written))
         {

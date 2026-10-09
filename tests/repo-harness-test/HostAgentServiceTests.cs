@@ -122,12 +122,14 @@ public sealed class HostAgentServiceTests
 
     /// <summary>
     /// What a request says of the command it asks for beside its line - the run it is a leg of, the drive its WSL disk grows
-    /// on - is handed to the command, never added to its arguments; a run that is not a run id is refused, and nothing runs.
+    /// on - is handed to the command, never added to its arguments; a run that is not a run id, and a blank drive, are
+    /// refused, and nothing runs.
     /// </summary>
     [Theory]
-    [InlineData("20261008-120000-0a1b2c3d", true)]
-    [InlineData("../../somewhere", false)]
-    public async Task Run_HandsTheCommandWhatTheRequestSaysOfIt_AndRefusesARunThatIsNotARunId(string run, bool valid)
+    [InlineData("20261008-120000-0a1b2c3d", "C:\\", null)]
+    [InlineData("../../somewhere", "C:\\", "the request names its run as '../../somewhere', which is not a run id")]
+    [InlineData("20261008-120000-0a1b2c3d", " ", "the request names a blank drive as where WSL keeps the distribution's disk")]
+    public async Task Run_HandsTheCommandWhatTheRequestSaysOfIt_AndRefusesARunThatIsNotARunId(string run, string drive, string? refusal)
     {
         using var copy = new TempDirectory();
         using var error = new StringWriter();
@@ -141,7 +143,7 @@ public sealed class HostAgentServiceTests
                 Arguments = ["build", "--json"],
                 Nonce = Nonce,
                 RunId = run,
-                DiskImageDrive = "C:\\",
+                DiskImageDrive = drive,
             },
             HostAgentProtocol.JsonOptions);
 
@@ -156,17 +158,18 @@ public sealed class HostAgentServiceTests
             },
             TestContext.Current.CancellationToken);
 
-        if (valid)
+        if (refusal is null)
         {
             Assert.Equal(HarnessExit.Success, exitCode);
-            Assert.Equal(new Dispatch(run, "C:\\"), ranFor);
+            Assert.NotNull(ranFor);
+            Assert.Equal((run, drive), (ranFor.RunId?.ToString(), ranFor.DiskImageDrive));
             Assert.Equal(["build", "--json"], ranWith!);
         }
         else
         {
             Assert.Equal(HarnessExit.UsageError, exitCode);
             Assert.Null(ranWith);
-            Assert.Contains("the request names its run as '../../somewhere', which is not a run id", error.ToString(), StringComparison.Ordinal);
+            Assert.Contains(refusal, error.ToString(), StringComparison.Ordinal);
         }
     }
 

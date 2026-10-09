@@ -58,7 +58,7 @@ public sealed class HarnessFactory
             FileSystem,
             Platform,
             Output,
-            new SyncedCopyToolCheck(PublishedVersions, RunningTool, new CommandOrigin(ServesAnotherMachine: false), Output));
+            new SyncedCopyToolCheck(PublishedVersions, RunningTool, CommandOrigin.Typed, Output));
         LocalTransport = Local(FileSystem);
         WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport);
 

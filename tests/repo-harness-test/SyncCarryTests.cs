@@ -17,7 +17,7 @@ namespace RepoHarness.Tests;
 [Collection(MemoryMeasured.Name)]
 public sealed class SyncCarryTests
 {
-    /// <summary>How much more the heap may hold while batches are carried, or after: a small part of one batch.</summary>
+    /// <summary>How much more the heap may hold while batches are carried, or after: half of one batch.</summary>
     private const long HeapBound = 4L * 1024 * 1024;
 
     /// <summary>How many batches are carried.</summary>
@@ -55,7 +55,7 @@ public sealed class SyncCarryTests
         // Once, so that what is made the first time anything runs is not counted as the carrying's.
         await transport.WriteFilesAsync("/home/dev/repo", batch[..1], cancellationToken);
 
-        var before = GC.GetTotalMemory(forceFullCollection: true);
+        var (before, _) = HeapWatch.Collected();
         var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
         long growth;
 
@@ -70,7 +70,7 @@ public sealed class SyncCarryTests
         }
 
         var allocated = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
-        var held = GC.GetTotalMemory(forceFullCollection: true) - before;
+        var held = HeapWatch.Collected().Held - before;
 
         TestContext.Current.TestOutputHelper?.WriteLine(
             $"carrying {carried:N0} bytes grew the heap by at most {growth:N0}, allocated {allocated:N0}, and left {held:N0} more held");
@@ -108,7 +108,7 @@ public sealed class SyncCarryTests
         await File.WriteAllBytesAsync(temp.Combine("copy", "small.bin"), [1, 2, 3], cancellationToken);
         await transport.ReadFileAsync(temp.Combine("copy"), "small.bin", cancellationToken);
 
-        var before = GC.GetTotalMemory(forceFullCollection: true);
+        var (before, _) = HeapWatch.Collected();
         var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
         var threadsBefore = ThreadPool.ThreadCount;
         long growth;
@@ -128,8 +128,9 @@ public sealed class SyncCarryTests
         // hold its last continuation, and with it the file this test has finished with.
         await transport.ReadFileAsync(temp.Combine("copy"), "small.bin", cancellationToken);
 
-        var held = GC.GetTotalMemory(forceFullCollection: true) - before;
-        var after = $"{HeapWatch.Parts()}; {ThreadPool.ThreadCount} pool thread(s), against {threadsBefore} before; "
+        var (heldAfter, partsAfter) = HeapWatch.Collected();
+        var held = heldAfter - before;
+        var after = $"{partsAfter}; {ThreadPool.ThreadCount} pool thread(s), against {threadsBefore} before; "
             + $"{harness.StandardOutput.GetStringBuilder().Length:N0} and {harness.StandardError.GetStringBuilder().Length:N0} character(s) "
             + "written to the output and its errors";
 

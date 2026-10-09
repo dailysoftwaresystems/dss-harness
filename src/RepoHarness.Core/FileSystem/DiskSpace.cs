@@ -8,6 +8,9 @@ namespace RepoHarness.Core.FileSystem;
 /// <param name="Filesystem">Where it is mounted - its drive on Windows - as a reader would look it up.</param>
 public sealed record DiskSpace(long FreeBytes, long TotalBytes, string Filesystem)
 {
+    /// <summary>A gibibyte: the unit a configuration says room in.</summary>
+    public const long Gibibyte = 1L << 30;
+
     /// <summary>The room on the filesystem <paramref name="path"/> is on, or why it could not be measured.</summary>
     /// <param name="fileSystem">Measures it.</param>
     /// <param name="path">A path on the filesystem.</param>

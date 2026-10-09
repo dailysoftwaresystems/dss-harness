@@ -3,6 +3,7 @@ using RepoHarness.Cli;
 using RepoHarness.Cli.Commands;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Worktrees;
 
@@ -97,6 +98,6 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
 Task<int> RunInAsync(string directory, string[] arguments, Dispatch dispatch, CancellationToken cancellationToken)
 {
     Directory.SetCurrentDirectory(directory);
-    CommandRunner.ServeDispatch(dispatch);
+    CommandRunner.Serve(CommandOrigin.Served(dispatch));
     return RunAsync(arguments, cancellationToken);
 }

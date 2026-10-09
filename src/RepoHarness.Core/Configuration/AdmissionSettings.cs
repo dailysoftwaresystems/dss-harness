@@ -1,3 +1,5 @@
+using RepoHarness.Core.FileSystem;
+
 namespace RepoHarness.Core.Configuration;
 
 /// <summary>
@@ -50,8 +52,6 @@ public sealed class AdmissionSettings
 
     /// <summary>The most room, in GiB, a section may keep free: a tebibyte.</summary>
     public const double MostMinFreeGiB = 1024;
-
-    private const long Gibibyte = 1L << 30;
 
     /// <summary>
     /// Heavy legs the machine runs at once, across every command this user runs there, at least one: each takes a slot
@@ -135,7 +135,7 @@ public sealed class AdmissionSettings
             TimeSpan.FromSeconds(merged.SettleSeconds[1]),
             TimeSpan.FromSeconds(merged.PollSeconds.Value),
             TimeSpan.FromMinutes(merged.MaxWaitMinutes.Value),
-            (long)Math.Round(merged.MinFreeGiB.Value * Gibibyte));
+            (long)Math.Round(merged.MinFreeGiB.Value * DiskSpace.Gibibyte));
     }
 }
 

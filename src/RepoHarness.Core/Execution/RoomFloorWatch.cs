@@ -37,10 +37,14 @@ public sealed class RoomFloorWatch : IAsyncDisposable
         _filled = [(buildDirectory, string.Empty), .. floor.Also];
         _say = say;
         _done = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Stopping = _stopping.Token;
     }
 
-    /// <summary>Cancelled once a filesystem the build fills has less room than its floor; <see cref="Why"/> then says so.</summary>
-    public CancellationToken Stopping => _stopping.Token;
+    /// <summary>
+    /// Cancelled once a filesystem the build fills has less room than its floor; <see cref="Why"/> then says so. Read as
+    /// well once the watch has ended, when nothing cancels it any more.
+    /// </summary>
+    public CancellationToken Stopping { get; }
 
     /// <summary>Why the build was stopped, as its line says it; <see langword="null"/> while it was not.</summary>
     public string? Why
@@ -100,7 +104,8 @@ public sealed class RoomFloorWatch : IAsyncDisposable
     /// <summary>
     /// Why the build is to be stopped for room, read again now where no reading has said so yet: a build that failed
     /// between two readings - a disk filled faster than the next one came, or one that stopped it as the build ended - failed
-    /// for want of room, which says nothing about its code. <see langword="null"/> where every filesystem it fills has room.
+    /// for want of room, which says nothing about its code. <see langword="null"/> where every filesystem it fills has room,
+    /// and, without reading any, once the watch has ended: its build has gone past what fills a disk.
     /// </summary>
     public string? Now()
     {
@@ -108,15 +113,21 @@ public sealed class RoomFloorWatch : IAsyncDisposable
         return Why;
     }
 
-    /// <summary>Stops watching; the build it watched has ended, or gone past what fills a disk.</summary>
+    /// <summary>
+    /// Stops watching; the build it watched has ended, or gone past what fills a disk. From here no room is read and nothing
+    /// is stopped, whoever asks; ended twice, it ends once.
+    /// </summary>
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
+        lock (_reading)
         {
-            return;
-        }
+            if (_disposed)
+            {
+                return;
+            }
 
-        _disposed = true;
+            _disposed = true;
+        }
 
         await _done.CancelAsync().ConfigureAwait(false);
         await _watching.ConfigureAwait(false);
@@ -143,7 +154,8 @@ public sealed class RoomFloorWatch : IAsyncDisposable
 
     /// <summary>
     /// Reads each filesystem the build fills, and stops the build where one has less room than its floor; whether it is
-    /// stopped. One reading at a time: the watch's own and one a build that ended asks for meet here.
+    /// stopped. One reading at a time: the watch's own and one a build that ended asks for meet here, and neither reads once
+    /// the watch has ended.
     /// </summary>
     private bool Under()
     {
@@ -152,6 +164,11 @@ public sealed class RoomFloorWatch : IAsyncDisposable
             if (_why is not null)
             {
                 return true;
+            }
+
+            if (_disposed)
+            {
+                return false;
             }
 
             foreach (var (path, where) in _filled)

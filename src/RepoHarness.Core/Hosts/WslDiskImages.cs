@@ -99,7 +99,8 @@ public static partial class WindowsDriveMounts
     /// <summary>
     /// Where <paramref name="drive"/> is mounted, by <paramref name="mounts"/> - the lines of <see cref="MountsFile"/>, each
     /// what is mounted, where, as what and how, a space or a backslash in any of them written as three octal digits after a
-    /// backslash - or <see langword="null"/> where no line mounts it.
+    /// backslash - or <see langword="null"/> where no line mounts it. A line names the drive as what it mounts, or, from an
+    /// older WSL, which writes what it mounts as <c>drvfs</c>, by the <c>path=</c> its options give.
     /// </summary>
     /// <param name="mounts">What <see cref="MountsFile"/> holds.</param>
     /// <param name="drive">
@@ -122,13 +123,16 @@ public static partial class WindowsDriveMounts
         {
             var fields = line.Split(' ');
 
-            if (fields.Length > 1 && string.Equals(Unescaped(fields[0]).TrimEnd('\\', '/'), wanted, StringComparison.OrdinalIgnoreCase))
+            if (fields.Length > 1
+                && (Names(fields[0]) || (fields.Length > 3 && fields[3].Split(',', ';').Any(option => option.StartsWith("path=", StringComparison.Ordinal) && Names(option[5..])))))
             {
                 return Unescaped(fields[1]);
             }
         }
 
         return null;
+
+        bool Names(string field) => string.Equals(Unescaped(field).TrimEnd('\\', '/'), wanted, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary><paramref name="field"/> as it is, each three octal digits after a backslash read back into what they stand for.</summary>

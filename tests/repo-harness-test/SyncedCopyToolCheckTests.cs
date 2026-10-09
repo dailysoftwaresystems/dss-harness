@@ -71,12 +71,17 @@ public sealed class SyncedCopyToolCheckTests
     /// <summary>
     /// A command the host agent runs for another machine runs in the same copy, but after an inspection that
     /// has just made this build that machine's own: nothing to tell, and a leg would otherwise ask nuget.org
-    /// once for every run.
+    /// once for every run. Neither does the host agent itself, serving that machine.
     /// </summary>
-    [Fact]
-    public async Task ACommandServingAnotherMachine_NeverAsks()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACommandServingAnotherMachine_NeverAsks(bool askedToRun)
     {
-        var fixture = new Fixture(running: "0.5.9", published: "0.5.10", servesAnotherMachine: true);
+        var fixture = new Fixture(
+            running: "0.5.9",
+            published: "0.5.10",
+            askedToRun ? CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run })) : CommandOrigin.Agent);
 
         await fixture.Check.WarnWhenBehindAsync(fixture.Copy, TestContext.Current.CancellationToken);
 
@@ -235,13 +240,13 @@ public sealed class SyncedCopyToolCheckTests
 
     private sealed class Fixture
     {
-        public Fixture(string running, string? published, bool servesAnotherMachine = false, bool verbose = false)
+        public Fixture(string running, string? published, CommandOrigin? origin = null, bool verbose = false)
         {
             Feed = new PublishedVersionsDouble(published);
             Check = new SyncedCopyToolCheck(
                 Feed,
                 new RunningToolDouble(running),
-                new CommandOrigin(servesAnotherMachine),
+                origin ?? CommandOrigin.Typed,
                 new ConsoleHarnessOutput(Output, Error, verbose));
 
             var layout = new HarnessLayout(TestHost.TemporaryRoot, TestHost.TemporaryRoot);

@@ -73,7 +73,6 @@ public sealed class MutationService(
     BuildDirectoryGuard buildDirectoryGuard,
     PhaseRunner phaseRunner,
     IPathBudget pathBudget,
-    IRepositoryTrees trees,
     IFileSystem fileSystem,
     MutationFixtureStore fixtures,
     IProcessIdentity identity,
@@ -112,7 +111,6 @@ public sealed class MutationService(
     private readonly BuildDirectoryGuard _buildDirectoryGuard = buildDirectoryGuard;
     private readonly PhaseRunner _phaseRunner = phaseRunner;
     private readonly IPathBudget _pathBudget = pathBudget;
-    private readonly IRepositoryTrees _trees = trees;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly MutationFixtureStore _fixtures = fixtures;
     private readonly IProcessIdentity _identity = identity;
@@ -188,7 +186,7 @@ public sealed class MutationService(
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
-                    : SweepAsync(runner, work, arms, request.ForceLock, request.Here, token),
+                    : SweepAsync(runner, work, arms, request.ForceLock, token),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -223,40 +221,43 @@ public sealed class MutationService(
 
     /// <summary>
     /// Sweeps <paramref name="work"/>'s leg, its workers' builds measured against every tree of the repository on this
-    /// machine: a tree that never built the leg's variant here is measured by another's that did. Trees beside the main
-    /// checkout's that could not be listed are said, with why.
+    /// machine, as they were listed as the leg's work began here: a tree that never built the leg's variant here is
+    /// measured by another's that did. Trees beside the main checkout's that could not be listed are said, with why, and
+    /// with what the workers' builds are measured by instead.
     /// </summary>
-    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, HostId? here, CancellationToken cancellationToken)
+    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, CancellationToken cancellationToken)
     {
-        var trees = await _trees.HereAsync(work.Context, here, cancellationToken).ConfigureAwait(false);
+        var beside = work.Leg.Beside ?? throw new InvalidOperationException($"Leg '{work.Leg.Name}' began its work with no trees listed beside it.");
 
-        if (trees.Unlisted is { } why)
+        if (beside.Unlisted is { } why)
         {
+            var measured = beside.Trees.Any(tree => tree.Name == RepositoryTree.MainCheckout) ? "its own tree's and the main checkout's" : "its own tree's";
+
             _output.Warn(
                 CommandName,
-                $"leg '{work.Leg.Name}': the worktrees beside the main checkout could not be listed, so a worker's build is measured by its "
-                + $"own tree's and the main checkout's alone: {why}");
+                $"leg '{work.Leg.Name}': the worktrees beside the main checkout could not be listed, so a worker's build is measured by "
+                + $"{measured} alone: {why}");
         }
 
-        return await runner.RunAsync(Subject(work, arms, force, trees), work, cancellationToken).ConfigureAwait(false);
+        return await runner.RunAsync(Subject(work, arms, force, beside), work, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// What <paramref name="work"/>'s leg sweeps: its tree; its project, as the leg builds it; the dependency sources its
     /// own build fetched, which each worker is given its own copy of and configured with; the arms it drives; the test
     /// settings its tests start by; and what a build of its variant is expected to come to - its <c>buildSpaceGiB</c>
-    /// where it declares one, else what its own build directory last recorded, else the most any other of
-    /// <paramref name="trees"/> recorded of it (<see cref="LegRoom.ExpectedBuildBytes"/>).
+    /// where it declares one, else what its own build directory last recorded, else the most any of
+    /// <paramref name="beside"/> - the repository's other trees here - recorded of it (<see cref="LegRoom.ExpectedBuildBytes"/>).
     /// </summary>
-    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound trees)
+    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound beside)
     {
-        ArgumentNullException.ThrowIfNull(trees);
+        ArgumentNullException.ThrowIfNull(beside);
 
         var leg = work.Leg;
         var expected = LegRoom.ExpectedBuildBytes(
             leg.Leg,
             BuildRecord.BytesIn(_fileSystem, leg.BuildDirectory),
-            trees.Trees.Select(tree => (tree.Name, BuildRecord.BytesIn(_fileSystem, leg.Variant.DirectoryUnder(tree.Root)))));
+            beside.Trees.Select(tree => (tree.Name, BuildRecord.BytesIn(_fileSystem, leg.Variant.DirectoryUnder(tree.Root)))));
         var project = leg.BuildableProject();
 
         return new MutationSubject

@@ -3196,6 +3196,36 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
+    /// An empty name in a manifest or a prune request names nothing: it withholds no path from the manifest, and a prune
+    /// takes it for no directory - never for the copy's own root, which the last directory it removed left empty.
+    /// </summary>
+    [Fact]
+    public async Task AnEmptyName_InAManifestOrAPruneRequest_NamesNothing()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var listed = temp.Combine("listed");
+        var pruned = temp.Combine("pruned");
+
+        temp.WriteFile("listed/src/app.cs", "// code");
+        Directory.CreateDirectory(Path.Combine(pruned, "gone"));
+
+        var manifest = await CliRunner.RunAsync(["sync-serve", SyncServe.Manifest, SyncServe.OperandsFollow, listed, ""], token);
+        var prune = await CliRunner.RunAsync(["sync-serve", SyncServe.Prune, SyncServe.OperandsFollow, pruned, "gone", ""], token);
+
+        Assert.Equal((HarnessExit.Success, HarnessExit.Success), (manifest.ExitCode, prune.ExitCode));
+
+        var entries = SyncServe.ReadAnswer<SyncManifestAnswer>(manifest.StandardOutput.Trim());
+        var removed = SyncServe.ReadAnswer<SyncPruneAnswer>(prune.StandardOutput.Trim());
+
+        Assert.NotNull(entries);
+        Assert.NotNull(removed);
+        Assert.Contains(entries.Entries, entry => entry.Path == "src/app.cs");
+        Assert.Equal(["gone"], removed.Directories.Select(entry => entry.Path));
+        Assert.True(Directory.Exists(pruned), "the prune removed the copy's own root");
+    }
+
+    /// <summary>
     /// A dry run exits as the run it previews would. Printing the cost and exiting zero makes
     /// "this checkout needs taking over" indistinguishable from "everything is in step" to anything
     /// reading the code, which is what a dry run is for reading. This changed silently between two

@@ -373,7 +373,7 @@ public sealed class GitClientTests
         var blob = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:docs/x.md"], cancellationToken)).StandardOutput.Trim();
         var elsewhere = new string('1', held.Length);
 
-        foreach (var entry in new[] { $"160000,{held},lib/held", $"160000,{elsewhere},lib/elsewhere", $"100644,{blob},odd\nfile.md", $"100644,{blob},odd\ndir/inner.md" })
+        foreach (var entry in new[] { $"160000,{held},lib/held", $"160000,{elsewhere},lib/elsewhere", $"100644,{blob},odd\nfile.md", $"100644,{blob},odd\ndir/inner.md", $"160000,{held},odd\nsub" })
         {
             // Git for Windows protects the names NTFS cannot hold by refusing them, a line break among them.
             await harness.RunGitAsync(temp.Path, ["-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", entry], cancellationToken);
@@ -384,7 +384,7 @@ public sealed class GitClientTests
         var answered = await harness.GitClient.HeldAtAsync(
             temp.Path,
             "HEAD",
-            ["docs/x.md", "docs", "lib/held", "lib/elsewhere", "none.txt", "odd\nfile.md", "odd\ndir", "odd\nnone"],
+            ["docs/x.md", "docs", "lib/held", "lib/elsewhere", "none.txt", "odd\nfile.md", "odd\ndir", "odd\nsub", "odd\nnone"],
             cancellationToken);
 
         Assert.Equal(GitHeld.File(blob), answered["docs/x.md"]);
@@ -394,6 +394,7 @@ public sealed class GitClientTests
         Assert.Equal(GitHeld.Nothing, answered["none.txt"]);
         Assert.Equal(GitHeld.File(blob), answered["odd\nfile.md"]);
         Assert.Equal(GitHeld.Directory, answered["odd\ndir"]);
+        Assert.Equal(GitHeld.Submodule(held), answered["odd\nsub"]);
         Assert.Equal(GitHeld.Nothing, answered["odd\nnone"]);
     }
 

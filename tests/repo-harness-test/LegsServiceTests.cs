@@ -463,6 +463,69 @@ public sealed class LegsServiceTests
     }
 
     /// <summary>
+    /// A command told it runs here as this machine's own host, <c>local</c>, measures its legs against this machine's own
+    /// trees, as one typed here does: this machine keeps no copy, so a first build here needs what a worktree's build of
+    /// the variant came to, never nothing for want of copies it does not keep.
+    /// </summary>
+    [Fact]
+    public async Task ACommandToldItRunsHereAsTheLocalHost_MeasuresItsLegsAgainstThisMachinesOwnTrees()
+    {
+        var feature = Path.Combine(Root, ".worktrees", "feature");
+        var fixture = Create(
+            new() { ["leg"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug" } },
+            rooms: (_, path) => path.StartsWith(feature, StringComparison.Ordinal)
+                ? Room(path, exists: true, recorded: 9L << 30, free: 30)
+                : Room(path, exists: false, recorded: null, free: 30),
+            trees: new KnownTrees { Beside = host => host == HostId.Local ? [new RepositoryTree(feature, "worktree feature")] : [] });
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Local, TestContext.Current.CancellationToken);
+
+        var need = Assert.Single(report.Placements).Need;
+        Assert.NotNull(need);
+        Assert.Equal((9L << 30, "what worktree feature's copy of the same variant came to there"), (need.Bytes, need.Source));
+        Assert.DoesNotContain("could not be listed", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A leg naming a worktree, in a command told it runs here as this machine's own host, is that worktree's leg, as in
+    /// one typed here: the worktree's first build of its variant needs what the main checkout's build of it came to. Only
+    /// on a host another machine sent it to is its tree the copy it was sent, whatever worktree it names.
+    /// </summary>
+    [Fact]
+    public async Task ALegNamingAWorktree_InACommandToldItRunsHereAsTheLocalHost_IsThatWorktreesLeg()
+    {
+        var feature = Path.Combine(Root, ".harness-config", "worktrees", "feature");
+        var fixture = Create(
+            new() { ["leg"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Worktree = "feature" } },
+            rooms: (_, path) => path.StartsWith(feature, StringComparison.Ordinal)
+                ? Room(path, exists: false, recorded: null, free: 30)
+                : Room(path, exists: true, recorded: 7L << 30, free: 30));
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Local, TestContext.Current.CancellationToken);
+
+        var need = Assert.Single(report.Placements).Need;
+        Assert.NotNull(need);
+        Assert.Equal((7L << 30, "what the main checkout's copy of the same variant came to there"), (need.Bytes, need.Source));
+    }
+
+    /// <summary>
+    /// A host the configuration declares no copy for holds none of the repository's trees, and is never looked at for
+    /// them: nothing says its trees could not be listed, since it has none to list.
+    /// </summary>
+    [Fact]
+    public async Task AHostKeepingNoCopy_IsNeverLookedAtForItsTrees()
+    {
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "nas" } },
+            inspect: host => new HostReport { Host = host, Os = "linux", Processor = "arm64" });
+
+        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+
+        Assert.Equal([HostId.Ssh("nas")], fixture.Inspector.Inspected);
+        Assert.DoesNotContain("could not be listed", fixture.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Trees beside the main checkout's that could not be listed are said, with why, rather than taken for none: a leg
     /// whose own tree never built its variant there is then measured by the main checkout's build alone.
     /// </summary>

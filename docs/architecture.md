@@ -550,8 +550,8 @@ An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orc
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
 orchestrator under the root is shared with plain worktrees' names, so create-worktree refuses an orchestrator's
 name and create-orchestrator a worktree's, and delete-worktree never deletes a directory holding worktrees below
-it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own counts
-- but for a mutation worker kept beside an agent's worktree, a copy of it, which goes with its agent -
+it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own
+counts - but for a mutation worker kept beside an agent's worktree, a copy of it, which goes with its agent -
 and below any other directory with none of its own only what git records - a husk's submodules are its own contents,
 which `--force` deletes with it. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
 every record last - each agent's after the rest of that agent, the orchestrator's after its agents - so a removal that
@@ -1466,14 +1466,17 @@ A leg holds its slot until its work ends - a runner's steps after its build, and
 run there, included - and keeps its lock while it waits, so another run of its variant is
 `refused-locked` meanwhile, as it would be while the leg ran. A waiting leg counts against its
 command's `maxParallelLegs` and `maxParallelLegsTotal` as a running one does, and each leg waits up to
-`maxWaitMinutes` of its own - not counting a wait for slots only legs of its own run hold, which is
-certain to end, which its line says is its own, and which a refusal for a wait after it names as not
-counted. Measured: a command's WSL leg, asked for at once
-with its two Windows legs by the process that dispatched them all, waited out its hour behind them and
-was `not-admitted`. A host serving a leg for another machine records the leg's slot under that
-machine's run, which the run request carries beside the command (`HostAgentRequest.RunId`, protocol
-7), so the legs one command sends there wait for each other the same way. A slot is held by the process that
-asked for it, never by a timeout: given back when the work ends, and, where that process ended
+`maxWaitMinutes` of its own - not counting a wait with only legs of its own run ahead of it, holding
+slots or in line first, which is certain to end, which its line says is its own, and which a refusal
+for a wait after it names as not counted. Another command's leg in line ahead makes the wait count,
+whoever holds the slots: that leg takes the next slot given back, for as long as its own command keeps
+it. Measured: a command's WSL leg, asked for at once with its two Windows legs by the process that
+dispatched them all, waited out its hour behind them and was `not-admitted`. A host serving a leg for
+another machine records the leg's slot under that machine's run, which the run request carries beside
+the command (`HostAgentRequest.RunId`, protocol 7), so the legs one command sends there wait for each
+other the same way; a request naming its run by what is no run id, or naming a blank drive where WSL
+keeps the disk, is refused, and nothing it asks for runs. A slot is held by the process that asked
+for it, never by a timeout: given back when the work ends, and, where that process ended
 first - a command that crashed or was killed holding a slot - reclaimed by the next leg that looks,
 and said to be. Every entry of the record is this machine's, whatever name it carries, so an entry
 is told by its process alone, where the run lock keeps one naming another machine until
@@ -1520,15 +1523,21 @@ again every 15 seconds, and the build is stopped once one has less free than its
 naming what was free and where, and what it built left for `clean`, as any build stopped part way
 leaves it. A build that fails between two readings - a disk filled faster than the next came - is
 read again as it fails, and is `stopped`, not `failed`, where a filesystem it fills is under the
-floor then: a full disk says nothing of its code. The room a leg claims is only what is said of its build, and a consumer's leg whose need
-nothing said filled a 47 GiB disk to 79 MiB, under two other legs, before it died; the floor holds
-every build of a heavy leg - a sweep's workers' too - its need said or not, and only where its
-machine declares admission. A WSL distribution's leg holds the drive its disk grows on as well,
-which the distribution's own room does not show: the machine that sends the leg names that drive
-beside its command, as it measured it, and the distribution reaches it through its mount there
-(`/mnt/c`, as `/proc/mounts` lists it); where it names none, or the drive is mounted nowhere, the
-build says only the distribution's own room is held. A room that cannot be read stops nothing, and
-is said once, as a leg is admitted without a room it could not read.
+floor then: a full disk says nothing of its code. So is a build whose own write fails then - a
+phase's log, its record - which would otherwise end every leg of its run. The floor is read before
+the build writes anything: one under it as it starts is stopped writing nothing, not its record,
+which would say its directory was built from a tree no phase of it read; and a record of what it
+built that it has no room left for is said, the one it wrote as it began standing. The room a leg
+claims is only what is said of its build, and a consumer's leg whose need nothing said filled a 47
+GiB disk to 79 MiB, under two other legs, before it died; the floor holds every build of a heavy
+leg - a sweep's workers' too - its need said or not, and only where its machine declares admission.
+A WSL distribution's leg holds the drive its disk grows on as well, which the distribution's own room
+does not show: the machine that sends the leg names that drive beside its command, as it measured
+it, and the distribution reaches it through its mount there (`/mnt/c`, as `/proc/mounts` lists it -
+by the drive, or by the `path=` its options name, where an older WSL lists what it mounts as
+`drvfs`); where it names none, or the drive is mounted nowhere, the build says only the
+distribution's own room is held. A room that cannot be read stops nothing, and is said once, as a
+leg is admitted without a room it could not read.
 
 **The machine is the physical one.** A WSL distribution runs on this machine, so this machine's
 command takes its heavy legs - by `hosts.local`'s rule, against this machine's slots and memory -
@@ -1559,15 +1568,21 @@ GiB of clean cache, and every heavy leg there waited its hour out. So on Windows
 on the memory has that cache dropped first - `sync; echo 1 > /proc/sys/vm/drop_caches`, as WSL's own
 root, which asks no password, in the first running distribution a WSL host of its repository reaches
 (every distribution runs in the one virtual machine) - at most once a minute, whichever leg of the
-process asks, and reads the memory again a minute later, in place of its poll: measured, a drop of
-24.2 GiB took 3 seconds, and the commit fell from 93.8 GiB to 73.9 GiB in two waves, the last 47
-seconds after. Its line says how much was dropped and the memory before and after, and the leg
-starts at once where that reading is below the limit. A WSL leg sent from a machine that declares
-admission drops it as the leg ends, its line saying so, without waiting: what comes back is the next
-wait's to read, and no command waits a minute for it. A distribution that is not running is never
-started for it, a drop that could not be made is said once in a wait - a WSL host whose item cannot
-be read, where no other host reaches a distribution, among the reasons - and one with nothing to drop
-says nothing.
+process asks, and reads the memory again once what was dropped has come back - a minute later at
+the most, in place of its poll, and sooner where its wait ends or its next line is due first:
+measured, a drop of 21.8 GiB of the 23.1 GiB cached took 3 seconds, and the commit fell from 93.8 GiB
+to 73.9 GiB in two waves, the last done 49 seconds after. Its line says how much was dropped and the
+memory before and after, and the leg goes on from that reading as from any other: below the limit,
+it still settles where another leg holds a slot, and waits for room its build's need does not find.
+A WSL leg sent from a machine that declares admission drops it as the leg ends, its line saying so,
+without waiting: what comes back is the next wait's to read, and no command waits a minute for it.
+Where WSL lists none of the distributions its hosts reach running then, though the leg had just run
+in one, its line says nothing was dropped. A distribution that is not running is never started for
+it, a drop that could not be made is said once in a wait - a WSL host whose item cannot be read,
+where no other host reaches a distribution, and a list of the distributions running that cannot be
+read, among the reasons - and one with nothing to drop says nothing. That list is read in UTF-16
+too, which an older wsl.exe writes whatever `WSL_UTF8` says: read as UTF-8, each character of a
+name came with a NUL, and the list was taken for one naming none.
 
 Unlike a held lock, which refuses at once, admission waits - because the slots and room it waits for
 come free as the legs ahead finish - but never silently and never for ever: while it waits the leg
@@ -1695,8 +1710,9 @@ building below it are never heard. Measured: watched all the way down, an agent'
 below the worktrees root overflowed the operating system's buffer, and a run in the main
 tree that only read its own inputs ended `unmeasured`. Past 64 watches, the top-level
 directories holding the most directories of inputs are watched all the way down instead,
-until the rest fit, and a tree with more than 64 top-level directories of inputs is
-watched whole.
+until the rest fit, and a tree whose inputs lie in more than 64 top-level directories -
+the root counted among them where it holds one itself - is watched whole, other trees'
+builds below the worktrees root heard with the rest.
 
 A leg on another machine tests that machine's copy, which holds still under it; what can
 move is the tree here, before the copy is made of it. So a run reads each tree its hosts'
@@ -2335,10 +2351,10 @@ directory here cannot drift apart.
   text, and the serializer's buffers for it - six times a batch's length, rented to escape it - were
   kept by the shared pool for the life of the process: the machine that carried it held 3.2 GiB,
   flat, while the leg ran for minutes after. Carried now, the same tree leaves it about 40 MiB, and
-  reading back a 64 MiB file 90 MiB where it left 2 GiB. A file crosses whole, inside one request,
-  so the largest that can is one whose base64 text, with the rest of the request around it, a host
-  reads as one line, and one string holds: 804,519,909 bytes. A larger one is refused by name before
-  anything is sent.
+  reading back a 64 MiB file 90 MiB where it left 2 GiB. A file crosses to a host whole, inside one
+  request, so the largest that can is one whose base64 text, with the rest of the request around it,
+  a host reads as one line, and one string holds: 804,519,909 bytes; one read back is held to the
+  same. A larger one is refused by name before anything is sent.
 - **Staging is the two commands, not a flag.** `sync` transfers and stops — that is all it ever
   does — and `build`, `test`, `run` and `check-mutations` take `--use-staged` to act on what is already there without
   syncing again. A `--stage-only` on `sync` would name a mode `sync` is always in.

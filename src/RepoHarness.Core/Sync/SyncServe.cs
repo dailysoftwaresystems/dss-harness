@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Sync;
@@ -186,12 +187,13 @@ public static class SyncServe
     /// The largest file one request can carry, in bytes.
     /// </summary>
     /// <remarks>
-    /// A file crosses whole, inside one request, encoded as base64 - which is a third longer again - and the far
-    /// side reads that request, as this side reads the answer carrying a file back, as one line of text: one
-    /// string, which holds at most <see cref="LongestString"/> characters, the rest of the line among them. That
-    /// is where this number comes from; it is not a policy anybody chose, and no configuration moves it.
-    /// Reckoned from <see cref="int.MaxValue"/>, it was twice what a line holds, and a file between the two was
-    /// turned away only by this machine running out of memory encoding it, in words naming a limit it was under.
+    /// A file crosses to a host whole, inside one request, encoded as base64 - which is a third longer again - and the
+    /// far side reads that request as one line of text: one string, which holds at most <see cref="LongestString"/>
+    /// characters, the rest of the line among them. That is where this number comes from; it is not a policy anybody
+    /// chose, and no configuration moves it. Reckoned from <see cref="int.MaxValue"/>, it was twice what a line holds,
+    /// and a file between the two was turned away only by this machine running out of memory encoding it, in words naming
+    /// a limit it was under. A file read back crosses a piece to a line (<see cref="ContentLines"/>), and is held to the
+    /// same size: whichever way it goes, the same file crosses, or is refused by name.
     /// </remarks>
     public const long LargestFile = (LongestString - AroundAFile) / 4 * 3L;
 
@@ -270,13 +272,6 @@ public static class SyncServe
     /// </remarks>
     public const string ContentPrefix = "sync-serve-content ";
 
-    /// <summary>
-    /// How many bytes of a file each of its content lines carries: a multiple of three, so each line is whole base64, and
-    /// few enough that the line is an object the runtime collects as soon as it is dropped, rather than one of the large
-    /// ones it collects only with everything else.
-    /// </summary>
-    public const int ContentPiece = 24 * 1024;
-
     /// <summary>The files a batched write carries: after the copy's root, each file's path, then its content's base64.</summary>
     /// <param name="arguments">The request's arguments, the copy's root first.</param>
     /// <exception cref="HarnessException">
@@ -298,7 +293,20 @@ public static class SyncServe
                 + "argument(s) after the copy's root, where each file is its path then its content. The two ends are different builds.");
         }
 
-        return [.. Enumerable.Range(0, (arguments.Count - 1) / 2).Select(file => new SyncFileWrite(arguments[1 + (2 * file)], arguments[2 + (2 * file)]))];
+        return [.. arguments.Skip(1).Chunk(2).Select(file => new SyncFileWrite(file[0], file[1]))];
+    }
+
+    /// <summary>
+    /// The names a request carries after the copy's root - the paths a manifest withholds, the directories a prune empties -
+    /// each in turn. An empty one names nothing to either: a path pattern that is empty matches no path, and a prune
+    /// passes over an empty name.
+    /// </summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    public static IReadOnlyList<string> Named(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        return [.. arguments.Skip(1)];
     }
 
     /// <summary>The paths an index request carries: everything after the copy's root.</summary>
@@ -326,15 +334,18 @@ public static class SyncServe
     /// <param name="answer">The answer.</param>
     public static string Answer<T>(T answer) => AnswerPrefix + JsonSerializer.Serialize(answer, JsonOptions);
 
-    /// <summary>The lines carrying <paramref name="contents"/> after its answer, <see cref="ContentPiece"/> bytes to a line.</summary>
+    /// <summary>
+    /// The lines carrying <paramref name="contents"/> after its answer, <see cref="HostAgentProtocol.CarriedPiece"/> bytes to
+    /// a line.
+    /// </summary>
     /// <param name="contents">A file's bytes.</param>
     public static IEnumerable<string> ContentLines(byte[] contents)
     {
         ArgumentNullException.ThrowIfNull(contents);
 
-        for (var at = 0; at < contents.Length; at += ContentPiece)
+        for (var at = 0; at < contents.Length; at += HostAgentProtocol.CarriedPiece)
         {
-            yield return ContentPrefix + Convert.ToBase64String(contents.AsSpan(at, Math.Min(ContentPiece, contents.Length - at)));
+            yield return ContentPrefix + Convert.ToBase64String(contents.AsSpan(at, Math.Min(HostAgentProtocol.CarriedPiece, contents.Length - at)));
         }
     }
 

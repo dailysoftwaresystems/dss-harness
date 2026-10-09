@@ -122,16 +122,16 @@ then for the memory in use to fall below `maxMemoryPercent`, then - where its bu
 for room on the filesystem it fills beside what the other admitted legs claim, says who holds each slot
 while it waits, and names on its line how long it waited, the memory it started at and the room it
 claimed. A WSL distribution's legs take this machine's slots, and claim room on the drive where WSL
-keeps its disk; an ssh host takes its own. One that waited `maxWaitMinutes` - a wait for slots only its
-own command's legs hold not counting - is `not-admitted`, exit 7,
-naming what held the slots and where they are recorded, the memory it waited on, or the room and who
-claimed it, and nothing of it ran. On Windows, a leg about to wait on the memory has WSL's page cache
-dropped first - as root, at most once a minute - and reads the memory again a minute later; a WSL leg
-drops it as it ends. While a heavy leg builds, each filesystem it fills - for a WSL leg,
-the Windows drive its disk grows on too - is held to `minFreeGiB` (2 GiB): one that falls under it,
-read every 15 seconds and again as a build fails, stops the build, `stopped`, what it built left for
-`clean`. Run `dssharness help admission` for the
-rules.
+keeps its disk; an ssh host takes its own. One that waited `maxWaitMinutes` - a wait with only its own
+command's legs ahead of it not counting - is `not-admitted`, exit 7, naming what held the slots and
+where they are recorded, the memory it waited on, or the room and who claimed it, and nothing of it
+ran. On Windows, a leg about to wait on the memory has WSL's page cache dropped first - as root, at
+most once a minute - and reads the memory again once what was dropped has come back, a minute later
+at the most; a WSL leg drops it as it ends. While a heavy leg builds, each filesystem it fills - for a
+WSL leg, the Windows drive its disk grows on too - is held to `minFreeGiB` (2 GiB): one that falls
+under it, read every 15 seconds and again as a build or a write of its fails, stops the build,
+`stopped`, what it built left for `clean`; a build under it as it starts writes nothing. Run
+`dssharness help admission` for the rules.
 
 ## Design
 

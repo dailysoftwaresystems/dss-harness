@@ -79,6 +79,45 @@ public sealed class WslPageCacheTests
     }
 
     /// <summary>
+    /// A list of the running distributions an older wsl.exe wrote in UTF-16, whatever WSL_UTF8 says - read as UTF-8, each
+    /// character of a name followed by a NUL - is read as the names it holds, and the cache dropped in the one running.
+    /// </summary>
+    [Fact]
+    public async Task AListAnOlderWslWroteInUtf16_IsReadAsTheNamesItHolds()
+    {
+        var hosts = new ScriptedHostCommands((_, _) => HostResults.Ok(Printed))
+        {
+            RunningWslDistributions = () => HostResults.Ok(string.Concat("docker-desktop\r\nUbuntu-24.04\r\n".Select(character => $"{character}\0"))),
+        };
+
+        var drop = await DropAsync(hosts, PlatformId.Windows, ("ubuntu", "Ubuntu-24.04"));
+
+        Assert.Equal("Ubuntu-24.04", Assert.Single(hosts.Calls).Connection.Distribution);
+        Assert.NotNull(drop);
+        Assert.Equal((true, "WSL's page cache was dropped as root in wsl ubuntu, 21.8 GiB of it"), (drop.Done, drop.Said));
+    }
+
+    /// <summary>
+    /// A list of the running distributions that cannot be read - characters its bytes did not spell, or a control
+    /// character, which no name holds - is said, and nothing is dropped: taken for a list of none, it said nothing ran, and
+    /// a leg the cache kept waiting was never told why none was dropped.
+    /// </summary>
+    [Theory]
+    [InlineData("\uFFFD\uFFFDUbuntu-24.04\n")]
+    [InlineData("Ubuntu-24.04\u0007\n")]
+    public async Task AListOfTheRunningThatCannotBeRead_IsSaid_AndNothingIsDropped(string listed)
+    {
+        var hosts = new ScriptedHostCommands((_, _) => HostResults.Ok(Printed)) { RunningWslDistributions = () => HostResults.Ok(listed) };
+
+        var drop = await DropAsync(hosts, PlatformId.Windows, ("ubuntu", "Ubuntu-24.04"));
+
+        Assert.Empty(hosts.Calls);
+        Assert.NotNull(drop);
+        Assert.False(drop.Done);
+        Assert.Equal("WSL's page cache was not dropped: WSL's list of the distributions running could not be read", drop.Said);
+    }
+
+    /// <summary>
     /// A host whose item cannot be read reaches no distribution - its legs cannot run either - and where no other host
     /// reaches one, the drop is said not to be made, naming the host and why its item could not be read: a leg the cache
     /// keeps waiting is told why none was dropped. Another host that reaches a running one drops it as ever.

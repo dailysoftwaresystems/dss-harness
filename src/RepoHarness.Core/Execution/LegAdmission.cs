@@ -99,7 +99,8 @@ public sealed class Admission : IDisposable
 /// <param name="Rule">What the machine admits heavy legs by, as the command's configuration declares it.</param>
 /// <param name="RunId">
 /// The run the leg is part of - for a leg on an ssh host, the run of the machine that dispatched it - which its slot's
-/// entry records: a wait for slots only legs of that run hold does not count against the machine's limit.
+/// entry records: a wait with only legs of that run ahead of it - holding slots, or in line first - does not count
+/// against the machine's limit.
 /// </param>
 /// <param name="Command">The command running it.</param>
 /// <param name="Leg">The leg, or a unit of its work, named <c>&lt;leg&gt;/&lt;unit&gt;</c>.</param>
@@ -145,8 +146,10 @@ public sealed record AdmissionRequest(
 /// slot, so two legs taking theirs together do not both start on one reading - and then, where its build's need is
 /// known, the room that need takes, beside what every other admitted leg there claims. A leg that waits longer than the
 /// machine allows is not let start, and its line names what held the slots, the memory in use it waited on, or the room
-/// and who claimed it. A wait for slots only legs of its own run hold - its command's other legs, asked for at once -
-/// does not count: it is certain to end, and is said to be its own. A leg about to wait on the memory has what this
+/// and who claimed it. A wait with only legs of its own run ahead of it - its command's other legs, asked for at once,
+/// holding slots or in line first - does not count: it is certain to end, and is said to be its own. A wait with another
+/// command's leg in line ahead counts, though only its own run's legs hold the slots: that leg takes the next slot given
+/// back, for as long as its own command keeps it. A leg about to wait on the memory has what this
 /// machine could have back at once given back first, where its request says how - WSL's page cache
 /// (<see cref="AdmissionRequest.DropPageCache"/>) - and reads the memory again once it has come back.
 /// </summary>

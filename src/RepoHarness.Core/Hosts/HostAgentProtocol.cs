@@ -5,8 +5,10 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Processes;
+using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Hosts;
 
@@ -157,18 +159,21 @@ public static class HostAgentProtocol
     }
 
     /// <summary>
-    /// How many bytes an argument carrying bytes (<see cref="HostArgument.Carrying"/>) is encoded in at a time: a multiple
-    /// of three, so each piece is whole base64, and small enough that its text is an object the runtime collects as soon as
-    /// it is dropped.
+    /// How many bytes are encoded as base64 at a time, whichever way they cross: an argument carrying bytes to a host
+    /// (<see cref="HostArgument.Carrying"/>), and each line a file read there follows its answer back with
+    /// (<see cref="Sync.SyncServe.ContentLines"/>). A multiple of three, so each piece is whole base64, and small enough that
+    /// its text is an object the runtime collects as soon as it is dropped, rather than one of the large ones it collects
+    /// only with everything else.
     /// </summary>
-    internal const int CarriedPiece = 24 * 1024;
+    public const int CarriedPiece = 24 * 1024;
 
     /// <summary>How much of a request is gathered before it is written on: what a piece of what it carries encodes to, twice.</summary>
-    private const int Gathered = 64 * 1024;
+    private const int Gathered = CarriedPiece / 3 * 4 * 2;
 
     /// <summary>
     /// <paramref name="request"/> as a host reads it: one line of JSON on its standard input, written as it is encoded, so
-    /// that nothing the size of what it carries - a batch of files a sync writes there - is ever held here as text.
+    /// that nothing the size of what it carries - a batch of files a sync writes there - is ever held here as text. Written
+    /// again, from the start, where a call over ssh that failed before any session began is made again.
     /// </summary>
     /// <param name="request">The request.</param>
     public static ChildInput Input(HostAgentRequest request)
@@ -177,7 +182,7 @@ public static class HostAgentProtocol
 
         return ChildInput.WrittenBy(stream =>
         {
-            var gathered = new GatheredWrites(stream, Gathered);
+            var gathered = new GatheredWrites(stream);
 
             using (var writer = new Utf8JsonWriter(gathered, new JsonWriterOptions { Encoder = JsonOptions.Encoder }))
             {
@@ -193,9 +198,9 @@ public static class HostAgentProtocol
     /// than is left, so the request is never held whole. Grown only for one value longer than the buffer, which an argument
     /// carrying bytes never is: it is written a piece at a time.
     /// </summary>
-    private sealed class GatheredWrites(Stream stream, int size) : IBufferWriter<byte>
+    private sealed class GatheredWrites(Stream stream) : IBufferWriter<byte>
     {
-        private byte[] _buffer = new byte[size];
+        private byte[] _buffer = new byte[Gathered];
         private int _written;
 
         public void Advance(int count) => _written += count;
@@ -447,20 +452,48 @@ public sealed record HostAgentInfo
 /// What the machine that asked a host to run a command says of it beside the command line - never on it, since nothing on
 /// a command line a host runs may say who asked for it.
 /// </summary>
-/// <param name="RunId">The run of that machine the command runs a leg of; <see langword="null"/> where it runs none.</param>
-/// <param name="DiskImageDrive">
-/// For a leg of a WSL distribution, the drive of that machine where WSL keeps the distribution's disk; see
-/// <see cref="HostAgentRequest.DiskImageDrive"/>.
-/// </param>
-public sealed record Dispatch(string? RunId, string? DiskImageDrive)
+public sealed record Dispatch
 {
-    /// <summary>What <paramref name="request"/> says of the command it asks for.</summary>
+    private Dispatch(RunId? runId, string? diskImageDrive)
+    {
+        RunId = runId;
+        DiskImageDrive = diskImageDrive;
+    }
+
+    /// <summary>The run of that machine the command runs a leg of; <see langword="null"/> where it runs none.</summary>
+    public RunId? RunId { get; }
+
+    /// <summary>
+    /// For a leg of a WSL distribution, the drive of that machine where WSL keeps the distribution's disk - see
+    /// <see cref="HostAgentRequest.DiskImageDrive"/> - and never a blank one; <see langword="null"/> where none was named.
+    /// </summary>
+    public string? DiskImageDrive { get; }
+
+    /// <summary>
+    /// What <paramref name="request"/> says of the command it asks for, read as strictly as anywhere else: its run as a run
+    /// id, which a leg here records its heavy-leg slot under, and its drive as one named, which a leg here holds its build
+    /// to the floor on.
+    /// </summary>
     /// <param name="request">A run request.</param>
+    /// <exception cref="HarnessException">
+    /// The request names its run by what is no run id, or names a blank drive: refused, and nothing it asks for runs.
+    /// </exception>
     public static Dispatch Of(HostAgentRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        return new Dispatch(request.RunId, request.DiskImageDrive);
+        RunId? run = null;
+
+        if (request.RunId is { } named)
+        {
+            run = Execution.RunId.TryParse(named, out var parsed)
+                ? parsed
+                : throw new HarnessException(HarnessExit.UsageError, $"the request names its run as '{named}', which is not a run id");
+        }
+
+        return request.DiskImageDrive is { } drive && string.IsNullOrWhiteSpace(drive)
+            ? throw new HarnessException(HarnessExit.UsageError, "the request names a blank drive as where WSL keeps the distribution's disk")
+            : new Dispatch(run, request.DiskImageDrive);
     }
 }
 

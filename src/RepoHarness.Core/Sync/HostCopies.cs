@@ -178,6 +178,14 @@ public static partial class HostCopies
         }
     }
 
+    /// <summary>
+    /// The host whose copy of the repository this machine's tree is, where it runs legs another machine sent it as a WSL
+    /// distribution or an ssh host; <see langword="null"/> where its tree is the repository itself - a command typed here,
+    /// or one told it runs here as this machine's own, <c>local</c>, which keeps no copy.
+    /// </summary>
+    /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
+    public static HostId? KeptAs(HostId? here) => here is { Kind: not HostKind.Local } ? here : null;
+
     /// <summary>Where a host keeps the main checkout's copy, as the configuration declares it.</summary>
     /// <param name="config">The configuration that declares the host.</param>
     /// <param name="host">The host.</param>

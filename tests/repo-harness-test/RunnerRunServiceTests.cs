@@ -2630,7 +2630,7 @@ public sealed class RunnerRunServiceTests
         config.Contention.SharedResourceTools.Add("toolcc");
         var variant = Core.Build.VariantKey.For(config, config.Legs[Leg], factory.Platform.PlatformKey);
         var theirs = variant.DirectoryUnder(other.Path);
-        var table = new ProcessTableHolding(new Core.Platform.SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
+        var table = new QuietProcessTable(new Core.Platform.SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
 
         var result = await Service(factory, processTable: table).RunAsync(
             config,
