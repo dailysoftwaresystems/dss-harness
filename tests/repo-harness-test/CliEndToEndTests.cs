@@ -2125,6 +2125,128 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// A real configure, by the CMake, Ninja and C and C++ compilers on this machine, of a C++ project whose C only a
+    /// subproject's own <c>project()</c> enables, as a dependency such as googletest enables it: CMake's answer names C's
+    /// compiler with a path and no id, and C is identified from CMake's record of it and held to what the toolchain
+    /// declares - for the configure that asked, and for the directory read afresh - though that record is dated after the
+    /// answer, as a clock that stepped forward for a moment dates one. Told apart by when each was written, the record was
+    /// a later configure's, and a consumer's leg was unwitnessed. A leg built from that project, its toolchain declaring
+    /// both compilers, passes. Skipped where this machine lacks one of the tools - and failed there instead, where it says
+    /// it is meant to hold every build tool (<see cref="BuildTools"/>).
+    /// </summary>
+    /// <remarks>
+    /// The record is dated after the answer once that configure is done, and the leg built in a directory of its own: a
+    /// build finding a record dated ahead of its build files has Ninja run CMake again until the clock passes it, which a
+    /// project this small does a hundred times, and fails, within the 24 seconds a consumer's clock stepped.
+    /// </remarks>
+    [Fact]
+    public async Task ARealConfigureOfALanguageOnlyASubprojectEnables_IdentifiesIt_ThoughItsRecordIsDatedAfterTheAnswer_AndItsLegPasses()
+    {
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var (c, cxx) = OperatingSystem.IsWindows() ? ("gcc", "g++") : ("cc", "c++");
+
+        BuildTools.Need(harness.ProcessRunner, "a real configure of a project whose C only a subproject enables", "cmake", "ninja", c, cxx);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        // Real builds, ordered by the times of the files they write: on a clock that steps, they prove nothing here.
+        using var clock = new ClockWatch();
+
+        var repository = temp.Combine("r");
+        var compilers = new Dictionary<string, string?> { ["CC"] = c, ["CXX"] = cxx };
+
+        Directory.CreateDirectory(repository);
+        File.WriteAllText(Path.Combine(repository, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(app CXX)\nadd_subdirectory(dep)\nadd_executable(app main.cpp)\ntarget_link_libraries(app PRIVATE dep)\n");
+        File.WriteAllText(Path.Combine(repository, "main.cpp"), "extern \"C\" int dep(void);\nint main() { return dep() == 7 ? 0 : 1; }\n");
+        Directory.CreateDirectory(Path.Combine(repository, "dep"));
+        File.WriteAllText(Path.Combine(repository, "dep", "CMakeLists.txt"), "project(dep C)\nadd_library(dep STATIC dep.c)\n");
+        File.WriteAllText(Path.Combine(repository, "dep", "dep.c"), "int dep(void) { return 7; }\n");
+
+        try
+        {
+            // Configured once outside any leg, for what CMake answers about C and the ids it identifies here: what the
+            // leg's toolchain then declares.
+            var reader = new CMakeToolchainReader(harness.FileSystem);
+            var probe = temp.Combine("probe");
+            var asked = reader.Ask(probe);
+            var configured = await harness.ProcessRunner.RunAsync(
+                new ProcessRequest { FileName = "cmake", Arguments = ["-S", repository, "-B", probe, "-G", "Ninja"], Environment = compilers },
+                token);
+
+            Assert.True(configured.ExitCode == 0, configured.StandardError + configured.StandardOutput);
+
+            var replies = Path.Combine(probe, ".cmake", "api", "v1", "reply");
+
+            using (var toolchains = JsonDocument.Parse(File.ReadAllText(Directory.EnumerateFiles(replies, "toolchains-v1-*.json").Single())))
+            {
+                var answered = toolchains.RootElement.GetProperty("toolchains").EnumerateArray()
+                    .Single(toolchain => toolchain.GetProperty("language").GetString() == "C")
+                    .GetProperty("compiler");
+
+                Assert.True(answered.TryGetProperty("path", out _) && !answered.TryGetProperty("id", out _), answered.GetRawText());
+            }
+
+            // CMake's record of identifying C, dated after its answer by as much as a consumer's clock stepped.
+            var record = Directory.EnumerateFiles(Path.Combine(probe, "CMakeFiles"), "CMakeCCompiler.cmake", SearchOption.AllDirectories).Single();
+
+            File.SetLastWriteTimeUtc(record, File.GetLastWriteTimeUtc(Directory.EnumerateFiles(replies, "index-*.json").Single()).AddSeconds(24));
+
+            var readings = new[] { reader.Read(probe, asked), reader.Read(probe) };
+            var ids = readings[0].Compilers.ToDictionary(compiler => compiler.Language, compiler => compiler.Id);
+
+            Assert.True(ids.ContainsKey("C") && ids.ContainsKey("CXX"), string.Join(", ", ids) + " " + string.Join("; ", readings[0].Unidentified));
+
+            var config = new HarnessConfig
+            {
+                Toolchains =
+                {
+                    ["cc"] = new ToolchainConfig
+                    {
+                        Platforms = [platform.PlatformKey],
+                        Generator = "Ninja",
+                        Env = { ["CC"] = c, ["CXX"] = cxx },
+                        CompilerId = { ["C"] = ids["C"], ["CXX"] = ids["CXX"] },
+                    },
+                },
+                BuildConfigs = { ["debug"] = new BuildConfiguration { CmakeBuildType = "Debug" } },
+                Projects = { new ProjectConfig { Name = "app", Type = "cmake", Path = ".", BuildOutputs = [BuildOutput.Keyed([new("windows", "app.exe"), new("all", "app")])] } },
+                Tools = { new ToolConfig { Name = "cmake" } },
+                Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Toolchain = "cc" } },
+            };
+
+            foreach (var reading in readings)
+            {
+                Assert.Equal(readings[0].Compilers, reading.Compilers);
+                Assert.False(reading.Unidentified.ContainsKey("C"), reading.Unidentified.GetValueOrDefault("C"));
+                Assert.Null(CompilerFacts.HeldTo(config, "cc", reading));
+            }
+
+            await harness.InitializeHarnessAsync(repository, token, config);
+
+            // Ignored, as a repository ignores its builds: committed, a build's own files would be inputs it changes.
+            File.AppendAllText(Path.Combine(repository, ".gitignore"), "build/\n");
+            await harness.CommitAllAsync(repository, "a C++ project whose C a subproject enables", token);
+
+            var built = await CliRunner.RunAsync(["build", "--legs", "native", "--json", "-C", repository], token);
+
+            Assert.True(built.ExitCode == HarnessExit.Success, built.StandardError + built.StandardOutput);
+
+            using var document = JsonDocument.Parse(built.StandardOutput);
+            var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+            Assert.Equal(
+                ["C " + ids["C"], "CXX " + ids["CXX"]],
+                leg.GetProperty("compilers").EnumerateArray().Select(compiler => $"{compiler.GetProperty("language").GetString()} {compiler.GetProperty("id").GetString()}").Order(StringComparer.Ordinal));
+        }
+        catch (Exception ex) when (clock.Explains(ex))
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// A real incremental build, by the cmake, ninja and C compiler on this machine, of a tree one of whose targets
     /// was renamed away since its last build: that target's object is still in the build directory, deeper than the
     /// path budget's reserve, and ninja says no target produces it any more. It is left out of the check and noted,

@@ -1800,6 +1800,46 @@ public sealed class BuildServiceTests
         Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
     }
 
+    /// <summary>
+    /// A language only a subproject enables - C, where a C++ project's dependency declares it in a <c>project()</c> of its
+    /// own - is held to the toolchain as the others are, and passes where its compiler is the one declared: in a build whose
+    /// phase spanned a clock step, and in the one after, rebuilt from clean for it. CMake's answer names that compiler's path
+    /// and no id, and its record of identifying it, dated after the answer, names the same compiler. Told apart by when each
+    /// was written, the record was taken for a later configure's, and a consumer's leg rebuilt after a step was unwitnessed.
+    /// </summary>
+    [Fact]
+    public async Task ALanguageOnlyASubprojectEnables_PassesAfterAClockStep_ThoughItsRecordIsDatedAfterTheAnswer()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (factory, request) = await TrackedTreeAsync(temp, cancellationToken);
+        var gcc = temp.WriteFile(Path.Combine(ToolchainDirectory, "gcc"), "a compiler").Replace('\\', '/');
+        var clock = new SteppingClock();
+        var declared = Declaring(("C", "GNU"), ("CXX", "GNU"));
+
+        // The compiler there now is the one CMake identified, so nothing but the step starts the next build from clean.
+        var gnu = new VersionAnswering("_MSC_VER _MSC_FULL_VER _MSC_BUILD", gnu: "13 __GNUG__ 2 0");
+
+        var stepped = await Service(
+                factory,
+                exitCode: 0,
+                phases: new ConfiguringRunner("GNU", "13.2.0", onlyASubprojectEnablesC: gcc, building: () => clock.Step(TimeSpan.FromSeconds(25))),
+                wallClock: clock,
+                compilers: gnu)
+            .BuildAsync(declared, request, cancellationToken);
+        var again = await Service(factory, exitCode: 0, phases: new ConfiguringRunner("GNU", "13.2.0", onlyASubprojectEnablesC: gcc), compilers: gnu)
+            .BuildAsync(declared, request, cancellationToken);
+
+        Assert.Contains(stepped.Phases, phase => phase.ClockStepped);
+        Assert.StartsWith("a clock step: the previous build's 'build' phase spanned one", again.RebuiltFromClean, StringComparison.Ordinal);
+
+        foreach (var result in new[] { stepped, again })
+        {
+            Assert.True(result.Verdict.Verdict == LegVerdict.Passed, result.Verdict.Detail);
+            Assert.Equal([new CompilerFact("C", "GNU", "13.2.0"), new CompilerFact("CXX", "GNU", "13.2.0")], result.Compilers);
+        }
+    }
+
     /// <summary>A configuration whose gcc toolchain declares <paramref name="ids"/> as its compilerId.</summary>
     private static HarnessConfig Declaring(params (string Language, string Id)[] ids)
     {
@@ -1819,10 +1859,20 @@ public sealed class BuildServiceTests
     /// <summary>
     /// A CMake that answers the file API query on configure, as CMake 4.3 does, with
     /// <paramref name="id"/> for C and C++ - or, where it fails with <paramref name="exitCode"/>, with
-    /// the error index CMake 4.3 writes in its place - and every other phase starts nothing.
+    /// the error index CMake 4.3 writes in its place - and every other phase starts nothing but
+    /// <paramref name="building"/>, as the build phase starts.
     /// </summary>
-    private sealed class ConfiguringRunner(string id, string version, int exitCode = 0) : IProcessRunner
+    /// <remarks>
+    /// Given <paramref name="onlyASubprojectEnablesC"/>, it answers for a C++ project whose C only a subproject's own
+    /// <c>project()</c> enables: C with that compiler's path and no id, and CMake's record of identifying it, naming the same
+    /// compiler, dated 24 seconds after the answer - as a clock that stepped forward for a moment dated one on a consumer's
+    /// WSL host.
+    /// </remarks>
+    private sealed class ConfiguringRunner(string id, string version, int exitCode = 0, string? onlyASubprojectEnablesC = null, Action? building = null) : IProcessRunner
     {
+        /// <summary>The CMake version a subproject's answer names, under which its record of identifying C is kept.</summary>
+        private const string CMakeVersion = "4.3.2";
+
         /// <summary>How many answers every configure so far wrote, which names each one, as CMake's moment of writing does.</summary>
         private static int _written;
 
@@ -1838,6 +1888,11 @@ public sealed class BuildServiceTests
         {
             _started.Add(request.Arguments);
 
+            if (request.Arguments is ["--build", ..])
+            {
+                building?.Invoke();
+            }
+
             if (request.Arguments is ["-S", _, "-B", var build, ..])
             {
                 Asked = File.Exists(Path.Combine(build, ".cmake", "api", "v1", "query", "toolchains-v1"));
@@ -1851,6 +1906,21 @@ public sealed class BuildServiceTests
                     File.WriteAllText(
                         Path.Combine(replies, $"error-{moment}.json"),
                         """{ "reply": { "toolchains-v1": { "error": "no buildsystem generated" } } }""");
+                }
+                else if (onlyASubprojectEnablesC is { } c)
+                {
+                    var index = Path.Combine(replies, $"index-{moment}.json");
+                    var record = Path.Combine(build, "CMakeFiles", CMakeVersion, "CMakeCCompiler.cmake");
+
+                    File.WriteAllText(
+                        index,
+                        $$"""{ "cmake": { "version": { "string": "{{CMakeVersion}}" } }, "reply": { "toolchains-v1": { "jsonFile": "toolchains-v1-{{moment}}.json" } } }""");
+                    File.WriteAllText(
+                        Path.Combine(replies, $"toolchains-v1-{moment}.json"),
+                        $$"""{ "toolchains": [ { "language": "C", "compiler": { "path": "{{c}}" } }, { "language": "CXX", "compiler": { "id": "{{id}}", "version": "{{version}}" } } ] }""");
+                    Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+                    File.WriteAllText(record, $"set(CMAKE_C_COMPILER \"{c}\")\nset(CMAKE_C_COMPILER_ID \"{id}\")\nset(CMAKE_C_COMPILER_VERSION \"{version}\")\n");
+                    File.SetLastWriteTimeUtc(record, File.GetLastWriteTimeUtc(index).AddSeconds(24));
                 }
                 else
                 {
@@ -2456,9 +2526,10 @@ public sealed class BuildServiceTests
 
     /// <summary>
     /// A compiler that preprocesses the probed line into MSVC's <paramref name="msvc"/> - _MSC_VER,
-    /// _MSC_FULL_VER and _MSC_BUILD - defining nothing else, and remembers every request.
+    /// _MSC_FULL_VER and _MSC_BUILD - and GNU's <paramref name="gnu"/> - __GNUC__, __GNUG__,
+    /// __GNUC_MINOR__ and __GNUC_PATCHLEVEL__ - defining nothing else, and remembers every request.
     /// </summary>
-    private sealed class VersionAnswering(string msvc) : IProcessRunner
+    private sealed class VersionAnswering(string msvc, string gnu = "__GNUC__ __GNUG__ __GNUC_MINOR__ __GNUC_PATCHLEVEL__") : IProcessRunner
     {
         private readonly List<ProcessRequest> _requests = [];
 
@@ -2471,7 +2542,7 @@ public sealed class BuildServiceTests
 
             return Task.FromResult(new ProcessResult(
                 0,
-                $"repo_harness_compiler_version {msvc} __GNUC__ __GNUG__ __GNUC_MINOR__ __GNUC_PATCHLEVEL__ __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n",
+                $"repo_harness_compiler_version {msvc} {gnu} __clang_major__ __clang_minor__ __clang_patchlevel__ __apple_build_version__\n",
                 "compiler-version-CXX.cpp\n",
                 TimeSpan.Zero,
                 TimedOut: false));
