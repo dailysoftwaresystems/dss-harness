@@ -225,7 +225,7 @@ public sealed class CleanServiceTests
         Assert.Equal(8L << 30, leg.GetProperty("space").GetProperty("buildBytes").GetInt64());
         Assert.Equal("/", leg.GetProperty("space").GetProperty("disk").GetProperty("filesystem").GetString());
 
-        var request = JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput!, HostAgentProtocol.JsonOptions)!;
+        var request = JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
 
         Assert.Equal(HostTree, request.Directory);
         Assert.Equal(
@@ -240,7 +240,7 @@ public sealed class CleanServiceTests
     [Fact]
     public async Task ALegItsHostLeftForALockHeldThere_IsRefusedLocked_AndTheRunIsNoRefusal()
     {
-        const string Why = "a sweep still running holds its mutation workers: pi pid 4242, run 20261007-101500-abcd";
+        const string Why = "a sweep still running holds its mutation workers: pid 4242, run 20261007-101500-abcd";
 
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -725,7 +725,7 @@ public sealed class CleanServiceTests
         transport.RootExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
         transport.RemoveWorkersAsync(HostTree, dryRun, Arg.Any<CancellationToken>()).Returns(new WorkersRemoval(
             [new WorkerRemoved(gone, 3L << 30)],
-            [new WorkerLeft(held, "a sweep still running holds it: pi pid 4242, run 20261007-101500-abcd", WorkerLeftAs.Held)]));
+            [new WorkerLeft(held, "a sweep still running holds it: pid 4242, run 20261007-101500-abcd", WorkerLeftAs.Held)]));
         transports.For(Arg.Any<HostReport>()).Returns(transport);
 
         var (outcome, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), hosts: hosts, dryRun: dryRun, transports: transports);
@@ -734,7 +734,7 @@ public sealed class CleanServiceTests
         Assert.Equal(
             $"nothing to remove: ssh {HostName} holds no copy of this tree at '{HostTree}'; "
             + (dryRun ? $"1 mutation worker(s) left beside where it was: 3 GiB in '{gone}'" : $"removed 1 mutation worker(s) left beside where it was, 3 GiB: '{gone}'")
-            + $"; '{held}' was left: a sweep still running holds it: pi pid 4242, run 20261007-101500-abcd",
+            + $"; '{held}' was left: a sweep still running holds it: pid 4242, run 20261007-101500-abcd",
             leg.GetProperty("detail").GetString());
         Assert.Equal(3L << 30, leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
         Assert.NotEqual(HarnessExit.Success, outcome.ExitCode);
@@ -1147,7 +1147,7 @@ public sealed class CleanServiceTests
                 Host = host,
                 Os = harness.Platform.PlatformKey,
                 Processor = harness.Platform.Processor,
-            }), harness.Platform, harness.Output),
+            }), new KnownTrees(), harness.Platform, harness.Output),
             runLock ?? new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             transports,
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),

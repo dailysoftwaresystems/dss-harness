@@ -594,6 +594,12 @@ internal static class HelpCommand
         builder.AppendLine("the same path holding fewer files, and a step reading it would measure less than was");
         builder.AppendLine("built and pass. With '--dry-run' it carries nothing and lists what it would carry,");
         builder.AppendLine("as '--pull' does.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A file crosses whole, whichever way it goes - to a host inside one request, back in one answer: one larger than "
+            + $"{SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture)} bytes is refused by name before anything is "
+            + "sent. Keep the smaller thing a later step reads - a packaged build rather than a build tree.");
 
         builder.AppendLine();
         builder.AppendLine("A step may ask for the guards the build and test verbs carry. Both are off unless");
@@ -716,7 +722,9 @@ internal static class HelpCommand
         builder.AppendLine("failed: run again, it finishes, where a failed one fails again. Read under the name");
         builder.AppendLine("it says it under, which for samurai, run by CMake for ninja where it is installed,");
         builder.AppendLine("is its file's. A build the harness stopped for hanging stays failed, saying it hung,");
-        builder.AppendLine("and so does one under any other build tool, since only ninja's lines are read.");
+        builder.AppendLine("and so does one under any other build tool, since only ninja's lines are read. A");
+        builder.AppendLine("heavy leg's build stopped for leaving less room than its machine's minFreeGiB is");
+        builder.AppendLine("stopped too ('help admission').");
         builder.AppendLine("A run killed, or stopped with its machine, before it finished says nothing more:");
         builder.AppendLine("the next build, test, run or check-mutations in its tree on that machine to own its");
         builder.AppendLine("run directory says it was abandoned - its run id, process and start, and where its");
@@ -743,7 +751,11 @@ internal static class HelpCommand
         builder.AppendLine("warning: one line per tool and per whose it was, with a count and the range of");
         builder.AppendLine("process ids. A process working in another declared leg's build directory is named");
         builder.AppendLine("as that leg's - two legs on one host share its load, which is maxParallelLegs at");
-        builder.AppendLine("work, and yours to decide about. contention.sharedState says what each tool shares,");
+        builder.AppendLine("work, and yours to decide about - and one working in a build directory of another");
+        builder.AppendLine("tree of the repository on that machine, a worktree's, an agent's or the main");
+        builder.AppendLine("checkout's, as that tree's leg's: 'worktree o1/xa's leg 'linux-debug''. Only what no");
+        builder.AppendLine("tree there accounts for is nobody's known, and where the other trees could not be");
+        builder.AppendLine("listed the line says so. contention.sharedState says what each tool shares,");
         builder.AppendLine("in the words the warning uses:");
         builder.AppendLine();
         builder.AppendLine("  \"sharedState\": { \"ccache\": \"the per-user compiler cache\" }");
@@ -889,8 +901,8 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "A sweep runs the workers whose copy and build fit the room left - a build of the variant coming to the leg's "
-            + "buildSpaceGiB where it declares one, else to what the leg's own build, or the main checkout's, last recorded "
-            + "- and whose build stays within the path limit, "
+            + "buildSpaceGiB where it declares one, else to what the leg's own build last recorded, else to the most any "
+            + "other tree of the repository on its machine recorded of it - and whose build stays within the path limit, "
             + "reckoned as a worktree's is; where not even the first does, the leg is skipped-unavailable, saying why, and "
             + "one that runs fewer says how many of those it wanted, and what keeps each of the rest out. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it, and "
             + "a claim whose sweep died is released and said. Workers an earlier sweep left beyond the count workers allows "
@@ -1073,6 +1085,22 @@ internal static class HelpCommand
         builder.AppendLine("looks, and said to be. A waiting leg keeps its lock: another run of its variant is");
         builder.AppendLine("refused-locked meanwhile, as it would be while the leg ran.");
         builder.AppendLine();
+        builder.AppendLine("While a heavy leg builds, each filesystem its build fills is read again every");
+        builder.AppendLine($"{RoomFloorWatch.Every.TotalSeconds:0} seconds, and the build is stopped once one has less free than minFreeGiB:");
+        builder.AppendLine($"stopped, exit {HarnessExit.Incomplete}, naming what was free and where, and what it built left for");
+        builder.AppendLine("clean - and so is a build that failed with one under it, read again as it failed,");
+        builder.AppendLine("since a full disk says nothing of its code, and one whose own write failed then -");
+        builder.AppendLine("a phase's log, its record. A build under it as it starts writes nothing, its");
+        builder.AppendLine("record included, and a record it has no room left for is said, the one it wrote");
+        builder.AppendLine("as it began standing. The room a leg claims is only what is said of its build; this");
+        builder.AppendLine("holds every build, its need said or not - a sweep's workers' too. A WSL leg holds");
+        builder.AppendLine("the drive its disk grows on as well, which this machine names as it sends the leg");
+        builder.AppendLine("and the distribution reaches through its mount there: /mnt/c, as /proc/mounts");
+        builder.AppendLine("lists it by the drive, or by the path its options name where an older WSL lists");
+        builder.AppendLine("what it mounts as drvfs. Where it is mounted nowhere, the build says only the");
+        builder.AppendLine("distribution's own room is held. A room that cannot be read stops nothing, and is");
+        builder.AppendLine("said once.");
+        builder.AppendLine();
         builder.AppendLine("A check-mutations leg, whose sweep can last hours, is admitted unit by unit instead:");
         builder.AppendLine("each worker as it is made, claiming the room its copy and build still need, and each");
         builder.AppendLine("arm as it starts, each unit holding a slot only while it runs. Only the sweep's first");
@@ -1092,6 +1120,8 @@ internal static class HelpCommand
         builder.AppendLine($"                    once ([{string.Join(", ", AdmissionSettings.DefaultSettleSeconds)}])");
         builder.AppendLine($"  pollSeconds       the time between looks while a leg waits, at least 1 ({AdmissionSettings.DefaultPollSeconds})");
         builder.AppendLine($"  maxWaitMinutes    how long a leg waits before it is not-admitted, above 0 ({AdmissionSettings.DefaultMaxWaitMinutes})");
+        builder.AppendLine("  minFreeGiB        the room a heavy leg's build leaves free on each filesystem it");
+        builder.AppendLine($"                    fills, from 0 to {AdmissionSettings.MostMinFreeGiB}; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})");
         builder.AppendLine();
         builder.AppendLine($"Seconds are at most {AdmissionSettings.MostSeconds}, and the wait at most {AdmissionSettings.MostWaitMinutes} minutes.");
         builder.AppendLine();
@@ -1118,17 +1148,38 @@ internal static class HelpCommand
         builder.AppendLine("lets the leg start, claimed against every filesystem of the machine, and one read");
         builder.AppendLine("before and not now decides nothing.");
         builder.AppendLine();
+        builder.AppendLine("On Windows the commit counts what WSL's virtual machine keeps as page cache - what");
+        builder.AppendLine("every distribution's builds read and wrote - which it gives back only once it has");
+        builder.AppendLine("idled for minutes. So a leg about to wait on the memory has that cache dropped first,");
+        builder.AppendLine("as root (sync, then drop_caches) in a running distribution a WSL host of its");
+        builder.AppendLine("repository reaches - at most once a minute, whichever leg asks - and reads the");
+        builder.AppendLine("memory again once what was dropped has come back, a minute later at the most, its");
+        builder.AppendLine("line saying how much was dropped and the memory before and after, and goes on from");
+        builder.AppendLine("that reading as from any other. A WSL leg sent from a machine that admits drops it");
+        builder.AppendLine("as it ends, without waiting, its line saying so - or that WSL listed none of its");
+        builder.AppendLine("distributions running, though the leg had just run in one. A distribution that is");
+        builder.AppendLine("not running is never started for it, and a drop that could not be made is said");
+        builder.AppendLine("once - a WSL host whose item cannot be read, where no other reaches one, or a list");
+        builder.AppendLine("of the distributions running that cannot be read, among the reasons; that list is");
+        builder.AppendLine("read in UTF-16 too, which an older wsl.exe writes whatever WSL_UTF8 says.");
+        builder.AppendLine();
         builder.AppendLine("While it waits, a leg says who holds each slot - tree, variant, host, leg, command,");
-        builder.AppendLine("machine, process, run, and since when it asked - and, once it holds one, what the");
-        builder.AppendLine("memory stands at, or the room free and who claims it. It says so again, as it reads");
-        builder.AppendLine($"then and with how long it has waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - a poll longer than");
-        builder.AppendLine("that is cut at it, and a settle longer than that waited whole in pieces of it - so a");
-        builder.AppendLine("long wait never goes silent. Its line, and admission in --json, name how long it");
-        builder.AppendLine("waited, the memory it started at and the room it claimed; --json also names the record");
-        builder.AppendLine("it asked in. One");
+        builder.AppendLine("process, run, and since when it asked, never the machine's name, which only the");
+        builder.AppendLine("record keeps - and, once it holds one, what the memory stands at, or the room free");
+        builder.AppendLine("and who claims it. It says so again, as it reads then and with how long it has");
+        builder.AppendLine($"waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - a poll longer than that is cut at it, and a");
+        builder.AppendLine("settle longer than that waited whole in pieces of it - so a long wait never goes");
+        builder.AppendLine("silent. Its line, and admission in --json, name how long it waited, the memory it");
+        builder.AppendLine("started at and the room it claimed; --json also names the record it asked in. One");
         builder.AppendLine($"that waited maxWaitMinutes is not-admitted, exit {LegExit.NotAdmitted}, naming what held the slots and");
         builder.AppendLine("where they are recorded, the memory it waited on, or the room, who claimed it and");
-        builder.AppendLine("where the claims are recorded: nothing of it ran, and nothing about the code is claimed.");
+        builder.AppendLine("where the claims are recorded: nothing of it ran, and nothing about the code is");
+        builder.AppendLine("claimed. A wait with only legs of its own run ahead of it - holding slots, or in");
+        builder.AppendLine("line first: a command's WSL leg behind its Windows legs, asked for at once - is");
+        builder.AppendLine("certain to end and does not count: its line says they are its own, and a refusal");
+        builder.AppendLine("after it says how much of the wait did not count. Another command's leg in line");
+        builder.AppendLine("ahead makes it count, whoever holds the slots. On an ssh host, the legs one command");
+        builder.AppendLine("sends there ask under that command's run.");
         builder.AppendLine();
         builder.AppendLine("The slots are kept in <user data>/dssharness/admission-<machine id>.json, and the");
         builder.AppendLine("room the legs claim beside them in admission-<machine id>.room.json - the user");
@@ -1586,14 +1637,15 @@ internal static class HelpCommand
         builder.AppendLine("only where the programs it starts are: a build that fills a disk dies half way, and");
         builder.AppendLine("takes any other leg building there with it. What a build needs is what its");
         builder.AppendLine("directory comes to once built - the leg's buildSpaceGiB, or, left out, what a build");
-        builder.AppendLine("of its variant recorded as it finished: in this tree's copy, or else in the main");
-        builder.AppendLine("checkout's copy on that host - less what the directory already holds. Legs building");
-        builder.AppendLine("on one filesystem of a host are counted together, in the order they were selected,");
-        builder.AppendLine("since every build directory stays once built; one that does not fit beside those");
-        builder.AppendLine("before it is skipped-unavailable:");
+        builder.AppendLine("of its variant recorded as it finished: in this tree's copy, or else the most any");
+        builder.AppendLine("other copy of the repository on that host recorded - the main checkout's, or a");
+        builder.AppendLine("worktree's, an agent's or a plain one, named in the line - less what the directory");
+        builder.AppendLine("already holds. Legs building on one filesystem of a host are counted together, in");
+        builder.AppendLine("the order they were selected, since every build directory stays once built; one");
+        builder.AppendLine("that does not fit beside those before it is skipped-unavailable:");
         builder.AppendLine();
-        builder.AppendLine("  ssh vps: 3.2 GiB free on '/', and this leg needs ~8 GiB, what the main");
-        builder.AppendLine("  checkout's copy of the same variant came to there");
+        builder.AppendLine("  ssh vps: this leg needs ~11.4 GiB, what worktree o1/xa's copy of the same");
+        builder.AppendLine("  variant came to there; 3.2 GiB free on '/'");
         builder.AppendLine();
         builder.AppendLine("A leg nothing has measured that declares no buildSpaceGiB is placed as it always");
         builder.AppendLine("was, and so is one whose directory no build of this version recorded. Nothing is");
@@ -1961,6 +2013,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>...] [--apply]");
+        builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] [{FoldAllowances.SettledOption} <path>]...");
         var allowances = $"[{FoldAllowances.SettledOption} <path>]... [{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
         builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {allowances}");
         builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] {allowances}");
@@ -1984,24 +2037,58 @@ internal static class HelpCommand
             + "of its own, is named and not handed; --empty hands it nothing. A symbolic link among it is refused before the "
             + "worktree is made, so nothing is left behind. seed-agent does it again, refused over changes of the agent's own - a "
             + "copy it was handed and left alone is not one - unless --force; --empty hands it nothing more, keeping what it was "
-            + "handed before. refresh-agent hands a live agent the main tree's changes under the paths given - the anchor "
-            + "registries' directory where none are - a dry run until --apply, refused, copying nothing, where the agent changed "
-            + "or deleted one, and records them as handed to it, so its fold leaves them out.");
+            + "handed before. Seeding again hands besides every path the main tree holds otherwise than the agent shares it, "
+            + "committed or not. refresh-agent hands a live agent every such path under the paths given - the anchor registries' "
+            + "directory where none are: one whose main-tree copy is not what the agent was last handed or folded, where it was, "
+            + "put back as the main tree's HEAD holds it included, and otherwise one the main tree holds otherwise than the agent's "
+            + "base, committed since or not. It is a dry run until --apply, refused, copying nothing, where the agent changed or "
+            + "deleted one, and records them as handed to it, so its fold leaves them out; a symbolic link the main tree committed "
+            + "is named and never handed, and so is a submodule's entry. A file the main tree turned into a directory, or a "
+            + "directory it turned into a file, is handed as git holds it: what goes is removed first, then what comes is copied. "
+            + "What the agent holds of its own where what it is handed needs room - a file or a link where a directory goes, or "
+            + "files of its own in a directory a file replaces - refuses the hand-over, forced or not, naming each: copied, it "
+            + "would write over them, or through the link out of its worktree. Neither hands anything while a move of the agent's "
+            + "base stands stopped part way, or its HEAD is off its base. Both say when the agent's base is not the main tree's "
+            + "HEAD. A path named otherwise than in UTF-8, committed or not, refuses any hand-over, naming it as git quotes it: no "
+            + "file opens here by such a name.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Rebasing. rebase-agent moves a live agent's base to the main tree's HEAD, a dry run until --apply. Each path the "
+            + "two commits hold differently that the agent holds as its base does comes into its worktree as git holds it - a "
+            + "change, a new file, a deletion, a link, a submodule's entry, a file turned into a directory, or a directory into a "
+            + "file or a submodule's entry - and its own changes, and what it was handed, stay: its seed still says what it shares, "
+            + "and refresh-agent hands it any of those the main tree moved since. A path it changed that the main tree committed a "
+            + "change to since - an edit, a deletion, or anything of its own where the main tree committed a file, ignored, staged "
+            + "or holding the same bytes included - refuses the move, nothing changed, unless --settled <path> names it: you "
+            + "reconciled its copy by hand, and it stays as its own change on the new base. So does whatever of the agent's what "
+            + "comes in would go over: a file or a link where the new base holds a directory, and what it keeps - its own, settled "
+            + "or shared - in a directory where the new base holds a file, or a submodule's entry that would hide it from git; each "
+            + "is named, with what to do. Its record names where the move goes before anything is written, then the new base's "
+            + "paths are written, HEAD and the index move, and its record names the new base: a move that stopped part way, exit "
+            + $"{HarnessExit.Incomplete}, is finished where it was going by running it again, what it wrote held as the new base "
+            + "holds it, and every other command refuses the agent until then, saying so. Only such a move is ever finished, and "
+            + "only from its base or where it goes: a HEAD moved by hand - back, forward or beside its base - or naming no commit "
+            + "is never taken for one, and each command refuses it, saying how to put it back; a commit made inside the agent is "
+            + "said to be one, and where git cannot say which a HEAD is, each says so and fails, never guessing.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             "Folding. fold-agent writes an agent's own work into the main tree, a dry run until --apply, and never removes its "
             + "worktree. Every path its status lists and every path it shares with the main tree - handed to it, or written or "
-            + "removed by an earlier fold - goes in one list: its own, written; deleted, removed with the directories that leaves "
-            + "empty; inherited, shared and unchanged; already in the main tree; or settled. A shared path is compared with what "
+            + "removed by an earlier fold - goes in one list: its own, written; deleted, removed first, with the directories that "
+            + "leaves empty, so a file it turned into a directory, or a directory into a file, makes room for what replaced it; "
+            + "inherited, shared and unchanged; already in the main tree; or settled. A shared path is compared with what "
             + "both trees held, any other with the blob at the agent's own base as git status compares, so a line-ending "
             + "conversion is no change, a changed mode is one, and a sibling's committed fold is never written over. What a fold "
             + "writes is recorded as shared: when a review sends the agent back, its later change of such a path - putting it back "
             + "as it was included - is its work to fold like any other. The whole fold is refused, and nothing written, where the "
-            + "main tree changed one of its paths since - by a commit, or by an uncommitted edit, the message says which - where a "
-            + "commit was made inside the agent, for a link, a directory, or a path leading out of the main tree, and for an anchor "
-            + "registry the agent changed as a file: its rows go in through its rows directory only. --settled "
-            + "<path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force. A path this process "
+            + "main tree changed one of its paths since - by a commit, or by an uncommitted edit, the message says which - where the "
+            + "agent's HEAD is off its base, a commit made inside it among the ways, or a move of its base stands stopped part way, "
+            + "for a link, a repository of its own, or a path leading out of the main tree, where what the main tree holds is in "
+            + "the way of what it writes - a file where a directory goes, or files the agent did not delete in a directory a file "
+            + "replaces - and for an anchor registry the agent changed as a file: its rows go in through its rows directory only. "
+            + "--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force. A path this process "
             + "cannot look at is never read as absent: the fold fails, nothing written. A file of either tree that changed after "
             + $"it was weighed is never written over: the fold stops there, exit {HarnessExit.Incomplete}, and run again weighs it "
             + "anew. Then the rows it declares anew are applied, all or nothing, each held to what write-anchor and set-anchor "
@@ -2044,8 +2131,9 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "Every command that writes the main tree or an agent's worktree holds it, as a sync holds a copy - fold-agent, "
-            + "seed-agent, refresh-agent and delete-agent hold the agent's worktree as well as the main tree - so no leg builds in "
-            + "either meanwhile, and once one has written, an interruption waits for it to finish. delete-agent refuses to run from "
+            + "seed-agent, refresh-agent and delete-agent hold the agent's worktree as well as the main tree, and rebase-agent "
+            + "holds its worktree - so no leg builds in either meanwhile, and once one has written, an interruption waits for it "
+            + "to finish. delete-agent refuses to run from "
             + "inside the worktree it removes, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
             + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
@@ -2252,8 +2340,12 @@ internal static class HelpCommand
         builder.AppendLine("declares a successPattern, since exiting 0 is not proof anything ran. A leg whose");
         builder.AppendLine("test inputs change while it runs, whose host's copy could not be made the tree the");
         builder.AppendLine("run began with because a file in it changed first, or whose build directory another");
-        builder.AppendLine("process uses, gets no pass or fail at all. Durations that diverge between legs, or");
-        builder.AppendLine("that span a clock step or a host sleep, are marked suspect, and never change a verdict.");
+        builder.AppendLine("process uses, gets no pass or fail at all. Its inputs are watched only as deep as they");
+        builder.AppendLine("lie - each directory holding one, for its own files - so a build in another tree below");
+        builder.AppendLine("the worktrees root, which init keeps in git by a placeholder, is never heard: but in a");
+        builder.AppendLine($"tree whose inputs lie in more than {InputWatch.MostDirectoriesWatched} top-level directories, the root counted where it");
+        builder.AppendLine("holds one, which is watched whole. Durations that diverge between legs, or that span a");
+        builder.AppendLine("clock step or a host sleep, are marked suspect, and never change a verdict.");
         builder.AppendLine();
         builder.AppendLine("A test count countPattern reads that differs from the other legs of the same project");
         builder.AppendLine("and test set is marked on its own - 'test count differs', and testCountDiffers and");

@@ -79,6 +79,35 @@ public sealed class HostCommandRunnerTests
         Assert.Equal("{}", request.StandardInput);
     }
 
+    /// <summary>
+    /// A command run as root in a WSL distribution is started as WSL's own root user, which asks for no password. No other
+    /// host runs one as root, and such a command starts nothing there: root is reached there only through a password.
+    /// </summary>
+    [Fact]
+    public void Wsl_AsRoot_StartsTheProgramAsWslsOwnRoot_AndNoOtherHostRunsOneAsRoot()
+    {
+        var connection = new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" };
+
+        var request = HostCommandRunner.BuildRequest(connection, ListSdks with { AsRoot = true });
+
+        Assert.Equal(["--distribution", "Example-Linux", "--user", "root", "--cd", "~", "--exec", "dotnet", "--list-sdks"], request.Arguments);
+        Assert.Throws<ArgumentException>(() => HostCommandRunner.BuildRequest(new HostConnection { Host = HostId.Local }, ListSdks with { AsRoot = true }));
+        Assert.Throws<ArgumentException>(() => HostCommandRunner.BuildRequest(Ssh(), ListSdks with { AsRoot = true }));
+    }
+
+    /// <summary>WSL's running distributions are listed by name alone, which no language translates.</summary>
+    [Fact]
+    public void Wsl_RunningDistributions_AreListedByNameAlone()
+    {
+        var request = HostCommandRunner.RunningWslDistributionsRequest(TimeSpan.FromSeconds(7));
+
+        Assert.Equal(HostCommandRunner.WslProgram, request.FileName);
+        Assert.Equal(["--list", "--running", "--quiet"], request.Arguments);
+        Assert.Equal("1", request.Environment["WSL_UTF8"]);
+        Assert.Equal(TimeSpan.FromSeconds(7), request.Timeout);
+        Assert.Equal(string.Empty, request.StandardInput);
+    }
+
     [Fact]
     public void Wsl_WithoutItsDistribution_StartsNothing()
     {
@@ -454,11 +483,14 @@ public sealed class HostCommandRunnerTests
 
         var wsl = await Assert.ThrowsAsync<HarnessException>(
             () => hosts.ProbeDefaultWslDistributionAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        var running = await Assert.ThrowsAsync<HarnessException>(
+            () => hosts.ListRunningWslDistributionsAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
         var ssh = await Assert.ThrowsAsync<HarnessException>(
             () => hosts.ProbeShellAsync(Ssh(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.HostUnavailable, wsl.ExitCode);
         Assert.Equal("WSL could not be reached: Executable 'wsl.exe' was not found on PATH.", wsl.Message);
+        Assert.Equal((wsl.ExitCode, wsl.Message), (running.ExitCode, running.Message));
         Assert.Equal(HarnessExit.HostUnavailable, ssh.ExitCode);
         Assert.StartsWith("ssh build-box could not be reached: ", ssh.Message, StringComparison.Ordinal);
     }
@@ -489,8 +521,9 @@ public sealed class HostCommandRunnerTests
 
         await hosts.ProbeShellAsync(Ssh(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await hosts.ProbeDefaultWslDistributionAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await hosts.ListRunningWslDistributionsAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        _ = processRunner.Received(2).RunAsync(
+        _ = processRunner.Received(3).RunAsync(
             Arg.Is<ProcessRequest>(request => request.StandardInput == string.Empty && !request.HoldStandardInputOpen),
             Arg.Any<CancellationToken>());
     }

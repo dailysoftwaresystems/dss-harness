@@ -123,9 +123,9 @@ public sealed class LedgerReportTests
                 Admission = new AdmissionFact(
                     false,
                     3600,
-                    Holders: ["'/home/alice/repo' on local (leg 'x', build, box pid 7, run r, since 2026-09-30 16:29:42Z)"],
+                    Holders: ["'/home/alice/repo' on local (leg 'x', build, pid 7, run r, since 2026-09-30 16:29:42Z)"],
                     Record: "/home/alice/.local/share/dssharness/admission-x.json",
-                    Room: "40 GiB free on '/home/alice', and this leg needs ~8 GiB, as its buildSpaceGiB, 8, declares"),
+                    Room: "this leg needs ~8 GiB, as its buildSpaceGiB, 8, declares; 40 GiB free on '/home/alice'"),
             },
             Entry("unread", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty) with
             {
@@ -140,10 +140,10 @@ public sealed class LedgerReportTests
 
         Assert.False(refused.GetProperty("admitted").GetBoolean());
         Assert.Equal(
-            "'~/repo' on local (leg 'x', build, box pid 7, run r, since 2026-09-30 16:29:42Z)",
+            "'~/repo' on local (leg 'x', build, pid 7, run r, since 2026-09-30 16:29:42Z)",
             Assert.Single(refused.GetProperty("holders").EnumerateArray()).GetString());
         Assert.Equal("~/.local/share/dssharness/admission-x.json", refused.GetProperty("record").GetString());
-        Assert.Equal("40 GiB free on '~', and this leg needs ~8 GiB, as its buildSpaceGiB, 8, declares", refused.GetProperty("room").GetString());
+        Assert.Equal("this leg needs ~8 GiB, as its buildSpaceGiB, 8, declares; 40 GiB free on '~'", refused.GetProperty("room").GetString());
         Assert.Equal("the gauge gave no reading", legs[1].GetProperty("admission").GetProperty("unmeasured").GetString());
 
         var rows = report.Render();

@@ -5,6 +5,8 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
+using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
 using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
@@ -103,6 +105,10 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
     public Func<ProcessResult> DefaultWslDistribution { get; set; }
         = () => throw new InvalidOperationException("WSL was not expected to be asked for its default distribution.");
 
+    /// <summary>What asking WSL which distributions run answers; by default, WSL is not expected to be asked.</summary>
+    public Func<ProcessResult> RunningWslDistributions { get; set; }
+        = () => throw new InvalidOperationException("WSL was not expected to be asked which distributions run.");
+
     /// <summary>Every command run, in order.</summary>
     public IReadOnlyList<(HostConnection Connection, HostCommand Command)> Calls
     {
@@ -170,7 +176,9 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
     /// <summary>Writes the agent's start marker on both streams, where the command carries a request with a nonce.</summary>
     private static void Mark(HostCommand command, string glued = "")
     {
-        if (string.IsNullOrEmpty(command.StandardInput))
+        var input = command.StandardInput.Read();
+
+        if (string.IsNullOrEmpty(input))
         {
             return;
         }
@@ -179,7 +187,7 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
 
         try
         {
-            request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions);
+            request = JsonSerializer.Deserialize<HostAgentRequest>(input, HostAgentProtocol.JsonOptions);
         }
         catch (JsonException)
         {
@@ -210,6 +218,9 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
 
     public Task<ProcessResult> ProbeDefaultWslDistributionAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
         => Task.FromResult(DefaultWslDistribution());
+
+    public Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        => Task.FromResult(RunningWslDistributions());
 
     public Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
@@ -420,7 +431,7 @@ internal static class HostResults
     /// </remarks>
     public static ProcessResult Finished(HostCommand command, int exitCode, string error = "")
     {
-        var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions)
+        var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)
             ?? throw new InvalidOperationException("The host was sent no request.");
 
         var nonce = request.Nonce ?? throw new InvalidOperationException("The request carries no nonce.");
@@ -450,7 +461,8 @@ internal static class HostDoubles
         {
             PlatformId.Windows => PlatformNames.Windows,
             PlatformId.Linux => PlatformNames.Linux,
-            _ => throw new ArgumentOutOfRangeException(nameof(current), current, "Only Windows and Linux stand-ins are needed."),
+            PlatformId.MacOs => PlatformNames.MacOs,
+            _ => throw new ArgumentOutOfRangeException(nameof(current), current, "Only Windows, Linux and macOS stand-ins are needed."),
         });
         platform.Processor.Returns(processor);
         platform.PathComparison.Returns(current == PlatformId.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
@@ -482,6 +494,42 @@ internal static class HostDoubles
 
     /// <summary>A leg that needs <paramref name="os"/> on <paramref name="processor"/>, built in the "debug" configuration.</summary>
     public static LegConfig Leg(string os, string processor) => new() { Os = os, Processor = processor, Config = "debug" };
+}
+
+/// <summary>
+/// The trees of the repository each machine holds, as a test says them: the main checkout - here, or a host's copy of it
+/// where the configuration says the host keeps one - and whatever <see cref="Beside"/> adds on each.
+/// </summary>
+internal sealed class KnownTrees : IRepositoryTrees
+{
+    /// <summary>The trees each machine holds beside the main checkout's, where a test says any: none, where it says nothing.</summary>
+    public Func<HostId, IReadOnlyList<RepositoryTree>> Beside { get; init; } = _ => [];
+
+    /// <summary>Why the trees beside the main checkout's could not be listed, where a test says so.</summary>
+    public string? Unlisted { get; init; }
+
+    public Task<RepositoryTreesFound> HereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken = default)
+        => Task.FromResult(HostCopies.KeptAs(here) is { } kept ? Copies(context, kept, HostId.Local) : Found(context.Layout.MainCheckoutRoot, HostId.Local));
+
+    public RepositoryTreesFound On(HarnessContext context, HostId host) => Copies(context, host, host);
+
+    /// <summary>
+    /// The copies <paramref name="keeper"/> keeps, with the trees the test puts beside them on <paramref name="host"/>: none
+    /// where it declares nowhere to keep one, said as the listing says it.
+    /// </summary>
+    private RepositoryTreesFound Copies(HarnessContext context, HostId keeper, HostId host)
+    {
+        try
+        {
+            return Found(HostCopies.RepositoryPathOf(context.Config, keeper), host);
+        }
+        catch (HarnessException ex)
+        {
+            return new([], ex.Message.TrimEnd('.'));
+        }
+    }
+
+    private RepositoryTreesFound Found(string main, HostId host) => new([new RepositoryTree(main, RepositoryTree.MainCheckout), .. Beside(host)], Unlisted);
 }
 
 /// <summary>Records what this tool was asked to start detached, and starts nothing.</summary>

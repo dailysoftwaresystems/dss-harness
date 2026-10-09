@@ -14,8 +14,8 @@ If a behaviour cannot be expressed in `config.json`, that is a defect.
 
 Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
-`list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `fold-agent`,
-`delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
+`fold-agent`, `delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `sync`, `build`, `test`, `run`, `check-mutations`, `clean` and `help`.
@@ -75,6 +75,13 @@ Windows alone.
 A missing working directory is reported as exactly that. Linux and macOS report it
 with the same error number as a missing executable, which would otherwise surface as
 "git is not installed".
+
+A caller's handler for the lines a child writes is handed no more once it fails, and the
+stream is still read to its end, what the handler raised being raised once the child has
+gone. Left to stop reading, a child writing more than a pipe holds blocks on it, and a
+host's agent - whose input is held open, so that it can tell the machine that asked has
+gone - never ends: a file read back from a host whose content was refused part way left
+its command waiting until something stopped it.
 
 A program named without a path is looked up in the `PATH` directories and nowhere else -
 the `PATH` the child is given, which ends with the directories the survey found a leg's
@@ -543,8 +550,8 @@ An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orc
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
 orchestrator under the root is shared with plain worktrees' names, so create-worktree refuses an orchestrator's
 name and create-orchestrator a worktree's, and delete-worktree never deletes a directory holding worktrees below
-it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own counts
-- but for a mutation worker kept beside an agent's worktree, a copy of it, which goes with its agent -
+it, forced or not: below the directory named for an orchestrator, every directory with a `.git` of its own
+counts - but for a mutation worker kept beside an agent's worktree, a copy of it, which goes with its agent -
 and below any other directory with none of its own only what git records - a husk's submodules are its own contents,
 which `--force` deletes with it. Where git cannot list its worktrees, nothing is deleted. delete-orchestrator removes
 every record last - each agent's after the rest of that agent, the orchestrator's after its agents - so a removal that
@@ -561,9 +568,54 @@ where the platform has one, its execute bit, and each deletion made there too an
 then what the agent shares with the main tree, path by path. An untracked directory git will not look into - a
 repository of its own - is named and not handed, since a fold never moves one. A symbolic link is refused rather than
 handed over as the file it leads to, before the worktree is made, so the refusal leaves nothing behind. seed-agent
-counts as the agent's own only a change of what it shares that it made itself; refresh-agent hands over the main
-tree's later changes under the paths it is given the same way, refused, copying nothing, where the agent changed or
-deleted one of them.
+counts as the agent's own only a change of what it shares that it made itself. What the main tree holds later is
+weighed against what the agent shares (`AgentFold.MovedAsync`), never against git status alone, which forgets a path
+the main tree commits or puts back as its HEAD holds it: a path the agent was handed or folded is stale once the main
+tree's copy is not the one its seed records, and any other once the main tree's copy - committed since or not - is not
+what the agent's base holds, asked of git as a fold asks it. refresh-agent hands over every such path under the paths
+it is given, refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
+comparison asked of the agent's worktree), and seed-agent hands them besides the main tree's uncommitted state. A
+symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
+commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,
+one `cat-file --batch-check` process, and the commit's listing for what that does not answer as a file or a directory:
+git 2.43 answers a submodule's entry naming a commit the repository lacks as missing, as it does a path the commit does
+not hold) - and a directory is a repository of its own only where it holds its own `.git`,
+or the index holds a submodule's entry there: named, never handed. Any other directory holds no file at its path, its
+files weighed on paths of their own, so a file the main tree turned into a directory is handed as the file's deletion
+and the directory's files, and a directory it turned into a file as the files' deletions and the file - every deletion
+made first, with the directories it empties, then every file copied. What the agent holds of its own where a hand-over
+needs room refuses it, forced or not, before anything is written (`AgentFold.InTheWayOfHanding`): a file or a link at
+a part of a handed file's path, which a copy would stop at or write through, out of its worktree, and anything in a
+directory where a handed file goes that the hand-over does not delete. Neither hands anything while a move of the
+agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base is not the main
+tree's HEAD, seed-agent --empty too. A path named otherwise than in UTF-8, committed or not, refuses any hand-over,
+named as git's quoting writes it: no file opens here by such a name.
+
+rebase-agent moves an agent's base to the main tree's HEAD (`AgentFold.MeasureRebaseAsync`). Each path the two commits
+hold differently (`git diff --name-only`, commit to commit) is shared - kept as its seed records it, since the seed,
+not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
+base holds it, and comes in as git holds it (`git checkout --no-overlay <commit>`, the paths on standard input and read
+literally), or changed by the agent - asked of git against both commits, with anything where the old base holds
+nothing its own, untracked, ignored or staged, and one holding the new base's bytes included - which refuses the move
+unless `--settled` names it. What each commit holds at a path is told apart (`HeldAtAsync`): a directory the old base
+held, now a file or a submodule's entry, is held as the old base holds it while the agent's worktree holds a directory
+or nothing there, and a submodule's entry as git compares it, so neither is taken for something the agent made.
+Nothing of the agent's is written over or hidden: git removes a file or a link where a path it writes needs a
+directory, removes a directory, with all it holds, where it writes a file, and hides all a directory holds where it
+writes a submodule's entry the old base did not hold - a submodule's own checkout it leaves alone - so each refuses the
+move unless it is the old base's own, coming in with the rest - the agent's own, settled or shared, each named with
+what to do. A file or a submodule's entry where the old base held a directory is written last
+(`RebasePlan.WrittenLast`), once what was below it is: written first, git removes that, with the directories it leaves
+empty, where asked for both at once it finds that gone and stops, and a submodule's entry written first leaves it in
+place, hidden from git. The record names where the move goes (`Moving`) before anything is written, then the new
+base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
+name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
+again - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
+base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, saying
+so. Only a move its record names is ever finished, and only from its base or where it goes: a HEAD anywhere else was
+moved by hand - back, forward or beside its base, a move under way or not - or names no commit, and each command
+refuses it, saying how to put it back; one past its base that the main tree's history does not hold is a commit made
+inside the agent. Where git cannot say which a HEAD is, each fails, exit 20, saying so, never guessing.
 
 An agent's contribution is a measurement (`AgentFold`): its worktree's status, and every path it shares with the
 main tree whether its status lists it or not, less the shared paths left as they were. Each path goes in exactly one
@@ -576,9 +628,13 @@ out with other line endings is no change, and with its mode, so a sibling's chan
 what it wrote, removed and found already in as shared, so a later fold - after a review sends the agent back - weighs
 those paths against what the fold left, never against the base: the agent putting a path back as it was is its change
 to fold. A refusal of a changed main-tree path says whether a commit or an uncommitted edit changed it, since the two
-are reconciled differently. A deletion needs the same baseline proof a copy does. A path reached through a link in
-either tree, a directory - a submodule, a repository of the agent's own - and a HEAD moved past the base are
-refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
+are reconciled differently. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
+holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
+files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with
+the directories it empties, then every file written. A path reached through a link in either tree, a repository of
+its own - a submodule, or the agent's own - what the main tree holds in the way of the agent's files (a file where one
+needs a directory, or files the agent did not delete in a directory one replaces), a HEAD off the base and a move of
+the base stopped part way are refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
 against the registry the fold would otherwise have written over. `--settled` is the one way out of a path's refusal, asked before the deletion branch so a
 deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. A path the main
 tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
@@ -722,13 +778,17 @@ Every change holds a machine-wide named mutex, keyed by the two registry paths, 
 of its read, decide and write. .NET supports named mutexes on Windows, Linux and macOS alike,
 and named semaphores on Windows only. A mutex must be released by the thread that took it, so
 the locked work is synchronous by construction. A change that cannot take the lock within 10
-seconds writes nothing and exits 13. A read takes the lock too, for as long as reading the two
-files takes, and one that cannot take it in time reads nothing and exits 13 as well. A lock that
-belongs to another user refuses the same way (exit 13), and one the system will not open stops
-the command (exit 15). One file needs no lock, since every write replaces a whole file in one
-rename. Two do: a move never leaves its row in neither file, but a read of the destination before
-the move's first write and of the source after its second finds it in neither, which reads as an
-anchor closed or lost, and a read the other way round finds it in both, a duplicate.
+seconds writes nothing and exits 13. Those seconds, like every wait for a machine-wide lock's,
+are kept by a clock that never steps: Linux ends a wait for a named mutex at a deadline on the
+wall clock, which a WSL clock stepping forward by 24.8 seconds passes at once, so a wait half a
+second old ended as though the whole window had passed. A read takes the lock too, for as long
+as reading the two files takes, and one that cannot take it in time reads nothing and exits 13
+as well. A lock that belongs to another user refuses the same way (exit 13), and one the system
+will not open stops the command (exit 15). One file needs no lock, since every write replaces a
+whole file in one rename. Two do: a move never leaves its row in neither file, but a read of the
+destination before the move's first write and of the source after its second finds it in
+neither, which reads as an anchor closed or lost, and a read the other way round finds it in
+both, a duplicate.
 
 ### The balance
 
@@ -1013,7 +1073,8 @@ different package under the same name. Only stable versions are published there:
 released on GitHub alone, so a machine running one cannot bring a host to its build, and
 is told so. The machine that reaches it asks it questions
 through a hidden `host-agent` command, with the request as one line of JSON on standard
-input, which it holds open until the host has finished: which build
+input - written as it is encoded, so a request carrying files is never held whole as text on
+the machine that sends it - which it holds open until the host has finished: which build
 it is, what the host is, and whether each emulator works there; or to run one of its own
 commands in the host's copy of the repository, which is what `host-exec` does.
 
@@ -1221,7 +1282,7 @@ from the report.
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran; or a unit of a sweep - a worker, an arm - waited so, and each arm the sweep had left once its machine refused one | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up. A mutation arm whose site could not be put back as it was, or whose driving ended in a failure nobody named | **yes** |
-| `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a mutation arm was not driven to a verdict: its sweep stopped, or ended by a refusal of the run, while it was driven or before; its own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test binary not passing | no: incomplete |
+| `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a filesystem a heavy leg's build fills had less free than its machine's `minFreeGiB`; or a mutation arm was not driven to a verdict: its sweep stopped, or ended by a refusal of the run, while it was driven or before; its own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test binary not passing | no: incomplete |
 | `violated` | A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than the tree spells it or is no file the sweep's reading of the tree holds; its before-text is not in its site exactly once, or is replaced by itself; its target or its runner is not built, or no object they build depends on a site; its mutation reddened other cases than its C rows, ran another number of cases, left a G row's case unrun or left out its diagnostic; a mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired control did not | **yes** |
 | `survived` | A mutation arm's mutation built and ran, and no case reddened | **yes** |
 | `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, one that is no JUnit report, a failing exit whose report names no failing case, or a run stopped for passing its bound, or as hung for printing nothing for `defaults.stallSeconds` | **yes** |
@@ -1407,8 +1468,17 @@ A leg holds its slot until its work ends - a runner's steps after its build, and
 run there, included - and keeps its lock while it waits, so another run of its variant is
 `refused-locked` meanwhile, as it would be while the leg ran. A waiting leg counts against its
 command's `maxParallelLegs` and `maxParallelLegsTotal` as a running one does, and each leg waits up to
-`maxWaitMinutes` of its own. A slot is held by the process that
-asked for it, never by a timeout: given back when the work ends, and, where that process ended
+`maxWaitMinutes` of its own - not counting a wait with only legs of its own run ahead of it, holding
+slots or in line first, which is certain to end, which its line says is its own, and which a refusal
+for a wait after it names as not counted. Another command's leg in line ahead makes the wait count,
+whoever holds the slots: that leg takes the next slot given back, for as long as its own command keeps
+it. Measured: a command's WSL leg, asked for at once with its two Windows legs by the process that
+dispatched them all, waited out its hour behind them and was `not-admitted`. A host serving a leg for
+another machine records the leg's slot under that machine's run, which the run request carries beside
+the command (`HostAgentRequest.RunId`, protocol 7), so the legs one command sends there wait for each
+other the same way; a request naming its run by what is no run id, or naming a blank drive where WSL
+keeps the disk, is refused, and nothing it asks for runs. A slot is held by the process that asked
+for it, never by a timeout: given back when the work ends, and, where that process ended
 first - a command that crashed or was killed holding a slot - reclaimed by the next leg that looks,
 and said to be. Every entry of the record is this machine's, whatever name it carries, so an entry
 is told by its process alone, where the run lock keeps one naming another machine until
@@ -1444,10 +1514,32 @@ it start, claimed against every filesystem of the machine, since nothing says wh
 its line says why; one read before and not now decides nothing, as a memory reading lost does not. A
 WSL distribution's leg claims this machine's drive where WSL keeps its disk, where that drive was
 measured as it was placed; the room inside the distribution's own disk was counted as it was placed.
-An ssh host places and admits its own legs, a worktree's copy measured against the main checkout's
-copy there. Kept in a record of their own, `admission-<machine id>.room.json`, beside the slots': a
-build from before it, finding a member it does not know in the slots' record, would refuse that
-record.
+An ssh host places and admits its own legs, a worktree's copy measured against every other copy there,
+the main checkout's and each worktree's beside it. Kept in a record of their own,
+`admission-<machine id>.room.json`, beside the slots': a build from before it, finding a member it
+does not know in the slots' record, would refuse that record.
+
+**A build is held to a floor.** While a heavy leg builds, each filesystem its build fills is read
+again every 15 seconds, and the build is stopped once one has less free than its machine's
+`minFreeGiB` (2 where the section says nothing, from 0 to 1024; 0 stops none): `stopped`, exit 21,
+naming what was free and where, and what it built left for `clean`, as any build stopped part way
+leaves it. A build that fails between two readings - a disk filled faster than the next came - is
+read again as it fails, and is `stopped`, not `failed`, where a filesystem it fills is under the
+floor then: a full disk says nothing of its code. So is a build whose own write fails then - a
+phase's log, its record - which would otherwise end every leg of its run. The floor is read before
+the build writes anything: one under it as it starts is stopped writing nothing, not its record,
+which would say its directory was built from a tree no phase of it read; and a record of what it
+built that it has no room left for is said, the one it wrote as it began standing. The room a leg
+claims is only what is said of its build, and a consumer's leg whose need nothing said filled a 47
+GiB disk to 79 MiB, under two other legs, before it died; the floor holds every build of a heavy
+leg - a sweep's workers' too - its need said or not, and only where its machine declares admission.
+A WSL distribution's leg holds the drive its disk grows on as well, which the distribution's own room
+does not show: the machine that sends the leg names that drive beside its command, as it measured
+it, and the distribution reaches it through its mount there (`/mnt/c`, as `/proc/mounts` lists it -
+by the drive, or by the `path=` its options name, where an older WSL lists what it mounts as
+`drvfs`); where it names none, or the drive is mounted nowhere, the build says only the
+distribution's own room is held. A room that cannot be read stops nothing, and is said once, as a
+leg is admitted without a room it could not read.
 
 **The machine is the physical one.** A WSL distribution runs on this machine, so this machine's
 command takes its heavy legs - by `hosts.local`'s rule, against this machine's slots and memory -
@@ -1470,9 +1562,33 @@ its build's need is known - and its line says so, as a leg placed where its room
 is; one that stops giving a reading it gave is read again, never taken on the reading it last gave. A leg is let start only at a reading its own line
 shows below the limit.
 
+**WSL's page cache is given back before a leg waits on it.** WSL's virtual machine keeps what every
+distribution's builds read and wrote as page cache, and gives it back only once it has idled for
+minutes, which a machine running legs there never does; this machine's commit counts all of it. A
+consumer's machine stood above its limit with no leg running, its virtual machine holding about 13
+GiB of clean cache, and every heavy leg there waited its hour out. So on Windows a leg about to wait
+on the memory has that cache dropped first - `sync; echo 1 > /proc/sys/vm/drop_caches`, as WSL's own
+root, which asks no password, in the first running distribution a WSL host of its repository reaches
+(every distribution runs in the one virtual machine) - at most once a minute, whichever leg of the
+process asks, and reads the memory again once what was dropped has come back - a minute later at
+the most, in place of its poll, and sooner where its wait ends or its next line is due first:
+measured, a drop of 21.8 GiB of the 23.1 GiB cached took 3 seconds, and the commit fell from 93.8 GiB
+to 73.9 GiB in two waves, the last done 49 seconds after. Its line says how much was dropped and the
+memory before and after, and the leg goes on from that reading as from any other: below the limit,
+it still settles where another leg holds a slot, and waits for room its build's need does not find.
+A WSL leg sent from a machine that declares admission drops it as the leg ends, its line saying so,
+without waiting: what comes back is the next wait's to read, and no command waits a minute for it.
+Where WSL lists none of the distributions its hosts reach running then, though the leg had just run
+in one, its line says nothing was dropped. A distribution that is not running is never started for
+it, a drop that could not be made is said once in a wait - a WSL host whose item cannot be read,
+where no other host reaches a distribution, and a list of the distributions running that cannot be
+read, among the reasons - and one with nothing to drop says nothing. That list is read in UTF-16
+too, which an older wsl.exe writes whatever `WSL_UTF8` says: read as UTF-8, each character of a
+name came with a NUL, and the list was taken for one naming none.
+
 Unlike a held lock, which refuses at once, admission waits - because the slots and room it waits for
 come free as the legs ahead finish - but never silently and never for ever: while it waits the leg
-says who holds each slot (tree, variant, host, leg, command, machine, process, run, and since when it
+says who holds each slot (tree, variant, host, leg, command, process, run, and since when it
 asked) and, once it holds one, what the memory stands at, or the room free and who claims it; the
 wait is measured on the monotonic clock. A leg that waited `maxWaitMinutes` (60, above 0) is
 `not-admitted`, exit 7, naming what held the slots and the record they are kept in, the memory it
@@ -1589,6 +1705,17 @@ undone before word of it is looked at, and one of the same size undone in place 
 tool that also puts the old time back. The times are compared for equality alone, never
 ordered.
 
+The watch goes only as deep as the inputs: each directory holding one - the root among
+them - is watched for its own files only. A directory tracked for a placeholder, as init
+keeps the worktrees root and `.orchestrators`, costs one shallow watch, and other trees
+building below it are never heard. Measured: watched all the way down, an agent's build
+below the worktrees root overflowed the operating system's buffer, and a run in the main
+tree that only read its own inputs ended `unmeasured`. Past 64 watches, the top-level
+directories holding the most directories of inputs are watched all the way down instead,
+until the rest fit, and a tree whose inputs lie in more than 64 top-level directories -
+the root counted among them where it holds one itself - is watched whole, other trees'
+builds below the worktrees root heard with the rest.
+
 A leg on another machine tests that machine's copy, which holds still under it; what can
 move is the tree here, before the copy is made of it. So a run reads each tree its hosts'
 copies are made of once, as it begins and before any leg's work, and every copy is made from
@@ -1666,7 +1793,17 @@ while a gate ran turned a green suite red, with four test processes live at once
   `defaults.processSampleSeconds` between. A `contention.buildTools` process outside the
   harness's own process tree whose command line names the leg's build directory makes the
   verdict `contended`. A `contention.sharedResourceTools` process, one that shares a cache
-  rather than a build directory, is reported as a warning.
+  rather than a build directory, is reported as a warning, one line per tool and per whose it
+  was: a process whose command line names another leg's build directory is that leg's, and one
+  naming a build directory of another tree of the repository on the same machine - a
+  worktree's, an agent's, the main checkout's, each listed as the leg's work begins there, its
+  directories reckoned by this tree's configuration - is that tree's leg's ("worktree o1/xa's
+  leg 'linux-debug'"). A consumer's agents, each testing its own worktree on the same machines,
+  were warned of one another's test processes as nobody's - 1510 beside one leg - on every run,
+  until nobody read the warning. Only what no tree there accounts for is nobody's known, and
+  where the other trees could not be listed its line says it may be one of theirs, and why. A
+  build tool is a contender only where it names this leg's own build directory, which no other
+  tree's directory is or holds, so another tree's build never makes a leg `contended`.
 - Every sample is kept, and the report says when each process was seen: throughout, at
   the start, or at the end. A process table that could not be read is reported as
   unknown, never as nothing found.
@@ -1886,6 +2023,12 @@ test or sync of the leg (see *Mutation testing*).
 
 - A held lock **refuses immediately**. It never waits: silently blocking for
   hours is worse than a refusal that names the holder.
+- A holder is named by its process, run and start - `pid 12, run R, since T` - never by its
+  machine's name, which only its record keeps, to tell a holder here from one elsewhere: a host's
+  lines reach the machine that sent it work, and wherever that machine's output goes, and a
+  consumer's display had to mask a host's name in every one. One recorded on another machine is
+  said to be - `pid 12 on another machine, ...` - unnamed; a heavy-leg slot, every one of which is
+  its machine's own whatever name it carries, never is.
 - Staleness is decided by **liveness, never by a timeout**. A timeout is a guess
   about how long honest work takes, and it eventually breaks an honest run.
 - A dead holder on this host is reclaimed automatically, and the reclaim is
@@ -2004,13 +2147,23 @@ heavy leg also claims its room as it is let start, held against every other comm
 
 - **What a build needs** is what its build directory comes to once built: the leg's
   `buildSpaceGiB`, or, left out, what a build of its variant recorded as it finished - in the
-  tree's own copy on that host, or else in the main checkout's copy there - less what the
-  directory already holds. A build records what its directory came to in its `.harness-build`,
-  summed from the walk it already makes of the directory as it finishes.
+  tree's own copy on that host, or else the most any other copy of the repository there recorded,
+  naming whose - less what the directory already holds. A build records what its directory came
+  to in its `.harness-build`, summed from the walk it already makes of the directory as it
+  finishes. The other copies are the main checkout's and every worktree's, an agent's or a plain
+  one: a consumer's leg, placed where neither its own tree's copy nor the main checkout's had built
+  its variant, filled a 47 GiB disk under two other legs while three worktrees' copies beside them
+  had each recorded about 11.4 GiB. The most of them, since one variant comes to about as much in
+  every tree, and a need said over keeps a leg out until there is room where one said under fills
+  the disk. On this machine they are the main checkout and every worktree git records; on a host
+  this machine sends legs to, its main copy and each worktree's copy this machine's record of host
+  copies holds there; and a host running a leg it was sent, which places it again, finds the
+  worktrees' copies beside its main copy itself. Trees that could not be listed are said, with why,
+  and the main checkout's copy still counts.
 - **Nothing is walked to decide.** Each host is asked, in the same measuring that finds its
   programs, the room on the filesystem its copies are kept on and, for each leg the command
-  builds, what that leg's build directory - and the main checkout's copy of the same variant -
-  holds as recorded, with the room where each is. The room is the filesystem's own count.
+  builds, what that leg's build directory - and every other copy's of the same variant - holds as
+  recorded, with the room where each is. The room is the filesystem's own count.
 - **Legs sharing a filesystem add up.** Legs building on one filesystem of one host are counted
   together, in the order they were selected, because every build directory stays once built. A
   leg that does not fit beside the ones before it is `skipped-unavailable`, naming what is free,
@@ -2189,6 +2342,21 @@ directory here cannot drift apart.
 - **The result is verified, not assumed.** After the transfer the copy's manifest is read back and
   compared with the reading of the tree the sync was made from. A tree that still differs fails,
   names what differs, and says nothing should be run against it.
+- **What crosses is never held as text.** Files cross to a host in batches of up to 8 MiB or 512
+  files, a request each, written onto the host's standard input as it is encoded: each file's path,
+  then its bytes as base64, a piece at a time. A file read back - what `--pull` brings, and what
+  carrying an artefact reads to prove it landed - follows its answer a piece to a line and is
+  decoded as it arrives. Each value an operation takes is an argument of its own after `--`, so a
+  path starting with `@` or `-` is that path on the host, never a file of arguments or an option: a
+  file named `@notes` had its deletion read the file `notes` beside the copy and delete whatever
+  path that named. A consumer's first sync of a worktree of 85 MiB built each batch as text inside
+  text, and the serializer's buffers for it - six times a batch's length, rented to escape it - were
+  kept by the shared pool for the life of the process: the machine that carried it held 3.2 GiB,
+  flat, while the leg ran for minutes after. Carried now, the same tree leaves it about 40 MiB, and
+  reading back a 64 MiB file 90 MiB where it left 2 GiB. A file crosses to a host whole, inside one
+  request, so the largest that can is one whose base64 text, with the rest of the request around it,
+  a host reads as one line, and one string holds: 804,519,909 bytes; one read back is held to the
+  same. A larger one is refused by name before anything is sent.
 - **Staging is the two commands, not a flag.** `sync` transfers and stops — that is all it ever
   does — and `build`, `test`, `run` and `check-mutations` take `--use-staged` to act on what is already there without
   syncing again. A `--stage-only` on `sync` would name a mode `sync` is always in.
@@ -2551,8 +2719,9 @@ make. A claim whose sweep died is released and said; the copy it held is synced 
 worker is before it drives an arm.
 
 A worker needs its copy of the tree and what a build of the variant comes to - the leg's
-`buildSpaceGiB` where it declares one, else what the leg's own build directory, or the main
-checkout's copy of it, last recorded - less what it already holds. The
+`buildSpaceGiB` where it declares one, else what the leg's own build directory last recorded, else
+the most any other tree of the repository on its machine recorded of it - less what it already
+holds. The
 sweep runs the workers that fit the room, in order, saying it runs fewer; where not even the first
 does, the leg is `skipped-unavailable`, as a leg whose build does not fit is. A worker's build is
 kept within this machine's path limit as a worktree's is - the worker, its build directory, and
@@ -2703,7 +2872,7 @@ names each selected arm that did not pass, and why; `--json` carries every arm b
 A leg on a host is swept there, by the DssHarness there, on its own copy - with its own workers,
 its own admission and the arms `--arms` named - and its arms travel back beneath its line, their
 records staying on that host and its home written as `~`, as a leg's are (see "A host's home is
-`~`"); the answer changed shape, so the host-agent protocol is 6.
+`~`"); the answer changed shape, which raised the host-agent protocol to 6.
 
 ### Self-test
 
@@ -2829,7 +2998,7 @@ with "the harness could not run", because the remedies differ.
 | 14 | A required tool is missing, or could not be started |
 | 15 | A host could not be reached, DssHarness could not run there, or a command run there never reported how it finished |
 | 20 | The wrapped command ran and failed |
-| 21 | Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold or a hand-over stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
+| 21 | Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold, a hand-over or a move of an agent's base stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it |
 | 70 | The harness itself failed unexpectedly (a defect in the tool) |
 | 130 | The run was interrupted before it finished; what it had already done is still reported |
 

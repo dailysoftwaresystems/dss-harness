@@ -4,6 +4,7 @@ using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Build;
 
@@ -41,6 +42,18 @@ public sealed record BuildRequest(
     /// cache would otherwise go on holding. Removed, each is the project's own default again.
     /// </summary>
     public IReadOnlyList<string> UnsetFirst { get; init; } = [];
+
+    /// <summary>
+    /// The least room the build leaves free on each filesystem it fills, below which it is stopped: where the leg is heavy
+    /// and its machine declares admission; <see langword="null"/> where it is not, and nothing stops the build for room.
+    /// </summary>
+    public RoomFloor? Floor { get; init; }
+
+    /// <summary>
+    /// The repository's other trees on the machine that builds, the leg's own left out, as they were listed as its work
+    /// began there: whose build directory a process found beside the build works in is told by them.
+    /// </summary>
+    public RepositoryTreesFound? Beside { get; init; }
 }
 
 /// <summary>What one leg's build did.</summary>
@@ -109,7 +122,8 @@ public sealed class BuildService(
     Git.IGitClient gitClient,
     IFileSystem fileSystem,
     IHarnessOutput output,
-    TimeProvider? wallClock = null) : IBuildService
+    TimeProvider? wallClock = null,
+    Func<TimeSpan, CancellationToken, Task>? floorWait = null) : IBuildService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "build";
@@ -128,6 +142,9 @@ public sealed class BuildService(
     private readonly TimeProvider _wallClock = wallClock ?? TimeProvider.System;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
+
+    /// <summary>Waits between readings of the room a heavy leg's build leaves: the real time, unless a test needs its own.</summary>
+    private readonly Func<TimeSpan, CancellationToken, Task> _floorWait = floorWait ?? Task.Delay;
 
     /// <inheritdoc/>
     public async Task<BuildResult> BuildAsync(
@@ -216,7 +233,8 @@ public sealed class BuildService(
                         request.Leg,
                         buildDirectory,
                         request.TreeRoot,
-                        request.PlatformKey),
+                        request.PlatformKey,
+                        request.Beside),
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -231,6 +249,7 @@ public sealed class BuildService(
         // What the directory came to when a build last ran all its phases, read before this build's record
         // replaces it: a build that stops part way leaves only part of what the next build from clean needs.
         var ranThrough = false;
+        var recordWritten = false;
         var cameTo = BuildRecord.BytesIn(_fileSystem, buildDirectory);
 
         // When this build began touching the directory, so that what it wrote there can be told from what
@@ -239,28 +258,73 @@ public sealed class BuildService(
         // those, which this build did not produce and raising a reserve would not affect.
         var began = _wallClock.GetUtcNow().UtcDateTime;
 
-        Record(buildDirectory, recorded);
+        // While a heavy leg builds, each filesystem its build fills is held to the room its machine keeps free - read as it
+        // starts, before anything is written, and again every RoomFloorWatch.Every - and the build is stopped once one has
+        // less: a consumer's build, placed where nothing said what it needed, filled a disk to 79 MiB under two other legs.
+        // Stopped, it says nothing about the code, and what it built is left as any build stopped part way leaves it, for
+        // clean.
+        await using var floor = request.Floor is { } least
+            ? RoomFloorWatch.Start(
+                _fileSystem,
+                least,
+                buildDirectory,
+                _floorWait,
+                message => _output.Warn(CommandName, $"{request.Leg}: {message}"),
+                cancellationToken)
+            : null;
+        using var building = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, floor?.Stopping ?? CancellationToken.None);
+        CompilerQuestion? asked = null;
 
-        // Asked of every configure, so the compilers a verdict names are the ones this build's
-        // configure resolved, never the ones an earlier one did. Asked once the record is written, so
-        // the record is the first thing a build puts in its directory: a build stopped before writing it
-        // leaves nothing else behind to be read as a build nobody recorded.
-        var asked = adapter is CMakeAdapter ? _toolchainReader.Ask(buildDirectory) : null;
+        // Written only with room for it: a build under its floor as it starts writes nothing - not its record, which would
+        // say its directory was built from a tree no phase of it read - and is stopped before its first phase.
+        if (floor?.Why is null)
+        {
+            try
+            {
+                Record(buildDirectory, recorded);
+                recordWritten = true;
+
+                // Asked of every configure, so the compilers a verdict names are the ones this build's
+                // configure resolved, never the ones an earlier one did. Asked once the record is written, so
+                // the record is the first thing a build puts in its directory: a build stopped before writing it
+                // leaves nothing else behind to be read as a build nobody recorded.
+                asked = adapter is CMakeAdapter ? _toolchainReader.Ask(buildDirectory) : null;
+            }
+            catch (IOException) when (floor?.Now() is not null)
+            {
+                // Filled since the room was read: the floor has stopped the build, and its first turn below ends it.
+            }
+        }
 
         foreach (var phase in adapter.Phases(config, request, buildDirectory, overlay, environment))
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            PhaseResult result;
 
-            var result = await _phaseRunner
-                .RunAsync(
-                    phase with
-                    {
-                        TimingPatterns = request.Time ? config.BuildTimingRegex : [],
-                        ClockStepToleranceMilliseconds = config.Defaults.ClockStepToleranceMilliseconds,
-                        StallSeconds = config.Defaults.StallSeconds,
-                    },
-                    cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                building.Token.ThrowIfCancellationRequested();
+
+                result = await _phaseRunner
+                    .RunAsync(
+                        phase with
+                        {
+                            TimingPatterns = request.Time ? config.BuildTimingRegex : [],
+                            ClockStepToleranceMilliseconds = config.Defaults.ClockStepToleranceMilliseconds,
+                            StallSeconds = config.Defaults.StallSeconds,
+                        },
+                        building.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && floor?.Why is { } why)
+            {
+                return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, why), null).ConfigureAwait(false);
+            }
+            catch (IOException) when (floor?.Now() is { } full)
+            {
+                // What the phase wrote - its log - failing on a filesystem under its floor, filled between two readings,
+                // failed for want of room: stopped, as the next reading would have stopped it.
+                return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
+            }
 
             phases.Add(result);
 
@@ -269,7 +333,15 @@ public sealed class BuildService(
             if (recorded.Unordered is null && Stepped(phases) is { } stepped)
             {
                 recorded = recorded with { Unordered = stepped };
-                Record(buildDirectory, recorded);
+
+                try
+                {
+                    Record(buildDirectory, recorded);
+                }
+                catch (IOException) when (floor?.Now() is { } full)
+                {
+                    return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
+                }
             }
 
             if (asked is not null && string.Equals(phase.Phase, CMakeAdapter.ConfigurePhase, StringComparison.Ordinal))
@@ -288,6 +360,13 @@ public sealed class BuildService(
 
             if (!result.Passed)
             {
+                // A phase that failed while a filesystem the build fills stood under its floor - filled between two readings,
+                // or as one stopped it - failed for want of room: stopped, as the next reading would have stopped it.
+                if (floor?.Now() is { } full)
+                {
+                    return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
+                }
+
                 // A build ninja did not end itself, or ended only because it was interrupted, was stopped from outside,
                 // which says nothing about the code.
                 var stopped = adapter is CMakeAdapter
@@ -302,6 +381,12 @@ public sealed class BuildService(
         }
 
         ranThrough = true;
+
+        // Built: nothing it does from here on fills a disk.
+        if (floor is not null)
+        {
+            await floor.DisposeAsync().ConfigureAwait(false);
+        }
 
         if (request.Project.BuildOutputs.Count == 0)
         {
@@ -418,13 +503,29 @@ public sealed class BuildService(
             // With what the directory came to, which is the room its next build from clean needs, and the
             // room a first build of this variant in another copy on this machine needs: see LegRoom. Only a
             // build that ran all its phases says that; one stopped part way says no more than the larger of
-            // what it left and what the last whole build came to, and nothing where none did.
-            Record(buildDirectory, recorded with
+            // what it left and what the last whole build came to, and nothing where none did. Never where it
+            // wrote none as it began: under its floor from the start, it read no tree for a record to name.
+            if (recordWritten)
             {
-                Unordered = recorded.Unordered ?? Unordered(phases, seen, guards.Opening),
-                Newest = left.Newest,
-                Bytes = ranThrough ? left.Bytes : cameTo is { } whole && left.Bytes is { } part ? Math.Max(whole, part) : null,
-            });
+                try
+                {
+                    Record(buildDirectory, recorded with
+                    {
+                        Unordered = recorded.Unordered ?? Unordered(phases, seen, guards.Opening),
+                        Newest = left.Newest,
+                        Bytes = ranThrough ? left.Bytes : cameTo is { } whole && left.Bytes is { } part ? Math.Max(whole, part) : null,
+                    });
+                }
+                catch (IOException ex) when (floor?.Now() is not null)
+                {
+                    // A build stopped for want of room may have none left for its record: the one it wrote as it began
+                    // stands, as it does for a build stopped part way any other way.
+                    _output.Warn(
+                        CommandName,
+                        $"{request.Leg}: the record of what it built could not be written with this little room, so the one it wrote as it began "
+                        + $"stands: {ex.Message.TrimEnd('.')}");
+                }
+            }
 
             return new BuildResult(verdict, buildDirectory, phases, rebuilt, dependencies) { Compilers = compilers };
         }

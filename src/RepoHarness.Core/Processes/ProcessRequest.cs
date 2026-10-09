@@ -40,12 +40,11 @@ public sealed record ProcessRequest
     public IReadOnlyList<string> AppendToPath { get; init; } = [];
 
     /// <summary>
-    /// Text written to the child's standard input, which is then closed so the child sees its
-    /// end; <see langword="null"/> gives it an input that ends at once. A child is never
-    /// connected to this process's own input. Written as UTF-8 on every platform, the encoding
-    /// output is read with.
+    /// What is written to the child's standard input - text, or what a writer writes as it makes it - which is then closed
+    /// so the child sees its end; <see langword="null"/> gives it an input that ends at once. A child is never connected
+    /// to this process's own input.
     /// </summary>
-    public string? StandardInput { get; init; }
+    public ChildInput? StandardInput { get; init; }
 
     /// <summary>
     /// How the child's standard output is decoded, or <see langword="null"/> for UTF-8. Latin-1 turns
@@ -71,11 +70,12 @@ public sealed record ProcessRequest
 
     /// <summary>
     /// Invoked for each stdout line as it arrives, in addition to capture.
-    /// Raised on background threads, so implementations must be thread safe.
+    /// Raised on background threads, so implementations must be thread safe. One that throws is handed no more lines,
+    /// and what it threw is raised once the child has gone.
     /// </summary>
     public Action<string>? OnOutputLine { get; init; }
 
-    /// <summary>Invoked for each stderr line as it arrives, in addition to capture.</summary>
+    /// <summary>Invoked for each stderr line as it arrives, in addition to capture, as <see cref="OnOutputLine"/> is.</summary>
     public Action<string>? OnErrorLine { get; init; }
 
     /// <summary>

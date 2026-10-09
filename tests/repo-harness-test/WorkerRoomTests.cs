@@ -53,7 +53,7 @@ public sealed class WorkerRoomTests
         var plan = Plan([6 * Gibibyte, 5 * Gibibyte, 0], Room(10 * Gibibyte), null, "as its buildSpaceGiB, 4, declares");
 
         Assert.Equal(
-            WorkerPlan.Running(1, "1 of 3 workers: 10 GiB free on '/srv', and 2 need ~11 GiB, each worker's build as its buildSpaceGiB, 4, declares"),
+            WorkerPlan.Running(1, "1 of 3 workers: running 2 needs ~11 GiB, each worker's build as its buildSpaceGiB, 4, declares; 10 GiB free on '/srv'"),
             plan);
         Assert.False(plan.RunsNone);
     }
@@ -65,12 +65,12 @@ public sealed class WorkerRoomTests
         var none = Plan([12 * Gibibyte, 0], Room(10 * Gibibyte), null, "what its last build there came to");
 
         Assert.Equal(
-            WorkerPlan.None("10 GiB free on '/srv', and its first worker needs ~12 GiB, each worker's build what its last build there came to"),
+            WorkerPlan.None("its first worker needs ~12 GiB, each worker's build what its last build there came to; 10 GiB free on '/srv'"),
             none);
         Assert.True(none.RunsNone);
         Assert.Equal((0, null), (none.Count, none.Unchecked));
         Assert.Equal(
-            WorkerPlan.None("1 GiB free on '/srv', and its first worker needs ~3 GiB"),
+            WorkerPlan.None("its first worker needs ~3 GiB; 1 GiB free on '/srv'"),
             Plan([3 * Gibibyte], Room(Gibibyte), null, null));
     }
 
@@ -96,8 +96,8 @@ public sealed class WorkerRoomTests
     /// </summary>
     [Theory]
     [InlineData(3, 100, 3, "3 of 4 workers: worker 4 is past the limit", null)]
-    [InlineData(3, 10, 2, "2 of 4 workers: 10 GiB free on '/srv', and 3 need ~12 GiB, each worker's build as declared; and worker 4 is past the limit", null)]
-    [InlineData(3, 3, 0, "3 GiB free on '/srv', and its first worker needs ~4 GiB, each worker's build as declared; and worker 4 is past the limit", null)]
+    [InlineData(3, 10, 2, "2 of 4 workers: running 3 needs ~12 GiB, each worker's build as declared; 10 GiB free on '/srv'; and worker 4 is past the limit", null)]
+    [InlineData(3, 3, 0, "its first worker needs ~4 GiB, each worker's build as declared; 3 GiB free on '/srv'; and worker 4 is past the limit", null)]
     [InlineData(3, null, 3, "3 of 4 workers: worker 4 is past the limit", "the room for its workers could not be measured: the drive is gone")]
     [InlineData(0, 100, 0, "worker 1 is past the limit", null)]
     [InlineData(0, null, 0, "worker 1 is past the limit", null)]

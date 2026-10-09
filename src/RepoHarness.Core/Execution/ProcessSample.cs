@@ -36,11 +36,11 @@ public enum ProcessSeen
 /// <param name="Seen">When it was seen.</param>
 /// <param name="Tool">The configured tool name it matched, so the report says which rule it broke.</param>
 /// <param name="Owner">
-/// The other leg whose build directory its command line names, or <see langword="null"/> when no
-/// declared leg's does. A sibling leg run on the same host by a harness process of its own is
-/// outside this leg's process tree, and without this it read as a stranger's work.
+/// The other leg whose build directory its command line names - of this tree, or of another tree of the repository on the
+/// same machine - or <see langword="null"/> when no declared leg's does. A sibling leg run on the same host by a harness
+/// process of its own is outside this leg's process tree, and without this it read as a stranger's work.
 /// </param>
-public sealed record ContendingProcess(SampledProcess Process, ProcessSeen Seen, string Tool, string? Owner = null);
+public sealed record ContendingProcess(SampledProcess Process, ProcessSeen Seen, string Tool, BuildDirectoryOwner? Owner = null);
 
 /// <summary>What sampling the process table during a leg found.</summary>
 /// <param name="Samples">Every reading, kept in full.</param>
@@ -55,12 +55,17 @@ public sealed record ContendingProcess(SampledProcess Process, ProcessSeen Seen,
 /// </param>
 /// <param name="Unreadable">Samples whose process table could not be read, with the reason.</param>
 /// <param name="Limits">What sampling cannot see, stated so a clean report is not read as more than it is.</param>
+/// <param name="OthersUnlisted">
+/// Why the repository's other trees on the machine could not be listed, where they could not: a shared tool no listed
+/// build directory accounts for may be working in one of theirs (<see cref="ContentionRequest.OthersUnlisted"/>).
+/// </param>
 public sealed record ContentionReport(
     IReadOnlyList<ProcessSample> Samples,
     IReadOnlyList<ContendingProcess> Contenders,
     IReadOnlyList<ContendingProcess> SharedResourceUsers,
     IReadOnlyList<string> Unreadable,
-    IReadOnlyList<string> Limits)
+    IReadOnlyList<string> Limits,
+    string? OthersUnlisted = null)
 {
     /// <summary>Whether another process used this leg's build directory while it ran.</summary>
     public bool Contended => Contenders.Count > 0;

@@ -100,6 +100,24 @@ public sealed class MutationLegRunnerTests
     };
 
     /// <summary>
+    /// Every build a sweep makes - each worker's whole build, each arm's and each control's - is held to the leg's floor as
+    /// the leg's own build is, and one stopped under it names the leg itself as what cleans it: 'clean --legs native'
+    /// removes the leg's workers with its build, where no worker's own name is a leg clean takes.
+    /// </summary>
+    [Fact]
+    public async Task EveryBuildASweepMakes_IsHeldToTheLegsFloor_NamingTheLegItselfAsWhatCleansIt()
+    {
+        var floor = RoomFloor.Beside(LegName, 2L << 30, "/mnt/c", ", where WSL keeps its disk");
+        using var sweep = new Sweep { Floor = floor };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Equal(6, sweep.Builder.Builds.Count);
+        Assert.All(sweep.Builder.Builds, build => Assert.Same(floor, build.Floor));
+    }
+
+    /// <summary>
     /// Each arm is driven in a worker synced from the one reading of the tree: built as the arm builds - its target, and a
     /// TEST-RED arm's runner - witnessed rebuilt, and run whole or paired with its control, each judged as declared; and
     /// every site is put back as the tree held it. Each arm's line names its worker and its records, which hold its
@@ -1792,7 +1810,7 @@ public sealed class MutationLegRunnerTests
 
         var turned = await full.RunAsync([DepthType]);
 
-        var why = $"{DiskSpace.Size(10)} free on '/data', and its first worker needs ~{DiskSpace.Size(copy + (1L << 30))}, each worker's build as declared";
+        var why = $"its first worker needs ~{DiskSpace.Size(copy + (1L << 30))}, each worker's build as declared; {DiskSpace.Size(10)} free on '/data'";
 
         Assert.Equal((LegVerdict.SkippedUnavailable, $"{why}; 1 arm(s): 1 skipped-unavailable"), (turned.Verdict, turned.Detail));
         Assert.Equal((LegVerdict.SkippedUnavailable, why), (turned.Arms[0].Verdict, turned.Arms[0].Detail));
@@ -1859,8 +1877,8 @@ public sealed class MutationLegRunnerTests
         var fewer = await tight.RunAsync([ChargeBound, DepthType, ChargeFloor]);
 
         Assert.Equal(
-            $"3 arm(s): 3 passed; 1 of 3 workers: {DiskSpace.Size((1L << 30) + copy + 100)} free on '/data', and 2 need "
-            + $"~{DiskSpace.Size(2 * ((1L << 30) + copy))}, each worker's build as declared; and worker 3 would be kept at '{tight.Worker(3)}', where its "
+            $"3 arm(s): 3 passed; 1 of 3 workers: running 2 needs ~{DiskSpace.Size(2 * ((1L << 30) + copy))}, each worker's build as declared; "
+            + $"{DiskSpace.Size((1L << 30) + copy + 100)} free on '/data'; and worker 3 would be kept at '{tight.Worker(3)}', where its "
             + "build needs paths of 300 characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under "
             + "260: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);
@@ -2730,6 +2748,9 @@ public sealed class MutationLegRunnerTests
         /// <summary>The host as the machine that dispatched the leg names it, where that is not the host it runs on.</summary>
         public HostId? Named { get; init; }
 
+        /// <summary>The room the leg's builds leave free, where its machine keeps any.</summary>
+        public RoomFloor? Floor { get; init; }
+
         /// <summary>The directories the leg's host found its programs in.</summary>
         public IReadOnlyList<string> ProgramDirectories { get; init; } = [];
 
@@ -2810,6 +2831,7 @@ public sealed class MutationLegRunnerTests
                 leg = leg with { Named = named };
             }
 
+            leg = leg with { Floor = Floor };
             Reader = new Source(Read(context));
 
             var work = new LegWork(leg, context, RunId.New(), RunDirectory, Time: false)

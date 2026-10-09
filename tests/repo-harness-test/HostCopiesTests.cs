@@ -283,13 +283,13 @@ public sealed class HostCopiesTests
 
         var answering = new ScriptedHostCommands((_, command) =>
         {
-            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions);
+            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
             command.OnOutputLine?.Invoke(SyncServe.Answer(new SyncRemoveAnswer(CopyRemoval.Removed)));
             return HostResults.Finished(command, HarnessExit.Success);
         });
 
         Assert.Equal(CopyRemoval.Removed, await Remote(answering).RemoveCopyAsync(copy, cancellationToken));
-        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveCopy, copy], asked?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveCopy, SyncServe.OperandsFollow, copy], asked?.Arguments);
         Assert.Equal("~", asked?.Directory);
 
         var silent = new ScriptedHostCommands((_, command) => HostResults.Finished(command, HarnessExit.Success));
@@ -308,7 +308,7 @@ public sealed class HostCopiesTests
         var copy = hosts.Combine("repo.worktree-feature");
         await Local(new HarnessFactory()).CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
 
-        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveCopy, copy], cancellationToken);
+        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveCopy, SyncServe.OperandsFollow, copy], cancellationToken);
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Equal(CopyRemoval.Removed, SyncServe.ReadAnswer<SyncRemoveAnswer>(result.StandardOutput.Trim())?.Removal);
@@ -427,7 +427,7 @@ public sealed class HostCopiesTests
         record.Claim(layout, Entry(onPi, created.Path));
         record.Claim(layout, Entry(onMac, created.Path, Mac));
 
-        var claims = new Claims { Held = { [held] = "vps pid 4242, run 20261007-101500-abcd" } };
+        var claims = new Claims { Held = { [held] = "pid 4242, run 20261007-101500-abcd" } };
         var service = Service(harness, new HashSet<HostId> { Pi, Mac }, claims: claims);
         var size = harness.FileSystem.DirectorySize(held) + harness.FileSystem.DirectorySize(free);
         var orphaned = harness.FileSystem.DirectorySize(orphan);
@@ -440,7 +440,7 @@ public sealed class HostCopiesTests
             [
                 created.Path,
                 $"ssh pi: its copy at '{onPi}' stays, and is still recorded: a mutation worker kept beside it is in use - '{held}': "
-                + "a sweep still running holds it: vps pid 4242, run 20261007-101500-abcd",
+                + "a sweep still running holds it: pid 4242, run 20261007-101500-abcd",
                 $"ssh mac: found nothing at '{onMac}' to remove; the 1 mutation worker(s) kept beside it were removed, {DiskSpace.Size(orphaned)}; "
                 + $"left beside it: '{somebodys}', nothing there says the harness made it, so it is yours to remove",
             ],
@@ -523,7 +523,7 @@ public sealed class HostCopiesTests
                 // Taken by a sweep the second time it is asked about: between the asking and the removal.
                 if (keptBy.StartsWith("a sweep took ", StringComparison.Ordinal) && Path.GetFullPath(copy) == other && ++asked == 2)
                 {
-                    claims.Held[other] = "pi pid 7, run 20261007-101500-abcd";
+                    claims.Held[other] = "pid 7, run 20261007-101500-abcd";
                 }
             },
         };
@@ -555,7 +555,7 @@ public sealed class HostCopiesTests
 
         var line = Assert.Single(deleted.Outcome.Details ?? [], said => said.StartsWith("ssh pi: ", StringComparison.Ordinal));
         var stays = $"ssh pi: its copy at '{onPi}' stays, and is still recorded: ";
-        var held = "a sweep still running holds it: pi pid 7, run 20261007-101500-abcd";
+        var held = "a sweep still running holds it: pid 7, run 20261007-101500-abcd";
         var before = keptBy == "a worker cannot be told" || alone
             ? string.Empty
             : $"; {(keptBy == "the copy could not be removed" ? 2 : 1)} mutation worker(s) kept beside it were removed before that, {DiskSpace.Size(went)}";
@@ -1539,12 +1539,12 @@ public sealed class HostCopiesTests
             Substitute.For<IHostCommandRunner>(),
             harness.Platform,
             harness.Output,
-            new Claims { Held = { [held] = "this machine pid 1, run r" } });
+            new Claims { Held = { [held] = "pid 1, run r" } });
 
         var removal = await factory.For(new HostReport { Host = HostId.Local }).RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
 
         Assert.Empty(removal.Removed);
-        Assert.Equal([new WorkerLeft(held, "a sweep still running holds it: this machine pid 1, run r", WorkerLeftAs.Held)], removal.Left);
+        Assert.Equal([new WorkerLeft(held, "a sweep still running holds it: pid 1, run r", WorkerLeftAs.Held)], removal.Left);
         Assert.True(Directory.Exists(held));
     }
 
@@ -1907,7 +1907,7 @@ public sealed class HostCopiesTests
 
         var answering = new ScriptedHostCommands((_, command) =>
         {
-            asked.Add(JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions));
+            asked.Add(JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions));
             command.OnOutputLine?.Invoke(SyncServe.Answer(new SyncWorkersAnswer(answer)));
             return HostResults.Finished(command, HarnessExit.Success);
         });
@@ -1920,8 +1920,8 @@ public sealed class HostCopiesTests
             Assert.Equal(answer.Removed, told.Removed);
             Assert.Equal(answer.Left, told.Left);
         });
-        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, tree], asked[0]?.Arguments);
-        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, tree, SyncServe.MeasureOnly], asked[1]?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree], asked[0]?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree, SyncServe.MeasureOnly], asked[1]?.Arguments);
         Assert.All(asked, request => Assert.Equal("~", request?.Directory));
 
         var silent = new ScriptedHostCommands((_, command) => HostResults.Finished(command, HarnessExit.Success));
@@ -1954,13 +1954,13 @@ public sealed class HostCopiesTests
 
         Assert.True(copies.Claim(held, sweep, force: false).Taken);
 
-        var measured = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree, SyncServe.MeasureOnly], cancellationToken);
+        var measured = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree, SyncServe.MeasureOnly], cancellationToken);
 
         Assert.Equal(HarnessExit.Success, measured.ExitCode);
         Assert.Equal([free], SyncServe.ReadAnswer<SyncWorkersAnswer>(measured.StandardOutput.Trim())?.Workers.Removed.Select(worker => worker.Path));
         Assert.True(Directory.Exists(free));
 
-        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree], cancellationToken);
+        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree], cancellationToken);
         var answer = SyncServe.ReadAnswer<SyncWorkersAnswer>(result.StandardOutput.Trim())?.Workers;
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
@@ -1976,7 +1976,7 @@ public sealed class HostCopiesTests
 
         copies.Release(held, sweep);
 
-        var unknown = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree, "everything"], cancellationToken);
+        var unknown = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree, "everything"], cancellationToken);
 
         Assert.Equal(HarnessExit.UsageError, unknown.ExitCode);
         Assert.True(Directory.Exists(held));
@@ -1997,13 +1997,13 @@ public sealed class HostCopiesTests
 
         var answering = new ScriptedHostCommands((_, command) =>
         {
-            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions);
+            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
             command.OnOutputLine?.Invoke(SyncServe.Answer(new SyncCopiesAnswer([kept])));
             return HostResults.Finished(command, HarnessExit.Success);
         });
 
         Assert.Equal([kept], await Remote(answering).ListCopiesAsync(main, cancellationToken));
-        Assert.Equal([SyncServe.CommandName, SyncServe.ListCopies, main], asked?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.ListCopies, SyncServe.OperandsFollow, main], asked?.Arguments);
         Assert.Equal("~", asked?.Directory);
 
         var silent = new ScriptedHostCommands((_, command) => HostResults.Finished(command, HarnessExit.Success));
@@ -2022,7 +2022,7 @@ public sealed class HostCopiesTests
         var main = hosts.Combine("repo");
         await Local(new HarnessFactory()).CreateRootAsync(main + ".worktree-feature", CopyMark.Complete, cancellationToken);
 
-        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.ListCopies, main], cancellationToken);
+        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.ListCopies, SyncServe.OperandsFollow, main], cancellationToken);
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
 
@@ -2124,7 +2124,7 @@ public sealed class HostCopiesTests
                 $"  {onPi}.worktree-alpha  {Size("alpha")}  worktree 'alpha'",
                 $"  {onPi}.worktree-beta  {Size("beta")}  the worktree at '{beta}'",
                 $"  {onPi}.worktree-lfprobe  {Size("lfprobe")}  gone from '{lfprobe}': 'dssharness delete-worktree lfprobe' removes it",
-                $"  {onPi}.worktree-zeta  {Size("zeta")}  not recorded here, so deleting a worktree here never reaches it; made by {zeta.CreatedBy} at {zeta.CreatedUtc}",
+                $"  {onPi}.worktree-zeta  {Size("zeta")}  not recorded here, so deleting a worktree here never reaches it; made by the harness at {zeta.CreatedUtc}",
                 $"  {onPi}.worktree-gamma  recorded here, and not there: 'dssharness delete-worktree gamma' forgets it",
                 "ssh old: recorded as keeping '/home/old/repo.worktree-old', and no configuration here declares it, so it was not asked",
             ],
@@ -2299,7 +2299,7 @@ public sealed class HostCopiesTests
             new ManifestBuilder(harness.FileSystem, harness.Platform),
             Local(harness),
             Substitute.For<ISyncTransportFactory>(),
-            new LegsService(harness.ContextLoader, Substitute.For<IHostInspector>(), harness.Platform, harness.Output),
+            new LegsService(harness.ContextLoader, Substitute.For<IHostInspector>(), new KnownTrees(), harness.Platform, harness.Output),
             harness.GitClient,
             harness.FileSystem,
             harness.Platform,

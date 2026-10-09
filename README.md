@@ -56,8 +56,9 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `list-worktree [--hosts] [--json]` | List existing worktrees with the commit each was made from, the copies hosts keep of them, and the copies left by worktrees that are gone; `--hosts` also asks each host what it keeps, and how large each copy is |
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
 | `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
-| `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again; refused over changes of its own without `--force` |
-| `refresh-agent <o> <a> [<path>...] [--apply]` | Copy the main tree's changes under the paths - the anchor registries' directory by default - into a live agent, recorded as handed to it |
+| `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again, with every path the main tree holds otherwise than the agent shares it, committed or not; refused over changes of its own without `--force` |
+| `refresh-agent <o> <a> [<path>...] [--apply]` | Copy into a live agent every path under the paths - the anchor registries' directory by default - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it |
+| `rebase-agent <o> <a> [--apply] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; refused over a path both changed unless `--settled`, and over anything of its own what comes in would go over; run again after one that stopped part way, it finishes it |
 | `fold-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; its worktree is kept |
 | `delete-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
 | `list-orchestrator [<o>] [--json]` | List orchestrators, their agents and where each stands |
@@ -88,9 +89,9 @@ Zero means every selected leg reached a verdict and none failed. A run where not
 some leg never reported exits `21` and names those legs: a leg that did no work proves nothing
 about the code, so it is never counted among the legs that passed. A command that changes an
 orchestrator or an agent exits `21` too when it stops part way - an agent closed and its worktree
-not yet removed, a fold or a hand-over half written, an orchestrator half deleted; run again, it
-finishes.
-`dssharness help orchestrators` explains seeding, folding and deleting agents.
+not yet removed, a fold or a hand-over half written, a move of an agent's base half made, an
+orchestrator half deleted; run again, it finishes.
+`dssharness help orchestrators` explains seeding, rebasing, folding and deleting agents.
 
 `--time` pulls each phase's own timing marks out of its output, using `buildTimingRegex`,
 `testTimingRegex` or `runTimingRegex`, and prints them under the ledger as a `TIMINGS` block naming
@@ -121,9 +122,16 @@ then for the memory in use to fall below `maxMemoryPercent`, then - where its bu
 for room on the filesystem it fills beside what the other admitted legs claim, says who holds each slot
 while it waits, and names on its line how long it waited, the memory it started at and the room it
 claimed. A WSL distribution's legs take this machine's slots, and claim room on the drive where WSL
-keeps its disk; an ssh host takes its own. One that waited `maxWaitMinutes` is `not-admitted`, exit 7,
-naming what held the slots and where they are recorded, the memory it waited on, or the room and who
-claimed it, and nothing of it ran. Run `dssharness help admission` for the rules.
+keeps its disk; an ssh host takes its own. One that waited `maxWaitMinutes` - a wait with only its own
+command's legs ahead of it not counting - is `not-admitted`, exit 7, naming what held the slots and
+where they are recorded, the memory it waited on, or the room and who claimed it, and nothing of it
+ran. On Windows, a leg about to wait on the memory has WSL's page cache dropped first - as root, at
+most once a minute - and reads the memory again once what was dropped has come back, a minute later
+at the most; a WSL leg drops it as it ends. While a heavy leg builds, each filesystem it fills - for a
+WSL leg, the Windows drive its disk grows on too - is held to `minFreeGiB` (2 GiB): one that falls
+under it, read every 15 seconds and again as a build or a write of its fails, stops the build,
+`stopped`, what it built left for `clean`; a build under it as it starts writes nothing. Run
+`dssharness help admission` for the rules.
 
 ## Design
 
@@ -290,7 +298,8 @@ every host and installs nothing, naming each command that would run. `sync` crea
 of the tree it runs in and keeps it in step, deletions included: the main checkout's at the host's
 `repositoryPath`, and each worktree's beside it, so worktrees do not wait for each other on a host.
 Deleting a worktree removes its copies from the hosts that hold one, and fails, naming it, while one
-stays. An
+stays. A file crosses whole, either way, so one larger than 804,519,909 bytes is refused by name
+before anything is sent. An
 emulator counts only once its witness proves it runs programs for its processor.
 
 `legs` runs the witness of each emulator the selected legs use, and both commands install

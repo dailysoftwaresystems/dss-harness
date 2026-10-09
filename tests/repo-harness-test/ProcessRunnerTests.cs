@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.Versioning;
+using System.Text;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 
@@ -139,6 +140,78 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// A line handler that fails - of the output or of the error output - is handed no more lines, and its stream is still
+    /// read to the end: a child writing more than a pipe holds would otherwise block on a pipe nobody reads, and one whose
+    /// input is held open, as a host's agent's is, would never end. What the handler raised is raised once the child has
+    /// gone, and a handler of the other stream is handed every line of it.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_ALineHandlerThatFails_IsRaisedOnceTheChildHasGone_NeverLeavingItBlockedOnItsPipe(bool ofErrors)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        stop.CancelAfter(TimeSpan.FromSeconds(60));
+        var handed = 0;
+        var other = 0;
+
+        void Failing(string line)
+        {
+            handed++;
+            throw new InvalidOperationException("a line this caller cannot read");
+        }
+
+        void Counting(string line) => Interlocked.Increment(ref other);
+
+        var raised = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood-both", "20000", "200") with
+            {
+                StandardInput = string.Empty,
+                HoldStandardInputOpen = true,
+                OnOutputLine = ofErrors ? Counting : Failing,
+                OnErrorLine = ofErrors ? Failing : Counting,
+            },
+            stop.Token));
+
+        Assert.False(stop.IsCancellationRequested, "the child blocked on a pipe nobody read, until the run was stopped");
+        Assert.Equal("a line this caller cannot read", raised.Message);
+        Assert.Equal(1, handed);
+        Assert.Equal(20000, other);
+    }
+
+    /// <summary>
+    /// Handlers of both streams that fail are both raised: together where they failed differently - saying another thing,
+    /// or the same thing as another kind of failure; one said and the other lost would send whoever read it after half
+    /// the trouble - and once where they raised the same, one reason met on each.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task RunAsync_HandlersOfBothStreamsThatFail_AreBothRaised(bool sayingAnotherThing, bool ofAnotherKind)
+    {
+        const string Output = "an output line this caller cannot read";
+        const string Error = "an error line this caller cannot read";
+        var differently = sayingAnotherThing || ofAnotherKind;
+        var said = sayingAnotherThing ? Error : Output;
+
+        Exception Failure() => ofAnotherKind ? new FormatException(said) : new InvalidOperationException(said);
+
+        var raised = await Assert.ThrowsAnyAsync<Exception>(() => CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood-both", "100", "20") with
+            {
+                OnOutputLine = _ => throw new InvalidOperationException(Output),
+                OnErrorLine = _ => throw Failure(),
+            },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(differently, raised is AggregateException);
+        Assert.Equal(
+            differently ? [Output, said] : [Output],
+            raised is AggregateException both ? both.InnerExceptions.Select(inner => inner.Message) : [raised.Message]);
+    }
+
+    /// <summary>
     /// A line that never ends, on a stream kept as a tail, arrives in pieces of at most the longest line handed on - cut
     /// where the caller says, where it says - each as soon as it is complete; on a stream kept whole it arrives whole, as
     /// an answer written on one line has to.
@@ -261,7 +334,8 @@ public sealed class ProcessRunnerTests
     public async Task RunAsync_WritesStandardInput_AndClosesIt()
     {
         // The child reads its input to the end, so it can finish only once the input is closed.
-        // The text carries what a request to another host carries: spaces, quotes, non-ASCII.
+        // The text carries what a request to another host carries: spaces, quotes, non-ASCII; and
+        // nothing before it, a byte order mark included, which a child reading bytes takes for text.
         const string Input = "{\"arguments\":[\"with space\",\"quote\\\"inside\",\"João\"]}\nsecond line";
 
         var result = await CreateRunner().RunAsync(
@@ -271,6 +345,79 @@ public sealed class ProcessRunnerTests
         Assert.False(result.TimedOut, "The child never saw the end of its input.");
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("[" + Input + "]", result.StandardOutput.TrimEnd('\n'));
+    }
+
+    /// <summary>
+    /// An input a writer writes as it makes it reaches the child whole and in order, and is closed once written, as text
+    /// is: the child, reading to the end, finishes only once it is.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WritesAWrittenInputWhole_AndClosesIt()
+    {
+        var pieces = Enumerable.Range(0, 64).Select(index => $"piece {index} of João's input;").ToList();
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("echo-stdin") with
+            {
+                StandardInput = ChildInput.WrittenBy(stream =>
+                {
+                    foreach (var piece in pieces)
+                    {
+                        stream.Write(Encoding.UTF8.GetBytes(piece));
+                    }
+                }),
+                Timeout = TimeSpan.FromSeconds(60),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.TimedOut, "The child never saw the end of its input.");
+        Assert.Equal("[" + string.Concat(pieces) + "]", result.StandardOutput.TrimEnd('\n'));
+    }
+
+    /// <summary>
+    /// A writer that fails part way has the input closed though it was to be held open - the child would wait for the
+    /// rest, which never comes - and its failure raised once the child has gone, never taken for a child that stopped
+    /// reading.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ClosesAnInputItsWriterCouldNotFinish_AndRaisesWhyOnceTheChildHasGone()
+    {
+        using var temp = new TempDirectory();
+        var read = temp.Combine("read.txt");
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateRunner().RunAsync(
+            TestHost.ChildRequest("stdin-to-file", read) with
+            {
+                StandardInput = ChildInput.WrittenBy(stream =>
+                {
+                    stream.Write("request"u8);
+                    throw new InvalidOperationException("the writer stopped");
+                }),
+                HoldStandardInputOpen = true,
+                Timeout = TimeSpan.FromSeconds(60),
+            },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("the writer stopped", failure.Message);
+
+        // Written only by a child that saw the end of its input, and ended on its own rather than by the budget.
+        Assert.Equal("request", await File.ReadAllTextAsync(read, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// Text is written as UTF-8 a piece at a time, so a character whose two halves fall either side of where one piece
+    /// ends and the next begins still reaches the child whole.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WritesTextAPieceAtATime_WithACharacterAcrossTwoPiecesWhole()
+    {
+        var input = new string('a', (16 * 1024) - 1) + "\U0001F600" + new string('b', 40 * 1024);
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("echo-stdin") with { StandardInput = input, Timeout = TimeSpan.FromSeconds(60) },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("[" + input + "]", result.StandardOutput.TrimEnd('\n'));
     }
 
     [Fact]

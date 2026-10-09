@@ -1788,9 +1788,9 @@ public sealed class ConfigStoreTests
     {
         var config = LoadValid("""
             {
-              "defaults": { "admission": { "heavyLegs": 3, "maxMemoryPercent": 80, "settleSeconds": [5, 10] } },
+              "defaults": { "admission": { "heavyLegs": 3, "maxMemoryPercent": 80, "settleSeconds": [5, 10], "minFreeGiB": 4.5 } },
               "hosts": {
-                "local": { "admission": { "heavyLegs": 1, "pollSeconds": 10, "maxWaitMinutes": 0.5 } },
+                "local": { "admission": { "heavyLegs": 1, "pollSeconds": 10, "maxWaitMinutes": 0.5, "minFreeGiB": 0 } },
                 "ssh": { "vps": { "repositoryPath": "/r" } }
               },
               "sshItems": ["vps"]
@@ -1800,11 +1800,11 @@ public sealed class ConfigStoreTests
         var local = AdmissionSettings.RuleFor(config.Hosts.Local.Admission, config.Defaults.Admission);
         var vps = AdmissionSettings.RuleFor(config.Hosts.Ssh["vps"].Admission, config.Defaults.Admission);
 
-        Assert.Equal(new AdmissionRule(1, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)), local);
-        Assert.Equal(new AdmissionRule(3, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60)), vps);
+        Assert.Equal(new AdmissionRule(1, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), 0), local);
+        Assert.Equal(new AdmissionRule(3, 80, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 9L << 29), vps);
         Assert.Null(AdmissionSettings.RuleFor(null, null));
         Assert.Equal(
-            new AdmissionRule(2, 76, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60)),
+            new AdmissionRule(2, 76, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(60), 2L << 30),
             AdmissionSettings.RuleFor(new AdmissionSettings(), null));
     }
 
@@ -1825,6 +1825,8 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "defaults": { "admission": { "pollSeconds": 3601 } } }""", "defaults.admission pollSeconds must be from 1 to 3600, found 3601")]
     [InlineData("""{ "defaults": { "admission": { "settleSeconds": [-1, 5] } } }""", "found [-1, 5]")]
     [InlineData("""{ "defaults": { "admission": { "heavyLegs": -2 } } }""", "defaults.admission heavyLegs must be at least 1, found -2")]
+    [InlineData("""{ "defaults": { "admission": { "minFreeGiB": -0.5 } } }""", "defaults.admission minFreeGiB must be from 0 to 1024, found -0.5")]
+    [InlineData("""{ "hosts": { "local": { "admission": { "minFreeGiB": 1024.5 } } } }""", "hosts.local admission minFreeGiB must be from 0 to 1024, found 1024.5")]
     public void Admission_ThatNoMachineCouldAdmitBy_IsRefused(string json, string expected)
         => Assert.Contains(expected, LoadInvalid(json).Message, StringComparison.Ordinal);
 
@@ -1832,14 +1834,14 @@ public sealed class ConfigStoreTests
     [Fact]
     public void Admission_AtEveryBound_Loads()
     {
-        var most = LoadValid("""{ "defaults": { "admission": { "heavyLegs": 1, "maxMemoryPercent": 100, "settleSeconds": [0, 3600], "pollSeconds": 3600, "maxWaitMinutes": 10080 } } }""");
-        var least = LoadValid("""{ "defaults": { "admission": { "maxMemoryPercent": 0.5, "settleSeconds": [5, 5], "pollSeconds": 1, "maxWaitMinutes": 0.1 } } }""");
+        var most = LoadValid("""{ "defaults": { "admission": { "heavyLegs": 1, "maxMemoryPercent": 100, "settleSeconds": [0, 3600], "pollSeconds": 3600, "maxWaitMinutes": 10080, "minFreeGiB": 1024 } } }""");
+        var least = LoadValid("""{ "defaults": { "admission": { "maxMemoryPercent": 0.5, "settleSeconds": [5, 5], "pollSeconds": 1, "maxWaitMinutes": 0.1, "minFreeGiB": 0 } } }""");
 
         Assert.Equal(
-            new AdmissionRule(1, 100, TimeSpan.Zero, TimeSpan.FromSeconds(3600), TimeSpan.FromSeconds(3600), TimeSpan.FromMinutes(10080)),
+            new AdmissionRule(1, 100, TimeSpan.Zero, TimeSpan.FromSeconds(3600), TimeSpan.FromSeconds(3600), TimeSpan.FromMinutes(10080), 1L << 40),
             AdmissionSettings.RuleFor(null, most.Defaults.Admission));
         Assert.Equal(
-            new AdmissionRule(2, 0.5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(0.1)),
+            new AdmissionRule(2, 0.5, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(0.1), 0),
             AdmissionSettings.RuleFor(null, least.Defaults.Admission));
     }
 

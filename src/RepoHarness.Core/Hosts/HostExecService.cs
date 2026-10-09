@@ -1,4 +1,3 @@
-using System.Text.Json;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
@@ -126,22 +125,20 @@ public sealed class HostExecService(
 
         var nonce = HostAgentProtocol.NewNonce();
 
-        var request = JsonSerializer.Serialize(
-            new HostAgentRequest
-            {
-                Kind = HostAgentRequestKind.Run,
-                Directory = HostCopies.For(target.RepositoryPath, context.Layout, context.Layout.RepositoryRoot, context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), _platform.PathComparison),
-                Arguments = [.. arguments],
+        var request = new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Run,
+            Directory = HostCopies.For(target.RepositoryPath, context.Layout, context.Layout.RepositoryRoot, context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), _platform.PathComparison),
+            Arguments = [.. arguments],
 
-                // As a sync's own requests carry it: a command run here is the host's work for as long as it
-                // takes, and a host that sleeps part way through leaves the reader a command that never said
-                // how it finished. Read from this machine's configuration, which is the one that has it.
-                KeepAwake = [.. report.KeepAwake],
-                KeepAwakeEnvironment = new(report.KeepAwakeEnvironment, StringComparer.Ordinal),
-                KeepAwakeDirectories = [.. report.ProgramDirectories],
-                Nonce = nonce,
-            },
-            HostAgentProtocol.JsonOptions);
+            // As a sync's own requests carry it: a command run here is the host's work for as long as it
+            // takes, and a host that sleeps part way through leaves the reader a command that never said
+            // how it finished. Read from this machine's configuration, which is the one that has it.
+            KeepAwake = [.. report.KeepAwake],
+            KeepAwakeEnvironment = new(report.KeepAwakeEnvironment, StringComparer.Ordinal),
+            KeepAwakeDirectories = [.. report.ProgramDirectories],
+            Nonce = nonce,
+        };
 
         var lines = new HostAgentLines(nonce);
 
@@ -156,7 +153,7 @@ public sealed class HostExecService(
 
                 // One line, with the input then held open while the command runs: stopping this process ends the
                 // input on the host, which cancels the command there instead of leaving it running.
-                StandardInput = request + "\n",
+                StandardInput = HostAgentProtocol.Input(request),
                 HoldStandardInputOpen = true,
 
                 // Both streams are shown line by line as they arrive, and are as long as what the command prints:

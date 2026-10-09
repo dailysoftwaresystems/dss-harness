@@ -1,3 +1,5 @@
+using RepoHarness.Core.FileSystem;
+
 namespace RepoHarness.Core.Configuration;
 
 /// <summary>
@@ -45,6 +47,12 @@ public sealed class AdmissionSettings
     /// <summary>The most minutes a leg may wait to be admitted: a week.</summary>
     public const double MostWaitMinutes = 10080;
 
+    /// <summary>The room, in GiB, a heavy leg's build leaves free on each filesystem it fills when a section says nothing.</summary>
+    public const double DefaultMinFreeGiB = 2;
+
+    /// <summary>The most room, in GiB, a section may keep free: a tebibyte.</summary>
+    public const double MostMinFreeGiB = 1024;
+
     /// <summary>
     /// Heavy legs the machine runs at once, across every command this user runs there, at least one: each takes a slot
     /// before it starts, in the order they asked, and gives it back when its work ends.
@@ -77,6 +85,13 @@ public sealed class AdmissionSettings
     public double? MaxWaitMinutes { get; init; }
 
     /// <summary>
+    /// The room, in GiB, a heavy leg's build leaves free on each filesystem it fills: read again every 15 seconds while it
+    /// builds, and the build stopped once one has less - <c>stopped</c>, what it built left for clean - rather than let it
+    /// fill a disk other legs build and test on. 0 stops no build.
+    /// </summary>
+    public double? MinFreeGiB { get; init; }
+
+    /// <summary>
     /// The rule a machine admits heavy legs by: each field its own section declares, or else the defaults' section's,
     /// or else the built-in value; <see langword="null"/> where neither section is declared, and every leg is
     /// admitted at once.
@@ -101,6 +116,7 @@ public sealed class AdmissionSettings
             SettleSeconds = machine?.SettleSeconds ?? defaults?.SettleSeconds ?? [.. DefaultSettleSeconds],
             PollSeconds = machine?.PollSeconds ?? defaults?.PollSeconds ?? DefaultPollSeconds,
             MaxWaitMinutes = machine?.MaxWaitMinutes ?? defaults?.MaxWaitMinutes ?? DefaultMaxWaitMinutes,
+            MinFreeGiB = machine?.MinFreeGiB ?? defaults?.MinFreeGiB ?? DefaultMinFreeGiB,
         };
 
         var problems = new List<string>();
@@ -118,7 +134,8 @@ public sealed class AdmissionSettings
             TimeSpan.FromSeconds(merged.SettleSeconds[0]),
             TimeSpan.FromSeconds(merged.SettleSeconds[1]),
             TimeSpan.FromSeconds(merged.PollSeconds.Value),
-            TimeSpan.FromMinutes(merged.MaxWaitMinutes.Value));
+            TimeSpan.FromMinutes(merged.MaxWaitMinutes.Value),
+            (long)Math.Round(merged.MinFreeGiB.Value * DiskSpace.Gibibyte));
     }
 }
 
@@ -129,10 +146,12 @@ public sealed class AdmissionSettings
 /// <param name="SettleMost">The most a settle lasts.</param>
 /// <param name="Poll">The time between looks while a leg waits.</param>
 /// <param name="MaxWait">How long a leg waits before it is not admitted.</param>
+/// <param name="MinFreeBytes">The room a heavy leg's build leaves free on each filesystem it fills; 0 stops no build.</param>
 public sealed record AdmissionRule(
     int HeavyLegs,
     double MaxMemoryPercent,
     TimeSpan SettleLeast,
     TimeSpan SettleMost,
     TimeSpan Poll,
-    TimeSpan MaxWait);
+    TimeSpan MaxWait,
+    long MinFreeBytes);

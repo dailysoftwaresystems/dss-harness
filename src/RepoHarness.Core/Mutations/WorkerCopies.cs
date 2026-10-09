@@ -113,6 +113,7 @@ internal sealed class WorkerClaims(IFileSystem fileSystem, IHarnessOutput output
 {
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
+    private readonly IProcessIdentity _identity = identity;
     private readonly string _commandName = commandName;
 
     /// <summary>The claims themselves, in a worker's terms.</summary>
@@ -126,7 +127,7 @@ internal sealed class WorkerClaims(IFileSystem fileSystem, IHarnessOutput output
     {
         try
         {
-            return Standing(copy)?.Describe();
+            return Standing(copy)?.Describe(_identity);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.Refused)
         {

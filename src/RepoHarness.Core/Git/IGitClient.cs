@@ -68,18 +68,29 @@ public interface IGitClient
     /// Every tracked path whose working state under <paramref name="directory"/> differs from what <paramref name="commit"/>
     /// holds - its content, compared as git status compares it, the index's line-ending rules among them, or its mode
     /// where the repository trusts modes - its deletion included. An untracked file is not listed. Nothing is written.
+    /// A set to ask of a path: a name that is not UTF-8 is no path this tool can ask about, and is not in it -
+    /// <see cref="ListNamesChangedSinceAsync"/> lists every name.
     /// </summary>
     /// <exception cref="HarnessException">git could not compare the work tree with the commit.</exception>
     Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// The id of the blob <paramref name="commit"/> holds at each of <paramref name="paths"/>, or <see langword="null"/>
-    /// where it holds no file there - nothing, a directory, or a submodule's entry. One git process for them all.
+    /// What <see cref="ListChangedSinceAsync"/> answers, every name as git holds it: a name that is not UTF-8 among them, for
+    /// a caller that takes each name listed as a path to work with, and refuses one it cannot open.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not compare the work tree with the commit.</exception>
+    Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What <paramref name="commit"/> holds at each of <paramref name="paths"/>: a file and its blob, a directory, a
+    /// submodule's entry and the commit it names - whether or not this repository holds that commit, on every version of
+    /// git - or nothing. One git process for them all, and one listing of the commit where git could not read one of them
+    /// by its object: a path the commit does not hold, or a submodule's entry naming a commit this repository does not.
     /// </summary>
     /// <exception cref="HarnessException">
     /// git could not read the commit, answer for every path, or read a file the commit lists.
     /// </exception>
-    Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(
+    Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(
         string directory,
         string commit,
         IReadOnlyList<string> paths,
@@ -122,6 +133,29 @@ public interface IGitClient
     /// place, so neither a filter the machine cannot run nor a lock a stopped git left behind stops it.
     /// </remarks>
     Task IndexExactlyAsync(string directory, IReadOnlyCollection<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes the work tree at <paramref name="directory"/>, and its index, hold at each of <paramref name="paths"/> what
+    /// <paramref name="commit"/> holds there, written through git's own filters and line-ending rules, and removes each
+    /// one it does not hold: <c>git checkout --no-overlay</c>, every path read literally. No other path is touched, and
+    /// HEAD does not move.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="paths">Paths relative to the root, with forward separators, as git names them.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not write them.</exception>
+    Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves the HEAD of the work tree at <paramref name="directory"/> - the branch it is on, where it is on one - and its
+    /// index to <paramref name="commit"/>, and leaves every file in the work tree as it is: <c>git reset --mixed</c>.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not move them.</exception>
+    Task ResetToAsync(string directory, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>The index file git uses for the work tree at <paramref name="directory"/>, as an absolute path.</summary>
     /// <exception cref="HarnessException">git could not say.</exception>

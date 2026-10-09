@@ -1481,7 +1481,7 @@ public sealed class SyncServiceTests
         temp.WriteFile("src/app.cs", "// code");
 
         var result = await CliRunner.RunAsync(
-            ["sync-serve", SyncServe.Manifest, temp.Path, ".git\n.harness-config"],
+            ["sync-serve", SyncServe.Manifest, SyncServe.OperandsFollow, temp.Path, ".git", ".harness-config"],
             token);
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
@@ -1747,7 +1747,7 @@ public sealed class SyncServiceTests
         }
 
         var result = await CliRunner.RunAsync(
-            ["sync-serve", SyncServe.Manifest, temp.Path, ".git\n.harness-config"],
+            ["sync-serve", SyncServe.Manifest, SyncServe.OperandsFollow, temp.Path, ".git", ".harness-config"],
             token);
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
@@ -2096,10 +2096,10 @@ public sealed class SyncServiceTests
         Assert.Equal(HarnessExit.HostUnavailable, refusal.ExitCode);
         Assert.Contains("did not answer with what", refusal.Message, StringComparison.Ordinal);
 
-        // The answer is one line, which can be a whole file's content, and is read whole; what the host says on standard
-        // error is shown as it comes, and only its end is kept.
+        // The answer is one line, read whole, and a file's content follows it a piece to a line, each taken as it comes; of
+        // either stream only its end is kept, and what the host says on standard error is shown as it comes.
         var (_, command) = Assert.Single(commands.Calls);
-        Assert.Equal((StreamKept.Whole, StreamKept.Tail), (command.OutputKept, command.ErrorKept));
+        Assert.Equal((StreamKept.TailOfWholeLines, StreamKept.Tail), (command.OutputKept, command.ErrorKept));
     }
 
     /// <summary>
@@ -3081,9 +3081,8 @@ public sealed class SyncServiceTests
 
     /// <summary>
     /// The far side makes a copy's index hold what it is told, through the real parser: what the asking
-    /// machine's sync carried is what a build there fingerprints. A list it cannot read - null, naming a
-    /// blank path, or not a list at all - is refused and touches nothing: read as none, it would unstage
-    /// every file the copy has.
+    /// machine's sync carried is what a build there fingerprints, each path an argument of its own. A list
+    /// naming a blank path is refused and touches nothing: read as fewer, it would unstage what it left out.
     /// </summary>
     [Fact]
     public async Task TheAgentIndexesExactlyWhatItIsTold_AndRefusesAListItCannotRead()
@@ -3102,21 +3101,62 @@ public sealed class SyncServiceTests
             => [.. (await harness.GitClient.ListIndexAsync(temp.Path, token)).Select(entry => entry.Path)];
 
         var result = await CliRunner.RunAsync(
-            ["sync-serve", SyncServe.Index, temp.Path, SyncServe.CarryPaths(["src/a.c"])],
+            ["sync-serve", SyncServe.Index, SyncServe.OperandsFollow, temp.Path, "src/a.c"],
             token);
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Equal(["src/a.c"], await IndexedAsync());
 
-        foreach (var unreadable in new[] { "null", """["src/a.c", " "]""", "not a list" })
+        var refused = await CliRunner.RunAsync(["sync-serve", SyncServe.Index, SyncServe.OperandsFollow, temp.Path, "src/a.c", " "], token);
+
+        Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+        Assert.Contains("The files to index arrived in a shape this build cannot read", refused.StandardError, StringComparison.Ordinal);
+        Assert.Equal(["src/a.c"], await IndexedAsync());
+    }
+
+    /// <summary>
+    /// The far side writes a batch through the real parser, each file its path then its content's base64. One that arrives
+    /// a content short, or naming no file at all, is refused and writes nothing - read as fewer files, it would answer as
+    /// though every file sent had crossed - and a content that is not base64 is refused naming its file, alone as in a batch.
+    /// </summary>
+    [Fact]
+    public async Task TheAgentWritesTheBatchItIsSent_AndRefusesOneItCannotRead_NamingTheFile()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var root = temp.Combine("copy");
+
+        Directory.CreateDirectory(root);
+
+        string[] Write(string operation, params string[] operands) => ["sync-serve", operation, SyncServe.OperandsFollow, root, .. operands];
+
+        var written = await CliRunner.RunAsync(
+            Write(SyncServe.WriteMany, "src/a.c", Convert.ToBase64String("a\n"u8), "@b.txt", Convert.ToBase64String("b\n"u8)),
+            token);
+
+        Assert.Equal(HarnessExit.Success, written.ExitCode);
+        Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(root, "src", "a.c"), token));
+        Assert.Equal("b\n", await File.ReadAllTextAsync(Path.Combine(root, "@b.txt"), token));
+
+        foreach (var unreadable in new[] { Write(SyncServe.WriteMany, "c.txt", Convert.ToBase64String("c\n"u8), "d.txt"), Write(SyncServe.WriteMany) })
         {
-            var refused = await CliRunner.RunAsync(["sync-serve", SyncServe.Index, temp.Path, unreadable], token);
+            var refused = await CliRunner.RunAsync(unreadable, token);
 
             Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
-            Assert.Contains("The files to index arrived in a shape this build cannot read", refused.StandardError, StringComparison.Ordinal);
+            Assert.Contains("The files to write arrived in a shape this build cannot read", refused.StandardError, StringComparison.Ordinal);
         }
 
-        Assert.Equal(["src/a.c"], await IndexedAsync());
+        Assert.False(File.Exists(Path.Combine(root, "c.txt")));
+
+        foreach (var notBase64 in new[] { Write(SyncServe.Write, "e.txt", "not base64!"), Write(SyncServe.WriteMany, "e.txt", "not base64!") })
+        {
+            var refused = await CliRunner.RunAsync(notBase64, token);
+
+            Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+            Assert.Contains("'e.txt' arrived in a shape this build cannot read", refused.StandardError, StringComparison.Ordinal);
+        }
+
+        Assert.False(File.Exists(Path.Combine(root, "e.txt")));
     }
 
     /// <summary>
@@ -3135,7 +3175,7 @@ public sealed class SyncServiceTests
         await File.WriteAllTextAsync(temp.Combine("kept", "still-here.txt"), "x\n", token);
 
         var result = await CliRunner.RunAsync(
-            ["sync-serve", SyncServe.Prune, temp.Path, "gone\nkept"],
+            ["sync-serve", SyncServe.Prune, SyncServe.OperandsFollow, temp.Path, "gone", "kept"],
             token);
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
@@ -3153,6 +3193,36 @@ public sealed class SyncServiceTests
 
         Assert.False(Directory.Exists(temp.Combine("gone")));
         Assert.True(Directory.Exists(temp.Combine("kept")));
+    }
+
+    /// <summary>
+    /// An empty name in a manifest or a prune request names nothing: it withholds no path from the manifest, and a prune
+    /// takes it for no directory - never for the copy's own root, which the last directory it removed left empty.
+    /// </summary>
+    [Fact]
+    public async Task AnEmptyName_InAManifestOrAPruneRequest_NamesNothing()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var listed = temp.Combine("listed");
+        var pruned = temp.Combine("pruned");
+
+        temp.WriteFile("listed/src/app.cs", "// code");
+        Directory.CreateDirectory(Path.Combine(pruned, "gone"));
+
+        var manifest = await CliRunner.RunAsync(["sync-serve", SyncServe.Manifest, SyncServe.OperandsFollow, listed, ""], token);
+        var prune = await CliRunner.RunAsync(["sync-serve", SyncServe.Prune, SyncServe.OperandsFollow, pruned, "gone", ""], token);
+
+        Assert.Equal((HarnessExit.Success, HarnessExit.Success), (manifest.ExitCode, prune.ExitCode));
+
+        var entries = SyncServe.ReadAnswer<SyncManifestAnswer>(manifest.StandardOutput.Trim());
+        var removed = SyncServe.ReadAnswer<SyncPruneAnswer>(prune.StandardOutput.Trim());
+
+        Assert.NotNull(entries);
+        Assert.NotNull(removed);
+        Assert.Contains(entries.Entries, entry => entry.Path == "src/app.cs");
+        Assert.Equal(["gone"], removed.Directories.Select(entry => entry.Path));
+        Assert.True(Directory.Exists(pruned), "the prune removed the copy's own root");
     }
 
     /// <summary>

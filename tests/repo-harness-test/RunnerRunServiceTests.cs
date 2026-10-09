@@ -182,7 +182,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -241,7 +241,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -298,7 +298,7 @@ public sealed class RunnerRunServiceTests
             ignoreArtifacts);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
             config,
@@ -335,7 +335,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -417,7 +417,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -756,7 +756,13 @@ public sealed class RunnerRunServiceTests
         Assert.Equal(4, result.Phases.Count);
     }
 
-    private static string Child => TestHost.DotnetExecutable;
+    /// <summary>
+    /// The program a step's line starts this assembly with: dotnet, by the name 'tools' declares, as an action's line has
+    /// to name a program nothing in the repository ships. Named by the path of the dotnet running this suite - as it is
+    /// where the suite was started through it, not through its own program - the line named a program nothing declared,
+    /// and was refused before it ran; the leg finds it by name, as <see cref="Request"/> says where.
+    /// </summary>
+    private const string Child = "dotnet";
 
     private const string Exec = "exec";
 
@@ -1443,7 +1449,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         // Named on the command line, or declared as the runner's own steps: the same selection either way.
         var runner = new RunnerConfig
@@ -1494,7 +1500,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Service(factory).RunAsync(
             config,
@@ -2128,7 +2134,7 @@ public sealed class RunnerRunServiceTests
             """);
 
         var config = Config();
-        config.Tools.Add(new ToolConfig { Name = Path.GetFileNameWithoutExtension(Child) });
+        config.Tools.Add(new ToolConfig { Name = Child });
 
         var runner = new RunnerConfig
         {
@@ -2596,7 +2602,50 @@ public sealed class RunnerRunServiceTests
     private static LegIdentity Identity(string os)
         => new(Leg, os, "x86_64", "gcc", "release", "gcc-release", "local", RunId);
 
-    private static RunnerRunService Service(HarnessFactory factory, IProcessRunner? phases = null)
+    /// <summary>
+    /// A step's contention watch knows the repository's other trees on the machine, as a build's does: a shared tool working
+    /// in another tree's build directory of this leg's variant while the step runs is named as that tree's leg's, never
+    /// warned of as one no declared leg accounts for.
+    /// </summary>
+    [Fact]
+    public async Task ASharedToolWorkingInAnotherTreesBuildDirectory_IsNamedAsThatTreesLeg_WhileAStepRuns()
+    {
+        using var temp = new TempDirectory();
+        using var other = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $"""
+            name: corpus
+            steps:
+              - name: measure
+                watchContention: true
+                run: |
+                  {Child} --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+        config.BuildConfigs["release"] = new BuildConfiguration();
+        config.Legs[Leg] = new LegConfig { Os = factory.Platform.PlatformKey, Processor = factory.Platform.Processor, Config = "release" };
+        config.Contention.SharedResourceTools.Add("toolcc");
+        var variant = Core.Build.VariantKey.For(config, config.Legs[Leg], factory.Platform.PlatformKey);
+        var theirs = variant.DirectoryUnder(other.Path);
+        var table = new QuietProcessTable(new Core.Platform.SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
+
+        var result = await Service(factory, processTable: table).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+            {
+                BuildDirectory = variant.DirectoryUnder(temp.Path),
+                Beside = new Core.Worktrees.RepositoryTreesFound([new Core.Worktrees.RepositoryTree(other.Path, "worktree o1/xa")]),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Contains($"working in the build directory of worktree o1/xa's leg '{Leg}'", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    private static RunnerRunService Service(HarnessFactory factory, IProcessRunner? phases = null, Core.Platform.IProcessTable? processTable = null)
         => new(
             new PhaseRunner(phases ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
             new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform),
@@ -2607,7 +2656,7 @@ public sealed class RunnerRunServiceTests
             new RunSegments(factory.FileSystem, factory.Output),
             new PredefinedActionRunner(factory.GitClient, factory.Output),
             new InputFingerprint(factory.FileSystem, factory.Platform),
-            new ProcessSampler(factory.ProcessTable, factory.Platform, factory.Output),
+            new ProcessSampler(processTable ?? factory.ProcessTable, factory.Platform, factory.Output),
             factory.GitClient,
             factory.Platform,
             factory.FileSystem,
@@ -2618,6 +2667,11 @@ public sealed class RunnerRunServiceTests
         Defaults = new HarnessDefaults { StallSeconds = 0 },
     };
 
+    /// <summary>
+    /// A run of <paramref name="runner"/> on the one leg, in <paramref name="temp"/>, whose host keeps its programs - as a
+    /// host's report says where they are, after its PATH - in the directory of the dotnet running this suite, so a line
+    /// naming <see cref="Child"/> starts that one where no PATH names any.
+    /// </summary>
     private static RunnerRunRequest Request(TempDirectory temp, RunnerConfig runner) => new()
     {
         RunnerName = "corpus",
@@ -2628,6 +2682,7 @@ public sealed class RunnerRunServiceTests
         SegmentId = "s1",
         TreeRoot = temp.Path,
         ResolvedLegs = [Leg],
+        ProgramDirectories = Path.IsPathFullyQualified(TestHost.DotnetExecutable) ? [Path.GetDirectoryName(TestHost.DotnetExecutable)!] : [],
     };
 
     /// <summary>

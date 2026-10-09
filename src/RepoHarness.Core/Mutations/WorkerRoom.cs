@@ -174,14 +174,13 @@ public static class WorkerRoom
             return WorkerPlan.Running(within, limited);
         }
 
-        var reckoned = source is null ? string.Empty : $", each worker's build {source}";
+        var reckoned = source is null ? null : $"each worker's build {source}";
         var past = within < wanted ? $"; and {beyond}" : string.Empty;
 
         return fitting == 0
-            ? WorkerPlan.None($"{DiskSpace.Size(room.FreeBytes)} free on '{room.Filesystem}', and its first worker needs ~{DiskSpace.Size(needs[0])}{reckoned}{past}")
+            ? WorkerPlan.None(room.Against(DiskSpace.Needs("its first worker", needs[0], reckoned), beside: past))
             : WorkerPlan.Running(
                 fitting,
-                $"{fitting} of {wanted} workers: {DiskSpace.Size(room.FreeBytes)} free on '{room.Filesystem}', and {fitting + 1} need "
-                + $"~{DiskSpace.Size(taken + needs[fitting])}{reckoned}{past}");
+                $"{fitting} of {wanted} workers: " + room.Against(DiskSpace.Needs($"running {fitting + 1}", taken + needs[fitting], reckoned), beside: past));
     }
 }

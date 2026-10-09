@@ -182,11 +182,11 @@ public sealed class ProcessSamplingSession : IAsyncDisposable
             {
                 // No build directory makes these a verdict: they share state rather than a build
                 // directory, which is why they are a warning. Whose they are is still worth saying,
-                // and a command line naming another leg's build directory says it.
-                var owner = request.OtherLegs
-                    .OrderBy(other => other.Key, StringComparer.Ordinal)
-                    .FirstOrDefault(other => NamesBuildDirectory(entry.Process.CommandLine, other.Value, pathComparison))
-                    .Key;
+                // and a command line naming another leg's build directory - this tree's, or another
+                // tree's of the repository here - says it.
+                var owner = request.Owned
+                    .FirstOrDefault(owned => NamesBuildDirectory(entry.Process.CommandLine, owned.Directory, pathComparison))
+                    ?.Owner;
 
                 shared.Add(new ContendingProcess(entry.Process, seen, sharedTool, owner));
             }
@@ -220,7 +220,8 @@ public sealed class ProcessSamplingSession : IAsyncDisposable
             [.. contenders.OrderBy(found => found.Process.Id)],
             [.. shared.OrderBy(found => found.Process.Id)],
             unreadable,
-            limits);
+            limits,
+            request.OthersUnlisted);
     }
 
     /// <summary>

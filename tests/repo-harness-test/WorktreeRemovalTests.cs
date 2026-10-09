@@ -1175,6 +1175,18 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// <summary>Replaces what git said decides each path, once it has said it, given the directory asked in.</summary>
     public Func<string, IReadOnlyList<IgnoreDecision>, IReadOnlyList<IgnoreDecision>>? AfterExplainIgnored { get; init; }
 
+    /// <summary>A failure moving HEAD and the index throws instead of asking git, as a git stopped part way would.</summary>
+    public HarnessException? ResetFailure { get; init; }
+
+    /// <summary>A failure asking where two histories part throws instead of asking git, as a git that cannot look would.</summary>
+    public HarnessException? MergeBaseFailure { get; init; }
+
+    /// <summary>Runs before each listing of names, with the arguments it asks git with.</summary>
+    public Action<IReadOnlyList<string>>? BeforeListNames { get; init; }
+
+    /// <summary>Whether resolving a reference, given the directory and the reference, fails as a git that cannot look would.</summary>
+    public Func<string, string, bool>? ResolveCommitFails { get; init; }
+
     public Task<int> CountRepositoryCommitsAsync(
         string gitDirectory,
         IReadOnlyList<string> revisions,
@@ -1219,8 +1231,11 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
         => Call(() => inner.ListChangedSinceAsync(directory, commit, Token(cancellationToken)));
 
-    public Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
-        => Call(() => inner.BlobIdsAtAsync(directory, commit, paths, Token(cancellationToken)));
+    public Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListNamesChangedSinceAsync(directory, commit, Token(cancellationToken)));
+
+    public Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.HeldAtAsync(directory, commit, paths, Token(cancellationToken)));
 
     public Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(string directory, CancellationToken cancellationToken = default)
         => ListWorktreesFailure is { } failure && (ListWorktreesFailsWhen?.Invoke() ?? true)
@@ -1237,6 +1252,18 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     {
         BeforeEveryCall?.Invoke();
         return inner.IndexExactlyAsync(directory, paths, Token(cancellationToken));
+    }
+
+    public Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    {
+        BeforeEveryCall?.Invoke();
+        return inner.CheckOutAtAsync(directory, commit, paths, Token(cancellationToken));
+    }
+
+    public Task ResetToAsync(string directory, string commit, CancellationToken cancellationToken = default)
+    {
+        BeforeEveryCall?.Invoke();
+        return ResetFailure is { } failure ? Task.FromException(failure) : inner.ResetToAsync(directory, commit, Token(cancellationToken));
     }
 
     public Task<string> GetIndexFileAsync(string directory, CancellationToken cancellationToken = default)
@@ -1277,10 +1304,14 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         => Call(() => inner.FindIgnoredAsync(directory, paths, Token(cancellationToken)));
 
     public Task<string?> ResolveCommitAsync(string directory, string reference, CancellationToken cancellationToken = default)
-        => Call(() => inner.ResolveCommitAsync(directory, reference, Token(cancellationToken)));
+        => Call(() => ResolveCommitFails?.Invoke(directory, reference) == true
+            ? Task.FromException<string?>(new HarnessException(HarnessExit.CommandFailed, $"git could not resolve '{reference}': fatal: unable to read index"))
+            : inner.ResolveCommitAsync(directory, reference, Token(cancellationToken)));
 
     public Task<string?> MergeBaseAsync(string directory, string first, IReadOnlyList<string> others, CancellationToken cancellationToken = default)
-        => Call(() => inner.MergeBaseAsync(directory, first, others, Token(cancellationToken)));
+        => Call(() => MergeBaseFailure is { } failure
+            ? Task.FromException<string?>(failure)
+            : inner.MergeBaseAsync(directory, first, others, Token(cancellationToken)));
 
     public Task<IReadOnlyList<string>> ListMergeHeadsAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.ListMergeHeadsAsync(directory, Token(cancellationToken)));
@@ -1312,7 +1343,11 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         string directory,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken = default)
-        => Call(() => inner.ListNamesAsync(directory, arguments, Token(cancellationToken)));
+        => Call(() =>
+        {
+            BeforeListNames?.Invoke(arguments);
+            return inner.ListNamesAsync(directory, arguments, Token(cancellationToken));
+        });
 
     /// <summary>
     /// An answer to give once the call's own token is in hand, or <see langword="null"/> to run the

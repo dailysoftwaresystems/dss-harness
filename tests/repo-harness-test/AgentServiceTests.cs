@@ -418,6 +418,540 @@ public sealed class AgentServiceTests
         Assert.Equal(HarnessExit.UsageError, refreshed.ExitCode);
     }
 
+    /// <summary>
+    /// A path an agent was handed that the main tree has since put back as its HEAD holds it is handed again: git status no
+    /// longer lists it, and the agent's copy is stale all the same. A consumer's five steps: one agent's fold hands a sibling
+    /// a file, a second fold of it puts the file back, and the sibling refreshed then held the first fold's copy, told OK.
+    /// </summary>
+    [Fact]
+    public async Task Refreshing_HandsAgainAPathTheMainTreePutBackAsItsHeadHoldsIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var first = await kit.CreateAgentAsync("first");
+        var second = await kit.CreateAgentAsync("second");
+
+        OrchestrationKit.Write(first, "b.txt", "two\nfirst's edit\n");
+        Assert.True((await kit.FoldAsync("first", apply: true)).Succeeded);
+        Assert.True((await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", ["b.txt"], apply: true, Token)).Succeeded);
+        Assert.Equal("two\nfirst's edit\n", OrchestrationKit.Read(second, "b.txt"));
+
+        OrchestrationKit.Write(first, "b.txt", "two\n");
+        var undone = await kit.FoldAsync("first", apply: true);
+        Assert.True(undone.Succeeded, OrchestrationKit.Describe(undone));
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", ["b.txt"], apply: false, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Contains("  b.txt", dry.Details!);
+        Assert.Equal("two\nfirst's edit\n", OrchestrationKit.Read(second, "b.txt"));
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", ["b.txt"], apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("two\n", OrchestrationKit.Read(second, "b.txt"));
+        Assert.Equal(await DigestAsync(kit.Main, "b.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "second")!.Paths["b.txt"]);
+        Assert.Contains("1 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("second", apply: false)).Details!);
+    }
+
+    /// <summary>
+    /// What the main tree committed since an agent's base is handed to it like what it holds uncommitted: a commit does not
+    /// make the agent's copy any less stale - a path handed before the commit and changed again since, and one never handed.
+    /// Its fold then leaves both out, and the refresh says its base is behind and what moves it.
+    /// </summary>
+    [Fact]
+    public async Task Refreshing_HandsWhatTheMainTreeCommittedSinceTheAgentsBase()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nhanded row\n");
+        Assert.True((await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token)).Succeeded);
+
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nhanded row\nanother row\n");
+        OrchestrationKit.Write(kit.Main, "docs/new.md", "new\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: false, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal(["  docs/new.md", "  docs/x.md"], dry.Details!.Take(2));
+        Assert.Equal(
+            $"its base {Core.Output.ReportText.Commit(kit.Record("ag").Base!)} is not the main tree's HEAD "
+            + $"{Core.Output.ReportText.Commit((await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!)}: what the main tree committed "
+            + "since reaches it as copies it is handed; 'dssharness rebase-agent o1 ag --apply' moves its base there",
+            Assert.Single(dry.Details!.Skip(2)));
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("x\nhanded row\nanother row\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+        Assert.Equal("new\n", OrchestrationKit.Read(worktree, "docs/new.md"));
+        Assert.Contains("2 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
+    }
+
+    /// <summary>A path an agent was handed as a deletion that the main tree has since restored is handed again: its file goes back.</summary>
+    [Fact]
+    public async Task Refreshing_HandsAgainAPathHandedAsADeletionThatTheMainTreeRestored()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        var worktree = await kit.CreateAgentAsync("ag");
+        Assert.False(File.Exists(Path.Combine(worktree, "b.txt")));
+
+        await kit.GitAsync(kit.Main, "checkout", "--", "b.txt");
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["b.txt"], apply: true, Token);
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("two\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Contains("b.txt", seed.Paths.Keys);
+        Assert.DoesNotContain("b.txt", seed.Absent ?? []);
+    }
+
+    /// <summary>
+    /// A dry run given several paths names every one it would hand: a stale copy the main tree's status no longer lists
+    /// among them, which a consumer's dry run left out of its count without a word.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshDryRun_NamesEveryPathGivenItWouldHand()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.GitAsync(kit.Main, "checkout", "--", "b.txt");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["a.txt", "b.txt"], apply: false, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.StartsWith("dry run: 2 path(s) would be refreshed", dry.Message, StringComparison.Ordinal);
+        Assert.Equal(["  a.txt", "  b.txt"], dry.Details);
+        Assert.Equal("two\nmain edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
+    /// seed-agent weighs as refresh-agent does: what the main tree committed since the agent's base is handed to it too, so
+    /// its base not being the main tree's HEAD leaves it nothing stale.
+    /// </summary>
+    [Fact]
+    public async Task SeedingAgain_HandsWhatTheMainTreeCommittedSinceTheAgentsBase()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.True(seeded.Succeeded, OrchestrationKit.Describe(seeded));
+        Assert.Equal("seeded agent 'ag' of 'o1' with 1 path(s)", seeded.Message);
+        Assert.Equal("two\ncommitted\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Contains("b.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
+    }
+
+    /// <summary>
+    /// An agent made after the main tree committed is made from that commit, and handed only what is uncommitted on top of
+    /// it: nothing it starts from is stale.
+    /// </summary>
+    [Fact]
+    public async Task AnAgentMadeAfterTheMainTreeCommitted_IsMadeFromThatCommit_AndHandedWhatIsUncommitted()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "before the agent", Token);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nuncommitted\n");
+
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        Assert.Equal(await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token), kit.Record("ag").Base);
+        Assert.Equal("two\ncommitted\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal("one\nuncommitted\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal(["a.txt"], kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
+    }
+
+    /// <summary>
+    /// Forced, seeding again hands the main tree's whole uncommitted state over the agent's own changes, as making it did:
+    /// a file the main tree holds uncommitted and has not moved since it was handed among them, though weighing alone would
+    /// leave it as the agent changed it.
+    /// </summary>
+    [Fact]
+    public async Task SeedingAgainForced_HandsTheMainTreesUncommittedFile_OverTheAgentsChange_ThoughTheMainTreeLeftItAsHanded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+
+        var refused = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+        var forced = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.True(forced.Succeeded, OrchestrationKit.Describe(forced));
+        Assert.Equal("two\nmain edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
+    /// A refresh given paths weighs what the main tree committed under them alone: a change it committed elsewhere is
+    /// neither handed nor listed.
+    /// </summary>
+    [Fact]
+    public async Task RefreshingUnderAPath_HandsOnlyWhatTheMainTreeCommittedUnderIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "docs/new.md", "new\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted elsewhere\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("refreshed 1 path(s) into agent 'ag' of 'o1', recorded as handed to it, so its fold leaves them out", applied.Message);
+        Assert.Equal("  docs/new.md", applied.Details![0]);
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
+    /// A refresh given paths hands again only what the agent was handed under them: a path it was handed elsewhere, which
+    /// the main tree has moved since, stays as it was handed, for a refresh that names it.
+    /// </summary>
+    [Fact]
+    public async Task RefreshingUnderAPath_HandsAgainOnlyWhatTheAgentWasHandedUnderIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nhanded\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nhanded\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmoved since\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nmoved since\n");
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Contains("  docs/x.md", applied.Details!);
+        Assert.DoesNotContain("  a.txt", applied.Details!);
+        Assert.Equal("x\nmoved since\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+        Assert.Equal("one\nhanded\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
+    /// What the main tree committed under the paths never moved between trees - the orchestrators' directory here, forced
+    /// past its ignore rule - is never handed, committed or not, by seeding as by making.
+    /// </summary>
+    [Fact]
+    public async Task WhatTheMainTreeCommittedOnTheFloor_IsNeverHanded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, ".orchestrators/note.md", "the orchestrator's\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted\n");
+        await kit.GitAsync(kit.Main, "add", "--force", ".orchestrators/note.md");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.True(seeded.Succeeded, OrchestrationKit.Describe(seeded));
+        Assert.Equal("seeded agent 'ag' of 'o1' with 1 path(s)", seeded.Message);
+        Assert.Equal(["a.txt"], kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
+        Assert.False(File.Exists(Path.Combine(worktree, ".orchestrators", "note.md")));
+    }
+
+    /// <summary>
+    /// A path the main tree committed whose name is not UTF-8 refuses a refresh and a seeding, naming it, as an uncommitted
+    /// one does: passed over, the agent would hold a stale copy while being told it held the main tree's.
+    /// </summary>
+    [Fact]
+    public async Task APathTheMainTreeCommittedNamedOtherwiseThanInUtf8_RefusesTheHandOver_NamingIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        await kit.Harness.StageAsync(kit.Main, "\"docs/caf\\351.md\"", "bytes\n", Token);
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a name no file here can hold");
+        await kit.Harness.SkipWorktreeAsync(kit.Main, "\"docs/caf\\351.md\"", Token);
+
+        var refreshed = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: false, Token));
+        var seeded = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token));
+
+        foreach (var refusal in new[] { refreshed, seeded })
+        {
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+            Assert.Contains(@"'docs/caf\351.md' is not named in UTF-8", refusal.Message, StringComparison.Ordinal);
+            Assert.Contains("it cannot be handed to an agent", refusal.Message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// A path the main tree committed that no record of an agent can keep - one another platform reads as rooted - refuses a
+    /// seeding, as an uncommitted one does: handed, it would be recorded as somewhere else on that platform.
+    /// </summary>
+    [Fact]
+    public async Task APathTheMainTreeCommittedThatNoRecordCanKeep_RefusesSeeding()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows cannot hold a colon in a file name, and git there commits none.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "C:weird.md", "rooted on Windows\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a name another platform reads as rooted", Token);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("no record of an agent can keep a path another platform would read as somewhere else", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// seed-agent says, as refresh-agent does, when the agent's base is not the main tree's HEAD; where git cannot say what
+    /// the main tree's HEAD is, the refresh says that, and hands what it weighed all the same.
+    /// </summary>
+    [Fact]
+    public async Task ABaseBehindTheMainTreesHead_IsSaidBySeeding_AndAHeadGitCannotReadIsSaidToBeOne()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = Core.Output.ReportText.Commit(kit.Record("ag").Base!);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        var head = Core.Output.ReportText.Commit((await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!);
+
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.True(seeded.Succeeded, OrchestrationKit.Describe(seeded));
+        Assert.Contains(
+            $"its base {from} is not the main tree's HEAD {head}: what the main tree committed since reaches it as copies it is handed; "
+            + "'dssharness rebase-agent o1 ag --apply' moves its base there",
+            seeded.Details!);
+
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nuncommitted\n");
+        var main = kit.Main;
+        var git = new InterceptingGitClient(kit.Harness.GitClient) { ResolveCommitFails = (directory, reference) => directory == main && reference == "HEAD" };
+
+        var refreshed = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RefreshAsync(kit.Main, "o1", "ag", ["a.txt"], apply: true, Token);
+
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Contains("whether the main tree's HEAD is still its base cannot be told: git could not resolve 'HEAD': fatal: unable to read index", refreshed.Details!);
+        Assert.Equal("one\nuncommitted\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
+    /// A file the main tree turned into a directory, and a directory it turned into a file, are handed as git holds them:
+    /// the agent's file goes and what the directory holds comes, the agent's directory goes and the file comes - recorded as
+    /// handed, so its fold leaves all of it out - on every seeding, never a hand-over that stops at the first.
+    /// </summary>
+    [Fact]
+    public async Task SeedingAgain_HandsAFileTheMainTreeTurnedIntoADirectory_AndADirectoryItTurnedIntoAFile()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
+        OrchestrationKit.Write(kit.Main, "a.txt/inner.txt", "inner\n");
+        Directory.Delete(Path.Combine(kit.Main, "docs"), recursive: true);
+        OrchestrationKit.Write(kit.Main, "docs", "a file now\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.True(seeded.Succeeded, OrchestrationKit.Describe(seeded));
+        Assert.Equal("seeded agent 'ag' of 'o1' with 4 path(s)", seeded.Message);
+        Assert.DoesNotContain(seeded.Details!, line => line.StartsWith("not handed:", StringComparison.Ordinal));
+        Assert.Equal("inner\n", OrchestrationKit.Read(worktree, "a.txt/inner.txt"));
+        Assert.Equal("a file now\n", OrchestrationKit.Read(worktree, "docs"));
+
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.Equal(["a.txt/inner.txt", "docs"], seed.Paths.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["a.txt", "docs/x.md"], seed.Absent);
+        Assert.Contains("4 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
+    }
+
+    /// <summary>
+    /// A file the main tree has not committed that it turned into a directory is handed by a refresh as one it committed
+    /// is, and a submodule's entry the main tree moved is named and never handed, as a repository of its own is.
+    /// </summary>
+    [Fact]
+    public async Task Refreshing_HandsAFileTurnedIntoADirectoryUncommitted_AndNamesAMovedSubmodule()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var first = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        Directory.CreateDirectory(Path.Combine(kit.Main, "lib", "sub"));
+        await kit.GitAsync(kit.Main, "update-index", "--add", "--cacheinfo", $"160000,{first},lib/sub");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a submodule");
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.GitAsync(kit.Main, "update-index", "--cacheinfo", $"160000,{kit.Record("ag").Base},lib/sub");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "the submodule moved");
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        OrchestrationKit.Write(kit.Main, "b.txt/inner.txt", "inner\n");
+
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["b.txt", "lib"], apply: true, Token);
+
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Equal(["  b.txt", "  b.txt/inner.txt"], refreshed.Details!.Take(2));
+        Assert.Contains(refreshed.Details!, line => line.StartsWith("not handed: lib/sub - ", StringComparison.Ordinal));
+        Assert.Equal("inner\n", OrchestrationKit.Read(worktree, "b.txt/inner.txt"));
+        Assert.True(Directory.Exists(Path.Combine(worktree, "lib", "sub")));
+    }
+
+    /// <summary>
+    /// A directory the main tree turned into a file it has not committed - which git's comparison with the agent's base
+    /// never lists, untracked - is handed by a refresh, its files removed and the file copied, and the agent's copy of the
+    /// directory, which holds no file at its path, is never taken for a change of its own that the file would write over.
+    /// </summary>
+    [Fact]
+    public async Task Refreshing_HandsADirectoryTurnedIntoAFileUncommitted_OverTheAgentsCopyOfTheDirectory()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        Directory.Delete(Path.Combine(kit.Main, "docs"), recursive: true);
+        OrchestrationKit.Write(kit.Main, "docs", "a file now\n");
+
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Equal(["  docs", "  docs/x.md"], refreshed.Details!.Take(2));
+        Assert.Equal("a file now\n", OrchestrationKit.Read(worktree, "docs"));
+        Assert.Contains("2 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
+    }
+
+    /// <summary>
+    /// What the agent holds of its own where a hand-over needs room - a file where the main tree holds a directory, a link
+    /// to a directory elsewhere, a file of its own and a link in a directory the main tree turned into a file - refuses a
+    /// refresh and a seeding, forced or not, naming each, before anything is written: a copy would write through the link,
+    /// out of the agent's worktree, or stop at the file.
+    /// </summary>
+    [Fact]
+    public async Task WhatTheAgentHoldsOfItsOwnWhereAHandOverNeedsRoom_RefusesIt_NamingEach()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "notes", "the agent's own notes\n");
+        OrchestrationKit.Write(worktree, "docs/mine.md", "the agent's own\n");
+        OrchestrationKit.Write(kit.Main, "notes/a.md", "the main tree's\n");
+        OrchestrationKit.Write(kit.Main, "linked/b.md", "the main tree's\n");
+        Directory.Delete(Path.Combine(kit.Main, "docs"), recursive: true);
+        OrchestrationKit.Write(kit.Main, "docs", "a file now\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        TestLinks.DirectoryLink(Path.Combine(worktree, "linked"), elsewhere.Path);
+        TestLinks.DirectoryLink(Path.Combine(worktree, "docs", "elsewhere"), elsewhere.Path);
+
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs", "linked", "notes"], apply: true, Token);
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: true, Token);
+
+        foreach (var refusal in new[] { refreshed, seeded })
+        {
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+            Assert.Contains("4 path(s) of its own - docs/elsewhere, docs/mine.md, linked and 1 more -", refusal.Message);
+            Assert.EndsWith("Nothing was written.", refusal.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Equal("the agent's own notes\n", OrchestrationKit.Read(worktree, "notes"));
+        Assert.Equal("the agent's own\n", OrchestrationKit.Read(worktree, "docs/mine.md"));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(elsewhere.Path));
+    }
+
+    /// <summary>Seeding with nothing says, as any seeding does, that the agent's base is not the main tree's HEAD, and what moves it there.</summary>
+    [Fact]
+    public async Task SeedingWithNothing_SaysABaseBehindTheMainTreesHead()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: true, force: false, Token);
+
+        Assert.True(seeded.Succeeded, OrchestrationKit.Describe(seeded));
+        Assert.Contains(seeded.Details!, line => line.StartsWith($"its base {Core.Output.ReportText.Commit(kit.Record("ag").Base!)} is not the main tree's HEAD", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A path handed to the agent that the main tree then committed as it was handed is no change of the main tree's to the
+    /// agent: the agent holds the main tree's copy, and a refresh hands nothing, though the commit moved it from the base.
+    /// </summary>
+    [Fact]
+    public async Task APathTheMainTreeCommittedAsItWasHanded_IsNeverHandedAgain()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nhanded\n");
+        await kit.CreateAgentAsync("ag");
+        await kit.Harness.CommitAllAsync(kit.Main, "what was handed, committed", Token);
+
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["a.txt"], apply: true, Token);
+
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every changed path under a.txt", refreshed.Message);
+    }
+
+    /// <summary>
+    /// A symbolic link the main tree has not committed refuses a refresh and a seeding, as it refuses making an agent, before
+    /// anything is written: handed, it would be the file it leads to.
+    /// </summary>
+    [Fact]
+    public async Task ALinkTheMainTreeHasNotCommitted_RefusesARefreshAndASeeding()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(kit.Main, "docs", "linked.md"), "x.md"));
+
+        var refreshed = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token));
+        var seeded = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token));
+
+        foreach (var refusal in new[] { refreshed, seeded })
+        {
+            Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+            Assert.Contains("'docs/linked.md' is a symbolic link", refusal.Message);
+        }
+
+        Assert.False(File.Exists(Path.Combine(worktree, "docs", "linked.md")));
+    }
+
+    /// <summary>
+    /// A name not in UTF-8 that the main tree committed outside the paths a refresh is given refuses nothing: only what the
+    /// refresh weighs must be one a record can keep.
+    /// </summary>
+    [Fact]
+    public async Task ANameNotInUtf8OutsideWhatARefreshWeighs_RefusesNothing()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.Harness.StageAsync(kit.Main, "\"src/caf\\351.md\"", "bytes\n", Token);
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\ncommitted\n");
+        await kit.GitAsync(kit.Main, "add", "docs/x.md");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a name no file here can hold, and a change");
+        await kit.Harness.SkipWorktreeAsync(kit.Main, "\"src/caf\\351.md\"", Token);
+
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Equal("x\ncommitted\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+    }
+
+    /// <summary>The digest a seed records for the file at <paramref name="relative"/> under <paramref name="root"/>.</summary>
+    private static async Task<string> DigestAsync(string root, string relative)
+        => (await Core.FileSystem.FileContentHash.OfAsync(new HarnessFactory().FileSystem, Path.Combine(root, relative), Token)).Content;
+
     /// <summary>The real file system, except that one file cannot be copied, as while another program holds it.</summary>
     private sealed class UncopyableFileSystem(Core.FileSystem.IFileSystem inner, string held) : PassThroughFileSystem(inner)
     {

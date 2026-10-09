@@ -95,7 +95,8 @@ public enum LegVerdict
     /// <summary>
     /// Its work was begun or due, and was stopped before it reached a verdict of its own. Something stopped its build
     /// from outside before it finished: ninja, which says why whenever it ends a build itself, said nothing of why, or
-    /// said it was interrupted. Or a mutation arm was not driven to a verdict: its sweep was stopped, or ended by a
+    /// said it was interrupted; or a filesystem a heavy leg's build fills had less free than its machine keeps
+    /// (<see cref="RoomFloor"/>). Or a mutation arm was not driven to a verdict: its sweep was stopped, or ended by a
     /// refusal of the run, while it was driven or before; its own build, or its paired control's, was stopped from
     /// outside; no worker was left to run it; or the unmutated run of its test binary did not pass, leaving nothing to
     /// judge its own run against. Says

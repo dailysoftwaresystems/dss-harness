@@ -275,16 +275,16 @@ jobs:
 
       - name: Test
         # The package is only worth publishing if the suite passed on the commit being
-        # published, and this runs it only where nothing else did. A run Deploy started names
-        # the commit it promoted, and the full matrix passed in Deploy: on this commit for
-        # stable, and for beta on its parent, which differs only in <Version>. A run resuming a
-        # commit an earlier run tagged has that run's package job behind it, which passed by
-        # this same rule before the tag was made. What is left is a run started by hand that
-        # names no commit, on a commit no run has packaged: a release branch moved past the rules
-        # that guard it has nothing else behind it, so the suite runs here, on Linux x86_64 alone.
-        # A run started by hand that fills expected_sha in says Deploy promoted that commit, and
-        # is taken at its word.
-        if: env.ON_NUGET != 'true' && inputs.expected_sha == '' && steps.resume.outputs.tag_exists != 'true'
+        # published, and this runs it only where nothing else did. A run Deploy started has the
+        # full matrix behind it: on this commit for stable, and for beta on its parent, which
+        # differs only in <Version>. It is told by who started it - Deploy starts it with the
+        # workflow's own token, so it is github-actions[bot]'s, and stays so when a person runs
+        # it again - never by what was typed into expected_sha, which a person can fill in too.
+        # A run resuming a commit an earlier run tagged has that run's package job behind it,
+        # which passed by this same rule before the tag was made. What is left is a run a person
+        # started, on a commit no run has packaged: a release branch moved past the rules that
+        # guard it has nothing else behind it, so the suite runs here, on Linux x86_64 alone.
+        if: env.ON_NUGET != 'true' && github.actor != 'github-actions[bot]' && steps.resume.outputs.tag_exists != 'true'
         env:
           # As the test matrix sets it: a test that really builds fails where the runner lacks cmake, ninja or a
           # compiler, rather than being skipped green. This runner's image carries all three.

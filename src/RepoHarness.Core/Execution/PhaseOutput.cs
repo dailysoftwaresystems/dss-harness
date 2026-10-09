@@ -1,4 +1,5 @@
 using System.Text;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Processes;
 
 namespace RepoHarness.Core.Execution;
@@ -84,6 +85,7 @@ public abstract class PhaseOutput
     /// The lines between byte <paramref name="start"/> and byte <paramref name="end"/> of <paramref name="logFile"/>: where a
     /// phase's child wrote, below the header and above the exit line.
     /// </summary>
+    /// <param name="fileSystem">Opens the log, each time its lines are asked for.</param>
     /// <param name="logFile">The phase's log.</param>
     /// <param name="start">Where the child's first line begins.</param>
     /// <param name="end">Where the line after the child's last one begins.</param>
@@ -92,11 +94,12 @@ public abstract class PhaseOutput
     /// ran - or none where nothing says. The log is held to them before any line of the range is handed on, so a log
     /// written again since is never read as this phase's, by a reader that stops early no more than by one that reads on.
     /// </param>
-    internal static PhaseOutput InLog(string logFile, long start, long end, ReadOnlyMemory<byte> closes = default)
+    internal static PhaseOutput InLog(IFileSystem fileSystem, string logFile, long start, long end, ReadOnlyMemory<byte> closes = default)
     {
+        ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentException.ThrowIfNullOrWhiteSpace(logFile);
 
-        return new LogRange(logFile, start, end, closes);
+        return new LogRange(fileSystem, logFile, start, end, closes);
     }
 
     /// <summary>Text held in memory, read as the process runner reads a child's stream.</summary>
@@ -121,7 +124,7 @@ public abstract class PhaseOutput
     }
 
     /// <summary>A range of a log's bytes, read only from a log that still holds what its phase left in it.</summary>
-    private sealed class LogRange(string logFile, long start, long end, ReadOnlyMemory<byte> closes) : PhaseOutput
+    private sealed class LogRange(IFileSystem fileSystem, string logFile, long start, long end, ReadOnlyMemory<byte> closes) : PhaseOutput
     {
         /// <exception cref="PhaseOutputUnreadException">The log no longer holds the range: said as the first line is asked for.</exception>
         public override IEnumerable<string> Lines()
@@ -166,14 +169,15 @@ public abstract class PhaseOutput
         /// The log, opened where the range begins once it is seen to hold what the phase left: as many bytes as the phase
         /// wrote up to the end of what closed its child's lines, and those very bytes there.
         /// </summary>
-        private FileStream Open()
+        private Stream Open()
         {
-            FileStream log;
+            Stream log;
 
             try
             {
-                // Shared for writing, so a log another process still holds open can be read, as it can while a phase runs.
-                log = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 1);
+                // Shared for writing and deleting, as every file this harness streams is opened, so a log another process
+                // still holds open can be read, as it can while a phase runs.
+                log = fileSystem.OpenRead(logFile);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -215,7 +219,7 @@ public abstract class PhaseOutput
         }
 
         /// <summary>Reads up to <paramref name="count"/> bytes of the range, which the log held as it was opened.</summary>
-        private int Read(FileStream log, byte[] bytes, int count)
+        private int Read(Stream log, byte[] bytes, int count)
         {
             int read;
 

@@ -3,6 +3,7 @@ using RepoHarness.Cli;
 using RepoHarness.Cli.Commands;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Worktrees;
 
@@ -24,6 +25,7 @@ root.Subcommands.Add(ListOrchestratorCommand.Create());
 root.Subcommands.Add(CreateAgentCommand.Create());
 root.Subcommands.Add(SeedAgentCommand.Create());
 root.Subcommands.Add(RefreshAgentCommand.Create());
+root.Subcommands.Add(RebaseAgentCommand.Create());
 root.Subcommands.Add(FoldAgentCommand.Create());
 root.Subcommands.Add(DeleteAgentCommand.Create());
 root.Subcommands.Add(WriteAnchorCommand.Create());
@@ -77,9 +79,9 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
         return HarnessExit.UsageError;
     }
 
-    // A command past its point of no return goes on after Ctrl+C - a deletion, a fold or a hand-over is
-    // never left half written, and a host agent can be running one for another machine - so each is
-    // waited for as long as a deletion expects. No other command is any slower to stop.
+    // A command past its point of no return goes on after Ctrl+C - a deletion, a fold, a hand-over or a
+    // move of an agent's base is never left half written, and a host agent can be running one for another
+    // machine - so each is waited for as long as a deletion expects. No other command is any slower to stop.
     var invocation = new InvocationConfiguration();
 
     if (PointOfNoReturn.Commands.Contains(parseResult.CommandResult.Command.Name))
@@ -91,9 +93,11 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
 }
 
 // A command acts on the current directory when it is given no --directory, so a host runs a request
-// in its copy of the repository by starting there, without its arguments being rewritten.
-Task<int> RunInAsync(string directory, string[] arguments, CancellationToken cancellationToken)
+// in its copy of the repository by starting there, without its arguments being rewritten - and with what
+// the machine that asked says of it beside them: the run it is a leg of, the drive its WSL disk grows on.
+Task<int> RunInAsync(string directory, string[] arguments, Dispatch dispatch, CancellationToken cancellationToken)
 {
     Directory.SetCurrentDirectory(directory);
+    CommandRunner.Serve(CommandOrigin.Served(dispatch));
     return RunAsync(arguments, cancellationToken);
 }

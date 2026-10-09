@@ -7,6 +7,7 @@ using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Runs;
 
@@ -84,6 +85,19 @@ public sealed record PlacedLeg(
     public RoomNeed? Need { get; init; }
 
     /// <summary>
+    /// The least room the leg's builds leave free on each filesystem they fill, on the machine that runs them, below which
+    /// each is stopped; <see langword="null"/> until its work starts there, and where nothing stops them for room.
+    /// </summary>
+    public RoomFloor? Floor { get; init; }
+
+    /// <summary>
+    /// The repository's other trees on the machine that runs the leg's work - every tree but the leg's own - as they were
+    /// listed as its work began there; <see langword="null"/> until then. Whose build directory a process found beside the
+    /// leg works in is told by them.
+    /// </summary>
+    public RepositoryTreesFound? Beside { get; init; }
+
+    /// <summary>
     /// What the developer environment the leg's toolchain names set up for it, on the machine that runs
     /// it: empty until it is set up there, and for a leg whose toolchain names none.
     /// </summary>
@@ -139,6 +153,8 @@ public sealed record PlacedLeg(
         {
             ProgramDirectories = Host.ProgramDirectories,
             HostEnvironment = Environment,
+            Floor = Floor,
+            Beside = Beside,
         };
     }
 

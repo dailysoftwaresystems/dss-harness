@@ -1275,7 +1275,7 @@ public sealed class ToolProvisionServiceTests
         public ProcessResult Respond(HostConnection connection, HostCommand command)
         {
             var host = connection.Host;
-            Calls.Add(new HostCall(host, command.Program, command.Arguments, command.StandardInput));
+            Calls.Add(new HostCall(host, command.Program, command.Arguments, command.StandardInput.Read()));
 
             if (transportStops?.Invoke(host, command) == true)
             {
@@ -1310,9 +1310,9 @@ public sealed class ToolProvisionServiceTests
                 // the one that only checks a password and installs nothing.
                 ("sudo", "-S") when command.Arguments is ["-S", "-v"] => checkNeverFinishes
                     ? new ProcessResult(-1, string.Empty, string.Empty, TimeSpan.FromMinutes(2), TimedOut: true)
-                    : string.Equals(command.StandardInput, rootPassword(host) + "\n", StringComparison.Ordinal)
+                    : string.Equals(command.StandardInput.Read(), rootPassword(host) + "\n", StringComparison.Ordinal)
                         ? HostResults.Ok(string.Empty)
-                        : HostResults.Failed(1, $"sudo: a password is required: {command.StandardInput.TrimEnd('\n')}"),
+                        : HostResults.Failed(1, $"sudo: a password is required: {command.StandardInput.Read().TrimEnd('\n')}"),
                 ("sudo", "-n") when command.Arguments.Count == 2 => passwordlessSudo
                     ? HostResults.Ok(string.Empty)
                     : HostResults.Failed(1, "sudo: a password is required"),

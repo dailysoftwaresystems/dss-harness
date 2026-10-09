@@ -448,6 +448,28 @@ public sealed class ArtifactCarryTests
         SyncServe.RefuseAFileTooLargeToCarry(SyncServe.LargestFile, "build/pack/corpus.bin", "ssh vps");
     }
 
+    /// <summary>
+    /// A file whose base64 text would fill the longest string there is - 1,073,741,791 characters - is refused by name before
+    /// anything crosses: the far side reads the request carrying it as one line, and that line holds the rest of the request
+    /// too. Reckoned from int.MaxValue, the bound was twice that, and a file between the two was turned away only by this
+    /// machine running out of memory encoding it, in words naming a limit the file was under.
+    /// </summary>
+    [Fact]
+    public void AFileWhoseTextNoLineCanHold_IsRefusedByName_BeforeAnythingCrosses()
+    {
+        const int LongestString = 0x3FFFFFDF;
+
+        var refusal = Assert.Throws<HarnessException>(() => SyncServe.RefuseAFileTooLargeToCarry(
+            LongestString / 4 * 3L,
+            "build/pack/corpus.bin",
+            "ssh vps"));
+
+        Assert.Contains("corpus.bin", refusal.Message, StringComparison.Ordinal);
+
+        // What the bound lets cross still leaves the request room around its text on that one line.
+        Assert.True((SyncServe.LargestFile + 2) / 3 * 4 < LongestString - (64 * 1024), $"{SyncServe.LargestFile:N0} bytes encode to a line no string holds");
+    }
+
     /// <summary>A run's artifacts here, a host holding a copy of this tree, and what joins them.</summary>
     /// <param name="Harness">The services, and the streams a warning is written to.</param>
     /// <param name="Service">The sync under test.</param>

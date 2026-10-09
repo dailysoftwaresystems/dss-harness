@@ -135,11 +135,11 @@ public sealed record HostCommand
     public IReadOnlyList<string> Arguments { get; init; } = [];
 
     /// <summary>
-    /// Text written to the program's standard input, which is then closed unless
-    /// <see cref="HoldStandardInputOpen"/> is set; empty by default. ssh forwards whatever input it is
+    /// What is written to the program's standard input - text, or what a writer writes as it makes it - which is then
+    /// closed unless <see cref="HoldStandardInputOpen"/> is set; empty by default. ssh forwards whatever input it is
     /// given, so the program on the host reads exactly this, and nothing piped to DssHarness.
     /// </summary>
-    public string StandardInput { get; init; } = string.Empty;
+    public ChildInput StandardInput { get; init; } = string.Empty;
 
     /// <summary>
     /// Keeps standard input open until the program exits, so that a program watching for its end learns when
@@ -150,10 +150,19 @@ public sealed record HostCommand
     /// <summary>Wall clock budget, or <see langword="null"/> for none.</summary>
     public TimeSpan? Timeout { get; init; }
 
-    /// <summary>Receives each line the program writes to standard output, as it arrives.</summary>
+    /// <summary>
+    /// Runs the program as root: in a WSL distribution, as WSL's own root user, which asks for no password. No other host
+    /// runs a command so, and one asked to starts nothing: root is reached there only through a password.
+    /// </summary>
+    public bool AsRoot { get; init; }
+
+    /// <summary>
+    /// Receives each line the program writes to standard output, as it arrives. One that throws is handed no more lines,
+    /// and what it threw is raised once the program has gone.
+    /// </summary>
     public Action<string>? OnOutputLine { get; init; }
 
-    /// <summary>Receives each line the program writes to standard error, as it arrives.</summary>
+    /// <summary>Receives each line the program writes to standard error, as it arrives, as <see cref="OnOutputLine"/> does.</summary>
     public Action<string>? OnErrorLine { get; init; }
 
     /// <summary>
@@ -199,6 +208,13 @@ public interface IHostCommandRunner
     /// </summary>
     /// <exception cref="HarnessException">wsl.exe would not start, so WSL could not be reached.</exception>
     Task<ProcessResult> ProbeDefaultWslDistributionAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Asks WSL which of its distributions are running, with <c>wsl --list --running --quiet</c>: each one's name on a line
+    /// of its own, and nothing where none is.
+    /// </summary>
+    /// <exception cref="HarnessException">wsl.exe would not start, so WSL could not be reached.</exception>
+    Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IHostCommandRunner"/>
@@ -381,6 +397,22 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
         Timeout = timeout,
     };
 
+    public Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        => ThroughTransportAsync("WSL", RunningWslDistributionsRequest(timeout), cancellationToken);
+
+    /// <summary>
+    /// The process that asks WSL which of its distributions are running: by name alone, which no language translates, where
+    /// the listing's other words are translated into the machine's language.
+    /// </summary>
+    public static ProcessRequest RunningWslDistributionsRequest(TimeSpan timeout) => new()
+    {
+        FileName = WslProgram,
+        Arguments = ["--list", "--running", "--quiet"],
+        Environment = WslEnvironment,
+        StandardInput = string.Empty,
+        Timeout = timeout,
+    };
+
     /// <summary>The process that runs <paramref name="command"/> on the host <paramref name="connection"/> reaches.</summary>
     public static ProcessRequest BuildRequest(HostConnection connection, HostCommand command)
         => BuildRequest(connection, command, Holding(connection));
@@ -393,6 +425,11 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(command);
+
+        if (command.AsRoot && connection.Host.Kind != HostKind.Wsl)
+        {
+            throw new ArgumentException($"Only a WSL distribution runs a command as root, and {connection.Host} is none.", nameof(command));
+        }
 
         var request = connection.Host.Kind switch
         {
@@ -408,6 +445,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
                 [
                     "--distribution",
                     Declared(connection.Distribution, nameof(HostConnection.Distribution)),
+                    .. command.AsRoot ? ["--user", "root"] : Array.Empty<string>(),
                     "--cd",
                     "~",
                     "--exec",

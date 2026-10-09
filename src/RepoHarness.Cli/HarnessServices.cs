@@ -39,15 +39,15 @@ internal static class HarnessServices
     /// Whether a password may be asked for at the terminal. False under <c>--no-prompt</c>, and for
     /// a process serving another machine, which has nobody to ask.
     /// </param>
-    /// <param name="servesAnotherMachine">
-    /// Whether the command was asked for by the DssHarness on another machine, through this one's host
-    /// agent, rather than typed here.
+    /// <param name="origin">
+    /// Who the command runs for: somebody typing it here, this machine's host agent, or a command the DssHarness on another
+    /// machine asked that agent to run, with what it says of it beside the command line.
     /// </param>
-    internal static ServiceProvider Build(bool verbose, bool prompting, bool servesAnotherMachine = false)
+    internal static ServiceProvider Build(bool verbose, bool prompting, CommandOrigin origin)
     {
         var services = new ServiceCollection();
 
-        services.AddSingleton(new CommandOrigin(servesAnotherMachine));
+        services.AddSingleton(origin);
 
         // The only registrations that observe the operating system: which system this is, how it
         // expresses a file's permissions, and how it publishes its process table. Everything
@@ -62,7 +62,7 @@ internal static class HarnessServices
 
         // A host answering another machine writes its home as ~ in what it tells that machine; a command
         // typed here writes its own paths as they are.
-        services.AddSingleton(provider => servesAnotherMachine
+        services.AddSingleton(provider => origin.ServesAnotherMachine
             ? HomeShorthand.Of(provider.GetRequiredService<IHostPlatform>, provider.GetRequiredService<IFileSystem>())
             : HomeShorthand.None);
         services.AddSingleton<IHarnessOutput>(provider => new ConsoleHarnessOutput(verbose, provider.GetRequiredService<HomeShorthand>()));
@@ -139,6 +139,7 @@ internal static class HarnessServices
             prompting));
 
         services.AddSingleton<IToolProvisionService, ToolProvisionService>();
+        services.AddSingleton<IRepositoryTrees, RepositoryTrees>();
         services.AddSingleton<LegsService>();
         services.AddSingleton<HostExecService>();
 
@@ -164,6 +165,7 @@ internal static class HarnessServices
         services.AddSingleton(provider => new LegAdmission(
             provider.GetRequiredService<HeavyLegSlots>(),
             provider.GetRequiredService<IMemoryGauge>()));
+        services.AddSingleton<IWslPageCache, WslPageCache>();
         services.AddSingleton<LegRunService>();
         services.AddSingleton<CleanService>();
 

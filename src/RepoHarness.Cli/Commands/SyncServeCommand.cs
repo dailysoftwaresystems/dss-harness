@@ -25,7 +25,7 @@ internal static class SyncServeCommand
 
     private static readonly Argument<string[]> ArgumentsArgument = new("arguments")
     {
-        Description = "The operation's arguments: the copy's root, then whatever the operation takes.",
+        Description = $"The operation's arguments, after '{SyncServe.OperandsFollow}': the copy's root, then whatever the operation takes, each value an argument of its own.",
         Arity = ArgumentArity.OneOrMore,
     };
 
@@ -67,7 +67,7 @@ internal static class SyncServeCommand
 
                 case SyncServe.Index:
                     await transport
-                        .IndexAsync(root, SyncServe.CarriedPaths(Required(arguments, 1, operation)), cancellationToken)
+                        .IndexAsync(root, SyncServe.CarriedPaths(arguments), cancellationToken)
                         .ConfigureAwait(false);
                     return Done();
 
@@ -84,11 +84,8 @@ internal static class SyncServeCommand
                         await transport.RemoveWorkersAsync(root, SyncServe.MeasuresOnly(arguments), cancellationToken).ConfigureAwait(false)));
 
                 case SyncServe.Manifest:
-                    var withheld = Required(arguments, 1, operation)
-                        .Split('\n', StringSplitOptions.RemoveEmptyEntries);
-
                     var manifest = await transport
-                        .ReadManifestAsync(root, withheld, cancellationToken)
+                        .ReadManifestAsync(root, SyncServe.Named(arguments), cancellationToken)
                         .ConfigureAwait(false);
 
                     return Answer(new SyncManifestAnswer([.. manifest.Paths.Select(path => manifest.Entries[path])])
@@ -97,12 +94,10 @@ internal static class SyncServeCommand
                     });
 
                 case SyncServe.Write:
+                    var file = new SyncFileWrite(Required(arguments, 1, operation), Required(arguments, 2, operation));
+
                     await transport
-                        .WriteFileAsync(
-                            root,
-                            Required(arguments, 1, operation),
-                            Convert.FromBase64String(Required(arguments, 2, operation)),
-                            cancellationToken)
+                        .WriteFileAsync(root, file.Path, file.Bytes(), cancellationToken)
                         .ConfigureAwait(false);
 
                     return Done();
@@ -111,8 +106,7 @@ internal static class SyncServeCommand
                     await transport
                         .WriteFilesAsync(
                             root,
-                            [.. SyncServe.Carried(Required(arguments, 1, operation))
-                                .Select(file => new SyncFileContent(file.Path, file.Bytes()))],
+                            [.. SyncServe.CarriedFiles(arguments).Select(carried => new SyncFileContent(carried.Path, carried.Bytes()))],
                             cancellationToken)
                         .ConfigureAwait(false);
 
@@ -128,10 +122,7 @@ internal static class SyncServeCommand
                 case SyncServe.Prune:
                     return Answer(new SyncPruneAnswer(
                         await transport
-                            .RemoveEmptyDirectoriesAsync(
-                                root,
-                                Required(arguments, 1, operation).Split('\n', StringSplitOptions.RemoveEmptyEntries),
-                                cancellationToken)
+                            .RemoveEmptyDirectoriesAsync(root, SyncServe.Named(arguments), cancellationToken)
                             .ConfigureAwait(false)));
 
                 case SyncServe.Read:
@@ -148,9 +139,9 @@ internal static class SyncServeCommand
 
                     // Hashed here, where the bytes were read. A hash the asking machine took of what
                     // arrived would agree with those bytes whatever happened on the way.
-                    return Answer(new SyncFileAnswer(
-                        Convert.ToBase64String(contents),
-                        RepoHarness.Core.FileSystem.FileContentHash.Of(contents)));
+                    return Answer(
+                        new SyncFileAnswer(contents.LongLength, RepoHarness.Core.FileSystem.FileContentHash.Of(contents)),
+                        SyncServe.ContentLines(contents));
 
                 default:
                     // Named rather than passed over: an operation this build does not know means the
@@ -165,9 +156,12 @@ internal static class SyncServeCommand
         return command;
     }
 
-    /// <summary>An answer the machine syncing reads, written to standard output on its own line.</summary>
-    private static CommandOutcome Answer<T>(T answer)
-        => CommandOutcome.Ok(string.Empty) with { Data = [SyncServe.Answer(answer)], Quiet = true };
+    /// <summary>
+    /// An answer the machine syncing reads, written to standard output on its own line, and the lines that follow it - a
+    /// file's content, a piece to a line - where it has any.
+    /// </summary>
+    private static CommandOutcome Answer<T>(T answer, IEnumerable<string>? following = null)
+        => CommandOutcome.Ok(string.Empty) with { Data = [SyncServe.Answer(answer), .. following ?? []], Quiet = true };
 
     /// <summary>An operation that answers nothing, which must still say nothing rather than a status line.</summary>
     private static CommandOutcome Done() => CommandOutcome.Ok(string.Empty) with { Quiet = true };

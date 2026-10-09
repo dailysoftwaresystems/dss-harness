@@ -7,6 +7,8 @@ using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Legs;
 
@@ -60,13 +62,19 @@ public sealed record LegsReport(IReadOnlyList<LegPlacement> Placements, IReadOnl
 /// that provides its operating system, its processor and its emulator - turning it away there when
 /// that host lacks a program the command requires.
 /// </summary>
-public sealed class LegsService(IHarnessContextLoader contextLoader, IHostInspector inspector, IHostPlatform platform, IHarnessOutput output)
+public sealed class LegsService(
+    IHarnessContextLoader contextLoader,
+    IHostInspector inspector,
+    IRepositoryTrees trees,
+    IHostPlatform platform,
+    IHarnessOutput output)
 {
     /// <summary>The command's name, which prefixes what it reports.</summary>
     public const string CommandName = "legs";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IHostInspector _inspector = inspector;
+    private readonly IRepositoryTrees _trees = trees;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
 
@@ -103,10 +111,11 @@ public sealed class LegsService(IHarnessContextLoader contextLoader, IHostInspec
         var reports = new Dictionary<HostId, HostReport>();
 
         // Asked in the same measuring, for nothing: the room on each host, and - for each leg the command builds -
-        // what the build directories it would fill hold there. A leg the command does not build needs no room, so
-        // its build directory is not asked about and it is never turned away for room: clean, above all, is how
-        // room is made.
-        var room = LegRoom.Questions(context, candidates, here, _platform.PathComparison, workload);
+        // what the build directories it would fill hold there, and every other tree's copy of its variant beside them.
+        // A leg the command does not build needs no room, so its build directory is not asked about and it is never
+        // turned away for room: clean, above all, is how room is made.
+        var trees = await TreesAsync(context, candidates, here, workload, cancellationToken).ConfigureAwait(false);
+        var room = LegRoom.Questions(context, candidates, here, _platform.PathComparison, workload, trees);
 
         // This machine costs nothing to reach, so it is measured first. Other hosts are measured only
         // for the legs it cannot take at all - the wrong machine, or an emulator that does not work
@@ -140,7 +149,8 @@ public sealed class LegsService(IHarnessContextLoader contextLoader, IHostInspec
             [.. selection.Legs.Select(leg => LegPlacement.Place(config, leg, workload, reports, here))],
             here,
             _platform.PathComparison,
-            workload);
+            workload,
+            trees);
 
         foreach (var note in roomUnchecked)
         {
@@ -154,6 +164,57 @@ public sealed class LegsService(IHarnessContextLoader contextLoader, IHostInspec
         }
 
         return new LegsReport(placements, [.. reports.Values], selection.Named) { Here = here };
+    }
+
+    /// <summary>
+    /// The trees of the repository each host a leg the command builds could be placed on holds: this machine's own, and
+    /// the copies this machine knows each other host to keep. A host whose trees beside the main checkout's could not be
+    /// listed is said, with why, rather than taken to hold none.
+    /// </summary>
+    /// <remarks>
+    /// What a first build of a variant needs there is what another tree's copy of it came to: a consumer's leg, placed
+    /// where neither its own tree's copy nor the main checkout's had built its variant, filled the disk under two other
+    /// legs, while three worktrees' copies beside them had each recorded about 11.4 GiB.
+    /// </remarks>
+    private async Task<IReadOnlyDictionary<HostId, RepositoryTreesFound>> TreesAsync(
+        HarnessContext context,
+        IEnumerable<(SelectedLeg Leg, IReadOnlyList<HostId> Hosts)> candidates,
+        HostId? here,
+        LegWorkload workload,
+        CancellationToken cancellationToken)
+    {
+        var found = new Dictionary<HostId, RepositoryTreesFound>();
+
+        foreach (var host in candidates
+            .Where(entry => workload.On(entry.Leg.Leg.Os) is { Build: true, BuildsTheLegsTree: true })
+            .SelectMany(entry => entry.Hosts)
+            .Distinct())
+        {
+            // A host that declares nowhere to keep a copy holds none of the repository's, and is refused where a leg is
+            // placed on it; this machine, running legs another machine sent it, keeps them where it declares for itself.
+            var keeper = host.Kind == HostKind.Local ? HostCopies.KeptAs(here) : host;
+
+            if (keeper is not null && HostCopies.DeclaredFor(context.Config, keeper)?.RepositoryPath is not { Length: > 0 })
+            {
+                continue;
+            }
+
+            var trees = host.Kind == HostKind.Local
+                ? await _trees.HereAsync(context, here, cancellationToken).ConfigureAwait(false)
+                : _trees.On(context, host);
+
+            if (trees.Unlisted is { } why)
+            {
+                _output.Warn(
+                    CommandName,
+                    $"{host}: the worktrees beside the main checkout could not be listed, so a leg whose own tree never built its variant "
+                    + $"there is measured by the main checkout's build alone: {why}");
+            }
+
+            found[host] = trees;
+        }
+
+        return found;
     }
 
     /// <summary>

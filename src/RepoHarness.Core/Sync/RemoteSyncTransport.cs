@@ -1,4 +1,4 @@
-using System.Text.Json;
+using System.Globalization;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
@@ -58,15 +58,19 @@ public sealed class RemoteSyncTransport(
 
     /// <inheritdoc/>
     public Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default)
-        => AskAsync<object>(root, [SyncServe.Create, root, mark.ToString()], cancellationToken);
+        => AskAsync<object>(SyncServe.Create, root, [mark.ToString()], cancellationToken);
 
     /// <inheritdoc/>
     public Task InitialiseRepositoryAsync(string root, CancellationToken cancellationToken = default)
-        => AskAsync<object>(root, [SyncServe.InitRepository, root], cancellationToken);
+        => AskAsync<object>(SyncServe.InitRepository, root, [], cancellationToken);
 
     /// <inheritdoc/>
     public Task IndexAsync(string root, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
-        => AskAsync<object>(root, [SyncServe.Index, root, SyncServe.CarryPaths(paths)], cancellationToken);
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        return AskAsync<object>(SyncServe.Index, root, [.. paths.Select(HostArgument.Of)], cancellationToken);
+    }
 
     /// <inheritdoc/>
     /// <remarks>
@@ -76,7 +80,7 @@ public sealed class RemoteSyncTransport(
     /// copy would stay recorded for good.
     /// </remarks>
     public async Task<CopyRemoval> RemoveCopyAsync(string root, CancellationToken cancellationToken = default)
-        => (await AskAsync<SyncRemoveAnswer>(root, [SyncServe.RemoveCopy, root], cancellationToken, HomeDirectory).ConfigureAwait(false))?.Removal
+        => (await AskAsync<SyncRemoveAnswer>(SyncServe.RemoveCopy, root, [], cancellationToken, HomeDirectory).ConfigureAwait(false))?.Removal
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
                 $"{Host} did not answer whether it removed '{root}'.");
@@ -87,7 +91,7 @@ public sealed class RemoteSyncTransport(
     /// host with none there answers that it keeps none.
     /// </remarks>
     public async Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default)
-        => (await AskAsync<SyncCopiesAnswer>(repositoryPath, [SyncServe.ListCopies, repositoryPath], cancellationToken, HomeDirectory).ConfigureAwait(false))?.Copies
+        => (await AskAsync<SyncCopiesAnswer>(SyncServe.ListCopies, repositoryPath, [], cancellationToken, HomeDirectory).ConfigureAwait(false))?.Copies
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
                 $"{Host} did not answer which copies it keeps beside '{repositoryPath}'.");
@@ -99,8 +103,9 @@ public sealed class RemoteSyncTransport(
     /// </remarks>
     public async Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
         => (await AskAsync<SyncWorkersAnswer>(
+                    SyncServe.RemoveWorkers,
                     root,
-                    measureOnly ? [SyncServe.RemoveWorkers, root, SyncServe.MeasureOnly] : [SyncServe.RemoveWorkers, root],
+                    measureOnly ? [SyncServe.MeasureOnly] : [],
                     cancellationToken,
                     HomeDirectory)
                 .ConfigureAwait(false))?.Workers
@@ -117,8 +122,9 @@ public sealed class RemoteSyncTransport(
         ArgumentNullException.ThrowIfNull(withheld);
 
         var answer = await AskAsync<SyncManifestAnswer>(
+                SyncServe.Manifest,
                 root,
-                [SyncServe.Manifest, root, string.Join('\n', withheld)],
+                [.. withheld.Select(HostArgument.Of)],
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -144,6 +150,11 @@ public sealed class RemoteSyncTransport(
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Refused here if it is too large to carry, before anything is sent, so the reader is told which file rather than
+    /// left with a host that could not read the request. Its content is encoded into the request as the request is
+    /// written, and never held here as text.
+    /// </remarks>
     public Task WriteFileAsync(
         string root,
         string relativePath,
@@ -154,47 +165,18 @@ public sealed class RemoteSyncTransport(
 
         SyncServe.RefuseAFileTooLargeToCarry(contents.LongLength, relativePath, Host.ToString());
 
-        return SendAsync(root, relativePath, contents, cancellationToken);
-    }
-
-    /// <summary>Encodes one file and sends it, as its own method so the encoding is inside a try.</summary>
-    /// <param name="root">The copy's root.</param>
-    /// <param name="relativePath">Where the file goes, relative to the root.</param>
-    /// <param name="contents">Its bytes.</param>
-    /// <param name="cancellationToken">Stops the write.</param>
-    private async Task SendAsync(
-        string root,
-        string relativePath,
-        byte[] contents,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await AskAsync<object>(
-                    root,
-                    [SyncServe.Write, root, relativePath, Convert.ToBase64String(contents)],
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OutOfMemoryException)
-        {
-            // The bound above is what base64 can express; this is the other ceiling, which is
-            // whatever this machine had free. Both mean one thing to the reader - the file does not
-            // fit through here - and only this one arrives as "the tool has a defect" if it is left
-            // alone. Nothing is retried and nothing continues: the exception ends the command.
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                SyncServe.TooLargeToCarry(contents.LongLength, relativePath, Host.ToString()));
-        }
+        return AskAsync<object>(SyncServe.Write, root, [relativePath, HostArgument.Carrying(contents)], cancellationToken);
     }
 
     /// <inheritdoc/>
     /// <remarks>
     /// One request, and so one session: the cost of reaching this host is paid once for the batch rather
     /// than once per file. Each file is refused here if it alone is too large to carry, before anything is
-    /// encoded, so the reader is told which file rather than left with this machine out of memory.
+    /// sent. Each crosses as its path then its content, encoded into the request as the request is written:
+    /// a batch built as text first - its files' base64, inside its JSON, inside the request's - left a
+    /// consumer's first sync of 85 MiB holding 3.2 GiB here.
     /// </remarks>
-    public async Task WriteFilesAsync(
+    public Task WriteFilesAsync(
         string root,
         IReadOnlyList<SyncFileContent> files,
         CancellationToken cancellationToken = default)
@@ -203,7 +185,7 @@ public sealed class RemoteSyncTransport(
 
         if (files.Count == 0)
         {
-            return;
+            return Task.CompletedTask;
         }
 
         foreach (var file in files)
@@ -211,37 +193,16 @@ public sealed class RemoteSyncTransport(
             SyncServe.RefuseAFileTooLargeToCarry(file.Contents.LongLength, file.Path, Host.ToString());
         }
 
-        string request;
-
-        // Only the encoding is guarded, because only here is it certain that nothing has been written: past
-        // this point the request has gone to the host, and an exception raised while the reply is read says
-        // nothing about how much of the batch the far side had already written.
-        try
-        {
-            var carried = files
-                .Select(file => new SyncFileWrite(file.Path, Convert.ToBase64String(file.Contents)))
-                .ToList();
-
-            request = SyncServe.Carry(carried);
-        }
-        catch (OutOfMemoryException)
-        {
-            // As one file's own write reports it: the batch is bounded by what the caller grouped, and this
-            // is the other ceiling - whatever this machine had free. Reported as the transfer being too
-            // large for this machine rather than as a defect in the tool, which is where an
-            // OutOfMemoryException otherwise arrives.
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"{files.Count} files could not be carried to {Host} in one request: this machine ran out "
-                + "of memory encoding them, so none of them was sent.");
-        }
-
-        await AskAsync<object>(root, [SyncServe.WriteMany, root, request], cancellationToken).ConfigureAwait(false);
+        return AskAsync<object>(
+            SyncServe.WriteMany,
+            root,
+            [.. files.SelectMany(file => new[] { HostArgument.Of(file.Path), HostArgument.Carrying(file.Contents) })],
+            cancellationToken);
     }
 
     /// <inheritdoc/>
     public Task DeleteFileAsync(string root, string relativePath, CancellationToken cancellationToken = default)
-        => AskAsync<object>(root, [SyncServe.Delete, root, relativePath], cancellationToken);
+        => AskAsync<object>(SyncServe.Delete, root, [relativePath], cancellationToken);
 
     /// <inheritdoc/>
     public async Task<IReadOnlyList<EmptiedDirectory>> RemoveEmptyDirectoriesAsync(
@@ -257,8 +218,9 @@ public sealed class RemoteSyncTransport(
         }
 
         var answer = await AskAsync<SyncPruneAnswer>(
+                SyncServe.Prune,
                 root,
-                [SyncServe.Prune, root, string.Join('\n', directories)],
+                [.. directories.Select(HostArgument.Of)],
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -276,15 +238,28 @@ public sealed class RemoteSyncTransport(
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Decoded a line at a time as it arrives, into the bytes the answer said the file holds, so it is never held here as
+    /// text.
+    /// </remarks>
     public async Task<byte[]> ReadFileAsync(
         string root,
         string relativePath,
         CancellationToken cancellationToken = default)
     {
+        byte[]? contents = null;
+        var filled = 0;
+
         var answer = await AskAsync<SyncFileAnswer>(
+                SyncServe.Read,
                 root,
-                [SyncServe.Read, root, relativePath],
-                cancellationToken)
+                [relativePath],
+                cancellationToken,
+                following: (told, line) =>
+                {
+                    contents ??= new byte[Told(told, relativePath)];
+                    filled += SyncServe.ReadContentLine(line, contents.AsSpan(filled), relativePath);
+                })
             .ConfigureAwait(false);
 
         if (answer is null)
@@ -294,7 +269,17 @@ public sealed class RemoteSyncTransport(
                 $"{Host} did not answer with the content of '{relativePath}'.");
         }
 
-        var contents = Convert.FromBase64String(answer.Content);
+        contents ??= new byte[Told(answer, relativePath)];
+
+        // Fewer bytes than it said is a file cut short on the way, and said so rather than as a file that changed.
+        if (filled != contents.Length)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{relativePath}' did not arrive whole from {Host}: {filled.ToString(CultureInfo.InvariantCulture)} of its "
+                + $"{contents.Length.ToString(CultureInfo.InvariantCulture)} bytes did.");
+        }
+
         var arrived = FileContentHash.Of(contents);
 
         // Checked against the hash the far side took of what it read, not against what arrived here.
@@ -308,9 +293,18 @@ public sealed class RemoteSyncTransport(
                 + $"and arrived as {arrived}.");
     }
 
+    /// <summary>How many bytes <paramref name="answer"/> says its file holds, refused where no file it can carry holds that many.</summary>
+    /// <exception cref="HarnessException">The length is below nothing or past <see cref="SyncServe.LargestFile"/>.</exception>
+    private int Told(SyncFileAnswer answer, string relativePath)
+        => answer.Length is >= 0 and <= SyncServe.LargestFile
+            ? (int)answer.Length
+            : throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"{Host} said '{relativePath}' holds {answer.Length.ToString(CultureInfo.InvariantCulture)} bytes, which no file it can send does.");
+
     /// <inheritdoc/>
     public async Task<SyncInspectAnswer> InspectAsync(string root, CancellationToken cancellationToken = default)
-        => await AskAsync<SyncInspectAnswer>(root, [SyncServe.Inspect, root], cancellationToken).ConfigureAwait(false)
+        => await AskAsync<SyncInspectAnswer>(SyncServe.Inspect, root, [], cancellationToken).ConfigureAwait(false)
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
                 $"{Host} did not answer whether '{root}' exists.");
@@ -324,32 +318,38 @@ public sealed class RemoteSyncTransport(
     /// command's result. A line that never arrives means the operation may not have run, or run only
     /// in part, which is exactly what must not be reported as a success.
     /// </remarks>
+    /// <param name="operation">The operation.</param>
     /// <param name="root">The copy the operation acts on.</param>
-    /// <param name="arguments">The operation and its arguments.</param>
+    /// <param name="operands">What the operation takes after the copy's root, each value an argument of its own.</param>
     /// <param name="cancellationToken">Stops the operation here and there.</param>
     /// <param name="startIn">
     /// Where the agent starts, when not in the directory the copy is kept in, which a first sync needs to be there.
     /// </param>
-    private async Task<T?> AskAsync<T>(string root, IReadOnlyList<string> arguments, CancellationToken cancellationToken, string? startIn = null)
+    /// <param name="following">Given each line the agent writes after its answer, with that answer: a file's content.</param>
+    private async Task<T?> AskAsync<T>(
+        string operation,
+        string root,
+        IReadOnlyList<HostArgument> operands,
+        CancellationToken cancellationToken,
+        string? startIn = null,
+        Action<T, string>? following = null)
         where T : class
     {
         var nonce = HostAgentProtocol.NewNonce();
 
-        var request = JsonSerializer.Serialize(
-            new HostAgentRequest
-            {
-                Kind = HostAgentRequestKind.Run,
+        var request = new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Run,
 
-                // The operation names the tree it acts on in its own arguments, and the agent starts
-                // in a directory that may not exist yet on a first sync.
-                Directory = startIn ?? ParentOf(root),
-                Arguments = [SyncServe.CommandName, .. arguments],
-                KeepAwake = [.. _keepAwake],
-                KeepAwakeEnvironment = new(_keepAwakeEnvironment, StringComparer.Ordinal),
-                KeepAwakeDirectories = [.. _keepAwakeDirectories],
-                Nonce = nonce,
-            },
-            HostAgentProtocol.JsonOptions);
+            // The operation names the tree it acts on in its own arguments, and the agent starts
+            // in a directory that may not exist yet on a first sync.
+            Directory = startIn ?? ParentOf(root),
+            Arguments = [SyncServe.CommandName, operation, SyncServe.OperandsFollow, root, .. operands],
+            KeepAwake = [.. _keepAwake],
+            KeepAwakeEnvironment = new(_keepAwakeEnvironment, StringComparer.Ordinal),
+            KeepAwakeDirectories = [.. _keepAwakeDirectories],
+            Nonce = nonce,
+        };
 
         T? answer = null;
         var lines = new HostAgentLines(nonce);
@@ -360,19 +360,29 @@ public sealed class RemoteSyncTransport(
                 {
                     Program = _session.ToolPath,
                     Arguments = [HostAgentProtocol.CommandName],
-                    StandardInput = request + "\n",
+                    StandardInput = HostAgentProtocol.Input(request),
                     HoldStandardInputOpen = true,
 
-                    // The answer arrives on standard output as one line, which can be a whole file's
-                    // content and is read whole; standard error is shown line by line as it comes, and
-                    // only its end is kept, for the message that says how the operation ended.
+                    // The answer arrives on standard output as one line, read whole, and a file's content
+                    // after it a line at a time, each taken as it comes and kept nowhere else; standard error
+                    // is shown line by line as it comes. Only the end of either is kept, for the message that
+                    // says how the operation ended.
+                    OutputKept = StreamKept.TailOfWholeLines,
                     ErrorKept = StreamKept.Tail,
                     OnOutputLine = line =>
                     {
-                        if (lines.Output(line))
+                        if (!lines.Output(line))
                         {
-                            answer ??= SyncServe.ReadAnswer<T>(line);
+                            return;
                         }
+
+                        if (answer is null)
+                        {
+                            answer = SyncServe.ReadAnswer<T>(line);
+                            return;
+                        }
+
+                        following?.Invoke(answer, line);
                     },
                     OnErrorLine = line =>
                     {
@@ -393,7 +403,7 @@ public sealed class RemoteSyncTransport(
         {
             throw new HarnessException(
                 HarnessExit.HostUnavailable,
-                $"{Host}: {HostProbes.NeverFinished($"'{arguments[0]}'", result, _session.Connection)}");
+                $"{Host}: {HostProbes.NeverFinished($"'{operation}'", result, _session.Connection)}");
         }
 
         if (exitCode != HarnessExit.Success)
@@ -403,7 +413,7 @@ public sealed class RemoteSyncTransport(
             // and ssh names the address it dialled, one the host's name resolved to.
             throw new HarnessException(
                 exitCode,
-                $"{Host}: '{arguments[0]}' exited {exitCode}"
+                $"{Host}: '{operation}' exited {exitCode}"
                 + HostProbes.Detail(HostProbes.AsConfigured(HostAgentProtocol.SinceServing(result.StandardError, nonce), _session.Connection)));
         }
 

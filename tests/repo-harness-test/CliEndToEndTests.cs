@@ -33,7 +33,7 @@ public sealed partial class CliEndToEndTests
         [
             "init", "verify-git", "create-worktree", "delete-worktree", "list-worktree",
             "create-orchestrator", "delete-orchestrator", "list-orchestrator",
-            "create-agent", "seed-agent", "refresh-agent", "fold-agent", "delete-agent",
+            "create-agent", "seed-agent", "refresh-agent", "rebase-agent", "fold-agent", "delete-agent",
             "check-root-litter", "check-anchor-citations", "fix-line-endings", "check-ci-legs",
             "legs", "install-missing-tools", "sync", "build", "test", "run", "host-exec", "help",
         ];
@@ -61,14 +61,16 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
-    /// fold-agent and delete-agent read --new and --accept-lost as often as they are given - the second one here as well as
-    /// the first - and refuse, as usage errors before any repository is looked for, an id no anchor could have, a cell that
-    /// is not ID:cell, and either beside --discard-uncommitted.
+    /// fold-agent and delete-agent read --new and --accept-lost, and rebase-agent --settled, as often as they are given - the
+    /// second one here as well as the first - and refuse, as usage errors before any repository is looked for, an id no
+    /// anchor could have, a cell that is not ID:cell, either beside --discard-uncommitted, and a path that is not one in the
+    /// tree.
     /// </summary>
     [Theory]
     [InlineData(new[] { "fold-agent", "o1", "ag", "--accept-lost", "D-X-Y-Z:status" }, "--accept-lost 'D-X-Y-Z:status' is not <ID>:<cell>")]
     [InlineData(new[] { "delete-agent", "o1", "ag", "--new", "D-X-Y-Z", "--new", "D-X Y" }, "--new 'D-X Y' is not an anchor id")]
     [InlineData(new[] { "delete-agent", "o1", "ag", "--accept-lost", "D-X-Y-Z:closing", "--discard-uncommitted" }, "--accept-lost lets a fold through what it otherwise refuses, and --discard-uncommitted folds nothing")]
+    [InlineData(new[] { "rebase-agent", "o1", "ag", "--settled", "a.txt", "--settled", "../x" }, "--settled, '../x', is not a path relative to the tree, spelt with forward slashes")]
     public async Task WhatAFoldIsLetThrough_IsReadEachTimeGiven_AndRefusedAsAUsageErrorWhereItCannotBeOne(string[] arguments, string refusal)
     {
         using var temp = new TempDirectory();
@@ -1096,6 +1098,187 @@ public sealed partial class CliEndToEndTests
         Assert.DoesNotContain(named, served.StandardError, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// A leg the real binary runs for another machine, as its host agent runs one, asks the host's heavy-leg slots under
+    /// the run the request says it is a leg of, beside its command: behind a slot only that run's legs hold, its wait is
+    /// its own command's, said so and never counted - here against a wait of about a second the host allows, which it
+    /// outlasts - and it starts once that leg gives its slot back.
+    /// </summary>
+    [Fact]
+    public async Task ALegAHostRunsForAnotherMachine_AsksItsSlotsUnderTheRunThatSentIt_SoAWaitBehindThatRunsLegsIsNotCounted()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var token = TestContext.Current.CancellationToken;
+        var (environment, holds) = OwnUserData(temp);
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            SshItems = { "pi" },
+            Hosts = new HostsConfig
+            {
+                Ssh =
+                {
+                    ["pi"] = new SshHostConfig
+                    {
+                        RepositoryPath = "~/repo",
+
+                        // One slot, looked at every second, and a limit of 100% of the memory, which any reading short of a
+                        // full machine is below.
+                        Admission = new AdmissionSettings
+                        {
+                            HeavyLegs = 1,
+                            MaxMemoryPercent = 100,
+                            SettleSeconds = [0, 0],
+                            PollSeconds = 1,
+                            MaxWaitMinutes = 0.02,
+                            MinFreeGiB = 0,
+                        },
+                    },
+                },
+            },
+            Tools = { new ToolConfig { Name = "dotnet" } },
+            Legs =
+            {
+                ["sent-here"] = new LegConfig
+                {
+                    Os = platform.PlatformKey,
+                    Processor = platform.Processor,
+                    Config = "debug",
+                    Test = new TestConfig { All = new TestInvocation { Runner = "dotnet", Args = ["--version"], SuccessPattern = @"^\d+\.\d+" } },
+                },
+            },
+        });
+
+        // The slot held by another leg of the run that sends this one, in the record the CLI keeps in the user's data it
+        // was given: this process's, which lives while the leg waits.
+        var record = Path.Combine(Path.GetDirectoryName(holds)!, HeavyLegSlots.FileNameFor(platform.MachineId.Id));
+        var run = RunId.New();
+        using var held = AdmissionKit.Slots(harness, record).Ask(run.Value, "test", "another", "ssh pi", "~/repo", "debug", 1);
+
+        const string Nonce = "0123456789abcdef0123456789abcdef";
+        var request = JsonSerializer.Serialize(
+            new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Run,
+                Directory = temp.Path,
+                Arguments = ["test", "--no-build", "--legs", "sent-here", "--json", RemoteLegRunner.HereOption, "ssh pi"],
+                Nonce = Nonce,
+                RunId = run.Value,
+            },
+            HostAgentProtocol.JsonOptions);
+
+        var serving = CliRunner.RunAsync(["host-agent"], token, standardInput: request + "\n", environment: environment);
+
+        // In line behind the slot, and given a few of its looks there - each past the second it may wait - before the slot
+        // is given back.
+        await EventuallyAsync(() => Read(record)?.Contains("\"sent-here\"", StringComparison.Ordinal) == true, token);
+        await Task.Delay(TimeSpan.FromSeconds(3), token);
+        held.Dispose();
+
+        var served = await serving;
+
+        Assert.Equal(HarnessExit.Success, served.ExitCode);
+        Assert.Contains(
+            "sent-here: waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead, each its own command's, which does not "
+            + "count against the",
+            served.StandardError,
+            StringComparison.Ordinal);
+
+        using var answer = JsonDocument.Parse(HostAgentProtocol.SinceServing(served.StandardOutput, Nonce));
+        Assert.Equal("passed", Assert.Single(answer.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("verdict").GetString());
+
+        // What the record holds as the CLI writes it; nothing where it is not there yet, or is held as it is written.
+        static string? Read(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A shared tool working in a build directory of another tree of the repository on this machine - here a worktree's -
+    /// is named as that tree's leg's while a leg's tests run, and while a runner's step does, through the real binary: the
+    /// trees a leg's work began among reach its tests and its runner as they reach its build.
+    /// </summary>
+    [Fact]
+    public async Task ASharedToolInAnotherTreesBuildDirectory_IsNamedAsThatTreesLeg_WhileTestsAndARunnerRun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var token = TestContext.Current.CancellationToken;
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Tools = { new ToolConfig { Name = "dotnet" } },
+            Contention = new ContentionConfig { SharedResourceTools = ["dotnet"] },
+            Legs =
+            {
+                ["native"] = new LegConfig
+                {
+                    Os = platform.PlatformKey,
+                    Processor = platform.Processor,
+                    Config = "debug",
+                    Test = new TestConfig { All = new TestInvocation { Runner = "dotnet", Args = ["--version"], SuccessPattern = @"^\d+\.\d+" } },
+                },
+            },
+            PredefinedRunners =
+            {
+                ["probe"] = new RunnerConfig
+                {
+                    Phases = [new RunnerPhase { Name = "probe", Command = ["dotnet", "--version"], WatchContention = true }],
+                },
+            },
+        };
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+
+        // Another tree of the repository, below the worktrees root, as create-worktree makes one.
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var worktree = Path.Combine(layout.WorktreesDirectoryUnder(config.Worktrees.Root), "plain");
+        await harness.RunGitAsync(temp.Path, ["worktree", "add", "--quiet", "--detach", worktree], token);
+
+        // A shared tool at work in that tree's build of the leg - a test binary there - for as long as the commands run.
+        var theirs = Path.Combine(VariantKey.For(config, config.Legs["native"], platform.PlatformKey).DirectoryUnder(worktree), "tests", "suite");
+        var start = new System.Diagnostics.ProcessStartInfo(TestHost.DotnetExecutable) { UseShellExecute = false, CreateNoWindow = true };
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+        start.ArgumentList.Add("120000");
+        start.ArgumentList.Add(theirs);
+        start.Environment[TestHost.ChildModeVariable] = "sleep";
+        using var tool = System.Diagnostics.Process.Start(start)!;
+
+        try
+        {
+            foreach (var command in new[] { new[] { "test", "--no-build" }, ["run", "probe"] })
+            {
+                var result = await CliRunner.RunAsync([.. command, "--legs", "native", "-C", temp.Path], token);
+
+                Assert.Equal(HarnessExit.Success, result.ExitCode);
+                Assert.Contains(
+                    $"dotnet (pid {tool.Id}), working in the build directory of worktree plain's leg 'native'",
+                    result.StandardError,
+                    StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            tool.Kill(entireProcessTree: true);
+            await tool.WaitForExitAsync(CancellationToken.None);
+        }
+    }
+
     /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it never comes.</summary>
     private static async Task EventuallyAsync(Func<bool> done, CancellationToken cancellationToken)
     {
@@ -2117,6 +2300,128 @@ public sealed partial class CliEndToEndTests
                 Assert.False(string.IsNullOrEmpty(configured.GetProperty("id").GetString()), result.StandardError);
                 Assert.Contains("compiler: ", result.StandardError, StringComparison.Ordinal);
             }
+        }
+        catch (Exception ex) when (clock.Explains(ex))
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// A real configure, by the CMake, Ninja and C and C++ compilers on this machine, of a C++ project whose C only a
+    /// subproject's own <c>project()</c> enables, as a dependency such as googletest enables it: CMake's answer names C's
+    /// compiler with a path and no id, and C is identified from CMake's record of it and held to what the toolchain
+    /// declares - for the configure that asked, and for the directory read afresh - though that record is dated after the
+    /// answer, as a clock that stepped forward for a moment dates one. Told apart by when each was written, the record was
+    /// a later configure's, and a consumer's leg was unwitnessed. A leg built from that project, its toolchain declaring
+    /// both compilers, passes. Skipped where this machine lacks one of the tools - and failed there instead, where it says
+    /// it is meant to hold every build tool (<see cref="BuildTools"/>).
+    /// </summary>
+    /// <remarks>
+    /// The record is dated after the answer once that configure is done, and the leg built in a directory of its own: a
+    /// build finding a record dated ahead of its build files has Ninja run CMake again until the clock passes it, which a
+    /// project this small does a hundred times, and fails, within the 24 seconds a consumer's clock stepped.
+    /// </remarks>
+    [Fact]
+    public async Task ARealConfigureOfALanguageOnlyASubprojectEnables_IdentifiesIt_ThoughItsRecordIsDatedAfterTheAnswer_AndItsLegPasses()
+    {
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var (c, cxx) = OperatingSystem.IsWindows() ? ("gcc", "g++") : ("cc", "c++");
+
+        BuildTools.Need(harness.ProcessRunner, "a real configure of a project whose C only a subproject enables", "cmake", "ninja", c, cxx);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        // Real builds, ordered by the times of the files they write: on a clock that steps, they prove nothing here.
+        using var clock = new ClockWatch();
+
+        var repository = temp.Combine("r");
+        var compilers = new Dictionary<string, string?> { ["CC"] = c, ["CXX"] = cxx };
+
+        Directory.CreateDirectory(repository);
+        File.WriteAllText(Path.Combine(repository, "CMakeLists.txt"), "cmake_minimum_required(VERSION 3.20)\nproject(app CXX)\nadd_subdirectory(dep)\nadd_executable(app main.cpp)\ntarget_link_libraries(app PRIVATE dep)\n");
+        File.WriteAllText(Path.Combine(repository, "main.cpp"), "extern \"C\" int dep(void);\nint main() { return dep() == 7 ? 0 : 1; }\n");
+        Directory.CreateDirectory(Path.Combine(repository, "dep"));
+        File.WriteAllText(Path.Combine(repository, "dep", "CMakeLists.txt"), "project(dep C)\nadd_library(dep STATIC dep.c)\n");
+        File.WriteAllText(Path.Combine(repository, "dep", "dep.c"), "int dep(void) { return 7; }\n");
+
+        try
+        {
+            // Configured once outside any leg, for what CMake answers about C and the ids it identifies here: what the
+            // leg's toolchain then declares.
+            var reader = new CMakeToolchainReader(harness.FileSystem);
+            var probe = temp.Combine("probe");
+            var asked = reader.Ask(probe);
+            var configured = await harness.ProcessRunner.RunAsync(
+                new ProcessRequest { FileName = "cmake", Arguments = ["-S", repository, "-B", probe, "-G", "Ninja"], Environment = compilers },
+                token);
+
+            Assert.True(configured.ExitCode == 0, configured.StandardError + configured.StandardOutput);
+
+            var replies = Path.Combine(probe, ".cmake", "api", "v1", "reply");
+
+            using (var toolchains = JsonDocument.Parse(File.ReadAllText(Directory.EnumerateFiles(replies, "toolchains-v1-*.json").Single())))
+            {
+                var answered = toolchains.RootElement.GetProperty("toolchains").EnumerateArray()
+                    .Single(toolchain => toolchain.GetProperty("language").GetString() == "C")
+                    .GetProperty("compiler");
+
+                Assert.True(answered.TryGetProperty("path", out _) && !answered.TryGetProperty("id", out _), answered.GetRawText());
+            }
+
+            // CMake's record of identifying C, dated after its answer by as much as a consumer's clock stepped.
+            var record = Directory.EnumerateFiles(Path.Combine(probe, "CMakeFiles"), "CMakeCCompiler.cmake", SearchOption.AllDirectories).Single();
+
+            File.SetLastWriteTimeUtc(record, File.GetLastWriteTimeUtc(Directory.EnumerateFiles(replies, "index-*.json").Single()).AddSeconds(24));
+
+            var readings = new[] { reader.Read(probe, asked), reader.Read(probe) };
+            var ids = readings[0].Compilers.ToDictionary(compiler => compiler.Language, compiler => compiler.Id);
+
+            Assert.True(ids.ContainsKey("C") && ids.ContainsKey("CXX"), string.Join(", ", ids) + " " + string.Join("; ", readings[0].Unidentified));
+
+            var config = new HarnessConfig
+            {
+                Toolchains =
+                {
+                    ["cc"] = new ToolchainConfig
+                    {
+                        Platforms = [platform.PlatformKey],
+                        Generator = "Ninja",
+                        Env = { ["CC"] = c, ["CXX"] = cxx },
+                        CompilerId = { ["C"] = ids["C"], ["CXX"] = ids["CXX"] },
+                    },
+                },
+                BuildConfigs = { ["debug"] = new BuildConfiguration { CmakeBuildType = "Debug" } },
+                Projects = { new ProjectConfig { Name = "app", Type = "cmake", Path = ".", BuildOutputs = [BuildOutput.Keyed([new("windows", "app.exe"), new("all", "app")])] } },
+                Tools = { new ToolConfig { Name = "cmake" } },
+                Legs = { ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Toolchain = "cc" } },
+            };
+
+            foreach (var reading in readings)
+            {
+                Assert.Equal(readings[0].Compilers, reading.Compilers);
+                Assert.False(reading.Unidentified.ContainsKey("C"), reading.Unidentified.GetValueOrDefault("C"));
+                Assert.Null(CompilerFacts.HeldTo(config, "cc", reading));
+            }
+
+            await harness.InitializeHarnessAsync(repository, token, config);
+
+            // Ignored, as a repository ignores its builds: committed, a build's own files would be inputs it changes.
+            File.AppendAllText(Path.Combine(repository, ".gitignore"), "build/\n");
+            await harness.CommitAllAsync(repository, "a C++ project whose C a subproject enables", token);
+
+            var built = await CliRunner.RunAsync(["build", "--legs", "native", "--json", "-C", repository], token);
+
+            Assert.True(built.ExitCode == HarnessExit.Success, built.StandardError + built.StandardOutput);
+
+            using var document = JsonDocument.Parse(built.StandardOutput);
+            var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+            Assert.Equal(
+                ["C " + ids["C"], "CXX " + ids["CXX"]],
+                leg.GetProperty("compilers").EnumerateArray().Select(compiler => $"{compiler.GetProperty("language").GetString()} {compiler.GetProperty("id").GetString()}").Order(StringComparer.Ordinal));
         }
         catch (Exception ex) when (clock.Explains(ex))
         {

@@ -45,13 +45,13 @@ public sealed class HeapWatchTests
             }
         }
 
-        Assert.InRange(watch.Growth, long.MinValue, Much / 4);
+        Assert.True(watch.Growth <= Much / 4, $"what was dropped grew the heap by {watch.Growth:N0} bytes: {watch.Where}");
 
         var held = new byte[Much];
 
         AwaitAReading(watch);
 
-        Assert.InRange(watch.Growth, Much - (Much / 16), long.MaxValue);
+        Assert.True(watch.Growth >= Much - (Much / 16), $"{Much:N0} bytes held grew the heap by {watch.Growth:N0}: {watch.Where}");
         GC.KeepAlive(held);
     }
 

@@ -184,6 +184,9 @@ public sealed class GitClient(
         => StatusAsync(directory, "all", cancellationToken);
 
     public async Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
+        => GitName.PathsOf(await ListNamesChangedSinceAsync(directory, commit, cancellationToken).ConfigureAwait(false));
+
+    public async Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
 
@@ -198,11 +201,7 @@ public sealed class GitClient(
 
         Ensure(result, $"read what the work tree changes since {commit}");
 
-        return Records(result.StandardOutput)
-            .Select(GitName.FromBytes)
-            .Where(name => name.IsUtf8)
-            .Select(name => name.Text)
-            .ToHashSet(StringComparer.Ordinal);
+        return [.. Records(result.StandardOutput).Select(GitName.FromBytes)];
     }
 
     /// <summary>
@@ -231,7 +230,7 @@ public sealed class GitClient(
         return ParseStatus(result.StandardOutput);
     }
 
-    public async Task<IReadOnlyDictionary<string, string?>> BlobIdsAtAsync(
+    public async Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(
         string directory,
         string commit,
         IReadOnlyList<string> paths,
@@ -240,16 +239,16 @@ public sealed class GitClient(
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
         ArgumentNullException.ThrowIfNull(paths);
 
-        var ids = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var held = new Dictionary<string, GitHeld>(StringComparer.Ordinal);
 
         if (paths.Count == 0)
         {
-            return ids;
+            return held;
         }
 
         // A line break cannot travel as a line of git's batch input, so such a path is answered from the commit's
         // listing instead, as reading files at a commit does.
-        var files = paths.Any(HoldsLineBreak) ? await FilesAtCommitAsync(directory, commit, cancellationToken).ConfigureAwait(false) : null;
+        var tree = paths.Any(HoldsLineBreak) ? await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false) : null;
         var asked = paths.Where(path => !HoldsLineBreak(path)).Distinct(StringComparer.Ordinal).ToList();
 
         // The commit is asked about first, in the same process: git answers "missing" for a commit it cannot read
@@ -295,29 +294,46 @@ public sealed class GitClient(
 
         for (var index = 0; index < asked.Count; index++)
         {
-            switch (lines[index + 1].Split(' '))
+            held[asked[index]] = lines[index + 1].Split(' ') switch
             {
-                case ["blob", var id]:
-                    ids[asked[index]] = id;
-                    break;
-                case ["tree" or "commit" or "tag", _]:
-                    ids[asked[index]] = null;
-                    break;
-                default:
-                    ids[asked[index]] = null;
-                    unanswered.Add(asked[index]);
-                    break;
-            }
+                ["blob", var id] => GitHeld.File(id),
+                ["tree", _] => GitHeld.Directory,
+                _ => Unanswered(asked[index]),
+            };
         }
 
-        await RefuseListedButUnreadAsync(directory, commit, unanswered, files, cancellationToken).ConfigureAwait(false);
+        // What git did not answer as a file or a directory is a submodule's entry, or a path the commit does not hold. An
+        // entry is answered as the commit it names where this repository holds that commit; where it does not, as missing
+        // by git 2.43, which Ubuntu 24.04 ships, as the path is, and as a submodule by later versions. The commit's listing
+        // tells them apart on every version, and names the commit an entry does.
+        if (unanswered.Count > 0)
+        {
+            tree ??= await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false);
+            var unread = unanswered.ToHashSet(StringComparer.Ordinal);
+
+            foreach (var entry in tree.Where(entry => entry.Type == "commit" && entry.Name.IsUtf8 && unread.Contains(entry.Name.Text)))
+            {
+                held[entry.Name.Text] = GitHeld.Submodule(entry.ObjectId);
+            }
+
+            await RefuseListedButUnreadAsync(directory, commit, unanswered, FilesIn(tree), cancellationToken).ConfigureAwait(false);
+        }
 
         foreach (var path in paths.Where(HoldsLineBreak))
         {
-            ids[path] = files!.GetValueOrDefault(path);
+            // The listing names files and submodules; a directory is what holds a name below it.
+            held[path] = tree!.FirstOrDefault(entry => entry.Name.IsUtf8 && entry.Name.Text == path) is { } entry
+                ? entry.IsFile ? GitHeld.File(entry.ObjectId) : GitHeld.Submodule(entry.ObjectId)
+                : tree!.Any(entry => entry.Name.IsUtf8 && entry.Name.Text.StartsWith(path + "/", StringComparison.Ordinal)) ? GitHeld.Directory : GitHeld.Nothing;
         }
 
-        return ids;
+        return held;
+
+        GitHeld Unanswered(string path)
+        {
+            unanswered.Add(path);
+            return GitHeld.Nothing;
+        }
     }
 
     public async Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(
@@ -441,6 +457,40 @@ public sealed class GitClient(
                 HarnessExit.CommandFailed,
                 $"The index built for '{directory}' could not replace '{index}': {ex.Message}");
         }
+    }
+
+    public async Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        if (paths.Count == 0)
+        {
+            return;
+        }
+
+        // The paths travel on standard input, NUL-separated, so no list of them outgrows a command line, and each is read
+        // literally: a name holding a wildcard or a colon never matches another path than its own.
+        var result = await RunCoreAsync(
+                directory,
+                ["--literal-pathspecs", "checkout", "--no-overlay", "--quiet", commit, "--pathspec-from-file=-", "--pathspec-file-nul"],
+                echoOutput: false,
+                untranslated: false,
+                indexFile: null,
+                string.Join('\0', paths),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(result, $"write what {commit} holds into '{directory}'");
+    }
+
+    public async Task ResetToAsync(string directory, string commit, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+
+        var result = await RunCoreAsync(directory, ["reset", "--mixed", "--quiet", commit, "--"], echoOutput: false, untranslated: false, cancellationToken).ConfigureAwait(false);
+
+        Ensure(result, $"move '{directory}' to {commit}");
     }
 
     /// <summary>
@@ -1279,7 +1329,11 @@ public sealed class GitClient(
         string directory,
         string commit,
         CancellationToken cancellationToken)
-        => (await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false))
+        => FilesIn(await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false));
+
+    /// <summary>Each file <paramref name="tree"/> lists whose name is UTF-8, with the object git holds its bytes in.</summary>
+    private static Dictionary<string, string> FilesIn(IReadOnlyList<TreeEntry> tree)
+        => tree
             .Where(entry => entry.IsFile && entry.Name.IsUtf8)
             .ToDictionary(entry => entry.Name.Text, entry => entry.ObjectId, StringComparer.Ordinal);
 

@@ -58,7 +58,7 @@ public sealed class HarnessFactory
             FileSystem,
             Platform,
             Output,
-            new SyncedCopyToolCheck(PublishedVersions, RunningTool, new CommandOrigin(ServesAnotherMachine: false), Output));
+            new SyncedCopyToolCheck(PublishedVersions, RunningTool, CommandOrigin.Typed, Output));
         LocalTransport = Local(FileSystem);
         WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport);
 
@@ -96,21 +96,25 @@ public sealed class HarnessFactory
         AgentService = Agents(FileSystem, AnchorRegistryService);
     }
 
-    /// <summary>The agent service over <paramref name="fileSystem"/> and <paramref name="anchors"/>, for a test that changes what one of them does.</summary>
+    /// <summary>
+    /// The agent service over <paramref name="fileSystem"/>, <paramref name="anchors"/> and <paramref name="gitClient"/>, for a
+    /// test that changes what one of them does.
+    /// </summary>
     /// <param name="fileSystem">
     /// Reads and writes everything the service keeps on disk: both trees, the run lock, the orchestrator's records and
     /// log, and the transcripts it keeps.
     /// </param>
     /// <param name="anchors">Applies an agent's rows.</param>
-    public AgentService Agents(IFileSystem fileSystem, IAnchorRegistryService anchors)
+    /// <param name="gitClient">Asks git, for the service and the worktrees it makes and removes; the real one where null.</param>
+    public AgentService Agents(IFileSystem fileSystem, IAnchorRegistryService anchors, IGitClient? gitClient = null)
         => new(
             ContextLoader,
-            GitClient,
+            gitClient ?? GitClient,
             fileSystem,
             Platform,
             Output,
             FilePermissions,
-            new WorktreeService(ContextLoader, GitClient, fileSystem, PathBudget, Platform, Output, HostCopies, Local(fileSystem)),
+            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, HostCopies, Local(fileSystem)),
             new RunLock(fileSystem, Output, Identity),
             AnchorRegistryLocator,
             anchors,
@@ -361,6 +365,17 @@ public sealed class HarnessFactory
             $"100644 {stored.Trim()} 0\t{quotedName}\n",
             cancellationToken);
     }
+
+    /// <summary>
+    /// Marks <paramref name="quotedName"/>, as <see cref="StageAsync"/> spells it, as one git takes for what its index holds
+    /// though no file is there, as a sparse checkout does: so a name no file system here can hold can be committed and sit
+    /// in a clean tree.
+    /// </summary>
+    /// <param name="repository">The repository's root.</param>
+    /// <param name="quotedName">The name, in double quotes, with git's escapes.</param>
+    /// <param name="cancellationToken">Cancels git.</param>
+    public Task SkipWorktreeAsync(string repository, string quotedName, CancellationToken cancellationToken)
+        => RunGitWithInputAsync(repository, ["update-index", "--skip-worktree", "--stdin"], quotedName + "\n", cancellationToken);
 
     /// <summary>Runs git with <paramref name="input"/> on its standard input, failing the test when git fails.</summary>
     private async Task<string> RunGitWithInputAsync(

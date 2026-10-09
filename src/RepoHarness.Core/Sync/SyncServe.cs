@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Sync;
@@ -14,11 +16,25 @@ namespace RepoHarness.Core.Sync;
 /// once here and served by one command. The payload of a write travels inside the request the host
 /// agent already carries on standard input, never on a command line: a command line is bounded, and
 /// the words a remote shell reads literally are a small set that file content would leave at once.
+/// Each value an operation takes is an argument of its own, after <see cref="OperandsFollow"/> - a
+/// batch's files each as its path then its content, an index's paths one by one - never a list inside
+/// one argument, which the request would then carry as text escaped inside text.
 /// </remarks>
 public static class SyncServe
 {
     /// <summary>The hidden command that serves these operations on a host.</summary>
     public const string CommandName = "sync-serve";
+
+    /// <summary>
+    /// What stands between an operation and the copy's root and everything after it: each of those is then read as what it
+    /// is - a path starting with '@' as that path, not as a file of arguments to read in its place, and one starting with
+    /// '-' as that path, not as an option.
+    /// </summary>
+    /// <remarks>
+    /// Without it, a tree holding a file named '@notes' had its deletion on a host read the file 'notes' beside the copy
+    /// and delete whatever path that named, and a file named '-v' was taken for the verbose option.
+    /// </remarks>
+    public const string OperandsFollow = "--";
 
     /// <summary>Reports what the copy holds, as a manifest.</summary>
     public const string Manifest = "manifest";
@@ -158,15 +174,28 @@ public static class SyncServe
                 $"sync operation '{RemoveWorkers}' takes '{MeasureOnly}' after its root, or nothing; it was given '{arguments[1]}'.");
     }
 
+    /// <summary>The most characters one string holds, however much memory is free: 1,073,741,791.</summary>
+    public const int LongestString = 0x3FFFFFDF;
+
+    /// <summary>
+    /// The room a request's line keeps beside the largest file it carries, in characters: for the file's path, the copy's
+    /// root and the rest of the request.
+    /// </summary>
+    private const int AroundAFile = 1024 * 1024;
+
     /// <summary>
     /// The largest file one request can carry, in bytes.
     /// </summary>
     /// <remarks>
-    /// A file crosses whole, inside one request, encoded as base64 - which is a third longer again
-    /// and is one string, so it cannot be longer than <see cref="int.MaxValue"/>. That is where
-    /// this number comes from; it is not a policy anybody chose, and no configuration moves it.
+    /// A file crosses to a host whole, inside one request, encoded as base64 - which is a third longer again - and the
+    /// far side reads that request as one line of text: one string, which holds at most <see cref="LongestString"/>
+    /// characters, the rest of the line among them. That is where this number comes from; it is not a policy anybody
+    /// chose, and no configuration moves it. Reckoned from <see cref="int.MaxValue"/>, it was twice what a line holds,
+    /// and a file between the two was turned away only by this machine running out of memory encoding it, in words naming
+    /// a limit it was under. A file read back crosses a piece to a line (<see cref="ContentLines"/>), and is held to the
+    /// same size: whichever way it goes, the same file crosses, or is refused by name.
     /// </remarks>
-    public const long LargestFile = (int.MaxValue / 4) * 3L;
+    public const long LargestFile = (LongestString - AroundAFile) / 4 * 3L;
 
     /// <summary>
     /// Refuses a file too large to cross whole, by name and with its size, rather than leaving it
@@ -233,72 +262,120 @@ public static class SyncServe
     /// </summary>
     public const string AnswerPrefix = "sync-serve-answer ";
 
-    /// <summary>The files of a batched write, as the request carries them.</summary>
-    /// <param name="files">The files, each with its path and its base64 content.</param>
-    public static string Carry(IReadOnlyList<SyncFileWrite> files) => JsonSerializer.Serialize(files, JsonOptions);
+    /// <summary>
+    /// The lines a file read on the far side follows its answer with, each carrying the next piece of its content as base64:
+    /// marked as the answer is, so nothing else the command prints is taken for a piece of the file.
+    /// </summary>
+    /// <remarks>
+    /// A line at a time, so the machine that asked decodes the file as it arrives and never holds it as text: as one line
+    /// inside its answer, one 64 MiB file left the machine that read it holding 2 GiB, in copies of that line.
+    /// </remarks>
+    public const string ContentPrefix = "sync-serve-content ";
 
-    /// <summary>The files a batched write carries, read back.</summary>
-    /// <param name="carried">What <see cref="Carry"/> wrote.</param>
-    /// <exception cref="HarnessException">The request is in a shape this build cannot read.</exception>
-    public static IReadOnlyList<SyncFileWrite> Carried(string carried)
+    /// <summary>The files a batched write carries: after the copy's root, each file's path, then its content's base64.</summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <exception cref="HarnessException">
+    /// The request carries no file, or a path without its content: the two ends are different builds.
+    /// </exception>
+    /// <remarks>
+    /// Refused rather than read as fewer files: a batch read short would write less than it was sent and answer as though
+    /// every file in it had crossed, and the sync would go on to call the copy current.
+    /// </remarks>
+    public static IReadOnlyList<SyncFileWrite> CarriedFiles(IReadOnlyList<string> arguments)
     {
-        ArgumentNullException.ThrowIfNull(carried);
+        ArgumentNullException.ThrowIfNull(arguments);
 
-        try
+        if (arguments.Count < 3 || arguments.Count % 2 == 0)
         {
-            // A payload of 'null' reads as no batch at all, which is the very thing the refusal below
-            // exists to prevent: written as nothing and answered as though every file had crossed.
-            return JsonSerializer.Deserialize<IReadOnlyList<SyncFileWrite>>(carried, JsonOptions)
-                ?? throw new JsonException("the files to write are null");
-        }
-        catch (JsonException ex)
-        {
-            // Refused rather than read as none: a batch read as empty would write nothing and answer
-            // as though every file in it had crossed, and the sync would go on to call the copy current.
             throw new HarnessException(
                 HarnessExit.UsageError,
-                $"The files to write arrived in a shape this build cannot read: {ex.Message}. The two ends "
-                + "are different builds.");
+                $"The files to write arrived in a shape this build cannot read: {(arguments.Count - 1).ToString(CultureInfo.InvariantCulture)} "
+                + "argument(s) after the copy's root, where each file is its path then its content. The two ends are different builds.");
         }
+
+        return [.. arguments.Skip(1).Chunk(2).Select(file => new SyncFileWrite(file[0], file[1]))];
     }
 
-    /// <summary>The paths an index request carries.</summary>
-    /// <param name="paths">Every file the copy holds from the sync, relative to its root.</param>
-    public static string CarryPaths(IReadOnlyList<string> paths) => JsonSerializer.Serialize(paths, JsonOptions);
-
-    /// <summary>The paths an index request carries, read back.</summary>
-    /// <param name="carried">What <see cref="CarryPaths"/> wrote.</param>
-    /// <exception cref="HarnessException">The request is in a shape this build cannot read.</exception>
-    /// <remarks>
-    /// Refused rather than read as none, as a batch of files is: an index made to hold nothing would
-    /// unstage every file the copy has, and every build there would then fingerprint nothing again.
-    /// </remarks>
-    public static IReadOnlyList<string> CarriedPaths(string carried)
+    /// <summary>
+    /// The names a request carries after the copy's root - the paths a manifest withholds, the directories a prune empties -
+    /// each in turn. An empty one names nothing to either: a path pattern that is empty matches no path, and a prune
+    /// passes over an empty name.
+    /// </summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    public static IReadOnlyList<string> Named(IReadOnlyList<string> arguments)
     {
-        ArgumentNullException.ThrowIfNull(carried);
+        ArgumentNullException.ThrowIfNull(arguments);
 
-        try
-        {
-            var paths = JsonSerializer.Deserialize<IReadOnlyList<string>>(carried, JsonOptions)
-                ?? throw new JsonException("the paths to index are null");
+        return [.. arguments.Skip(1)];
+    }
 
-            return paths.Any(string.IsNullOrWhiteSpace)
-                ? throw new JsonException("a path to index is blank")
-                : paths;
-        }
-        catch (JsonException ex)
-        {
-            throw new HarnessException(
+    /// <summary>The paths an index request carries: everything after the copy's root.</summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <exception cref="HarnessException">A path to index is blank: the two ends are different builds.</exception>
+    /// <remarks>
+    /// Refused rather than read as fewer, as a batch of files is: an index made to hold less than the copy does
+    /// would unstage what it left out, and every build there would then fingerprint it again.
+    /// </remarks>
+    public static IReadOnlyList<string> CarriedPaths(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        var paths = arguments.Skip(1).ToList();
+
+        return paths.Any(string.IsNullOrWhiteSpace)
+            ? throw new HarnessException(
                 HarnessExit.UsageError,
-                $"The files to index arrived in a shape this build cannot read: {ex.Message}. The two ends "
-                + "are different builds.");
-        }
+                "The files to index arrived in a shape this build cannot read: a path to index is blank. The two ends are different builds.")
+            : paths;
     }
 
     /// <summary>Writes an answer for the other end to read.</summary>
     /// <typeparam name="T">The answer's shape.</typeparam>
     /// <param name="answer">The answer.</param>
     public static string Answer<T>(T answer) => AnswerPrefix + JsonSerializer.Serialize(answer, JsonOptions);
+
+    /// <summary>
+    /// The lines carrying <paramref name="contents"/> after its answer, <see cref="HostAgentProtocol.CarriedPiece"/> bytes to
+    /// a line.
+    /// </summary>
+    /// <param name="contents">A file's bytes.</param>
+    public static IEnumerable<string> ContentLines(byte[] contents)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+
+        for (var at = 0; at < contents.Length; at += HostAgentProtocol.CarriedPiece)
+        {
+            yield return ContentPrefix + Convert.ToBase64String(contents.AsSpan(at, Math.Min(HostAgentProtocol.CarriedPiece, contents.Length - at)));
+        }
+    }
+
+    /// <summary>
+    /// Decodes the piece of a file <paramref name="line"/> carries into <paramref name="destination"/>, and says how many
+    /// bytes it was; nothing where the line is not one of a file's content lines.
+    /// </summary>
+    /// <param name="line">A line the far side printed after its answer.</param>
+    /// <param name="destination">Where the rest of the file goes.</param>
+    /// <param name="relativePath">The file, as the request named it.</param>
+    /// <exception cref="HarnessException">
+    /// The line is not base64, or carries more than the answer said the file holds: the two ends are different builds, or
+    /// the file did not survive the journey.
+    /// </exception>
+    public static int ReadContentLine(string line, Span<byte> destination, string relativePath)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        if (!line.StartsWith(ContentPrefix, StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        return Convert.TryFromBase64Chars(line.AsSpan(ContentPrefix.Length), destination, out var written)
+            ? written
+            : throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{relativePath}' arrived in a shape this build cannot read: a piece of it is not base64, or carries more than "
+                + "the file was said to hold.");
+    }
 
     /// <summary>Reads an answer the other end wrote, or null when the line is not one.</summary>
     /// <typeparam name="T">The answer's shape.</typeparam>
@@ -312,9 +389,16 @@ public static class SyncServe
             return null;
         }
 
+        // Read from bytes made here rather than from the text: read from text, the serializer rents a buffer three times
+        // its length from the shared pool to hold its bytes, and the pool keeps it for good.
+        var json = line.AsSpan(AnswerPrefix.Length);
+        var utf8 = new byte[Encoding.UTF8.GetByteCount(json)];
+
+        Encoding.UTF8.GetBytes(json, utf8);
+
         try
         {
-            return JsonSerializer.Deserialize<T>(line[AnswerPrefix.Length..], JsonOptions);
+            return JsonSerializer.Deserialize<T>(utf8, JsonOptions);
         }
         catch (JsonException ex)
         {
@@ -562,16 +646,19 @@ public enum CopyMark
     Unfinished,
 }
 
-/// <summary>One file's bytes, base64 encoded so they survive a line of text intact.</summary>
-/// <param name="Content">The file's bytes.</param>
+/// <summary>
+/// One file read on the far side, whose bytes follow its answer as <see cref="SyncServe.ContentLines"/>, base64 encoded so
+/// they survive a line of text intact.
+/// </summary>
+/// <param name="Length">How many bytes the file holds.</param>
 /// <param name="ContentHash">
 /// The SHA-256 the far side computed of those bytes, before they were encoded and sent. Carried so
 /// the machine that asked can check what arrived against what was read, rather than against itself:
 /// a hash taken here of the bytes that arrived agrees with them whatever happened on the way.
 /// </param>
-public sealed record SyncFileAnswer(string Content, string ContentHash);
+public sealed record SyncFileAnswer(long Length, string ContentHash);
 
-/// <summary>One file a batched write carries.</summary>
+/// <summary>One file a write carries, as the far side reads it.</summary>
 /// <param name="Path">Where it goes, relative to the copy's root.</param>
 /// <param name="Content">Its bytes, base64 encoded so they survive a line of text intact.</param>
 public sealed record SyncFileWrite(string Path, string Content)

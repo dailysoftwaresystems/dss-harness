@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using RepoHarness.Core.Platform;
 
@@ -156,7 +157,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // can never block this on a full output pipe, nor this block it on a full input pipe.
         var standardInput = WriteInputAsync(
             process.StandardInput,
-            request.StandardInput ?? string.Empty,
+            request.StandardInput,
             close: !request.HoldStandardInputOpen);
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -193,6 +194,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             CloseQuietly(process.StandardInput);
         }
 
+        // What a line handler raised, now that the child has gone and every line it wrote has been read.
+        RaiseHandlerFailures(capturedOutput.Failed, capturedError.Failed);
+
         stopwatch.Stop();
 
         if (stopped && cancellationToken.IsCancellationRequested)
@@ -202,8 +206,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         return new ProcessResult(
             ExitCode: stopped ? -1 : process.ExitCode,
-            StandardOutput: capturedOutput,
-            StandardError: capturedError,
+            StandardOutput: capturedOutput.Text,
+            StandardError: capturedError.Text,
             Duration: stopwatch.Elapsed,
             TimedOut: stopped);
     }
@@ -431,13 +435,20 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// billion characters. So only its last <see cref="TailLength"/> characters are kept, and a line of it is handed on in
     /// pieces of at most <see cref="LongestLine"/>, since a line that never ends would otherwise be held whole until it did.
     /// </para>
+    /// <para>
+    /// A handler that fails is handed no more lines, and the stream is still read to its end: a child writing more than a
+    /// pipe holds would otherwise block on a pipe nobody reads, and one whose input is held open - a host's agent, reading a
+    /// file back - would never end. What it raised is kept for the caller to raise once the child has gone.
+    /// </para>
     /// </remarks>
-    private static async Task<string> CaptureAsync(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut)
+    private static async Task<Captured> CaptureAsync(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut)
     {
-        var tail = kept == StreamKept.Tail;
+        var tail = kept != StreamKept.Whole;
+        var cutting = kept == StreamKept.Tail;
         var whole = tail ? null : new StringBuilder();
         var end = tail ? new StreamTail(TailLength) : null;
-        var lines = onLine is null ? null : new LineSplitter(onLine, tail ? LongestLine : null, tail ? cut : null);
+        ExceptionDispatchInfo? failed = null;
+        var lines = onLine is null ? null : new LineSplitter(Hand, cutting ? LongestLine : null, cutting ? cut : null);
         var buffer = new char[ReadBufferSize];
         int read;
 
@@ -453,19 +464,70 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // A last line with no line break after it is still a line.
         lines?.End();
 
-        return whole?.ToString() ?? end!.ToString();
+        return new Captured(whole?.ToString() ?? end!.ToString(), failed);
+
+        void Hand(string line)
+        {
+            if (failed is not null)
+            {
+                return;
+            }
+
+            try
+            {
+                onLine!(line);
+            }
+            catch (Exception ex)
+            {
+                failed = ExceptionDispatchInfo.Capture(ex);
+            }
+        }
+    }
+
+    /// <summary>A stream read to its end: what is kept of it, and what its line handler raised, where it raised anything.</summary>
+    private sealed record Captured(string Text, ExceptionDispatchInfo? Failed);
+
+    /// <summary>
+    /// Raises what the line handlers raised: nothing where neither failed; the failure where one did, or where both raised
+    /// the same - of one type, saying one thing, as one reason met on each stream does; and both together where they
+    /// differ, since one said and the other lost would send whoever reads it after half the trouble.
+    /// </summary>
+    /// <param name="output">What the output's handler raised, or <see langword="null"/>.</param>
+    /// <param name="error">What the error output's handler raised, or <see langword="null"/>.</param>
+    private static void RaiseHandlerFailures(ExceptionDispatchInfo? output, ExceptionDispatchInfo? error)
+    {
+        if (output is { SourceException: var first } && error is { SourceException: var second }
+            && (first.GetType() != second.GetType() || !string.Equals(first.Message, second.Message, StringComparison.Ordinal)))
+        {
+            throw new AggregateException("The handlers of both the output and the error output failed.", first, second);
+        }
+
+        (output ?? error)?.Throw();
     }
 
     /// <summary>
     /// Writes a child's whole input, then closes it when <paramref name="close"/> is set, which is how the
     /// child learns there is no more to read.
     /// </summary>
-    private static async Task WriteInputAsync(StreamWriter writer, string input, bool close)
+    /// <remarks>
+    /// Written on a thread of its own: a writer writes as it makes what it writes, for as long as the child takes to read
+    /// it. An input that could not be written whole is closed whatever <paramref name="close"/> says - a child holding its
+    /// input open waits for the rest of it, which would never come - and what stopped it, where that was not the child
+    /// ceasing to read, is raised once the child has gone.
+    /// </remarks>
+    private static async Task WriteInputAsync(StreamWriter writer, ChildInput? input, bool close)
     {
+        var whole = false;
+
         try
         {
-            await writer.WriteAsync(input.AsMemory()).ConfigureAwait(false);
-            await writer.FlushAsync().ConfigureAwait(false);
+            if (input is not null)
+            {
+                await Task.Run(() => input.WriteTo(writer.BaseStream)).ConfigureAwait(false);
+            }
+
+            await writer.BaseStream.FlushAsync().ConfigureAwait(false);
+            whole = true;
         }
         catch (IOException)
         {
@@ -474,7 +536,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
         finally
         {
-            if (close)
+            if (close || !whole)
             {
                 CloseQuietly(writer);
             }

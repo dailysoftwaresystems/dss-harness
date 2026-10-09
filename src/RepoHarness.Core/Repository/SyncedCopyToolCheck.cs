@@ -3,12 +3,46 @@ using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Repository;
 
-/// <summary>Who a command is being run for.</summary>
-/// <param name="ServesAnotherMachine">
-/// Whether the DssHarness on another machine asked for it, through this one's host agent, rather than
-/// somebody typing it here.
-/// </param>
-public sealed record CommandOrigin(bool ServesAnotherMachine);
+/// <summary>
+/// Who a command is being run for: somebody typing it here, this machine's host agent serving another machine, or a
+/// command the DssHarness on another machine asked that agent to run.
+/// </summary>
+public sealed record CommandOrigin
+{
+    private CommandOrigin(bool servesAnotherMachine, Dispatch? dispatched)
+    {
+        ServesAnotherMachine = servesAnotherMachine;
+        Dispatched = dispatched;
+    }
+
+    /// <summary>A command somebody typed here.</summary>
+    public static CommandOrigin Typed { get; } = new(false, null);
+
+    /// <summary>This machine's host agent, serving a request of the DssHarness on another machine.</summary>
+    public static CommandOrigin Agent { get; } = new(true, null);
+
+    /// <summary>
+    /// Whether the DssHarness on another machine asked for it, through this one's host agent, rather than somebody typing
+    /// it here.
+    /// </summary>
+    public bool ServesAnotherMachine { get; }
+
+    /// <summary>
+    /// What the machine that asked for it says of it beside the command line, where one asked: the run it is a leg of - what
+    /// a leg here asking this machine's heavy-leg slots is recorded under, so the legs of one command wait for each other's
+    /// slots without that wait counting - and, for a WSL distribution's leg, the drive its disk grows on.
+    /// </summary>
+    public Dispatch? Dispatched { get; }
+
+    /// <summary>A command the DssHarness on another machine asked this one's host agent to run.</summary>
+    /// <param name="dispatched">What the machine that asked says of it beside the command line.</param>
+    public static CommandOrigin Served(Dispatch dispatched)
+    {
+        ArgumentNullException.ThrowIfNull(dispatched);
+
+        return new(true, dispatched);
+    }
+}
 
 /// <summary>
 /// Tells somebody who typed a command in a copy the harness synced to a host that the DssHarness running

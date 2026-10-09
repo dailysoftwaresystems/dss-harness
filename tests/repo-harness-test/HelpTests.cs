@@ -10,6 +10,7 @@ using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
+using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Tests;
 
@@ -55,7 +56,7 @@ public sealed partial class HelpTests
             .Select(property => JsonNamingPolicy.CamelCase.ConvertName(property.Name))
             .ToList();
 
-        Assert.Equal(["heavyLegs", "maxMemoryPercent", "settleSeconds", "pollSeconds", "maxWaitMinutes"], keys);
+        Assert.Equal(["heavyLegs", "maxMemoryPercent", "settleSeconds", "pollSeconds", "maxWaitMinutes", "minFreeGiB"], keys);
 
         foreach (var key in keys)
         {
@@ -69,6 +70,7 @@ public sealed partial class HelpTests
             $"([{string.Join(", ", AdmissionSettings.DefaultSettleSeconds)}])",
             $"({AdmissionSettings.DefaultPollSeconds})",
             string.Create(CultureInfo.InvariantCulture, $"({AdmissionSettings.DefaultMaxWaitMinutes})"),
+            string.Create(CultureInfo.InvariantCulture, $"from 0 to {AdmissionSettings.MostMinFreeGiB}; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})"),
             $"at most {AdmissionSettings.MostSeconds}",
             string.Create(CultureInfo.InvariantCulture, $"at most {AdmissionSettings.MostWaitMinutes} minutes"),
             $"exit {LegExit.NotAdmitted}",
@@ -267,8 +269,8 @@ public sealed partial class HelpTests
             "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
             + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
             + "of its own - a worker's rebuilt from clean with it.",
-            "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build, or the "
-            + "main checkout's, last recorded",
+            "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build last "
+            + "recorded, else to the most any other tree of the repository on its machine recorded of it",
             "each read as its file holds it, less a UTF-8 byte order mark at its start and one line ending at its end,",
             "seven arms, one to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
             + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two files",
@@ -319,6 +321,89 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The admission topic says a heavy leg's build is held to minFreeGiB - read every few seconds, the seconds read from
+    /// the code, and again as a build or a write of its fails - and stopped under it, writing nothing where it starts under
+    /// it; that WSL's page cache is dropped before a wait on the
+    /// memory and as a WSL leg ends, a drop that could not be made said with why; that a holder's line never names its
+    /// machine; and that a wait with only legs of its own run ahead of it does not count.
+    /// </summary>
+    [Fact]
+    public async Task TheAdmissionTopic_SaysTheFloor_TheCacheDrop_TheHolderUnnamed_AndTheOwnRunsWait()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "admission"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        foreach (var expected in new[]
+        {
+            $"While a heavy leg builds, each filesystem its build fills is read again every {RoomFloorWatch.Every.TotalSeconds:0} seconds, and the "
+                + $"build is stopped once one has less free than minFreeGiB: stopped, exit {HarnessExit.Incomplete}, naming what was free and where, "
+                + "and what it built left for clean - and so is a build that failed with one under it, read again as it failed, since a full disk "
+                + "says nothing of its code, and one whose own write failed then - a phase's log, its record. A build under it as it starts writes "
+                + "nothing, its record included, and a record it has no room left for is said, the one it wrote as it began standing.",
+            "So a leg about to wait on the memory has that cache dropped first, as root (sync, then drop_caches) in a running distribution a WSL "
+                + "host of its repository reaches - at most once a minute, whichever leg asks - and reads the memory again once what was dropped "
+                + "has come back, a minute later at the most, its line saying how much was dropped and the memory before and after, and goes on "
+                + "from that reading as from any other.",
+            "A WSL leg sent from a machine that admits drops it as it ends, without waiting, its line saying so - or that WSL listed none of its "
+                + "distributions running, though the leg had just run in one.",
+            "a drop that could not be made is said once - a WSL host whose item cannot be read, where no other reaches one, or a list of the "
+                + "distributions running that cannot be read, among the reasons; that list is read in UTF-16 too, which an older wsl.exe writes "
+                + "whatever WSL_UTF8 says.",
+            "the distribution reaches through its mount there: /mnt/c, as /proc/mounts lists it by the drive, or by the path its options name "
+                + "where an older WSL lists what it mounts as drvfs.",
+            "process, run, and since when it asked, never the machine's name, which only the record keeps",
+            "A wait with only legs of its own run ahead of it - holding slots, or in line first: a command's WSL leg behind its Windows legs, "
+                + "asked for at once - is certain to end and does not count: its line says they are its own, and a refusal after it says how much "
+                + "of the wait did not count. Another command's leg in line ahead makes it count, whoever holds the slots. On an ssh host, the "
+                + "legs one command sends there ask under that command's run.",
+        })
+        {
+            Assert.Contains(expected, said, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The verdicts topic says a heavy leg's build stopped for room is stopped, and that a shared tool working in a build
+    /// directory of another tree of the repository is named as that tree's leg's, only what no tree accounts for being
+    /// nobody's known.
+    /// </summary>
+    [Fact]
+    public async Task TheVerdictsTopic_SaysABuildStoppedForRoomIsStopped_AndWhoseAToolInAnotherTreeIs()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            "A heavy leg's build stopped for leaving less room than its machine's minFreeGiB is stopped too ('help admission').",
+            said,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "and one working in a build directory of another tree of the repository on that machine, a worktree's, an agent's or the main "
+            + "checkout's, as that tree's leg's: 'worktree o1/xa's leg 'linux-debug''. Only what no tree there accounts for is nobody's known, "
+            + "and where the other trees could not be listed the line says so.",
+            said,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The space topic says a leg's need, where its own tree's copy recorded none, is the most any other copy of the
+    /// repository on that host recorded, named in the line - its example the line as a leg says it.
+    /// </summary>
+    [Fact]
+    public async Task TheSpaceTopic_SaysANeedIsTheMostAnyOtherCopyRecorded_NamingWhose()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "space"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            "in this tree's copy, or else the most any other copy of the repository on that host recorded - the main checkout's, or a "
+            + "worktree's, an agent's or a plain one, named in the line - less what the directory already holds.",
+            said,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ssh vps: this leg needs ~11.4 GiB, what worktree o1/xa's copy of the same variant came to there; 3.2 GiB free on '/'",
+            said,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ExitCodeTopic_DocumentsEverySharedExitCode()
     {
@@ -352,6 +437,25 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"({HarnessDefaults.DefaultCores.ToString(CultureInfo.InvariantCulture)} each)",
             result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The config topic says a leg's inputs are watched only as deep as they lie, so a build in another tree below the
+    /// worktrees root is never heard - but in a tree whose inputs lie in more top-level directories than a watch allows,
+    /// the number read from the code, which is watched whole.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_SaysInputsAreWatchedOnlyAsDeepAsTheyLie()
+    {
+        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "Its inputs are watched only as deep as they lie - each directory holding one, for its own files - so a build in another "
+                + "tree below the worktrees root, which init keeps in git by a placeholder, is never heard: but in a tree whose inputs lie "
+                + $"in more than {InputWatch.MostDirectoriesWatched} top-level directories, the root counted where it holds one, which is "
+                + "watched whole.",
+            Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
 
@@ -949,6 +1053,23 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The runner topic names the largest file that can cross to a host or back, the one the refusal names: a file crosses
+    /// whole, inside one request, and that request is one line of text a string must hold.
+    /// </summary>
+    [Fact]
+    public async Task RunnerTopic_NamesTheLargestFileThatCanCross_AsTheRefusalDoes()
+    {
+        var result = await CliRunner.RunAsync(["help", "runner"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Contains(
+            $"A file crosses whole, whichever way it goes - to a host inside one request, back in one answer: one larger than {SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture)} bytes is refused by name before anything is sent.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture), SyncServe.TooLargeToCarry(SyncServe.LargestFile + 1, "a.bin", "ssh vps"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The worktrees topic says a Ninja build leaves its dead outputs out of the path budget's warning, and names
     /// the ninja command that removes them, removing nothing itself.
     /// </summary>
@@ -1273,18 +1394,59 @@ public sealed partial class HelpTests
 
         Assert.Equal(0, result.ExitCode);
 
-        foreach (var command in new[] { "create-orchestrator", "delete-orchestrator", "list-orchestrator", "create-agent", "seed-agent", "refresh-agent", "fold-agent", "delete-agent" })
+        foreach (var command in new[] { "create-orchestrator", "delete-orchestrator", "list-orchestrator", "create-agent", "seed-agent", "refresh-agent", "rebase-agent", "fold-agent", "delete-agent" })
         {
             Assert.Contains($"  {ToolPackage.Command} {command} ", result.StandardOutput, StringComparison.Ordinal);
         }
 
         Assert.Contains("agents/<agent>/seed.json", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
+        Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
+        Assert.Contains("refuses the move, nothing changed, unless --settled <path> names it", text, StringComparison.Ordinal);
+        Assert.Contains(
+            $"a move that stopped part way, exit {HarnessExit.Incomplete}, is finished where it was going by running it again, what it wrote held as "
+            + "the new base holds it, and every other command refuses the agent until then",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("a file turned into a directory, or a directory into a file or a submodule's entry - and its own changes", text, StringComparison.Ordinal);
         Assert.Contains("never forced, and its evidence check kept, so a file written late stops it", text, StringComparison.Ordinal);
         Assert.Contains("a file changed or new since is work, left for you", text, StringComparison.Ordinal);
         Assert.Contains("one not found is said, and one found and not kept stops it before anything is closed", text, StringComparison.Ordinal);
         Assert.Contains("A path this process cannot look at is never read as absent: the fold fails, nothing written.", text, StringComparison.Ordinal);
         Assert.Contains("it removes the record last, so one that stops part way finishes when run again", text, StringComparison.Ordinal);
+        Assert.Contains("Seeding again hands besides every path the main tree holds otherwise than the agent shares it, committed or not.", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "a symbolic link the main tree committed is named and never handed, and so is a submodule's entry. A file the main tree turned into a "
+            + "directory, or a directory it turned into a file, is handed as git holds it: what goes is removed first, then what comes is copied.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "refuses the hand-over, forced or not, naming each: copied, it would write over them, or through the link out of its worktree. Neither "
+            + "hands anything while a move of the agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base "
+            + "is not the main tree's HEAD. A path named otherwise than in UTF-8, committed or not, refuses any hand-over, naming it as git quotes it: "
+            + "no file opens here by such a name.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "or anything of its own where the main tree committed a file, ignored, staged or holding the same bytes included - refuses the move",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a file or a link where the new base holds a directory, and what it keeps - its own, settled or shared - in a directory where the new "
+            + "base holds a file, or a submodule's entry that would hide it from git",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Only such a move is ever finished, and only from its base or where it goes: a HEAD moved by hand - back, forward or beside its base - "
+            + "or naming no commit is never taken for one, and each command refuses it, saying how to put it back; a commit made inside the agent "
+            + "is said to be one, and where git cannot say which a HEAD is, each says so and fails, never guessing.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "deleted, removed first, with the directories that leaves empty, so a file it turned into a directory, or a directory into a file, "
+            + "makes room for what replaced it",
+            text,
+            StringComparison.Ordinal);
     }
 
     [Fact]

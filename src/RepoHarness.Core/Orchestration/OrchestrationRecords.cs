@@ -98,6 +98,12 @@ public sealed record AgentRecord
     /// <summary>The commit its worktree was made from; null until the worktree is made.</summary>
     public string? Base { get; init; }
 
+    /// <summary>
+    /// The commit a move of its base goes to, written before the move writes anything into its worktree and gone once
+    /// <see cref="Base"/> names it: present, a move stopped part way, which only rebase-agent finishes. Null otherwise.
+    /// </summary>
+    public string? Moving { get; init; }
+
     /// <summary>The Claude session the agent runs as - a session's id or a subagent's - where it was given.</summary>
     public string? Session { get; init; }
 
@@ -160,9 +166,15 @@ public sealed record AgentRecord
         if ((OrchestrationRules.ModelProblem(Model)
             ?? OrchestrationRules.SessionProblem(Session)
             ?? OrchestrationRules.CommitProblem(Base, "base")
+            ?? OrchestrationRules.CommitProblem(Moving, "base's move")
             ?? OrchestrationRules.RelativePathProblem(WorktreesRoot, "its worktrees root")) is { } problem)
         {
             return problem;
+        }
+
+        if (Moving is not null && (Base is null || Moving == Base))
+        {
+            return $"it records a move of its base to {Moving}, from {(Base is null ? "no base" : "that very commit")}";
         }
 
         return State switch

@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Text.Json;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
@@ -146,7 +145,7 @@ public sealed class HoldAwakeRegistry(IHostCommandRunner hostCommands, IHarnessO
                 {
                     Program = toolPath,
                     Arguments = [HostAgentProtocol.CommandName],
-                    StandardInput = JsonSerializer.Serialize(requestFor(nonce), HostAgentProtocol.JsonOptions) + "\n",
+                    StandardInput = HostAgentProtocol.Input(requestFor(nonce)),
                     Timeout = Budget,
 
                     // Read line by line as it comes, for the hold's refusal; only its end is kept, for the

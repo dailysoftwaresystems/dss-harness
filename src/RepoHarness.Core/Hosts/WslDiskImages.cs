@@ -1,4 +1,6 @@
+using System.Text.RegularExpressions;
 using Microsoft.Win32;
+using RepoHarness.Core.FileSystem;
 
 namespace RepoHarness.Core.Hosts;
 
@@ -57,4 +59,86 @@ public sealed class WslDiskImages : IWslDiskImages
 
         return basePath.StartsWith(@"\\?\", StringComparison.Ordinal) ? basePath[4..] : basePath;
     }
+}
+
+/// <summary>Where a WSL distribution reaches the drives of the Windows machine it runs on: each one's mount there.</summary>
+/// <remarks>
+/// WSL mounts each drive as a filesystem of its own - <c>C:\</c> at <c>/mnt/c</c>, by default - whose room is the drive's,
+/// where the distribution's own root is its virtual disk's: measured, a terabyte where the drive had 477 GiB free.
+/// </remarks>
+public static partial class WindowsDriveMounts
+{
+    /// <summary>Where the system lists what is mounted, as <c>mount</c> reads it.</summary>
+    public const string MountsFile = "/proc/mounts";
+
+    /// <summary>
+    /// Where <paramref name="drive"/> is mounted here - <c>/mnt/c</c> for <c>C:\</c> - or <see langword="null"/> where it is
+    /// mounted nowhere, with why.
+    /// </summary>
+    /// <param name="fileSystem">Reads the mounts.</param>
+    /// <param name="drive">The drive, as Windows names it: <c>C:\</c>.</param>
+    public static (string? Mount, string? Why) Of(IFileSystem fileSystem, string drive)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(drive);
+
+        string mounts;
+
+        try
+        {
+            mounts = fileSystem.ReadAllText(MountsFile);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, $"what is mounted here could not be read from '{MountsFile}': {ex.Message.TrimEnd('.')}");
+        }
+
+        return In(mounts, drive) is { } mount ? (mount, null) : (null, $"'{MountsFile}' lists no mount of it");
+    }
+
+    /// <summary>
+    /// Where <paramref name="drive"/> is mounted, by <paramref name="mounts"/> - the lines of <see cref="MountsFile"/>, each
+    /// what is mounted, where, as what and how, a space or a backslash in any of them written as three octal digits after a
+    /// backslash - or <see langword="null"/> where no line mounts it. A line names the drive as what it mounts, or, from an
+    /// older WSL, which writes what it mounts as <c>drvfs</c>, by the <c>path=</c> its options give.
+    /// </summary>
+    /// <param name="mounts">What <see cref="MountsFile"/> holds.</param>
+    /// <param name="drive">
+    /// The drive, as Windows names it: <c>C:\</c>, in either case, with or without its backslash. Anything else is mounted
+    /// nowhere: what else a line names as mounted - <c>none</c>, a device - is no drive.
+    /// </param>
+    public static string? In(string mounts, string drive)
+    {
+        ArgumentNullException.ThrowIfNull(mounts);
+        ArgumentException.ThrowIfNullOrWhiteSpace(drive);
+
+        var wanted = drive.TrimEnd('\\', '/');
+
+        if (wanted is not [var letter, ':'] || !char.IsAsciiLetter(letter))
+        {
+            return null;
+        }
+
+        foreach (var line in mounts.Split('\n'))
+        {
+            var fields = line.Split(' ');
+
+            if (fields.Length > 1
+                && (Names(fields[0]) || (fields.Length > 3 && fields[3].Split(',', ';').Any(option => option.StartsWith("path=", StringComparison.Ordinal) && Names(option[5..])))))
+            {
+                return Unescaped(fields[1]);
+            }
+        }
+
+        return null;
+
+        bool Names(string field) => string.Equals(Unescaped(field).TrimEnd('\\', '/'), wanted, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary><paramref name="field"/> as it is, each three octal digits after a backslash read back into what they stand for.</summary>
+    private static string Unescaped(string field)
+        => Escaped().Replace(field, match => ((char)Convert.ToInt32(match.Groups[1].Value, 8)).ToString());
+
+    [GeneratedRegex(@"\\([0-7]{3})", RegexOptions.CultureInvariant)]
+    private static partial Regex Escaped();
 }

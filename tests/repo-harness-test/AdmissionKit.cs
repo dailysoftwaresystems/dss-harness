@@ -3,8 +3,10 @@ using System.Text.Json;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
+using RepoHarness.Core.Repository;
 
 namespace RepoHarness.Tests;
 
@@ -35,6 +37,39 @@ internal sealed class ScriptedGauge(params double?[] percents) : IMemoryGauge
                 ? (new MemoryReading(percent, string.Create(CultureInfo.InvariantCulture, $"{percent} of 100 by the test")), null)
                 : (null, "the test gave no reading");
         }
+    }
+}
+
+/// <summary>WSL's page cache, whose every drop comes to what a test says, recording each repository a drop was asked for.</summary>
+/// <param name="drop">What each drop comes to; nothing to drop where none is given.</param>
+internal sealed class ScriptedPageCache(PageCacheDrop? drop = null) : IWslPageCache
+{
+    private readonly List<HarnessContext> _asked = [];
+
+    /// <summary>Each repository a drop was asked for, in order.</summary>
+    public IReadOnlyList<HarnessContext> Asked
+    {
+        get
+        {
+            lock (_asked)
+            {
+                return [.. _asked];
+            }
+        }
+    }
+
+    /// <summary>Runs as each drop is asked for, before it comes to anything: a stop asked for while the cache drops, say.</summary>
+    public Action<CancellationToken>? WhileDropping { get; init; }
+
+    public Task<PageCacheDrop?> DropAsync(HarnessContext context, CancellationToken cancellationToken)
+    {
+        lock (_asked)
+        {
+            _asked.Add(context);
+        }
+
+        WhileDropping?.Invoke(cancellationToken);
+        return Task.FromResult(drop);
     }
 }
 
@@ -96,21 +131,37 @@ internal static class AdmissionKit
     /// <summary>
     /// An admission over <paramref name="slots"/>, whose every wait moves <paramref name="clock"/> by what it waits and
     /// then does <paramref name="onWait"/>, and whose every settle lasts <paramref name="settle"/>, or its least where
-    /// none is given.
+    /// none is given. A wait that runs past any a machine allows, or turns without end, fails the test rather than hang it.
     /// </summary>
     public static LegAdmission Admission(HeavyLegSlots slots, IMemoryGauge gauge, ManualClock clock, TimeSpan? settle = null, Action? onWait = null)
-        => new(
+    {
+        var turns = 0;
+
+        return new(
             slots,
             gauge,
             clock,
             (delay, token) =>
             {
                 token.ThrowIfCancellationRequested();
+
+                if (clock.Moved > Endless || ++turns > MostTurns)
+                {
+                    throw new TimeoutException($"the wait never ended: {turns} turns, {clock.Moved} on the clock");
+                }
+
                 clock.Advance(delay);
                 onWait?.Invoke();
                 return Task.CompletedTask;
             },
             (least, _) => settle ?? least);
+    }
+
+    /// <summary>Longer than any machine lets a leg wait: a test's wait past it would never have ended.</summary>
+    private static readonly TimeSpan Endless = TimeSpan.FromMinutes(AdmissionSettings.MostWaitMinutes) + TimeSpan.FromDays(1);
+
+    /// <summary>More turns than any test's wait takes: one past it is looking again without end.</summary>
+    private const int MostTurns = 100_000;
 
     /// <summary>The slots kept at <paramref name="record"/>, on <paramref name="fileSystem"/> or the real one.</summary>
     public static HeavyLegSlots Slots(HarnessFactory harness, string record, IFileSystem? fileSystem = null)
@@ -123,14 +174,16 @@ internal static class AdmissionKit
         int settleLeast = AdmissionSettings.DefaultSettleLeastSeconds,
         int settleMost = AdmissionSettings.DefaultSettleMostSeconds,
         int pollSeconds = AdmissionSettings.DefaultPollSeconds,
-        double maxWaitMinutes = AdmissionSettings.DefaultMaxWaitMinutes)
+        double maxWaitMinutes = AdmissionSettings.DefaultMaxWaitMinutes,
+        double minFreeGiB = AdmissionSettings.DefaultMinFreeGiB)
         => new(
             heavyLegs,
             maxMemoryPercent,
             TimeSpan.FromSeconds(settleLeast),
             TimeSpan.FromSeconds(settleMost),
             TimeSpan.FromSeconds(pollSeconds),
-            TimeSpan.FromMinutes(maxWaitMinutes));
+            TimeSpan.FromMinutes(maxWaitMinutes),
+            (long)(minFreeGiB * Gibibyte));
 
     /// <summary>
     /// A leg asking by <paramref name="rule"/>, whose every line of progress goes to <paramref name="said"/>, and whose
@@ -166,11 +219,11 @@ internal static class AdmissionKit
     /// this process stands for that command, so the entry stands for as long as the test runs, whatever machine name it
     /// carries, unless it names a process that has gone.
     /// </summary>
-    public static SlotEntry Holder(HarnessFactory harness, string leg, string? machine = null, int? processId = null, int slots = AdmissionSettings.DefaultHeavyLegs)
+    public static SlotEntry Holder(HarnessFactory harness, string leg, string? machine = null, int? processId = null, int slots = AdmissionSettings.DefaultHeavyLegs, string? run = null)
         => new(
             machine ?? harness.Identity.CurrentMachine,
             processId ?? harness.Identity.CurrentId,
-            $"run-{leg}",
+            run ?? $"run-{leg}",
             new DateTimeOffset(2026, 9, 30, 16, 29, 42, TimeSpan.Zero),
             "test",
             leg,

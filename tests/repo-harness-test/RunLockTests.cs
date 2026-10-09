@@ -30,10 +30,14 @@ public sealed class RunLockTests
             TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
-        Assert.Contains(Environment.MachineName, refusal.Message, StringComparison.Ordinal);
-        Assert.Contains(Environment.ProcessId.ToString(CultureInfo.InvariantCulture), refusal.Message, StringComparison.Ordinal);
-        Assert.Contains(held.Entry.Holder.RunId, refusal.Message, StringComparison.Ordinal);
-        Assert.Contains("sync", refusal.Message, StringComparison.Ordinal);
+
+        // Named by its process and run, never by this machine's name, which only the lock file keeps.
+        Assert.Contains(
+            string.Create(CultureInfo.InvariantCulture, $"is held by pid {Environment.ProcessId}, run {held.Entry.Holder.RunId}, since "),
+            refusal.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(Environment.MachineName, refusal.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("running 'sync'", refusal.Message, StringComparison.Ordinal);
 
         // It never waits: blocking for hours is worse than a refusal somebody can act on.
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"the refusal took {watch.Elapsed}");
@@ -317,13 +321,15 @@ public sealed class RunLockTests
             TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
-        Assert.Contains("another-machine", refusal.Message, StringComparison.Ordinal);
 
-        // A machine renamed since - a Mac, by the network it joined - reads as another: the reader is told the way out.
+        // Said to be another machine's, never named: the record keeps the name, which is how the two are told apart. A
+        // machine renamed since - a Mac, by the network it joined - reads as another: the reader is told the way out.
+        Assert.Contains($"is held by pid {int.MaxValue - 1} on another machine, run ", refusal.Message, StringComparison.Ordinal);
         Assert.Contains(
-            "(recorded on another machine, or on this one under an earlier name, which cannot be asked whether it still runs; --force-lock takes it)",
+            "(that machine - or this one, under an earlier name - cannot be asked whether it still runs; --force-lock takes it)",
             refusal.Message,
             StringComparison.Ordinal);
+        Assert.DoesNotContain("another-machine", refusal.Message, StringComparison.Ordinal);
 
         await using var forced = await runLock.AcquireAsync(
             layout,
@@ -331,7 +337,9 @@ public sealed class RunLockTests
             TestContext.Current.CancellationToken);
 
         Assert.Single(runLock.Read(layout));
+        Assert.Contains($"from pid {int.MaxValue - 1} on another machine, run ", factory.StandardError.ToString(), StringComparison.Ordinal);
         Assert.Contains("--force-lock", factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("another-machine", factory.StandardError.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

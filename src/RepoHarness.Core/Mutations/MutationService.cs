@@ -12,6 +12,7 @@ using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
 using RepoHarness.Core.Testing;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Mutations;
 
@@ -185,7 +186,7 @@ public sealed class MutationService(
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
-                    : runner.RunAsync(Subject(work, arms, request.ForceLock), work, token),
+                    : SweepAsync(runner, work, arms, request.ForceLock, token),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -219,19 +220,44 @@ public sealed class MutationService(
     }
 
     /// <summary>
+    /// Sweeps <paramref name="work"/>'s leg, its workers' builds measured against every tree of the repository on this
+    /// machine, as they were listed as the leg's work began here: a tree that never built the leg's variant here is
+    /// measured by another's that did. Trees beside the main checkout's that could not be listed are said, with why, and
+    /// with what the workers' builds are measured by instead.
+    /// </summary>
+    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, CancellationToken cancellationToken)
+    {
+        var beside = work.Leg.Beside ?? throw new InvalidOperationException($"Leg '{work.Leg.Name}' began its work with no trees listed beside it.");
+
+        if (beside.Unlisted is { } why)
+        {
+            var measured = beside.Trees.Any(tree => tree.Name == RepositoryTree.MainCheckout) ? "its own tree's and the main checkout's" : "its own tree's";
+
+            _output.Warn(
+                CommandName,
+                $"leg '{work.Leg.Name}': the worktrees beside the main checkout could not be listed, so a worker's build is measured by "
+                + $"{measured} alone: {why}");
+        }
+
+        return await runner.RunAsync(Subject(work, arms, force, beside), work, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// What <paramref name="work"/>'s leg sweeps: its tree; its project, as the leg builds it; the dependency sources its
     /// own build fetched, which each worker is given its own copy of and configured with; the arms it drives; the test
-    /// settings its tests start by; and what a build of its variant is
-    /// expected to come to - its <c>buildSpaceGiB</c> where it declares one, else what its own build directory, or the
-    /// main checkout's copy of it, last recorded (<see cref="LegRoom.ExpectedBuildBytes"/>).
+    /// settings its tests start by; and what a build of its variant is expected to come to - its <c>buildSpaceGiB</c>
+    /// where it declares one, else what its own build directory last recorded, else the most any of
+    /// <paramref name="beside"/> - the repository's other trees here - recorded of it (<see cref="LegRoom.ExpectedBuildBytes"/>).
     /// </summary>
-    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force)
+    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound beside)
     {
+        ArgumentNullException.ThrowIfNull(beside);
+
         var leg = work.Leg;
-        var (bytes, source) = LegRoom.ExpectedBuildBytes(
+        var expected = LegRoom.ExpectedBuildBytes(
             leg.Leg,
             BuildRecord.BytesIn(_fileSystem, leg.BuildDirectory),
-            BuildRecord.BytesIn(_fileSystem, leg.Variant.DirectoryUnder(work.Context.Layout.MainCheckoutRoot)));
+            beside.Trees.Select(tree => (tree.Name, BuildRecord.BytesIn(_fileSystem, leg.Variant.DirectoryUnder(tree.Root)))));
         var project = leg.BuildableProject();
 
         return new MutationSubject
@@ -243,8 +269,8 @@ public sealed class MutationService(
             Tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project),
             Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = work.Context.Config.Mutations,
-            ExpectedBuildBytes = bytes,
-            ExpectedBuildSource = source,
+            ExpectedBuildBytes = expected?.Bytes,
+            ExpectedBuildSource = expected?.Source ?? string.Empty,
             Force = force,
         };
     }

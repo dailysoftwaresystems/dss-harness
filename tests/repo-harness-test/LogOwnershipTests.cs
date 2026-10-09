@@ -198,7 +198,8 @@ public sealed class LogOwnershipTests
 
     /// <summary>
     /// A log path owned by a run on another machine is held - nothing here can ask that machine whether the run still
-    /// goes - saying --force-lock is the way out, and taken when forced.
+    /// goes - saying --force-lock is the way out, and taken when forced: each line saying the owner is another machine's,
+    /// and never naming that machine, which only the record keeps.
     /// </summary>
     [Fact]
     public async Task ALogPathOwnedOnAnotherMachine_IsHeld_UntilForced()
@@ -213,13 +214,16 @@ public sealed class LogOwnershipTests
         var held = await ownership.ClaimAsync(directory, RunId.New(), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(held.Taken);
-        Assert.Contains("another-machine pid", held.HeldBy, StringComparison.Ordinal);
+        Assert.StartsWith($"pid {int.MaxValue - 1} on another machine, run 20250101-120000-deadbeef, since ", held.HeldBy, StringComparison.Ordinal);
         Assert.Contains("--force-lock takes it", held.HeldBy, StringComparison.Ordinal);
+        Assert.DoesNotContain("another-machine", held.HeldBy, StringComparison.Ordinal);
 
         var forced = await ownership.ClaimAsync(directory, RunId.New(), force: true, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(forced.Taken);
+        Assert.Contains($"from pid {int.MaxValue - 1} on another machine, run 20250101-120000-deadbeef", factory.StandardError.ToString(), StringComparison.Ordinal);
         Assert.Contains("because --force-lock was given", factory.StandardError.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("another-machine", factory.StandardError.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -270,7 +274,7 @@ public sealed class LogOwnershipTests
 
         var said = factory.StandardError.ToString();
         Assert.Contains(
-            $"An earlier run was abandoned: {Environment.MachineName} pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since ",
+            $"An earlier run was abandoned: pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since ",
             said,
             StringComparison.Ordinal);
         Assert.Contains(recordsKept ? $"never gave up its records at '{dead}' - most likely it was killed" : $"never gave up '{dead}', which is gone", said, StringComparison.Ordinal);

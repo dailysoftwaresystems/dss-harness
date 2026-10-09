@@ -18,8 +18,8 @@ public sealed class HostAgentServiceTests
 {
     private const string Nonce = "0123456789abcdef0123456789abcdef";
 
-    private static readonly Func<string, string[], CancellationToken, Task<int>> NothingRuns
-        = (_, _, _) => throw new InvalidOperationException("Nothing should have run.");
+    private static readonly Func<string, string[], Dispatch, CancellationToken, Task<int>> NothingRuns
+        = (_, _, _, _) => throw new InvalidOperationException("Nothing should have run.");
 
     [Fact]
     public async Task Info_AnswersWithThisBuild_AndThisMachine()
@@ -98,7 +98,7 @@ public sealed class HostAgentServiceTests
             new StringReader(RunRequest(copy.Path, "read-anchor", "D-A B", "--json")),
             new StringWriter(),
             error,
-            (directory, arguments, _) =>
+            (directory, arguments, _, _) =>
             {
                 ranIn = directory;
                 ranWith = arguments;
@@ -120,6 +120,59 @@ public sealed class HostAgentServiceTests
             error.ToString().TrimEnd().Split('\n').Select(line => line.TrimEnd('\r')));
     }
 
+    /// <summary>
+    /// What a request says of the command it asks for beside its line - the run it is a leg of, the drive its WSL disk grows
+    /// on - is handed to the command, never added to its arguments; a run that is not a run id, and a blank drive, are
+    /// refused, and nothing runs.
+    /// </summary>
+    [Theory]
+    [InlineData("20261008-120000-0a1b2c3d", "C:\\", null)]
+    [InlineData("../../somewhere", "C:\\", "the request names its run as '../../somewhere', which is not a run id")]
+    [InlineData("20261008-120000-0a1b2c3d", " ", "the request names a blank drive as where WSL keeps the distribution's disk")]
+    public async Task Run_HandsTheCommandWhatTheRequestSaysOfIt_AndRefusesARunThatIsNotARunId(string run, string drive, string? refusal)
+    {
+        using var copy = new TempDirectory();
+        using var error = new StringWriter();
+        Dispatch? ranFor = null;
+        string[]? ranWith = null;
+        var request = JsonSerializer.Serialize(
+            new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Run,
+                Directory = copy.Path,
+                Arguments = ["build", "--json"],
+                Nonce = Nonce,
+                RunId = run,
+                DiskImageDrive = drive,
+            },
+            HostAgentProtocol.JsonOptions);
+
+        var exitCode = await Service().ServeAsync(
+            new StringReader(request),
+            new StringWriter(),
+            error,
+            (_, arguments, dispatched, _) =>
+            {
+                (ranWith, ranFor) = (arguments, dispatched);
+                return Task.FromResult(0);
+            },
+            TestContext.Current.CancellationToken);
+
+        if (refusal is null)
+        {
+            Assert.Equal(HarnessExit.Success, exitCode);
+            Assert.NotNull(ranFor);
+            Assert.Equal((run, drive), (ranFor.RunId?.ToString(), ranFor.DiskImageDrive));
+            Assert.Equal(["build", "--json"], ranWith!);
+        }
+        else
+        {
+            Assert.Equal(HarnessExit.UsageError, exitCode);
+            Assert.Null(ranWith);
+            Assert.Contains(refusal, error.ToString(), StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public async Task Run_FindsACopyNamedFromTheHomeDirectory()
     {
@@ -131,7 +184,7 @@ public sealed class HostAgentServiceTests
             new StringReader(RunRequest("~/src/repo", "verify-git")),
             new StringWriter(),
             new StringWriter(),
-            (directory, _, _) =>
+            (directory, _, _, _) =>
             {
                 ranIn = directory;
                 return Task.FromResult(0);
@@ -281,7 +334,7 @@ public sealed class HostAgentServiceTests
             new StringReader(RunRequest(copy.Path, "verify-git")),
             new StringWriter(),
             error,
-            (_, _, _) => throw new UnauthorizedAccessException("Access to the path is denied."),
+            (_, _, _, _) => throw new UnauthorizedAccessException("Access to the path is denied."),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.HostUnavailable, exitCode);
@@ -300,7 +353,7 @@ public sealed class HostAgentServiceTests
             input,
             new StringWriter(),
             new StringWriter(),
-            async (_, _, token) =>
+            async (_, _, _, token) =>
             {
                 started.SetResult();
 
@@ -334,7 +387,7 @@ public sealed class HostAgentServiceTests
             input,
             new StringWriter(),
             new StringWriter(),
-            async (_, _, token) =>
+            async (_, _, _, token) =>
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
                 cancelled = token.IsCancellationRequested;
@@ -371,6 +424,10 @@ public sealed class HostAgentServiceTests
     [InlineData("""{"kind":"run","arguments":[]}""")]
     [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git"]}""")]
     [InlineData("""{"kind":"info","unexpected":true}""")]
+    [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git",7],"nonce":"0123456789abcdef0123456789abcdef"}""")]
+    [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git",{}],"nonce":"0123456789abcdef0123456789abcdef"}""")]
+    [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git",null],"nonce":"0123456789abcdef0123456789abcdef"}""")]
+    [InlineData("""{"kind":"run","directory":"/r","arguments":[null],"nonce":"0123456789abcdef0123456789abcdef"}""")]
     [InlineData("""{"kind":"info","emulators":{"qemu":{"hostOs":"linux","hostProcessor":"x86_64","processor":"arm64","witness":{"command":["w"],"pattern":"x"}},"QEMU":{}}}""")]
     public async Task ARequestThatCannotBeServed_IsAUsageError_Explained(string request)
     {
@@ -481,7 +538,7 @@ public sealed class HostAgentServiceTests
             new StringReader(request),
             new StringWriter(),
             new StringWriter(),
-            (_, _, _) =>
+            (_, _, _, _) =>
             {
                 heldWhileRunning = processes.Started.Count == 1;
                 return Task.FromResult(0);
@@ -509,10 +566,52 @@ public sealed class HostAgentServiceTests
             new StringReader(RunRequest(copy.Path, "read-anchor", "D-A B")),
             new StringWriter(),
             new StringWriter(),
-            (_, _, _) => Task.FromResult(0),
+            (_, _, _, _) => Task.FromResult(0),
             TestContext.Current.CancellationToken);
 
         Assert.Empty(processes.Started);
+    }
+
+    /// <summary>
+    /// A request written as it is encoded is one line - the very line the serializer writes of it whole - and reads back as
+    /// the request: each argument as its text, and what an argument carries as the base64 text of its bytes, however its
+    /// length falls against the pieces it is encoded in, and a text longer than what is gathered before it is written on.
+    /// </summary>
+    [Fact]
+    public void ARequestWrittenAsItIsEncoded_IsTheLineTheSerializerWrites_AndReadsBackWithWhatItCarriesAsBase64()
+    {
+        var random = new Random(9);
+        int[] lengths = [0, 1, HostAgentProtocol.CarriedPiece - 1, HostAgentProtocol.CarriedPiece, HostAgentProtocol.CarriedPiece + 1, (3 * HostAgentProtocol.CarriedPiece) + 2];
+        var carried = lengths.Select(length => { var bytes = new byte[length]; random.NextBytes(bytes); return bytes; }).ToList();
+        var longText = string.Concat(Enumerable.Repeat("João + \"quoted\" / ", 20_000));
+
+        var textOnly = new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Run,
+            Directory = "~/src/repo",
+            Arguments = [SyncServe.CommandName, SyncServe.Index, SyncServe.OperandsFollow, "/r", longText, "a+b/c=d"],
+            KeepAwakeEnvironment = new() { ["LANG"] = "pt_BR.UTF-8" },
+            Nonce = Nonce,
+        };
+
+        Assert.Equal(JsonSerializer.Serialize(textOnly, HostAgentProtocol.JsonOptions) + "\n", HostAgentProtocol.Input(textOnly).Read());
+
+        var line = HostAgentProtocol.Input(new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Run,
+            Directory = textOnly.Directory,
+            Arguments = [.. textOnly.Arguments, .. carried.Select(bytes => HostArgument.Carrying(bytes))],
+            Nonce = Nonce,
+        }).Read();
+
+        Assert.Single(line, character => character == '\n');
+        Assert.EndsWith("\n", line, StringComparison.Ordinal);
+
+        var read = JsonSerializer.Deserialize<HostAgentRequest>(line, HostAgentProtocol.JsonOptions)!;
+
+        Assert.Equal(
+            [.. textOnly.Arguments.Select(argument => argument.Text), .. carried.Select(Convert.ToBase64String)],
+            read.Arguments.Select(argument => argument.Text));
     }
 
     /// <summary>

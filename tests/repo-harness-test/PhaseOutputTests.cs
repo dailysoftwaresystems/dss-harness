@@ -1,5 +1,7 @@
 using System.Text;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 
 namespace RepoHarness.Tests;
@@ -10,6 +12,9 @@ namespace RepoHarness.Tests;
 /// </summary>
 public sealed class PhaseOutputTests
 {
+    /// <summary>What every log here is read through, but where a test says otherwise.</summary>
+    private static readonly IFileSystem FileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
+
     /// <summary>
     /// Only the child's own lines are read: not the header, which echoes the command line and would witness a pattern the
     /// command contains, nor the exit line; and each reads as the child printed it, however it was ended.
@@ -55,9 +60,9 @@ public sealed class PhaseOutputTests
         var start = Encoding.UTF8.GetByteCount(header);
         var end = start + Encoding.UTF8.GetByteCount(child);
 
-        Assert.Equal(lines, PhaseOutput.InLog(log, start, end).Lines());
-        Assert.Equal(lines.Take(2), PhaseOutput.InLog(log, start, start + Encoding.UTF8.GetByteCount(lines[0] + ending + lines[1] + ending)).Lines());
-        Assert.Empty(PhaseOutput.InLog(log, start, start).Lines());
+        Assert.Equal(lines, PhaseOutput.InLog(FileSystem, log, start, end).Lines());
+        Assert.Equal(lines.Take(2), PhaseOutput.InLog(FileSystem, log, start, start + Encoding.UTF8.GetByteCount(lines[0] + ending + lines[1] + ending)).Lines());
+        Assert.Empty(PhaseOutput.InLog(FileSystem, log, start, start).Lines());
     }
 
     /// <summary>
@@ -123,7 +128,7 @@ public sealed class PhaseOutputTests
         using var temp = new TempDirectory();
         var log = temp.WriteFile("short.log", "one\ntwo\n");
 
-        var unread = Assert.Throws<PhaseOutputUnreadException>(() => PhaseOutput.InLog(log, 0, 1_000).Lines().ToList());
+        var unread = Assert.Throws<PhaseOutputUnreadException>(() => PhaseOutput.InLog(FileSystem, log, 0, 1_000).Lines().ToList());
 
         Assert.Contains("it holds 8 byte(s), fewer than the 1000 the phase left in it", unread.Message, StringComparison.Ordinal);
     }
@@ -138,7 +143,7 @@ public sealed class PhaseOutputTests
         using var temp = new TempDirectory();
         var log = temp.WriteFile("long.log", string.Concat(Enumerable.Range(0, 40_000).Select(index => $"line {index:D6}\n")));
 
-        using var lines = PhaseOutput.InLog(log, 0, new FileInfo(log).Length).Lines().GetEnumerator();
+        using var lines = PhaseOutput.InLog(FileSystem, log, 0, new FileInfo(log).Length).Lines().GetEnumerator();
 
         Assert.True(lines.MoveNext());
         Assert.Equal("line 000000", lines.Current);
@@ -158,6 +163,55 @@ public sealed class PhaseOutputTests
         Assert.Contains("it was cut short while it was read", unread.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A log the system refuses to say anything more of once it is open - its length, or what follows its child's lines -
+    /// is said as unread, naming the log and what the system said, before any line is handed on, and is let go of.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ALogTheSystemFailsAfterOpeningIt_IsSaidAsUnread_AndLetGoOf(bool denied)
+    {
+        using var temp = new TempDirectory();
+        var log = temp.WriteFile("open.log", "one\ntwo\n# exit 0\n");
+        var failing = new FailingLogs(FileSystem, failAfter: 0, denied);
+
+        var unread = Assert.Throws<PhaseOutputUnreadException>(() => PhaseOutput.InLog(failing, log, 0, 8, "# exit 0\n"u8.ToArray()).Lines().ToList());
+
+        Assert.Equal(log, unread.LogFile);
+        Assert.EndsWith($": {FailingLogs.Said}", unread.Message, StringComparison.Ordinal);
+        Assert.IsType(denied ? typeof(UnauthorizedAccessException) : typeof(IOException), unread.InnerException);
+        Assert.True(failing.Opened is { Disposed: true }, "the log was left open");
+    }
+
+    /// <summary>
+    /// A log the system fails part way through reading is said as unread at the read that failed, naming the log and what
+    /// the system said: the lines handed on before it came from the log as its phase left it, and none is made of the rest.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ALogTheSystemFailsWhileItIsRead_IsSaidAsUnread_WhereTheReadFailed(bool denied)
+    {
+        using var temp = new TempDirectory();
+        var log = temp.WriteFile("long.log", string.Concat(Enumerable.Range(0, 40_000).Select(index => $"line {index:D6}\n")));
+        var read = new List<string>();
+
+        var unread = Assert.Throws<PhaseOutputUnreadException>(() =>
+        {
+            foreach (var line in PhaseOutput.InLog(new FailingLogs(FileSystem, failAfter: 1, denied), log, 0, new FileInfo(log).Length).Lines())
+            {
+                read.Add(line);
+            }
+        });
+
+        Assert.Equal(log, unread.LogFile);
+        Assert.EndsWith($": {FailingLogs.Said}", unread.Message, StringComparison.Ordinal);
+        Assert.IsType(denied ? typeof(UnauthorizedAccessException) : typeof(IOException), unread.InnerException);
+        Assert.Equal(Enumerable.Range(0, read.Count).Select(index => $"line {index:D6}"), read);
+        Assert.InRange(read.Count, 1, 39_999);
+    }
+
     /// <summary>A reader that stops early reads no further and leaves the log free: nothing still holds it open.</summary>
     [Fact]
     public void AReaderThatStopsEarly_LeavesTheLogFree()
@@ -165,7 +219,7 @@ public sealed class PhaseOutputTests
         using var temp = new TempDirectory();
         var log = temp.WriteFile("free.log", string.Concat(Enumerable.Range(0, 1000).Select(index => $"line {index}\n")));
 
-        Assert.Equal("line 0", PhaseOutput.InLog(log, 0, new FileInfo(log).Length).Lines().First());
+        Assert.Equal("line 0", PhaseOutput.InLog(FileSystem, log, 0, new FileInfo(log).Length).Lines().First());
 
         using var exclusive = new FileStream(log, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
     }
@@ -184,6 +238,71 @@ public sealed class PhaseOutputTests
         Assert.Equal(
             ["configure", "build 1", "build 2"],
             PhaseOutput.Joined([PhaseOutput.Of("configure\n"), PhaseOutput.Empty, PhaseOutput.Of("build 1\nbuild 2")]).Lines());
+    }
+
+    /// <summary>
+    /// Logs that open, and whose streams then fail as the system fails a read: every call that asks the stream for
+    /// something - its length, a seek, a read - past the first <c>failAfter</c> reads fails, as one this user may no
+    /// longer read where <c>denied</c> says so, and otherwise as a device that stopped answering.
+    /// </summary>
+    private sealed class FailingLogs(IFileSystem inner, int failAfter, bool denied) : PassThroughFileSystem(inner)
+    {
+        /// <summary>What the system says of each failure.</summary>
+        public const string Said = "the device stopped answering";
+
+        /// <summary>The stream last opened.</summary>
+        public Failing? Opened { get; private set; }
+
+        public override Stream OpenRead(string path) => Opened = new Failing(base.OpenRead(path), failAfter, denied);
+
+        /// <summary>A stream that fails once it has read <c>failAfter</c> times.</summary>
+        public sealed class Failing(Stream inner, int failAfter, bool denied) : Stream
+        {
+            private int _reads;
+
+            /// <summary>Whether it was let go of.</summary>
+            public bool Disposed { get; private set; }
+
+            public override bool CanRead => true;
+
+            public override bool CanSeek => true;
+
+            public override bool CanWrite => false;
+
+            public override long Length => Fail() ?? inner.Length;
+
+            public override long Position
+            {
+                get => inner.Position;
+                set => inner.Position = value;
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                Fail();
+                _reads++;
+
+                return inner.Read(buffer, offset, count);
+            }
+
+            public override long Seek(long offset, SeekOrigin origin) => Fail() ?? inner.Seek(offset, origin);
+
+            public override void Flush() => throw new NotSupportedException();
+
+            public override void SetLength(long value) => throw new NotSupportedException();
+
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+            protected override void Dispose(bool disposing)
+            {
+                Disposed = true;
+                inner.Dispose();
+                base.Dispose(disposing);
+            }
+
+            /// <summary>Fails where this stream has read as often as it may; otherwise nothing.</summary>
+            private long? Fail() => _reads >= failAfter ? throw (denied ? new UnauthorizedAccessException(Said) : new IOException(Said)) : null;
+        }
     }
 
     /// <summary>A phase that runs this assembly as a child, exactly as the process tests do.</summary>

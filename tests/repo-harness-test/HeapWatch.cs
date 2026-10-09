@@ -12,6 +12,11 @@ namespace RepoHarness.Tests;
 /// budget, as large as the machine's caches and its settings make it, and nothing the code under test decides.
 /// </para>
 /// <para>
+/// What a reading counts is what that collection found live, part by part, as it reports it - never
+/// <see cref="GC.GetTotalMemory(bool)"/>, an estimate the runtime makes apart from the collection: on macOS it strayed
+/// some 7 MB either way of what the collection itself found live, failing bounds the live heap kept.
+/// </para>
+/// <para>
 /// The heap is the process's, so what the rest of a test run allocates at the same time is counted too: a test watched by
 /// this runs in <see cref="MemoryMeasured"/>, which runs alone.
 /// </para>
@@ -21,20 +26,22 @@ internal sealed class HeapWatch : IDisposable
     /// <summary>How often the heap is read, each reading a collection of its own.</summary>
     private static readonly TimeSpan Every = TimeSpan.FromMilliseconds(25);
 
+    /// <summary>The parts of the heap a collection reports on, in the order it reports them.</summary>
+    private static readonly string[] PartNames = ["generation 0", "generation 1", "generation 2", "large objects", "pinned objects"];
+
     private readonly ManualResetEventSlim _stop = new();
     private readonly Thread _reader;
     private readonly long _baseline;
+    private readonly string _baselineParts;
     private long _peak;
+    private string _peakParts;
     private long _readings;
 
     public HeapWatch()
     {
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-
-        _baseline = GC.GetTotalMemory(forceFullCollection: true);
+        (_baseline, _baselineParts) = Collected();
         _peak = _baseline;
+        _peakParts = _baselineParts;
 
         _reader = new Thread(Read)
         {
@@ -52,6 +59,49 @@ internal sealed class HeapWatch : IDisposable
     /// <summary>How many times the heap has been read so far.</summary>
     public long Readings => Interlocked.Read(ref _readings);
 
+    /// <summary>
+    /// Where the heap held what it held at its most, part by part, against where it held its baseline: for a bound's
+    /// failure to say what grew.
+    /// </summary>
+    public string Where => $"at its most {Volatile.Read(ref _peakParts)}; at its baseline {_baselineParts}";
+
+    /// <summary>
+    /// What this process's managed heap holds once everything collectable is collected - its finalizers run, and what they
+    /// let go collected too - in bytes, and part by part: the measure a watch reads.
+    /// </summary>
+    public static (long Held, string Parts) Collected()
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        return LastCollection();
+    }
+
+    /// <summary>
+    /// What the last full collection found live: every part's live objects summed, and each part's - each generation's,
+    /// and the large and the pinned objects' - with how many objects it found pinned, and left to finalize.
+    /// </summary>
+    private static (long Held, string Parts) LastCollection()
+    {
+        var collection = GC.GetGCMemoryInfo(GCKind.FullBlocking);
+        var generations = collection.GenerationInfo;
+        var held = 0L;
+        var parts = new List<string>();
+
+        for (var at = 0; at < generations.Length; at++)
+        {
+            var live = generations[at].SizeAfterBytes - generations[at].FragmentationAfterBytes;
+            held += live;
+            parts.Add($"{(at < PartNames.Length ? PartNames[at] : $"part {at}")} {live:N0}");
+        }
+
+        parts.Add($"{collection.PinnedObjectsCount:N0} object(s) pinned");
+        parts.Add($"{collection.FinalizationPendingCount:N0} awaiting finalization");
+
+        return (held, string.Join(", ", parts));
+    }
+
     public void Dispose()
     {
         _stop.Set();
@@ -66,11 +116,12 @@ internal sealed class HeapWatch : IDisposable
             // Collected first: what remains is held by something, and garbage is not.
             GC.Collect();
 
-            var now = GC.GetTotalMemory(forceFullCollection: false);
+            var (now, parts) = LastCollection();
 
             if (now > Interlocked.Read(ref _peak))
             {
                 Interlocked.Exchange(ref _peak, now);
+                Volatile.Write(ref _peakParts, parts);
             }
 
             Interlocked.Increment(ref _readings);

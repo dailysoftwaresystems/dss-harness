@@ -66,10 +66,29 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// leg's line is carried on it (<see cref="LegEntry.EndsTheRun"/>), and ends the run once the
     /// line is recorded.
     /// </exception>
+    public Task<LegEntry> RunAsync(
+        string commandName,
+        PlacedLeg leg,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken = default)
+        => RunAsync(commandName, leg, arguments, run: null, cancellationToken);
+
+    /// <summary>
+    /// Runs <paramref name="commandName"/> for one leg of <paramref name="run"/> on its host, and returns its entry: a leg
+    /// there asking the host's heavy-leg slots is recorded under <paramref name="run"/>, so the legs of one command wait
+    /// for each other's slots without that wait counting.
+    /// </summary>
+    /// <param name="commandName">The command to run there, which is the one running here.</param>
+    /// <param name="leg">The placed leg: its host, and the host's copy of its tree, which sync made, that it runs in.</param>
+    /// <param name="arguments">The command's own options, without <c>--legs</c>, <c>--json</c>, <c>--here</c> or <c>--verbose</c>, which this adds.</param>
+    /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
+    /// <exception cref="HarnessException">As <see cref="RunAsync(string, PlacedLeg, IReadOnlyList{string}, CancellationToken)"/> raises.</exception>
     public async Task<LegEntry> RunAsync(
         string commandName,
         PlacedLeg leg,
         IReadOnlyList<string> arguments,
+        RunId? run,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
@@ -89,15 +108,17 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         // relayed from there like every line of it.
         string[] verbosity = _output.IsVerbose ? [HostAgentProtocol.VerboseOption] : [];
 
-        var request = JsonSerializer.Serialize(
-            new HostAgentRequest
-            {
-                Kind = HostAgentRequestKind.Run,
-                Directory = leg.HostTreeRoot,
-                Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. verbosity, .. arguments],
-                Nonce = nonce,
-            },
-            HostAgentProtocol.JsonOptions);
+        var request = new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Run,
+            Directory = leg.HostTreeRoot,
+            Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. verbosity, .. arguments],
+            Nonce = nonce,
+            RunId = run?.Value,
+
+            // The drive a WSL distribution's disk grows on, which the leg's build fills, and which only this machine sees.
+            DiskImageDrive = leg.Host.Host.Kind == HostKind.Wsl ? leg.Host.DiskImageSpace?.Filesystem : null,
+        };
 
         var ledger = new System.Text.StringBuilder();
         var lines = new HostAgentLines(nonce);
@@ -116,7 +137,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                     Arguments = _output.IsVerbose
                         ? [HostAgentProtocol.CommandName, HostAgentProtocol.VerboseOption]
                         : [HostAgentProtocol.CommandName],
-                    StandardInput = request + "\n",
+                    StandardInput = HostAgentProtocol.Input(request),
                     HoldStandardInputOpen = true,
 
                     // What the host's command prints is relayed line by line, under --verbose every line of

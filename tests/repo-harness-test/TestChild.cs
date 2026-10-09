@@ -29,11 +29,13 @@ internal static class TestChild
             "echo-command-line" => EchoCommandLine(standardOutput, arguments),
             "echo-crlf" => EchoLinesEndedWithCrlf(standardOutput, arguments),
             "echo-stdin" => EchoStandardInput(standardOutput),
+            "stdin-to-file" => StandardInputToFile(arguments),
             "read-line-then-watch" => ReadLineThenWatch(standardOutput, arguments),
             "sleep" => Sleep(arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
             "flood-error" => Flood(standardError, arguments),
+            "flood-both" => Flood(standardOutput, arguments) + Flood(standardError, arguments),
             "print-file" => PrintFile(standardOutput, arguments),
             "spawn-grandchild" => SpawnGrandchild(arguments),
             "print-env" => PrintEnvironment(standardOutput, arguments),
@@ -113,12 +115,25 @@ internal static class TestChild
 
     /// <summary>
     /// Reads standard input to its end and writes it back between brackets. Read as UTF-8 bytes,
-    /// for the reason output is written that way.
+    /// for the reason output is written that way, and as they came: a byte order mark it began with
+    /// is written back, never taken for how to read the rest, as a child reading its input as bytes
+    /// would read it as text.
     /// </summary>
     private static int EchoStandardInput(TextWriter output)
     {
-        using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
+        using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom, detectEncodingFromByteOrderMarks: false);
         output.Write("[" + input.ReadToEnd() + "]\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads standard input to its end and writes it into the file <c>arguments[0]</c> names: what a child that saw the end
+    /// of its input leaves behind, where its output would not be read.
+    /// </summary>
+    private static int StandardInputToFile(string[] arguments)
+    {
+        using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
+        File.WriteAllText(arguments[0], input.ReadToEnd(), Utf8NoBom);
         return 0;
     }
 

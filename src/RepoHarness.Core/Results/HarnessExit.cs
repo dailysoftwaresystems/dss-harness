@@ -45,8 +45,8 @@ public static class HarnessExit
 
     /// <summary>
     /// The work ran and nothing failed, but not every unit of it reached a verdict; or a change was begun and not
-    /// finished - a deletion, a fold or a hand-over stopped part way - and running the command again, once what it names
-    /// is dealt with, finishes it.
+    /// finished - a deletion, a fold, a hand-over or a move of an agent's base stopped part way - and running the command
+    /// again, once what it names is dealt with, finishes it.
     /// </summary>
     /// <remarks>
     /// Distinct from <see cref="Success"/> because a leg that never ran is not a leg that passed,
@@ -104,7 +104,7 @@ public static class HarnessExit
             [nameof(ToolMissing)] = "A required external tool is not installed, or could not be started.",
             [nameof(HostUnavailable)] = "A host could not be reached, or DssHarness could not run there; nothing ran on it.",
             [nameof(CommandFailed)] = "The wrapped command ran and reported failure.",
-            [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold or a hand-over stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it.",
+            [nameof(Incomplete)] = "Ran with nothing failing, but a leg reached no verdict, or a deletion, a fold, a hand-over or a move of an agent's base stopped part way; it is not a pass, and running it again, once what it names is dealt with, finishes it.",
             [nameof(InternalError)] = "The harness itself failed unexpectedly; this is a defect in the tool.",
             [nameof(Cancelled)] = "The run was interrupted before it finished; what it had already done is still reported.",
         };

@@ -111,14 +111,14 @@ public sealed class HostExecServiceTests
 
         // One line, with the input held open: stopping this process ends it on the host, which cancels the command.
         Assert.True(command.HoldStandardInputOpen);
-        Assert.Single(command.StandardInput, character => character == '\n');
-        Assert.EndsWith("\n", command.StandardInput, StringComparison.Ordinal);
+        Assert.Single(command.StandardInput.Read(), character => character == '\n');
+        Assert.EndsWith("\n", command.StandardInput.Read(), StringComparison.Ordinal);
 
         // Both streams are shown as they come, and are as long as what the command prints: only their end is kept.
         Assert.Equal((StreamKept.Tail, StreamKept.Tail), (command.OutputKept, command.ErrorKept));
 
         // The arguments, a space included, never reach a shell: they are inside the request.
-        var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions);
+        var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
         Assert.NotNull(request);
         Assert.Equal(HostAgentRequestKind.Run, request.Kind);
         Assert.Equal("/srv/repo", request.Directory);
@@ -237,7 +237,7 @@ public sealed class HostExecServiceTests
             },
             respond: (_, command) =>
             {
-                asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions);
+                asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
                 return HostResults.Finished(command, 0);
             });
 
@@ -327,7 +327,7 @@ public sealed class HostExecServiceTests
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.Equal([HostId.Wsl("Ubuntu")], fixture.Inspector.Inspected);
 
-        var request = JsonSerializer.Deserialize<HostAgentRequest>(fixture.Commands.Calls[0].Command.StandardInput, HostAgentProtocol.JsonOptions);
+        var request = JsonSerializer.Deserialize<HostAgentRequest>(fixture.Commands.Calls[0].Command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
         Assert.Equal("~/src/repo", request?.Directory);
     }
 
@@ -426,7 +426,7 @@ public sealed class HostExecServiceTests
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.NotNull(sent);
-        Assert.Equal("/srv/repo.worktree-feature", JsonSerializer.Deserialize<HostAgentRequest>(sent.StandardInput, HostAgentProtocol.JsonOptions)!.Directory);
+        Assert.Equal("/srv/repo.worktree-feature", JsonSerializer.Deserialize<HostAgentRequest>(sent.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.Directory);
     }
 
     /// <summary>A host reached, with a session a request can travel on.</summary>

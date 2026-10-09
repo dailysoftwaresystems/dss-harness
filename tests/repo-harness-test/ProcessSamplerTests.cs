@@ -23,6 +23,10 @@ public sealed class ProcessSamplerTests
     private static readonly string OtherBuildDirectory =
         Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo", "build", "x86_64-gcc-release"));
 
+    /// <summary>The same variant's build directory in another tree of the repository: a worktree's copy beside the main one.</summary>
+    private static readonly string OtherTreesBuildDirectory =
+        Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo.worktree-o1--xa", "build", "x86_64-gcc-release"));
+
     [Fact]
     public async Task ASample_SeesThisMachinesProcesses_IncludingThisOne()
     {
@@ -108,6 +112,21 @@ public sealed class ProcessSamplerTests
         [
             Sample(0, Process(4242, "ninja", $"ninja -C {OtherBuildDirectory} all", parent: 9999)),
         ]);
+
+        Assert.Empty(report.Contenders);
+    }
+
+    /// <summary>
+    /// A build tool working in another tree's copy of this leg's own variant is no contender either: a build directory of
+    /// another tree of the repository is never this leg's, nor holds it, so another worktree's build never makes a leg
+    /// contended.
+    /// </summary>
+    [Fact]
+    public void ABuildToolInAnotherTreesCopyOfThisLegsVariant_IsNotAContender()
+    {
+        var elsewhere = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo.worktree-o1--xa", "build", "x86_64-msvc-release"));
+
+        var report = Classify([Sample(0, Process(4243, "ninja", $"ninja -C {elsewhere} all", parent: 9999))]);
 
         Assert.Empty(report.Contenders);
     }
@@ -334,11 +353,72 @@ public sealed class ProcessSamplerTests
         var report = Classify(
             [Sample(0, sibling, stranger)],
             sharedResourceTools: ["toolcc"],
-            otherLegs: new Dictionary<string, string> { ["lin-gcc-release"] = OtherBuildDirectory });
+            owned: [new OwnedBuildDirectory(OtherBuildDirectory, BuildDirectoryOwner.Sibling("lin-gcc-release"))]);
 
-        Assert.Equal("lin-gcc-release", report.SharedResourceUsers.Single(user => user.Process.Id == 5001).Owner);
+        Assert.Equal(BuildDirectoryOwner.Sibling("lin-gcc-release"), report.SharedResourceUsers.Single(user => user.Process.Id == 5001).Owner);
         Assert.Null(report.SharedResourceUsers.Single(user => user.Process.Id == 5002).Owner);
     }
+
+    /// <summary>
+    /// A shared tool working in a build directory of another tree of the repository on the same machine - a worktree's, an
+    /// agent's, the main checkout's - is that tree's leg's work, and said to be: measured, a consumer's agents, each testing
+    /// its own worktree, saw one another's test processes warned of as nobody's, 1510 of them beside one leg. Only what no
+    /// tree here accounts for is nobody's known.
+    /// </summary>
+    [Fact]
+    public void ASharedToolInAnotherTreesBuildDirectory_IsThatTreesLegsWork_AndIsSaidToBe()
+    {
+        var neighbour = Process(6001, "toolcc", $"\"{Path.Combine(OtherTreesBuildDirectory, "tests", "suite")}\" --filter=*", parent: 9999);
+        var stranger = Process(6002, "toolcc", "toolcc --serve", parent: 9999);
+        var theirs = BuildDirectoryOwner.InTree("worktree o1/xa", "lin-gcc-release");
+
+        var report = Classify(
+            [Sample(0, neighbour, stranger)],
+            sharedResourceTools: ["toolcc"],
+            owned:
+            [
+                new OwnedBuildDirectory(OtherBuildDirectory, BuildDirectoryOwner.Sibling("lin-gcc-release")),
+                new OwnedBuildDirectory(OtherTreesBuildDirectory, theirs),
+            ]);
+
+        Assert.Equal(theirs, report.SharedResourceUsers.Single(user => user.Process.Id == 6001).Owner);
+        Assert.Null(report.SharedResourceUsers.Single(user => user.Process.Id == 6002).Owner);
+        Assert.Equal(
+            [
+                "win-msvc-release: toolcc (pid 6001), working in the build directory of worktree o1/xa's leg 'lin-gcc-release', ran beside "
+                    + "this leg, seen throughout; it shares the compiler cache, so this leg and worktree o1/xa's leg 'lin-gcc-release' load one "
+                    + "host and contend for it.",
+                "win-msvc-release: toolcc (pid 6002), which no declared leg's build directory accounts for, ran beside this leg, seen "
+                    + "throughout; it shares the compiler cache.",
+            ],
+            ContentionWarnings.SharedLines("win-msvc-release", report, Described));
+    }
+
+    /// <summary>
+    /// Where the repository's other trees on the machine could not be listed, what no listed tree accounts for may be one of
+    /// theirs, and its line says so, with why.
+    /// </summary>
+    [Fact]
+    public void WhereTheOtherTreesCouldNotBeListed_WhatNoListedTreeAccountsFor_SaysItMayBeTheirs()
+    {
+        var report = Classify(
+            [Sample(0, Process(6003, "toolcc", "toolcc --serve", parent: 9999))],
+            sharedResourceTools: ["toolcc"],
+            othersUnlisted: "git worktree list exited 128");
+
+        Assert.Equal(
+            "win-msvc-release: toolcc (pid 6003), which no declared leg's build directory accounts for, ran beside this leg, seen "
+            + "throughout; it shares the compiler cache; the repository's other trees here could not be listed, so it may be working in "
+            + "one of theirs: git worktree list exited 128.",
+            Assert.Single(ContentionWarnings.SharedLines("win-msvc-release", report, Described)));
+    }
+
+    /// <summary>A configuration that says what the test's shared tool shares.</summary>
+    private static ContentionConfig Described => new()
+    {
+        SharedResourceTools = ["toolcc"],
+        SharedState = { ["toolcc"] = "the compiler cache" },
+    };
 
     /// <summary>
     /// One line per tool and per whose it was, with a count and the range of ids - never one line per
@@ -358,7 +438,7 @@ public sealed class ProcessSamplerTests
                     Process(8001, "toolcc", "toolcc --serve", parent: 9999)),
             ],
             sharedResourceTools: ["toolcc"],
-            otherLegs: new Dictionary<string, string> { ["lin-gcc-release"] = OtherBuildDirectory });
+            owned: [new OwnedBuildDirectory(OtherBuildDirectory, BuildDirectoryOwner.Sibling("lin-gcc-release"))]);
 
         var lines = ContentionWarnings.SharedLines(
             "win-msvc-release",
@@ -371,7 +451,8 @@ public sealed class ProcessSamplerTests
 
         Assert.Equal(2, lines.Count);
         Assert.Contains("3 processes, pids 7001-7003", lines[0], StringComparison.Ordinal);
-        Assert.Contains("working in leg 'lin-gcc-release''s build directory", lines[0], StringComparison.Ordinal);
+        Assert.Contains("working in the build directory of leg 'lin-gcc-release'", lines[0], StringComparison.Ordinal);
+        Assert.Contains("so this leg and leg 'lin-gcc-release' load one host and contend for it", lines[0], StringComparison.Ordinal);
         Assert.Contains("it shares the per-user compiler cache", lines[0], StringComparison.Ordinal);
         Assert.Contains("pid 8001", lines[1], StringComparison.Ordinal);
         Assert.Contains("which no declared leg's build directory accounts for", lines[1], StringComparison.Ordinal);
@@ -414,7 +495,8 @@ public sealed class ProcessSamplerTests
     private static ContentionReport Classify(
         IReadOnlyList<ProcessSample> samples,
         IReadOnlyList<string>? sharedResourceTools = null,
-        IReadOnlyDictionary<string, string>? otherLegs = null)
+        IReadOnlyList<OwnedBuildDirectory>? owned = null,
+        string? othersUnlisted = null)
         => ProcessSamplingSession.Classify(
             samples,
             new ContentionRequest
@@ -423,7 +505,8 @@ public sealed class ProcessSamplerTests
                 BuildDirectory = BuildDirectory,
                 BuildTools = ["ninja", "ctest", "cmake"],
                 SharedResourceTools = sharedResourceTools ?? [],
-                OtherLegs = otherLegs ?? new Dictionary<string, string>(),
+                Owned = owned ?? [],
+                OthersUnlisted = othersUnlisted,
             },
             StringComparison.OrdinalIgnoreCase,
             harnessId: Environment.ProcessId);
