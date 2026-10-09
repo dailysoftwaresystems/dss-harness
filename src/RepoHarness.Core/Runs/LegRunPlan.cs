@@ -84,6 +84,12 @@ public sealed record PlacedLeg(
     public RoomNeed? Need { get; init; }
 
     /// <summary>
+    /// The least room the leg's builds leave free on each filesystem they fill, on the machine that runs them, below which
+    /// each is stopped; <see langword="null"/> until its work starts there, and where nothing stops them for room.
+    /// </summary>
+    public RoomFloor? Floor { get; init; }
+
+    /// <summary>
     /// What the developer environment the leg's toolchain names set up for it, on the machine that runs
     /// it: empty until it is set up there, and for a leg whose toolchain names none.
     /// </summary>
@@ -139,6 +145,7 @@ public sealed record PlacedLeg(
         {
             ProgramDirectories = Host.ProgramDirectories,
             HostEnvironment = Environment,
+            Floor = Floor,
         };
     }
 

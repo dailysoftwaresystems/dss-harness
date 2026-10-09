@@ -8,6 +8,7 @@ using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Legs;
 
@@ -36,8 +37,8 @@ public sealed record RoomNeed(long Bytes, string Source, string? At, string Wher
 /// A consumer's two variants, the first builds of a new worktree's copy, filled a host's disk half way
 /// through and died writing an object, while <c>legs</c> said the host could run them. A leg's need is what
 /// its build directory comes to once built - declared as <see cref="LegConfig.BuildSpaceGiB"/>, or what a
-/// build of its variant recorded there: in the tree's own copy, or else in the main checkout's - less what
-/// that directory already holds. Nothing is walked: each build records what its directory came to as it
+/// build of its variant recorded there: in the tree's own copy, or else the most any other copy of the
+/// repository there recorded, the main checkout's or a worktree's - less what that directory already holds. Nothing is walked: each build records what its directory came to as it
 /// finishes. Legs sharing a filesystem on one host are counted together, in the order they were selected,
 /// because every build directory stays once built; a leg that no longer fits beside the ones before it is
 /// turned away, and they are kept. A leg whose need nothing says is placed as it always was; one whose need
@@ -60,16 +61,19 @@ public static class LegRoom
     /// What the command has each leg do: a leg it builds - on that leg's system - has a build directory worth asking
     /// about, and one it does not build, or builds no tree of its own, has none worth asking about.
     /// </param>
+    /// <param name="trees">The trees of the repository each host holds, where they were looked for.</param>
     public static IReadOnlyDictionary<HostId, RoomQuestions> Questions(
         HarnessContext context,
         IEnumerable<(SelectedLeg Leg, IReadOnlyList<HostId> Hosts)> candidates,
         HostId? here,
         StringComparison comparison,
-        LegWorkload workload)
+        LegWorkload workload,
+        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(workload);
+        ArgumentNullException.ThrowIfNull(trees);
 
         var asked = new Dictionary<HostId, (string? SpaceAt, List<string> Builds)>();
 
@@ -84,7 +88,7 @@ public static class LegRoom
             {
                 // A host that declares nowhere to keep a copy is refused where the leg is placed on it; asked
                 // nothing here.
-                if (Paths(context, leg.Leg, host, here, comparison, sweeps) is not { } paths)
+                if (Paths(context, leg.Leg, host, here, comparison, sweeps, trees) is not { } paths)
                 {
                     continue;
                 }
@@ -97,7 +101,7 @@ public static class LegRoom
 
                 if (builds)
                 {
-                    questions.Builds.AddRange(new[] { paths.Fills, paths.Own, paths.MainBuild }.Distinct(StringComparer.Ordinal));
+                    questions.Builds.AddRange(new[] { paths.Fills, paths.Own }.Concat(paths.Siblings.Select(sibling => sibling.Build)).Distinct(StringComparer.Ordinal));
                 }
             }
         }
@@ -119,16 +123,19 @@ public static class LegRoom
     /// never its own, and is placed by the room that worker's build needs - the least it runs with; a self-test of the
     /// sweep, which builds none of the leg's tree, by none, since <see cref="Questions"/> asked no host about any.
     /// </param>
+    /// <param name="trees">The trees of the repository each host holds, as <see cref="Questions"/> was given them.</param>
     public static (IReadOnlyList<LegPlacement> Placements, IReadOnlyList<string> Unchecked) Apply(
         HarnessContext context,
         IReadOnlyList<LegPlacement> placements,
         HostId? here,
         StringComparison comparison,
-        LegWorkload workload)
+        LegWorkload workload,
+        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(placements);
         ArgumentNullException.ThrowIfNull(workload);
+        ArgumentNullException.ThrowIfNull(trees);
 
         var placed = placements.ToList();
         var taken = new Dictionary<(HostId Host, string Filesystem), (long Bytes, List<string> Legs)>();
@@ -138,7 +145,7 @@ public static class LegRoom
         for (var index = 0; index < placed.Count; index++)
         {
             if (placed[index] is not { Host: { } host } placement
-                || Need(context, placement.Leg, host, here, comparison, workload.On(placement.Leg.Leg.Os).AdmitsEachUnit) is not { } need)
+                || Need(context, placement.Leg, host, here, comparison, workload.On(placement.Leg.Leg.Os).AdmitsEachUnit, trees) is not { } need)
             {
                 continue;
             }
@@ -183,8 +190,7 @@ public static class LegRoom
                     placement.Leg,
                     null,
                     (here is null ? $"{host.Host}: " : string.Empty)
-                    + $"{DiskSpace.Size(full.FreeBytes)} free on '{full.Filesystem}'{lacking.Room.Where}, and this leg needs ~{DiskSpace.Size(need.Bytes)}, "
-                    + $"{need.Source}{beside}")
+                    + full.Against(DiskSpace.Needs("this leg", need.Bytes, need.Source), lacking.Room.Where, beside))
                 {
                     Verdict = LegVerdict.SkippedUnavailable,
                 };
@@ -248,24 +254,23 @@ public static class LegRoom
         HostReport host,
         HostId? here,
         StringComparison comparison,
-        bool sweeps)
+        bool sweeps,
+        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees)
     {
-        if (Paths(context, leg.Leg, host.Host, here, comparison, sweeps) is not { } paths
+        if (Paths(context, leg.Leg, host.Host, here, comparison, sweeps, trees) is not { } paths
             || Answered(host, paths.Own) is not { } own
-            || Answered(host, paths.Fills) is not { } fills)
+            || Answered(host, paths.Fills) is not { } fills
+            || ExpectedBuildBytes(leg.Leg, own.RecordedBytes, paths.Siblings.Select(sibling => (sibling.Tree, Answered(host, sibling.Build)?.RecordedBytes)))
+                is not var (bytes, source))
         {
             return null;
         }
-
-        var main = paths.MainBuild == paths.Own ? null : Answered(host, paths.MainBuild);
-
-        var (expected, source) = ExpectedBuildBytes(leg.Leg, own.RecordedBytes, main?.RecordedBytes);
 
         // What the directory holds counts against its need only where its build recorded it: one there that no
         // build of this version recorded holds an amount nothing measured, and is left to build as it always did.
         long? present = !fills.Exists ? 0 : fills.RecordedBytes;
 
-        return expected is { } bytes && present is { } held
+        return present is { } held
             ? new Needed(Math.Max(0, bytes - held), fills.Disk, source, paths.Fills, fills.Unmeasured ?? "no reason was given")
             : null;
     }
@@ -273,24 +278,48 @@ public static class LegRoom
     /// <summary>
     /// What a build of <paramref name="leg"/>'s variant is expected to come to, and what said so: its
     /// <see cref="LegConfig.BuildSpaceGiB"/> where it declares one, else what its last build recorded its directory came
-    /// to, else what the main checkout's copy of the same variant came to; <see langword="null"/> where nothing says.
+    /// to, else the most any other tree's copy of the same variant on that machine came to, naming whose;
+    /// <see langword="null"/> where nothing says.
     /// </summary>
     /// <param name="leg">The leg.</param>
     /// <param name="ownRecorded">What its own build directory's last build recorded, where one did.</param>
-    /// <param name="mainRecorded">What the main checkout's copy of the same variant recorded, where one did.</param>
+    /// <param name="others">
+    /// Each other tree of the repository on that machine - the main checkout's first - as a line names it, with what its
+    /// copy of the same variant recorded, where one did. The leg's own tree may be among them: what it recorded is
+    /// <paramref name="ownRecorded"/>, taken first.
+    /// </param>
     /// <remarks>
     /// The one reckoning of a build's size: a leg's own build is placed by it, and each worker of a sweep of the leg's
-    /// arms, which builds the same variant in a copy of its own, is counted by it.
+    /// arms, which builds the same variant in a copy of its own, is counted by it. The most, of the others: one variant
+    /// comes to about as much in every tree, and a need said over keeps a leg out until there is room, where one said
+    /// under fills a disk under every leg building on it.
     /// </remarks>
-    public static (long? Bytes, string Source) ExpectedBuildBytes(LegConfig leg, long? ownRecorded, long? mainRecorded)
+    public static (long Bytes, string Source)? ExpectedBuildBytes(LegConfig leg, long? ownRecorded, IEnumerable<(string Tree, long? Recorded)> others)
     {
         ArgumentNullException.ThrowIfNull(leg);
+        ArgumentNullException.ThrowIfNull(others);
 
-        return leg.BuildSpaceGiB is { } declared
-            ? ((long)Math.Ceiling(declared * Gibibyte), string.Create(CultureInfo.InvariantCulture, $"as its buildSpaceGiB, {declared:0.###}, declares"))
-            : ownRecorded is { } recorded
-                ? (recorded, "what its last build there came to")
-                : (mainRecorded, "what the main checkout's copy of the same variant came to there");
+        if (leg.BuildSpaceGiB is { } declared)
+        {
+            return ((long)Math.Ceiling(declared * Gibibyte), string.Create(CultureInfo.InvariantCulture, $"as its buildSpaceGiB, {declared:0.###}, declares"));
+        }
+
+        if (ownRecorded is { } recorded)
+        {
+            return (recorded, "what its last build there came to");
+        }
+
+        (long Bytes, string Source)? most = null;
+
+        foreach (var (tree, came) in others)
+        {
+            if (came is { } bytes && (most is null || bytes > most.Value.Bytes))
+            {
+                most = (bytes, $"what {tree}'s copy of the same variant came to there");
+            }
+        }
+
+        return most;
     }
 
     /// <summary>What <paramref name="host"/> answered about the build directory at <paramref name="path"/>, as it was asked.</summary>
@@ -299,21 +328,22 @@ public static class LegRoom
 
     /// <summary>
     /// The paths <paramref name="leg"/> has on <paramref name="host"/>: where the host keeps the main checkout's
-    /// copy, the leg's own build directory there, the main checkout's copy of the same variant, and the build directory
-    /// the command fills - the leg's own, or for a sweep of its mutation arms its first worker's; or
-    /// <see langword="null"/> where the host declares nowhere to keep a copy.
+    /// copy, the leg's own build directory there, the build directory the command fills - the leg's own, or for a sweep
+    /// of its mutation arms its first worker's - and each other tree's copy of the same variant there, the main checkout's
+    /// first, with what a line calls that tree; or <see langword="null"/> where the host declares nowhere to keep a copy.
     /// </summary>
     /// <remarks>
     /// The variant for the leg's own operating system: a host of another is never given the leg, so the variant
     /// it would have there is never built.
     /// </remarks>
-    private static (string Main, string Own, string MainBuild, string Fills)? Paths(
+    private static (string Main, string Own, string Fills, IReadOnlyList<(string Tree, string Build)> Siblings)? Paths(
         HarnessContext context,
         LegConfig leg,
         HostId host,
         HostId? here,
         StringComparison comparison,
-        bool sweeps)
+        bool sweeps,
+        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees)
     {
         try
         {
@@ -329,7 +359,16 @@ public static class LegRoom
 
             var built = variant.DirectoryOn(host, own);
 
-            return (main, built, variant.DirectoryOn(host, mainCopy), sweeps ? variant.DirectoryOn(host, MutationWorkers.PathOf(own, variant, 1)) : built);
+            // The main checkout's copy is known without listing anything, so it is measured whether or not the trees beside
+            // it could be listed. The leg's own tree may be among the rest: what its own build recorded is taken first, and
+            // where it recorded nothing it has nothing to add.
+            IReadOnlyList<(string Tree, string Build)> siblings =
+            [
+                (RepositoryTree.MainCheckout, variant.DirectoryOn(host, mainCopy)),
+                .. (trees.GetValueOrDefault(host)?.Trees ?? []).Select(tree => (tree.Name, variant.DirectoryOn(host, tree.Root))),
+            ];
+
+            return (main, built, sweeps ? variant.DirectoryOn(host, MutationWorkers.PathOf(own, variant, 1)) : built, siblings);
         }
         catch (HarnessException)
         {

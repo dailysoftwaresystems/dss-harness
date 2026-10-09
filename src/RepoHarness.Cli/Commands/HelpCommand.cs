@@ -716,7 +716,9 @@ internal static class HelpCommand
         builder.AppendLine("failed: run again, it finishes, where a failed one fails again. Read under the name");
         builder.AppendLine("it says it under, which for samurai, run by CMake for ninja where it is installed,");
         builder.AppendLine("is its file's. A build the harness stopped for hanging stays failed, saying it hung,");
-        builder.AppendLine("and so does one under any other build tool, since only ninja's lines are read.");
+        builder.AppendLine("and so does one under any other build tool, since only ninja's lines are read. A");
+        builder.AppendLine("heavy leg's build stopped for leaving less room than its machine's minFreeGiB is");
+        builder.AppendLine("stopped too ('help admission').");
         builder.AppendLine("A run killed, or stopped with its machine, before it finished says nothing more:");
         builder.AppendLine("the next build, test, run or check-mutations in its tree on that machine to own its");
         builder.AppendLine("run directory says it was abandoned - its run id, process and start, and where its");
@@ -889,8 +891,8 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "A sweep runs the workers whose copy and build fit the room left - a build of the variant coming to the leg's "
-            + "buildSpaceGiB where it declares one, else to what the leg's own build, or the main checkout's, last recorded "
-            + "- and whose build stays within the path limit, "
+            + "buildSpaceGiB where it declares one, else to what the leg's own build last recorded, else to the most any "
+            + "other tree of the repository on its machine recorded of it - and whose build stays within the path limit, "
             + "reckoned as a worktree's is; where not even the first does, the leg is skipped-unavailable, saying why, and "
             + "one that runs fewer says how many of those it wanted, and what keeps each of the rest out. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it, and "
             + "a claim whose sweep died is released and said. Workers an earlier sweep left beyond the count workers allows "
@@ -1073,6 +1075,16 @@ internal static class HelpCommand
         builder.AppendLine("looks, and said to be. A waiting leg keeps its lock: another run of its variant is");
         builder.AppendLine("refused-locked meanwhile, as it would be while the leg ran.");
         builder.AppendLine();
+        builder.AppendLine("While a heavy leg builds, each filesystem its build fills is read again every");
+        builder.AppendLine($"{RoomFloorWatch.Every.TotalSeconds:0} seconds, and the build is stopped once one has less free than minFreeGiB:");
+        builder.AppendLine($"stopped, exit {HarnessExit.Incomplete}, naming what was free and where, and what it built left for");
+        builder.AppendLine("clean. The room a leg claims is only what is said of its build; this holds every");
+        builder.AppendLine("build, its need said or not - a sweep's workers' too. A WSL leg holds the drive its");
+        builder.AppendLine("disk grows on as well, which this machine names as it sends the leg and the");
+        builder.AppendLine("distribution reaches through its mount there, /mnt/c as /proc/mounts lists it;");
+        builder.AppendLine("where it is mounted nowhere, the build says only the distribution's own room is");
+        builder.AppendLine("held. A room that cannot be read stops nothing, and is said once.");
+        builder.AppendLine();
         builder.AppendLine("A check-mutations leg, whose sweep can last hours, is admitted unit by unit instead:");
         builder.AppendLine("each worker as it is made, claiming the room its copy and build still need, and each");
         builder.AppendLine("arm as it starts, each unit holding a slot only while it runs. Only the sweep's first");
@@ -1092,6 +1104,8 @@ internal static class HelpCommand
         builder.AppendLine($"                    once ([{string.Join(", ", AdmissionSettings.DefaultSettleSeconds)}])");
         builder.AppendLine($"  pollSeconds       the time between looks while a leg waits, at least 1 ({AdmissionSettings.DefaultPollSeconds})");
         builder.AppendLine($"  maxWaitMinutes    how long a leg waits before it is not-admitted, above 0 ({AdmissionSettings.DefaultMaxWaitMinutes})");
+        builder.AppendLine("  minFreeGiB        the room a heavy leg's build leaves free on each filesystem it");
+        builder.AppendLine($"                    fills, from 0 to {AdmissionSettings.MostMinFreeGiB}; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})");
         builder.AppendLine();
         builder.AppendLine($"Seconds are at most {AdmissionSettings.MostSeconds}, and the wait at most {AdmissionSettings.MostWaitMinutes} minutes.");
         builder.AppendLine();
@@ -1118,8 +1132,19 @@ internal static class HelpCommand
         builder.AppendLine("lets the leg start, claimed against every filesystem of the machine, and one read");
         builder.AppendLine("before and not now decides nothing.");
         builder.AppendLine();
+        builder.AppendLine("On Windows the commit counts what WSL's virtual machine keeps as page cache - what");
+        builder.AppendLine("every distribution's builds read and wrote - which it gives back only once it has");
+        builder.AppendLine("idled for minutes. So a leg about to wait on the memory has that cache dropped first,");
+        builder.AppendLine("as root (sync, then drop_caches) in a running distribution a WSL host of its");
+        builder.AppendLine("repository reaches - at most once a minute, whichever leg asks - and reads the");
+        builder.AppendLine("memory again a minute later, once what was dropped has come back, its line");
+        builder.AppendLine("saying how much was dropped and the memory before and after. A WSL leg sent from a");
+        builder.AppendLine("machine that admits drops it as it ends, without waiting. A distribution that is");
+        builder.AppendLine("not running is never started for it, and a drop that could not be made is said once.");
+        builder.AppendLine();
         builder.AppendLine("While it waits, a leg says who holds each slot - tree, variant, host, leg, command,");
-        builder.AppendLine("machine, process, run, and since when it asked - and, once it holds one, what the");
+        builder.AppendLine("process, run, and since when it asked, never the machine's name, which only the");
+        builder.AppendLine("record keeps - and, once it holds one, what the");
         builder.AppendLine("memory stands at, or the room free and who claims it. It says so again, as it reads");
         builder.AppendLine($"then and with how long it has waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - a poll longer than");
         builder.AppendLine("that is cut at it, and a settle longer than that waited whole in pieces of it - so a");
@@ -1129,6 +1154,10 @@ internal static class HelpCommand
         builder.AppendLine($"that waited maxWaitMinutes is not-admitted, exit {LegExit.NotAdmitted}, naming what held the slots and");
         builder.AppendLine("where they are recorded, the memory it waited on, or the room, who claimed it and");
         builder.AppendLine("where the claims are recorded: nothing of it ran, and nothing about the code is claimed.");
+        builder.AppendLine("A wait for slots only legs of its own run hold - a command's WSL leg behind its");
+        builder.AppendLine("Windows legs, asked for at once - is certain to end and does not count, and its line");
+        builder.AppendLine("says they are its own; on an ssh host, the legs one command sends there ask under");
+        builder.AppendLine("that command's run.");
         builder.AppendLine();
         builder.AppendLine("The slots are kept in <user data>/dssharness/admission-<machine id>.json, and the");
         builder.AppendLine("room the legs claim beside them in admission-<machine id>.room.json - the user");
@@ -1586,14 +1615,15 @@ internal static class HelpCommand
         builder.AppendLine("only where the programs it starts are: a build that fills a disk dies half way, and");
         builder.AppendLine("takes any other leg building there with it. What a build needs is what its");
         builder.AppendLine("directory comes to once built - the leg's buildSpaceGiB, or, left out, what a build");
-        builder.AppendLine("of its variant recorded as it finished: in this tree's copy, or else in the main");
-        builder.AppendLine("checkout's copy on that host - less what the directory already holds. Legs building");
-        builder.AppendLine("on one filesystem of a host are counted together, in the order they were selected,");
-        builder.AppendLine("since every build directory stays once built; one that does not fit beside those");
-        builder.AppendLine("before it is skipped-unavailable:");
+        builder.AppendLine("of its variant recorded as it finished: in this tree's copy, or else the most any");
+        builder.AppendLine("other copy of the repository on that host recorded - the main checkout's, or a");
+        builder.AppendLine("worktree's, an agent's or a plain one, named in the line - less what the directory");
+        builder.AppendLine("already holds. Legs building on one filesystem of a host are counted together, in");
+        builder.AppendLine("the order they were selected, since every build directory stays once built; one");
+        builder.AppendLine("that does not fit beside those before it is skipped-unavailable:");
         builder.AppendLine();
-        builder.AppendLine("  ssh vps: 3.2 GiB free on '/', and this leg needs ~8 GiB, what the main");
-        builder.AppendLine("  checkout's copy of the same variant came to there");
+        builder.AppendLine("  ssh vps: this leg needs ~11.4 GiB, what worktree o1/xa's copy of the same");
+        builder.AppendLine("  variant came to there; 3.2 GiB free on '/'");
         builder.AppendLine();
         builder.AppendLine("A leg nothing has measured that declares no buildSpaceGiB is placed as it always");
         builder.AppendLine("was, and so is one whose directory no build of this version recorded. Nothing is");

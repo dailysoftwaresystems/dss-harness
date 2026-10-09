@@ -43,11 +43,12 @@ internal static class HarnessServices
     /// Whether the command was asked for by the DssHarness on another machine, through this one's host
     /// agent, rather than typed here.
     /// </param>
-    internal static ServiceProvider Build(bool verbose, bool prompting, bool servesAnotherMachine = false)
+    /// <param name="dispatch">What the machine that asked says of the command beside its line, where one asked.</param>
+    internal static ServiceProvider Build(bool verbose, bool prompting, bool servesAnotherMachine = false, Dispatch? dispatch = null)
     {
         var services = new ServiceCollection();
 
-        services.AddSingleton(new CommandOrigin(servesAnotherMachine));
+        services.AddSingleton(new CommandOrigin(servesAnotherMachine, dispatch));
 
         // The only registrations that observe the operating system: which system this is, how it
         // expresses a file's permissions, and how it publishes its process table. Everything
@@ -139,6 +140,7 @@ internal static class HarnessServices
             prompting));
 
         services.AddSingleton<IToolProvisionService, ToolProvisionService>();
+        services.AddSingleton<IRepositoryTrees, RepositoryTrees>();
         services.AddSingleton<LegsService>();
         services.AddSingleton<HostExecService>();
 
@@ -164,6 +166,7 @@ internal static class HarnessServices
         services.AddSingleton(provider => new LegAdmission(
             provider.GetRequiredService<HeavyLegSlots>(),
             provider.GetRequiredService<IMemoryGauge>()));
+        services.AddSingleton<IWslPageCache, WslPageCache>();
         services.AddSingleton<LegRunService>();
         services.AddSingleton<CleanService>();
 

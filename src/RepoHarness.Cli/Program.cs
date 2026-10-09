@@ -92,9 +92,11 @@ async Task<int> RunAsync(string[] arguments, CancellationToken cancellationToken
 }
 
 // A command acts on the current directory when it is given no --directory, so a host runs a request
-// in its copy of the repository by starting there, without its arguments being rewritten.
-Task<int> RunInAsync(string directory, string[] arguments, CancellationToken cancellationToken)
+// in its copy of the repository by starting there, without its arguments being rewritten - and with what
+// the machine that asked says of it beside them: the run it is a leg of, the drive its WSL disk grows on.
+Task<int> RunInAsync(string directory, string[] arguments, Dispatch dispatch, CancellationToken cancellationToken)
 {
     Directory.SetCurrentDirectory(directory);
+    CommandRunner.ServeDispatch(dispatch);
     return RunAsync(arguments, cancellationToken);
 }

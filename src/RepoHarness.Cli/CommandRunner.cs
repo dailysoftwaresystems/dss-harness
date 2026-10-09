@@ -47,10 +47,20 @@ internal static class CommandRunner
     private static readonly AsyncLocal<bool> Serving = new();
 
     /// <summary>
+    /// What the machine that asked for the command this flow runs says of it beside the command line: held for the
+    /// flow, as <see cref="Serving"/> is, and for the same reason.
+    /// </summary>
+    private static readonly AsyncLocal<Dispatch?> Dispatched = new();
+
+    /// <summary>
     /// Marks what this flow runs from here on as asked for by another machine. Set by the host agent
     /// before it serves a request; nothing that flow runs is then taken for something typed here.
     /// </summary>
     internal static void ServeAnotherMachine() => Serving.Value = true;
+
+    /// <summary>Marks what this flow runs from here on with what the machine that asked for it says of it.</summary>
+    /// <param name="dispatch">What it says: the run the command is a leg of, the drive its WSL disk grows on.</param>
+    internal static void ServeDispatch(Dispatch dispatch) => Dispatched.Value = dispatch;
 
     /// <summary>Wraps a command body into an action the parser can invoke.</summary>
     /// <param name="commandName">The command, which prefixes every line it writes.</param>
@@ -96,7 +106,7 @@ internal static class CommandRunner
         {
             var verbose = parseResult.GetValue(GlobalOptions.Verbose);
             var prompting = !parseResult.GetValue(GlobalOptions.NoPrompt);
-            await using var services = HarnessServices.Build(verbose, prompting, Serving.Value);
+            await using var services = HarnessServices.Build(verbose, prompting, Serving.Value, Dispatched.Value);
             var output = services.GetRequiredService<IHarnessOutput>();
             var answersWithLedger = ledger is not null && parseResult.GetValue(ledger);
 

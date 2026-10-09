@@ -5,6 +5,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
+using RepoHarness.Core.Sync;
 using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
@@ -102,6 +103,10 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
     /// <summary>What asking WSL for its default distribution answers; by default, WSL is not expected to be asked.</summary>
     public Func<ProcessResult> DefaultWslDistribution { get; set; }
         = () => throw new InvalidOperationException("WSL was not expected to be asked for its default distribution.");
+
+    /// <summary>What asking WSL which distributions run answers; by default, WSL is not expected to be asked.</summary>
+    public Func<ProcessResult> RunningWslDistributions { get; set; }
+        = () => throw new InvalidOperationException("WSL was not expected to be asked which distributions run.");
 
     /// <summary>Every command run, in order.</summary>
     public IReadOnlyList<(HostConnection Connection, HostCommand Command)> Calls
@@ -210,6 +215,9 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
 
     public Task<ProcessResult> ProbeDefaultWslDistributionAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
         => Task.FromResult(DefaultWslDistribution());
+
+    public Task<ProcessResult> ListRunningWslDistributionsAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        => Task.FromResult(RunningWslDistributions());
 
     public Task<ProcessResult> ReadSshSettingsAsync(HostConnection connection, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
@@ -482,6 +490,26 @@ internal static class HostDoubles
 
     /// <summary>A leg that needs <paramref name="os"/> on <paramref name="processor"/>, built in the "debug" configuration.</summary>
     public static LegConfig Leg(string os, string processor) => new() { Os = os, Processor = processor, Config = "debug" };
+}
+
+/// <summary>
+/// The trees of the repository each machine holds, as a test says them: the main checkout - here, or a host's copy of it
+/// where the configuration says the host keeps one - and whatever <see cref="Beside"/> adds on each.
+/// </summary>
+internal sealed class KnownTrees : IRepositoryTrees
+{
+    /// <summary>The trees each machine holds beside the main checkout's, where a test says any: none, where it says nothing.</summary>
+    public Func<HostId, IReadOnlyList<RepositoryTree>> Beside { get; init; } = _ => [];
+
+    /// <summary>Why the trees beside the main checkout's could not be listed, where a test says so.</summary>
+    public string? Unlisted { get; init; }
+
+    public Task<RepositoryTreesFound> HereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken = default)
+        => Task.FromResult(Found(here is null ? context.Layout.MainCheckoutRoot : HostCopies.RepositoryPathOf(context.Config, here), HostId.Local));
+
+    public RepositoryTreesFound On(HarnessContext context, HostId host) => Found(HostCopies.RepositoryPathOf(context.Config, host), host);
+
+    private RepositoryTreesFound Found(string main, HostId host) => new([new RepositoryTree(main, RepositoryTree.MainCheckout), .. Beside(host)], Unlisted);
 }
 
 /// <summary>Records what this tool was asked to start detached, and starts nothing.</summary>

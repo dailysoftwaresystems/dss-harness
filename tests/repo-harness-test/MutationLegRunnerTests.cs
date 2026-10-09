@@ -1792,7 +1792,7 @@ public sealed class MutationLegRunnerTests
 
         var turned = await full.RunAsync([DepthType]);
 
-        var why = $"{DiskSpace.Size(10)} free on '/data', and its first worker needs ~{DiskSpace.Size(copy + (1L << 30))}, each worker's build as declared";
+        var why = $"its first worker needs ~{DiskSpace.Size(copy + (1L << 30))}, each worker's build as declared; {DiskSpace.Size(10)} free on '/data'";
 
         Assert.Equal((LegVerdict.SkippedUnavailable, $"{why}; 1 arm(s): 1 skipped-unavailable"), (turned.Verdict, turned.Detail));
         Assert.Equal((LegVerdict.SkippedUnavailable, why), (turned.Arms[0].Verdict, turned.Arms[0].Detail));
@@ -1859,8 +1859,8 @@ public sealed class MutationLegRunnerTests
         var fewer = await tight.RunAsync([ChargeBound, DepthType, ChargeFloor]);
 
         Assert.Equal(
-            $"3 arm(s): 3 passed; 1 of 3 workers: {DiskSpace.Size((1L << 30) + copy + 100)} free on '/data', and 2 need "
-            + $"~{DiskSpace.Size(2 * ((1L << 30) + copy))}, each worker's build as declared; and worker 3 would be kept at '{tight.Worker(3)}', where its "
+            $"3 arm(s): 3 passed; 1 of 3 workers: running 2 needs ~{DiskSpace.Size(2 * ((1L << 30) + copy))}, each worker's build as declared; "
+            + $"{DiskSpace.Size((1L << 30) + copy + 100)} free on '/data'; and worker 3 would be kept at '{tight.Worker(3)}', where its "
             + "build needs paths of 300 characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under "
             + "260: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);

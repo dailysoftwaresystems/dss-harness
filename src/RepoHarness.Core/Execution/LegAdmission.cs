@@ -1,6 +1,7 @@
 using System.Globalization;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
 
@@ -56,7 +57,7 @@ public sealed record AdmissionFact(
             ? "at once"
             : $"after {LedgerReport.FormatDuration(TimeSpan.FromSeconds(WaitedSeconds))}";
 
-        var room = Room is null ? string.Empty : $"; room {Room}";
+        var room = Room is null ? string.Empty : $", and {Room}";
 
         return Memory is not null
             ? $"admitted {waited}, memory {Memory}{room}"
@@ -96,7 +97,10 @@ public sealed class Admission : IDisposable
 
 /// <summary>A heavy leg asking its machine to take it.</summary>
 /// <param name="Rule">What the machine admits heavy legs by, as the command's configuration declares it.</param>
-/// <param name="RunId">The run the leg is part of.</param>
+/// <param name="RunId">
+/// The run the leg is part of - for a leg on an ssh host, the run of the machine that dispatched it - which its slot's
+/// entry records: a wait for slots only legs of that run hold does not count against the machine's limit.
+/// </param>
 /// <param name="Command">The command running it.</param>
 /// <param name="Leg">The leg, or a unit of its work, named <c>&lt;leg&gt;/&lt;unit&gt;</c>.</param>
 /// <param name="Host">The host its tree is on, as the command line names it.</param>
@@ -125,6 +129,14 @@ public sealed record AdmissionRequest(
     /// other units of its own sweep, which a settle for each would hold back 15 to 90 seconds an arm.
     /// </summary>
     public bool Settle { get; init; } = true;
+
+    /// <summary>
+    /// Drops what this machine counts as in use and could have back at once - the page cache of WSL's virtual machine - as
+    /// the leg is about to wait on the memory: at most once a minute in the process, whichever leg is about to wait, the
+    /// memory then read again once what the drop gives back has reached this machine's count. <see langword="null"/> where
+    /// nothing is dropped for it.
+    /// </summary>
+    public Func<CancellationToken, Task<PageCacheDrop?>>? DropPageCache { get; init; }
 }
 
 /// <summary>
@@ -133,7 +145,10 @@ public sealed record AdmissionRequest(
 /// slot, so two legs taking theirs together do not both start on one reading - and then, where its build's need is
 /// known, the room that need takes, beside what every other admitted leg there claims. A leg that waits longer than the
 /// machine allows is not let start, and its line names what held the slots, the memory in use it waited on, or the room
-/// and who claimed it.
+/// and who claimed it. A wait for slots only legs of its own run hold - its command's other legs, asked for at once -
+/// does not count: it is certain to end, and is said to be its own. A leg about to wait on the memory has what this
+/// machine could have back at once given back first, where its request says how - WSL's page cache
+/// (<see cref="AdmissionRequest.DropPageCache"/>) - and reads the memory again once it has come back.
 /// </summary>
 /// <remarks>
 /// Asked by the DssHarness process on the machine the leg's work runs on - for a WSL leg, the one that dispatched it -
@@ -163,11 +178,23 @@ public sealed class LegAdmission(
     /// </summary>
     public static readonly TimeSpan SaidAgainEvery = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// The least time between two drops of WSL's page cache for legs about to wait on the memory, whichever leg of this
+    /// process asks: a drop takes the cache every build in the virtual machine reads from, and what it gives back takes
+    /// most of a minute to reach this machine's count (<see cref="PageCacheDrop.HandedBackWithin"/>).
+    /// </summary>
+    public static readonly TimeSpan DropsAtMostEvery = TimeSpan.FromMinutes(1);
+
     private readonly HeavyLegSlots _slots = slots;
     private readonly IMemoryGauge _gauge = gauge;
     private readonly TimeProvider _clock = clock;
     private readonly Func<TimeSpan, CancellationToken, Task> _wait = wait;
     private readonly Func<TimeSpan, TimeSpan, TimeSpan> _settle = settle;
+
+    // When WSL's page cache was last dropped for a leg about to wait, by this process: guarded, legs waiting together ask
+    // together.
+    private readonly Lock _dropping = new();
+    private long? _droppedAt;
 
     /// <summary>What production admits by: waits on the system's clock, and settles for a time picked at random.</summary>
     /// <param name="slots">The machine's heavy-leg slots.</param>
@@ -209,51 +236,75 @@ public sealed class LegAdmission(
         // When the wait last said where it stands: once SaidAgainEvery has passed since, it says so again, as it reads now.
         var saidAt = started;
 
+        // What of the wait does not count against the machine's limit: the time the leg spent waiting only behind legs of
+        // its own command - a WSL leg behind its command's Windows legs, asked for together - which is certain to end,
+        // and is never a reason to turn it away. Counted from each look that found it so to the next look.
+        var excused = TimeSpan.Zero;
+        long? ownSince = null;
+
         try
         {
             IReadOnlyList<SlotEntry>? heldBy = null;
+            bool? ownSaid = null;
             MemoryReading? last = null;
             var waitingForMemory = false;
             var readingLost = false;
             var settled = false;
             var everBelow = false;
 
+            // A drop of WSL's page cache this wait made, with the memory as read before it, until the memory read again says
+            // what came back; and why a drop could not be made, as the wait last said it.
+            (MemoryReading Before, PageCacheDrop Drop, long At)? dropped = null;
+            string? notDropped = null;
+
             while (true)
             {
                 // Looked at every time round, the memory's wait included: a leg whose place went - its record removed
                 // by hand - is back in line, and waits its turn again rather than starting on a slot it no longer holds.
                 var standing = _slots.Look(place);
+                var lookedAt = _clock.GetTimestamp();
+
+                if (ownSince is { } since)
+                {
+                    excused += _clock.GetElapsedTime(since, lookedAt);
+                }
+
+                var own = !standing.Holding && standing.Ahead > 0 && standing.InLineAhead.All(entry => entry.RunId == request.RunId);
+                ownSince = own ? lookedAt : null;
 
                 if (!standing.Holding)
                 {
-                    if (heldBy is null || !heldBy.SequenceEqual(standing.Holders))
+                    var whose = own ? $", each its own command's, which does not count against the {Said(rule.MaxWait)} it may wait" : string.Empty;
+
+                    if (heldBy is null || !heldBy.SequenceEqual(standing.Holders) || ownSaid != own)
                     {
-                        Say($"waits for {Slots(standing)}, {standing.Ahead} leg(s) ahead; held by {Holders(standing)}");
-                        heldBy = standing.Holders;
+                        Say($"waits for {Slots(standing)}, {standing.Ahead} leg(s) ahead{whose}; held by {Holders(standing)}");
+                        (heldBy, ownSaid) = (standing.Holders, own);
                     }
                     else if (Due())
                     {
-                        Say($"still waits for {Slots(standing)}{After()}, {standing.Ahead} leg(s) ahead; held by {Holders(standing)}");
+                        Say($"still waits for {Slots(standing)}{After()}, {standing.Ahead} leg(s) ahead{whose}; held by {Holders(standing)}");
                     }
 
                     (waitingForMemory, settled) = (false, false);
 
-                    if (Left(started, rule) <= TimeSpan.Zero)
+                    // Never for a wait its own command's legs alone hold it to: they give their slots back as their work ends.
+                    if (!own && Remaining() <= TimeSpan.Zero)
                     {
                         return Refuse(
                             place,
                             started,
                             null,
                             standing,
-                            $"not admitted after {Waited(started)} waiting for {Slots(standing)}, held by {Holders(standing)}; "
+                            $"not admitted after {Counted()} waiting for {Slots(standing)}, held by {Holders(standing)}; "
                             + $"the machine's heavy legs are recorded in '{_slots.Location}'");
                     }
 
-                    await PauseAsync().ConfigureAwait(false);
+                    await PauseAsync(own).ConfigureAwait(false);
                     continue;
                 }
 
-                heldBy = null;
+                (heldBy, ownSaid) = (null, null);
 
                 var (reading, unmeasured) = _gauge.Read();
 
@@ -290,14 +341,14 @@ public sealed class LegAdmission(
                         Say($"holds a heavy-leg slot, and still could not read the memory in use again{After()}: {why}; it last read {last.Describe()}");
                     }
 
-                    if (Left(started, rule) <= TimeSpan.Zero)
+                    if (Remaining() <= TimeSpan.Zero)
                     {
                         return Refuse(
                             place,
                             started,
                             last,
                             null,
-                            $"not admitted after {Waited(started)}: it held a heavy-leg slot, and the memory in use, last read as "
+                            $"not admitted after {Counted()}: it held a heavy-leg slot, and the memory in use, last read as "
                             + $"{last.Describe()}, could not be read again: {why}",
                             why);
                     }
@@ -307,6 +358,12 @@ public sealed class LegAdmission(
                 }
 
                 (last, readingLost) = (reading, false);
+
+                if (dropped is { } pending)
+                {
+                    Say($"{pending.Drop.Said}, and {Waited(pending.At)} later the memory read {reading.Describe()}, from {pending.Before.Describe()}");
+                    dropped = null;
+                }
 
                 // Decided on the share a line gives, so a leg is never let start at a reading its own line would show at
                 // the limit.
@@ -331,7 +388,7 @@ public sealed class LegAdmission(
                         continue;
                     }
 
-                    var settling = Waits.Shorter(_settle(rule.SettleLeast, rule.SettleMost), Left(started, rule));
+                    var settling = Waits.Shorter(_settle(rule.SettleLeast, rule.SettleMost), Remaining());
 
                     Say($"memory {reading.Describe()}; another leg holds a slot, so it looks again in {Said(settling)}");
 
@@ -369,7 +426,7 @@ public sealed class LegAdmission(
                     Say($"holds a heavy-leg slot, and still waits for the memory {reading.Describe()} to fall below {Limit(rule)}{After()}");
                 }
 
-                if (Left(started, rule) <= TimeSpan.Zero)
+                if (Remaining() <= TimeSpan.Zero)
                 {
                     return Refuse(
                         place,
@@ -377,10 +434,30 @@ public sealed class LegAdmission(
                         reading,
                         null,
                         everBelow
-                            ? $"not admitted after {Waited(started)}: it held a heavy-leg slot, and the memory fell below {Limit(rule)} "
+                            ? $"not admitted after {Counted()}: it held a heavy-leg slot, and the memory fell below {Limit(rule)} "
                                 + $"only to rise above it again before the leg could start; it last read {reading.Describe()}"
-                            : $"not admitted after {Waited(started)}: it held a heavy-leg slot, and the memory {reading.Describe()} "
+                            : $"not admitted after {Counted()}: it held a heavy-leg slot, and the memory {reading.Describe()} "
                                 + $"never fell below {Limit(rule)}");
+                }
+
+                // About to wait on the memory: what this machine counts as in use and could have back - WSL's page cache - is
+                // dropped first, at most once a minute whichever leg asks, and the memory read again, in place of the poll,
+                // once what the drop gives back has reached this machine's count.
+                if (request.DropPageCache is { } dropPageCache && DropDue() && await dropPageCache(cancellationToken).ConfigureAwait(false) is { } drop)
+                {
+                    if (drop.Done)
+                    {
+                        dropped = (reading, drop, _clock.GetTimestamp());
+                        await _wait(Pause(PageCacheDrop.HandedBackWithin, Remaining(), _clock.GetElapsedTime(saidAt)), cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    // Said once, however often it is tried: the same failure each minute would say nothing new.
+                    if (drop.Said != notDropped)
+                    {
+                        Say(drop.Said);
+                        notDropped = drop.Said;
+                    }
                 }
 
                 await PauseAsync().ConfigureAwait(false);
@@ -415,7 +492,7 @@ public sealed class LegAdmission(
                     fact with
                     {
                         Room = claim.Disk is null
-                            ? $"unread, so ~{DiskSpace.Size(room.Bytes)} is claimed against every filesystem here: {claim.Unmeasured}"
+                            ? $"its room is unread, so ~{DiskSpace.Size(room.Bytes)} is claimed against every filesystem here: {claim.Unmeasured}"
                             : Claimed(room, claim),
                     });
             }
@@ -426,23 +503,23 @@ public sealed class LegAdmission(
 
                 if (!roomLost)
                 {
-                    Say($"holds a heavy-leg slot, and could not read the room again: {claim.Unmeasured}; it last read {read}");
+                    Say($"holds a heavy-leg slot, and could not read the room again: {claim.Unmeasured}; it last read: {read}");
                     roomLost = true;
                 }
                 else if (Due())
                 {
-                    Say($"holds a heavy-leg slot, and still could not read the room again{After()}: {claim.Unmeasured}; it last read {read}");
+                    Say($"holds a heavy-leg slot, and still could not read the room again{After()}: {claim.Unmeasured}; it last read: {read}");
                 }
 
-                return Left(started, rule) > TimeSpan.Zero
+                return Remaining() > TimeSpan.Zero
                     ? null
                     : Refuse(
                         place,
                         started,
                         reading,
                         null,
-                        $"not admitted after {Waited(started)}: it held a heavy-leg slot, and the room, last read as {read}, could "
-                            + $"not be read again: {claim.Unmeasured}",
+                        $"not admitted after {Counted()}: it held a heavy-leg slot, and the room could not be read again: "
+                            + $"{claim.Unmeasured}; it last read: {read}",
                         claimants: lastRoom.Claimants,
                         record: _slots.RoomLocation,
                         room: read);
@@ -461,14 +538,14 @@ public sealed class LegAdmission(
                 Say($"holds a heavy-leg slot, and still waits for room{After()}: {claim.Describe(room)}");
             }
 
-            return Left(started, rule) > TimeSpan.Zero
+            return Remaining() > TimeSpan.Zero
                 ? null
                 : Refuse(
                     place,
                     started,
                     reading,
                     null,
-                    $"not admitted after {Waited(started)}: it held a heavy-leg slot, and its build would not fit: "
+                    $"not admitted after {Counted()}: it held a heavy-leg slot, and its build would not fit: "
                         + $"{claim.Describe(room)}; the room each heavy leg claims is recorded in '{_slots.RoomLocation}'",
                     claimants: claim.Claimants,
                     record: _slots.RoomLocation,
@@ -486,10 +563,41 @@ public sealed class LegAdmission(
         bool Due() => _clock.GetElapsedTime(saidAt) >= SaidAgainEvery;
 
         // Waits before the next look, as long as a wait that last said where it stands when this one did may.
-        Task PauseAsync() => _wait(Pause(rule.Poll, Left(started, rule), _clock.GetElapsedTime(saidAt)), cancellationToken);
+        // A wait behind its own command's legs alone is not cut short by what is left of the time the leg may wait, which
+        // that wait does not spend.
+        Task PauseAsync(bool own = false) => _wait(Pause(rule.Poll, own ? rule.Poll : Remaining(), _clock.GetElapsedTime(saidAt)), cancellationToken);
+
+        // What is left of the time the leg may wait: all of it but what it spent behind its own command's legs alone.
+        TimeSpan Remaining() => rule.MaxWait - (_clock.GetElapsedTime(started) - excused);
+
+        // How long the leg has waited, and what of it did not count, as a line says it.
+        string Counted() => excused > TimeSpan.Zero
+            ? $"{Waited(started)} ({Said(excused)} of it behind its own command's legs, which does not count)"
+            : Waited(started);
 
         // How long the leg has waited, of the time it may: what a line said again adds.
-        string After() => $", after {Waited(started)} of the {Said(rule.MaxWait)} it may wait";
+        string After() => $", after {Counted()} of the {Said(rule.MaxWait)} it may wait";
+    }
+
+    /// <summary>
+    /// Whether WSL's page cache may be dropped for a leg about to wait - none was, by this process, within
+    /// <see cref="DropsAtMostEvery"/> - and, where it may, that it is now: a drop that gave nothing back, or could not be
+    /// made, counts as one.
+    /// </summary>
+    private bool DropDue()
+    {
+        lock (_dropping)
+        {
+            var now = _clock.GetTimestamp();
+
+            if (_droppedAt is { } at && _clock.GetElapsedTime(at, now) < DropsAtMostEvery)
+            {
+                return false;
+            }
+
+            _droppedAt = now;
+            return true;
+        }
     }
 
     /// <summary>
@@ -506,16 +614,14 @@ public sealed class LegAdmission(
         => Waits.Shorter(Waits.Shorter(poll, left), SaidAgainEvery - sinceSaid);
 
     /// <summary>
-    /// The room a leg claimed as it was let start, as its line says it: <c>~31 GiB of 40 GiB free on '/'</c>, with what the
-    /// other legs claim there where they claim any.
+    /// The room a leg claimed as it was let start, as its line says it: <c>its build needs ~31 GiB; 40 GiB free on '/'</c>,
+    /// with what the other legs claim there where they claim any.
     /// </summary>
     private static string Claimed(RoomNeed room, RoomStanding claim)
-    {
-        var disk = claim.Disk!;
-        var beside = claim.Claimed > 0 ? $", beside ~{DiskSpace.Size(claim.Claimed)} other legs claim" : string.Empty;
-
-        return $"~{DiskSpace.Size(room.Bytes)} of {DiskSpace.Size(disk.FreeBytes)} free on '{disk.Filesystem}'{room.Where}{beside}";
-    }
+        => claim.Disk!.Against(
+            DiskSpace.Needs("its build", room.Bytes),
+            room.Where,
+            claim.Claimed > 0 ? $", beside ~{DiskSpace.Size(claim.Claimed)} other legs claim" : string.Empty);
 
     /// <summary>A leg let start, holding its slot, as its line then says.</summary>
     private static Admission Take(AdmissionRequest request, SlotPlace place, AdmissionFact fact)
@@ -563,8 +669,6 @@ public sealed class LegAdmission(
 
     /// <summary>The machine's limit, as a line gives it: <c>76%</c>.</summary>
     private static string Limit(AdmissionRule rule) => string.Create(CultureInfo.InvariantCulture, $"{rule.MaxMemoryPercent:0.#}%");
-
-    private TimeSpan Left(long started, AdmissionRule rule) => rule.MaxWait - _clock.GetElapsedTime(started);
 
     private double Seconds(long started) => LedgerReport.Seconds(_clock.GetElapsedTime(started));
 

@@ -342,34 +342,56 @@ public sealed class LocalSyncTransport(
     /// <param name="cancellationToken">Stops the listing between copies.</param>
     public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string root, string family, Func<string, bool> named, CancellationToken cancellationToken = default)
     {
+        var found = new List<HostCopyFound>();
+
+        foreach (var copy in CopiesBeside(root, family, named))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            found.Add(Found(copy.Name, copy.Path, copy.Directory));
+        }
+
+        return Task.FromResult<IReadOnlyList<HostCopyFound>>(found);
+    }
+
+    /// <summary>
+    /// The copies of <paramref name="family"/> kept beside <paramref name="root"/> whose names <paramref name="named"/>
+    /// takes, in the order of their names, as <see cref="ListCopiesAsync(string, string, Func{string, bool}, CancellationToken)"/>
+    /// finds them - but none weighed: only where each is, which costs one look at the directory they are kept in.
+    /// </summary>
+    /// <param name="root">What the copies are kept beside, as the configuration spells it.</param>
+    /// <param name="family">The family's suffix.</param>
+    /// <param name="named">Whether what follows the suffix in a directory's name is the name of a copy to list.</param>
+    /// <returns>Each copy's name, where it is as the configuration spells it, and where it is as this machine does.</returns>
+    /// <exception cref="IOException">The directory they are kept in could not be looked in.</exception>
+    /// <exception cref="UnauthorizedAccessException">The directory they are kept in could not be looked in.</exception>
+    public IReadOnlyList<(string Name, string Path, string Directory)> CopiesBeside(string root, string family, Func<string, bool> named)
+    {
         ArgumentNullException.ThrowIfNull(named);
 
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(family);
 
-        var found = new List<HostCopyFound>();
-
         if (Beside(root, family) is not { } beside)
         {
-            return Task.FromResult<IReadOnlyList<HostCopyFound>>(found);
+            return [];
         }
 
         var prefix = beside.Prefix;
+        var found = new List<(string Name, string Path, string Directory)>();
 
         foreach (var directory in _fileSystem.EnumerateDirectories(beside.Parent))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
             if (leaf.Length > prefix.Length && leaf.StartsWith(prefix, StringComparison.Ordinal) && named(leaf[prefix.Length..]))
             {
                 var name = leaf[prefix.Length..];
-                found.Add(Found(name, HostCopies.InFamily(root, family, name), directory));
+                found.Add((name, HostCopies.InFamily(root, family, name), directory));
             }
         }
 
-        return Task.FromResult<IReadOnlyList<HostCopyFound>>([.. found.OrderBy(copy => copy.Name, StringComparer.Ordinal)]);
+        return [.. found.OrderBy(copy => copy.Name, StringComparer.Ordinal)];
     }
 
     /// <summary>

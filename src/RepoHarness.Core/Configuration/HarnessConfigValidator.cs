@@ -177,6 +177,12 @@ public static partial class HarnessConfigValidator
         }
 
         RequireAboveZeroAtMost(admission.MaxWaitMinutes, AdmissionSettings.MostWaitMinutes, $"{owner} maxWaitMinutes", problems);
+
+        // 0 is allowed, and stops no build: a floor is a rule a machine may do without, where a limit of none is not.
+        if (admission.MinFreeGiB is { } floor && !(double.IsFinite(floor) && floor >= 0 && floor <= AdmissionSettings.MostMinFreeGiB))
+        {
+            problems.Add($"{owner} minFreeGiB must be from 0 to {Number(AdmissionSettings.MostMinFreeGiB)}, found {Number(floor)}");
+        }
     }
 
     /// <summary>A number as a problem says it, the same on every machine.</summary>

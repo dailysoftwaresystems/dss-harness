@@ -65,9 +65,10 @@ public sealed record LockHolder(
 /// <param name="Variant">The build variant, when the entry takes one; absent for a whole tree.</param>
 public sealed record LockEntry(string Host, string Tree, LockScope Scope, LockHolder Holder, string? Variant = null)
 {
-    /// <summary>The entry as a refusal names it.</summary>
-    public string Describe()
-        => ProcessHolders.Describe(Holder.Machine, Holder.ProcessId, Holder.RunId, Holder.TakenUtc)
+    /// <summary>The entry as a refusal names it, said to be another machine's where it is, never naming that machine.</summary>
+    /// <param name="identity">This process, which tells this machine from another.</param>
+    public string Describe(IProcessIdentity identity)
+        => identity.Describe(Holder.Machine, Holder.ProcessId, Holder.RunId, Holder.TakenUtc)
             + $", running '{Holder.Command}'{ProcessHolders.OlderBuildNote(Holder.ProcessStamp)}";
 }
 
@@ -169,7 +170,7 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
 
             // A request that was refused writes nothing: the file is left as it was found.
             return kept.FirstOrDefault(existing => Conflicts(existing, entry)) is { } holder
-                ? (null, $"{Describe(entry)} is held by {holder.Describe()}{_identity.ElsewhereNote(holder.Holder.Machine)}.")
+                ? (null, $"{Describe(entry)} is held by {holder.Describe(_identity)}{_identity.ElsewhereNote(holder.Holder.Machine)}.")
                 : ([.. kept, entry], null);
         });
 
@@ -213,7 +214,7 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
         {
             if (Live(entries, wanted, force: false, afterwards: null).FirstOrDefault(existing => Conflicts(existing, wanted)) is { } holder)
             {
-                return (null, $"{Describe(wanted)} is held by {holder.Describe()}{_identity.ElsewhereNote(holder.Holder.Machine)}.");
+                return (null, $"{Describe(wanted)} is held by {holder.Describe(_identity)}{_identity.ElsewhereNote(holder.Holder.Machine)}.");
             }
 
             whileFree?.Invoke();
@@ -336,7 +337,7 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
             // to something live is held for ever, and only editing the file by hand recovers it.
             if (force && Conflicts(entry, wanted))
             {
-                afterwards?.Invoke(() => _output.Warn(CommandName, ProcessHolders.TakenByForce(Describe(entry), entry.Describe())));
+                afterwards?.Invoke(() => _output.Warn(CommandName, ProcessHolders.TakenByForce(Describe(entry), entry.Describe(_identity))));
                 continue;
             }
 
@@ -348,7 +349,7 @@ public sealed class RunLock(IFileSystem fileSystem, IHarnessOutput output, IProc
 
             // Reported rather than done quietly: a lock that disappears without a word is
             // indistinguishable from one that was never taken.
-            afterwards?.Invoke(() => _output.Info(CommandName, ProcessHolders.Reclaimed(Describe(entry), entry.Describe())));
+            afterwards?.Invoke(() => _output.Info(CommandName, ProcessHolders.Reclaimed(Describe(entry), entry.Describe(_identity))));
         }
 
         return kept;

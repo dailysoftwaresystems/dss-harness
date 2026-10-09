@@ -18,8 +18,8 @@ public sealed class HostAgentServiceTests
 {
     private const string Nonce = "0123456789abcdef0123456789abcdef";
 
-    private static readonly Func<string, string[], CancellationToken, Task<int>> NothingRuns
-        = (_, _, _) => throw new InvalidOperationException("Nothing should have run.");
+    private static readonly Func<string, string[], Dispatch, CancellationToken, Task<int>> NothingRuns
+        = (_, _, _, _) => throw new InvalidOperationException("Nothing should have run.");
 
     [Fact]
     public async Task Info_AnswersWithThisBuild_AndThisMachine()
@@ -98,7 +98,7 @@ public sealed class HostAgentServiceTests
             new StringReader(RunRequest(copy.Path, "read-anchor", "D-A B", "--json")),
             new StringWriter(),
             error,
-            (directory, arguments, _) =>
+            (directory, arguments, _, _) =>
             {
                 ranIn = directory;
                 ranWith = arguments;
@@ -120,6 +120,56 @@ public sealed class HostAgentServiceTests
             error.ToString().TrimEnd().Split('\n').Select(line => line.TrimEnd('\r')));
     }
 
+    /// <summary>
+    /// What a request says of the command it asks for beside its line - the run it is a leg of, the drive its WSL disk grows
+    /// on - is handed to the command, never added to its arguments; a run that is not a run id is refused, and nothing runs.
+    /// </summary>
+    [Theory]
+    [InlineData("20261008-120000-0a1b2c3d", true)]
+    [InlineData("../../somewhere", false)]
+    public async Task Run_HandsTheCommandWhatTheRequestSaysOfIt_AndRefusesARunThatIsNotARunId(string run, bool valid)
+    {
+        using var copy = new TempDirectory();
+        using var error = new StringWriter();
+        Dispatch? ranFor = null;
+        string[]? ranWith = null;
+        var request = JsonSerializer.Serialize(
+            new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Run,
+                Directory = copy.Path,
+                Arguments = ["build", "--json"],
+                Nonce = Nonce,
+                RunId = run,
+                DiskImageDrive = "C:\\",
+            },
+            HostAgentProtocol.JsonOptions);
+
+        var exitCode = await Service().ServeAsync(
+            new StringReader(request),
+            new StringWriter(),
+            error,
+            (_, arguments, dispatched, _) =>
+            {
+                (ranWith, ranFor) = (arguments, dispatched);
+                return Task.FromResult(0);
+            },
+            TestContext.Current.CancellationToken);
+
+        if (valid)
+        {
+            Assert.Equal(HarnessExit.Success, exitCode);
+            Assert.Equal(new Dispatch(run, "C:\\"), ranFor);
+            Assert.Equal(["build", "--json"], ranWith!);
+        }
+        else
+        {
+            Assert.Equal(HarnessExit.UsageError, exitCode);
+            Assert.Null(ranWith);
+            Assert.Contains("the request names its run as '../../somewhere', which is not a run id", error.ToString(), StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public async Task Run_FindsACopyNamedFromTheHomeDirectory()
     {
@@ -131,7 +181,7 @@ public sealed class HostAgentServiceTests
             new StringReader(RunRequest("~/src/repo", "verify-git")),
             new StringWriter(),
             new StringWriter(),
-            (directory, _, _) =>
+            (directory, _, _, _) =>
             {
                 ranIn = directory;
                 return Task.FromResult(0);
@@ -281,7 +331,7 @@ public sealed class HostAgentServiceTests
             new StringReader(RunRequest(copy.Path, "verify-git")),
             new StringWriter(),
             error,
-            (_, _, _) => throw new UnauthorizedAccessException("Access to the path is denied."),
+            (_, _, _, _) => throw new UnauthorizedAccessException("Access to the path is denied."),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.HostUnavailable, exitCode);
@@ -300,7 +350,7 @@ public sealed class HostAgentServiceTests
             input,
             new StringWriter(),
             new StringWriter(),
-            async (_, _, token) =>
+            async (_, _, _, token) =>
             {
                 started.SetResult();
 
@@ -334,7 +384,7 @@ public sealed class HostAgentServiceTests
             input,
             new StringWriter(),
             new StringWriter(),
-            async (_, _, token) =>
+            async (_, _, _, token) =>
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
                 cancelled = token.IsCancellationRequested;
@@ -481,7 +531,7 @@ public sealed class HostAgentServiceTests
             new StringReader(request),
             new StringWriter(),
             new StringWriter(),
-            (_, _, _) =>
+            (_, _, _, _) =>
             {
                 heldWhileRunning = processes.Started.Count == 1;
                 return Task.FromResult(0);
@@ -509,7 +559,7 @@ public sealed class HostAgentServiceTests
             new StringReader(RunRequest(copy.Path, "read-anchor", "D-A B")),
             new StringWriter(),
             new StringWriter(),
-            (_, _, _) => Task.FromResult(0),
+            (_, _, _, _) => Task.FromResult(0),
             TestContext.Current.CancellationToken);
 
         Assert.Empty(processes.Started);

@@ -45,9 +45,9 @@ public sealed class HostAgentService(
     /// <param name="output">Where an info answer is written.</param>
     /// <param name="error">Where a refused request is explained, and where a run request's completion line is written.</param>
     /// <param name="run">
-    /// Runs a DssHarness command line with the given directory as the current one, until it finishes or the
-    /// token is cancelled, and returns its exit code. Supplied by the program, which is the only place that
-    /// holds the command line parser.
+    /// Runs a DssHarness command line with the given directory as the current one, with what the machine that asked
+    /// says of it beside the line, until it finishes or the token is cancelled, and returns its exit code. Supplied by
+    /// the program, which is the only place that holds the command line parser.
     /// </param>
     /// <param name="cancellationToken">Stops serving.</param>
     /// <returns>The exit code this process reports.</returns>
@@ -55,7 +55,7 @@ public sealed class HostAgentService(
         TextReader input,
         TextWriter output,
         TextWriter error,
-        Func<string, string[], CancellationToken, Task<int>> run,
+        Func<string, string[], Dispatch, CancellationToken, Task<int>> run,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -352,7 +352,7 @@ public sealed class HostAgentService(
         HostAgentRequest request,
         TextWriter output,
         TextWriter error,
-        Func<string, string[], CancellationToken, Task<int>> run,
+        Func<string, string[], Dispatch, CancellationToken, Task<int>> run,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Nonce))
@@ -380,7 +380,7 @@ public sealed class HostAgentService(
     private async Task<int> ServeRunAsync(
         HostAgentRequest request,
         TextWriter error,
-        Func<string, string[], CancellationToken, Task<int>> run,
+        Func<string, string[], Dispatch, CancellationToken, Task<int>> run,
         CancellationToken cancellationToken)
     {
         if (request.Arguments.Count == 0)
@@ -399,6 +399,12 @@ public sealed class HostAgentService(
         if (string.IsNullOrWhiteSpace(request.Directory))
         {
             return await RefuseAsync(error, HarnessExit.UsageError, "the request names no directory to run in").ConfigureAwait(false);
+        }
+
+        // A run a leg here records its heavy-leg slot under, so read as strictly as a run id is anywhere else.
+        if (request.RunId is { } dispatched && !RunId.TryParse(dispatched, out _))
+        {
+            return await RefuseAsync(error, HarnessExit.UsageError, $"the request names its run as '{dispatched}', which is not a run id").ConfigureAwait(false);
         }
 
         var directory = ResolveDirectory(request.Directory);
@@ -431,7 +437,7 @@ public sealed class HostAgentService(
                 [.. request.KeepAwakeDirectories],
                 cancellationToken);
 
-            return await run(directory, [.. request.Arguments], cancellationToken).ConfigureAwait(false);
+            return await run(directory, [.. request.Arguments], Dispatch.Of(request), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {

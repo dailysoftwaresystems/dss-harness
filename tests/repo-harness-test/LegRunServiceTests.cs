@@ -668,7 +668,7 @@ public sealed class LegRunServiceTests
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
         Assert.False(File.Exists(LogOwnership.OwnerFile(dead)));
         Assert.Contains(
-            $"logs: WARN - An earlier run was abandoned: {Environment.MachineName} pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since 2025-01-01 12:00:00Z",
+            $"logs: WARN - An earlier run was abandoned: pid {int.MaxValue - 1}, run 20250101-120000-deadbeef, since 2025-01-01 12:00:00Z",
             harness.StandardError.ToString(),
             StringComparison.Ordinal);
     }
@@ -998,6 +998,32 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A heavy leg a host runs for the machine that dispatched it asks the host's slots under that machine's run, so the
+    /// command's other legs there wait for its slot without that wait counting.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyLegRunForAnotherMachine_AsksItsSlotUnderThatMachinesRun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = AdmissionRecord(temp);
+        IReadOnlyList<SlotEntry>? during = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            Admitting(OneLeg(harness), local: new AdmissionSettings { HeavyLegs = 2 }),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = Heavy },
+            ran: _ => during = AdmissionKit.Read(record),
+            admission: AdmissionKit.Admission(harness, record, new ScriptedGauge(12.5), new ManualClock()),
+            origin: new CommandOrigin(ServesAnotherMachine: true, new Dispatch("20261008-120000-0a1b2c3d", null)));
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("20261008-120000-0a1b2c3d", Assert.Single(during!).RunId);
+    }
+
+    /// <summary>
     /// A heavy leg whose build's need its placement knew claims that room on this machine as it is admitted - read where its
     /// build directory is - holds it while its work runs and gives it back as the work ends, its line naming what it
     /// claimed. Counted only as a command placed its own legs, two commands each placing one leg on one host both found it
@@ -1045,7 +1071,7 @@ public sealed class LegRunServiceTests
         using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
         var admission = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("admission");
 
-        Assert.Equal("~8 GiB of 40 GiB free on '/data'", admission.GetProperty("room").GetString());
+        Assert.Equal("its build needs ~8 GiB; 40 GiB free on '/data'", admission.GetProperty("room").GetString());
     }
 
     /// <summary>
@@ -1258,6 +1284,203 @@ public sealed class LegRunServiceTests
 
         Assert.Equal(wsl ? "passed" : "not-admitted", verdicts["native"].Verdict);
         Assert.Equal(wsl, ran);
+    }
+
+    /// <summary>
+    /// A heavy leg about to wait on this machine's memory has WSL's page cache dropped for this repository - whose WSL
+    /// hosts name the distributions this tool may run a command in - and its line says what came back.
+    /// </summary>
+    [Fact]
+    public async Task AHeavyLegAboutToWaitOnTheMemory_HasWslsPageCacheDroppedForThisRepository()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cache = new ScriptedPageCache(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), 4 * AdmissionKit.Gibibyte));
+        var config = Admitting(OneLeg(harness), local: new AdmissionSettings { HeavyLegs = 2 });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = Heavy },
+            admission: AdmissionKit.Admission(harness, AdmissionRecord(temp), new ScriptedGauge(90, 50), new ManualClock()),
+            pageCache: cache);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Same(config, Assert.Single(cache.Asked).Config);
+        Assert.Contains(
+            "native: WSL's page cache was dropped as root in wsl Ubuntu, 4 GiB of it, and 1m00s later the memory read 50.0% in use "
+            + "(50 of 100 by the test), from 90.0% in use (90 of 100 by the test)",
+            harness.StandardOutput.ToString() + harness.StandardError.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A WSL leg this machine sent has WSL's page cache dropped as it ends - what its build read and wrote, which this
+    /// machine counts as in use until the virtual machine idles for minutes - where this machine admits its heavy legs by
+    /// the memory, and its line says so: without waiting for what comes back, which the next leg's wait reads. A leg of an
+    /// ssh host, and one where this machine admits nothing, drop none.
+    /// </summary>
+    [Theory]
+    [InlineData("wsl", true, true)]
+    [InlineData("wsl", false, false)]
+    [InlineData("ssh", true, false)]
+    public async Task AWslLegsEnd_DropsWslsPageCache_WhereThisMachineAdmitsByTheMemory(string kind, bool admits, bool drops)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cache = new ScriptedPageCache(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), AdmissionKit.Gibibyte));
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = admits ? new AdmissionSettings() : null },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+                Ssh = { [HostName] = new SshHostConfig { RepositoryPath = HostTree } },
+            },
+            Legs =
+            {
+                ["remote"] = kind == "wsl"
+                    ? new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" }
+                    : new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Ssh = HostName },
+            },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = host.Kind == HostKind.Local ? harness.Platform.Processor : "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
+            hosts: hosts,
+            pageCache: cache);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(drops ? [config] : [], cache.Asked.Select(context => context.Config));
+        Assert.Equal(
+            drops,
+            (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Contains(
+                "remote: as the leg ended, WSL's page cache was dropped as root in wsl Ubuntu, 1 GiB of it",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A heavy leg's builds here - and a sweep's, each of whose workers builds - are held to the room its machine keeps
+    /// free, admission.minFreeGiB, where that machine declares admission: 2 GiB where it says nothing. A light leg's are held
+    /// to none, nor are those of a leg whose machine declares no admission, or keeps nothing free.
+    /// </summary>
+    [Theory]
+    [InlineData("heavy", true, null, 2L << 30)]
+    [InlineData("sweep", true, null, 2L << 30)]
+    [InlineData("heavy", true, 0.5, 1L << 29)]
+    [InlineData("heavy", true, 0.0, null)]
+    [InlineData("heavy", false, null, null)]
+    [InlineData("light", true, null, null)]
+    public async Task ALegsBuildsHere_AreHeldToTheRoomItsMachineKeepsFree_WhereItIsHeavyAndTheMachineAdmits(
+        string kind,
+        bool admits,
+        double? minFreeGiB,
+        long? floor)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var ran = false;
+        RoomFloor? held = null;
+        var config = admits ? Admitting(OneLeg(harness), local: new AdmissionSettings { MinFreeGiB = minFreeGiB }) : OneLeg(harness);
+        var workload = kind switch
+        {
+            "heavy" => Heavy,
+            "sweep" => Sweep,
+            _ => LegWorkload.Copy,
+        };
+
+        await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null) { Workload = workload },
+            ran: leg => (ran, held) = (true, leg.Floor));
+
+        Assert.True(ran);
+        Assert.Equal(floor, held?.Bytes);
+        Assert.Empty(held?.Also ?? []);
+        Assert.Null(held?.Unwatched);
+    }
+
+    /// <summary>
+    /// A WSL distribution's leg holds its builds to the floor on the drive its disk grows on as well, through that drive's
+    /// mount in the distribution, as the machine that sent it named the drive: the distribution's own room is its virtual
+    /// disk's, which a full drive does not shrink. Where that machine named none, or the drive is mounted nowhere there,
+    /// the build is told why only the distribution's own room is held.
+    /// </summary>
+    [Theory]
+    [InlineData("C:\\", "C:\\134 /mnt/c 9p rw,noatime,aname=drvfs;path=C:\\;uid=1000 0 0", "/mnt/c", null)]
+    [InlineData("c:", "none /mnt/wsl tmpfs rw 0 0\nC:\\134 /mnt/my\\040c 9p rw 0 0", "/mnt/my c", null)]
+    [InlineData(
+        null,
+        "C:\\134 /mnt/c 9p rw 0 0",
+        null,
+        "the machine that sent this leg named no drive where WSL keeps this distribution's disk, so only the distribution's own room is "
+        + "held to admission.minFreeGiB")]
+    [InlineData(
+        "D:\\",
+        "C:\\134 /mnt/c 9p rw 0 0",
+        null,
+        "the drive where WSL keeps this distribution's disk, D:\\, could not be found here, so only the distribution's own room is held to "
+        + "admission.minFreeGiB: '/proc/mounts' lists no mount of it")]
+    public async Task AWslLegsBuilds_AreHeldToTheFloorOnTheDriveItsDiskGrowsOn_ThroughItsMountThere(
+        string? drive,
+        string mounts,
+        string? mount,
+        string? unwatched)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        RoomFloor? held = null;
+        var config = Admitting(OneLeg(harness), local: new AdmissionSettings());
+
+        config.Hosts.Wsl["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" };
+
+        await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, Here: HostId.Wsl("Ubuntu")) { Workload = Heavy },
+            ran: leg => held = leg.Floor,
+            origin: new CommandOrigin(ServesAnotherMachine: true, new Dispatch(RunId.New().Value, drive)),
+            fileSystem: new MountsListing(harness.FileSystem, mounts));
+
+        Assert.NotNull(held);
+        Assert.Equal(2L << 30, held.Bytes);
+        Assert.Equal(mount is null ? Array.Empty<(string, string)>() : [(mount, ", where WSL keeps its disk")], held.Also);
+        Assert.Equal(unwatched, held.Unwatched);
+    }
+
+    /// <summary>The real file system, except that what is mounted reads as <paramref name="mounts"/> says.</summary>
+    private sealed class MountsListing(IFileSystem inner, string mounts) : PassThroughFileSystem(inner)
+    {
+        public override string ReadAllText(string path)
+            => path == WindowsDriveMounts.MountsFile ? mounts : base.ReadAllText(path);
     }
 
     /// <summary>
@@ -1982,13 +2205,16 @@ public sealed class LegRunServiceTests
         DeveloperEnvironmentProvider? developerEnvironments = null,
         LegAdmission? admission = null,
         ISyncTransportFactory? transports = null,
-        Func<LegWork, CancellationToken, Task<LegEntry>>? workAsync = null)
+        Func<LegWork, CancellationToken, Task<LegEntry>>? workAsync = null,
+        CommandOrigin? origin = null,
+        IFileSystem? fileSystem = null,
+        IWslPageCache? pageCache = null)
     {
         var loader = HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
 
         var service = new LegRunService(
             loader,
-            new LegsService(loader, inspector, harness.Platform, harness.Output),
+            new LegsService(loader, inspector, new KnownTrees(), harness.Platform, harness.Output),
             new LegExecutor(harness.Platform, harness.Output),
             runLock ?? new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             logs ?? new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
@@ -1998,12 +2224,14 @@ public sealed class LegRunServiceTests
 
             // Never this machine's own record of its heavy legs: a test's slots are its own.
             admission ?? AdmissionKit.Admission(harness, AdmissionRecord(temp), new ScriptedGauge(10), new ManualClock()),
+            pageCache ?? new ScriptedPageCache(),
             new KeepAwake(keepAwake ?? new HeldProcesses(), harness.Output),
             developerEnvironments ?? NoDeveloperEnvironment(harness),
-            harness.FileSystem,
+            fileSystem ?? harness.FileSystem,
             harness.FilePermissions,
             harness.Platform,
-            harness.Output);
+            harness.Output,
+            origin);
 
         return await service.RunAsync(
             "test",

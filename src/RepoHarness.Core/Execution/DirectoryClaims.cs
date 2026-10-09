@@ -110,13 +110,13 @@ internal sealed class DirectoryClaims(IFileSystem fileSystem, IHarnessOutput out
                 {
                     // A holder on another machine cannot be asked whether it is still running, so it stands. Liveness,
                     // never a timeout, is what decides for one on this machine.
-                    return new LogClaim(false, existing, file) { HeldBy = existing.Describe() + _identity.ElsewhereNote(existing.Machine) };
+                    return new LogClaim(false, existing, file) { HeldBy = existing.Describe(_identity) + _identity.ElsewhereNote(existing.Machine) };
                 }
 
                 // Said once the owner file is let go, as every line about a machine-wide file is.
                 afterwards(held
-                    ? () => _output.Warn(_terms.CommandName, ProcessHolders.TakenByForce(_terms.Directory(directory), existing.Describe()))
-                    : () => _output.Info(_terms.CommandName, ProcessHolders.Reclaimed(_terms.Directory(directory), existing.Describe())));
+                    ? () => _output.Warn(_terms.CommandName, ProcessHolders.TakenByForce(_terms.Directory(directory), existing.Describe(_identity)))
+                    : () => _output.Info(_terms.CommandName, ProcessHolders.Reclaimed(_terms.Directory(directory), existing.Describe(_identity))));
             }
 
             var owner = new LogOwner(
@@ -263,7 +263,7 @@ internal sealed class DirectoryClaims(IFileSystem fileSystem, IHarnessOutput out
 
         var directory = file[..^_terms.OwnerSuffix.Length];
         var held = _fileSystem.DirectoryExists(directory) ? _terms.Held(directory) : $"'{directory}', which is gone";
-        var holder = ProcessHolders.Describe(owner.Machine, owner.ProcessId, owner.RunId, owner.TakenUtc);
+        var holder = ProcessHolders.Describe(owner.ProcessId, owner.RunId, owner.TakenUtc);
         var abandoned = $"An earlier run was abandoned: {holder}, is no longer running, and never gave up {held} - "
             + "most likely it was killed, or stopped with its machine, before it finished, unless it said as it ended that its "
             + $"claim could not be given up - {_terms.Abandoned}";

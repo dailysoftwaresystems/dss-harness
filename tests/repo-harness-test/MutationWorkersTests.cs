@@ -10,6 +10,7 @@ using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -443,17 +444,35 @@ public sealed class MutationWorkersTests
 
     /// <summary>
     /// What a build of a leg's variant is expected to come to - by which a leg's build is placed and a sweep's workers are
-    /// counted alike: its declared buildSpaceGiB, else what its own last build recorded, else the main checkout's copy's.
+    /// counted alike: its declared buildSpaceGiB, else what its own last build recorded, else the most any other tree's copy
+    /// of the variant recorded there, naming whose - the first named of those that recorded the most - and nothing where
+    /// none did.
     /// </summary>
     [Theory]
-    [InlineData(4.5, 7L, 9L, 4831838208L, "as its buildSpaceGiB, 4.5, declares")]
-    [InlineData(null, 7L, 9L, 7L, "what its last build there came to")]
-    [InlineData(null, null, 9L, 9L, "what the main checkout's copy of the same variant came to there")]
-    [InlineData(null, null, null, null, "what the main checkout's copy of the same variant came to there")]
-    public void ABuildsExpectedSize_IsDeclared_ElseItsOwnRecord_ElseTheMainCheckoutsCopys(double? declared, long? own, long? main, long? bytes, string source)
-        => Assert.Equal(
-            (bytes, source),
-            LegRoom.ExpectedBuildBytes(new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", BuildSpaceGiB = declared }, own, main));
+    [InlineData(4.5, 7L, 9L, 11L, 4831838208L, "as its buildSpaceGiB, 4.5, declares")]
+    [InlineData(null, 7L, 9L, 11L, 7L, "what its last build there came to")]
+    [InlineData(null, null, 9L, null, 9L, "what the main checkout's copy of the same variant came to there")]
+    [InlineData(null, null, 9L, 11L, 11L, "what worktree o1/xa's copy of the same variant came to there")]
+    [InlineData(null, null, null, 11L, 11L, "what worktree o1/xa's copy of the same variant came to there")]
+    [InlineData(null, null, 11L, 11L, 11L, "what the main checkout's copy of the same variant came to there")]
+    [InlineData(null, null, null, null, null, null)]
+    public void ABuildsExpectedSize_IsDeclared_ElseItsOwnRecord_ElseTheLargestOtherCopys(
+        double? declared,
+        long? own,
+        long? main,
+        long? agent,
+        long? bytes,
+        string? source)
+    {
+        (long Bytes, string Source)? expected = bytes is { } some ? (some, source!) : null;
+
+        Assert.Equal(
+            expected,
+            LegRoom.ExpectedBuildBytes(
+                new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", BuildSpaceGiB = declared },
+                own,
+                [(RepositoryTree.MainCheckout, main), ("worktree o1/xa", agent)]));
+    }
 
     /// <summary>An owner file for <paramref name="worker"/> naming a process of this machine, as a sweep's claim records one.</summary>
     private static void WriteOwner(string worker, int processId, string processStamp)

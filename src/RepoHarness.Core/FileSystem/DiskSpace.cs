@@ -29,6 +29,24 @@ public sealed record DiskSpace(long FreeBytes, long TotalBytes, string Filesyste
     public string Describe() => $"{Size(FreeBytes)} free of {Size(TotalBytes)} on '{Filesystem}'";
 
     /// <summary>
+    /// A need of this room as every line about room says it: the need first, then what is free here, so neither is read
+    /// as part of the other - <c>this leg needs ~31 GiB, as its buildSpaceGiB, 31, declares; 40 GiB free on '/'</c>. Said
+    /// the other way about, <c>~4.8 GiB of 149.8 GiB free</c> read to a consumer as a disk all but full.
+    /// </summary>
+    /// <param name="needs">The need, as <see cref="Needs"/> says one: who needs how much, and why it is thought to.</param>
+    /// <param name="where">What this filesystem is to the need, said after its name; empty where nothing more is.</param>
+    /// <param name="beside">What else is counted on it, said last; empty where nothing is.</param>
+    public string Against(string needs, string where = "", string beside = "")
+        => $"{needs}; {Size(FreeBytes)} free on '{Filesystem}'{where}{beside}";
+
+    /// <summary>A need of room as a line says it: <c>this leg needs ~31 GiB, as its buildSpaceGiB, 31, declares</c>.</summary>
+    /// <param name="who">What needs it, as the line names it: <c>this leg</c>.</param>
+    /// <param name="bytes">How much it needs.</param>
+    /// <param name="source">What says it needs that much, where something is said.</param>
+    public static string Needs(string who, long bytes, string? source = null)
+        => source is null ? $"{who} needs ~{Size(bytes)}" : $"{who} needs ~{Size(bytes)}, {source}";
+
+    /// <summary>
     /// <paramref name="bytes"/> in the largest binary unit it reaches, to one place: <c>12.3 GiB</c>,
     /// <c>512 MiB</c>, <c>3 bytes</c>.
     /// </summary>

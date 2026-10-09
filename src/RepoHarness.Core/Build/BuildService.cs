@@ -41,6 +41,12 @@ public sealed record BuildRequest(
     /// cache would otherwise go on holding. Removed, each is the project's own default again.
     /// </summary>
     public IReadOnlyList<string> UnsetFirst { get; init; } = [];
+
+    /// <summary>
+    /// The least room the build leaves free on each filesystem it fills, below which it is stopped: where the leg is heavy
+    /// and its machine declares admission; <see langword="null"/> where it is not, and nothing stops the build for room.
+    /// </summary>
+    public RoomFloor? Floor { get; init; }
 }
 
 /// <summary>What one leg's build did.</summary>
@@ -109,7 +115,8 @@ public sealed class BuildService(
     Git.IGitClient gitClient,
     IFileSystem fileSystem,
     IHarnessOutput output,
-    TimeProvider? wallClock = null) : IBuildService
+    TimeProvider? wallClock = null,
+    Func<TimeSpan, CancellationToken, Task>? floorWait = null) : IBuildService
 {
     /// <summary>The command this service reports under.</summary>
     public const string CommandName = "build";
@@ -128,6 +135,9 @@ public sealed class BuildService(
     private readonly TimeProvider _wallClock = wallClock ?? TimeProvider.System;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
+
+    /// <summary>Waits between readings of the room a heavy leg's build leaves: the real time, unless a test needs its own.</summary>
+    private readonly Func<TimeSpan, CancellationToken, Task> _floorWait = floorWait ?? Task.Delay;
 
     /// <inheritdoc/>
     public async Task<BuildResult> BuildAsync(
@@ -247,20 +257,45 @@ public sealed class BuildService(
         // leaves nothing else behind to be read as a build nobody recorded.
         var asked = adapter is CMakeAdapter ? _toolchainReader.Ask(buildDirectory) : null;
 
+        // While a heavy leg builds, each filesystem its build fills is held to the room its machine keeps free, read again
+        // every RoomFloorWatch.Every, and the build is stopped once one has less: a consumer's build, placed where nothing
+        // said what it needed, filled a disk to 79 MiB under two other legs. Stopped, it says nothing about the code, and
+        // what it built is left as any build stopped part way leaves it, for clean.
+        await using var floor = request.Floor is { } least
+            ? RoomFloorWatch.Start(
+                _fileSystem,
+                least,
+                request.Leg,
+                buildDirectory,
+                _floorWait,
+                message => _output.Warn(CommandName, $"{request.Leg}: {message}"),
+                cancellationToken)
+            : null;
+        using var building = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, floor?.Stopping ?? CancellationToken.None);
+
         foreach (var phase in adapter.Phases(config, request, buildDirectory, overlay, environment))
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            PhaseResult result;
 
-            var result = await _phaseRunner
-                .RunAsync(
-                    phase with
-                    {
-                        TimingPatterns = request.Time ? config.BuildTimingRegex : [],
-                        ClockStepToleranceMilliseconds = config.Defaults.ClockStepToleranceMilliseconds,
-                        StallSeconds = config.Defaults.StallSeconds,
-                    },
-                    cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                building.Token.ThrowIfCancellationRequested();
+
+                result = await _phaseRunner
+                    .RunAsync(
+                        phase with
+                        {
+                            TimingPatterns = request.Time ? config.BuildTimingRegex : [],
+                            ClockStepToleranceMilliseconds = config.Defaults.ClockStepToleranceMilliseconds,
+                            StallSeconds = config.Defaults.StallSeconds,
+                        },
+                        building.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && floor?.Why is { } why)
+            {
+                return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, why), null).ConfigureAwait(false);
+            }
 
             phases.Add(result);
 
@@ -302,6 +337,12 @@ public sealed class BuildService(
         }
 
         ranThrough = true;
+
+        // Built: nothing it does from here on fills a disk.
+        if (floor is not null)
+        {
+            await floor.DisposeAsync().ConfigureAwait(false);
+        }
 
         if (request.Project.BuildOutputs.Count == 0)
         {

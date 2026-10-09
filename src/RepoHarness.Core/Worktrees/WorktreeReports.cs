@@ -165,7 +165,7 @@ public static class WorktreeReports
     /// <param name="copy">The copy, as a listing found it.</param>
     internal static string Origin(HostCopyFound copy) => copy.Origin switch
     {
-        CopyOrigin.Made => copy.CreatedBy is { } by ? $"made by {by} at {copy.CreatedUtc}" : "made by the harness",
+        CopyOrigin.Made => copy.CreatedUtc is { } at ? $"made by the harness at {at}" : "made by the harness",
         CopyOrigin.TakenOver => "the harness took over a directory that was there, which is yours to remove",
         CopyOrigin.Unmarked => "nothing there says the harness made it, so it is yours to remove",
         _ => $"its marker cannot be read: {copy.Problem?.TrimEnd('.')}",

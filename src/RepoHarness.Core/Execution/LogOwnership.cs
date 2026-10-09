@@ -35,9 +35,10 @@ public sealed record LogOwner(
     [JsonPropertyName("processStartedUtc")]
     public DateTimeOffset? LegacyStartedUtc { get; init; }
 
-    /// <summary>The owner as a refusal names it.</summary>
-    public string Describe()
-        => ProcessHolders.Describe(Machine, ProcessId, RunId, TakenUtc) + ProcessHolders.OlderBuildNote(ProcessStamp);
+    /// <summary>The owner as a refusal names it, said to be another machine's where it is, never naming that machine.</summary>
+    /// <param name="identity">This process, which tells this machine from another.</param>
+    public string Describe(IProcessIdentity identity)
+        => identity.Describe(Machine, ProcessId, RunId, TakenUtc) + ProcessHolders.OlderBuildNote(ProcessStamp);
 }
 
 /// <summary>

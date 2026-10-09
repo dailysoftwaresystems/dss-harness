@@ -1,6 +1,7 @@
 using NSubstitute;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 
@@ -76,7 +77,7 @@ public sealed class LegAdmissionTests
         var waiting = Assert.Single(said, line => line.StartsWith("waits for", StringComparison.Ordinal));
 
         Assert.Contains("one of this machine's 2 heavy-leg slot(s), 2 leg(s) ahead", waiting, StringComparison.Ordinal);
-        Assert.Contains($"'/src/first' variant 'x86_64-gcc-release' on local (leg 'first', test, {harness.Identity.CurrentMachine} pid {harness.Identity.CurrentId}, run run-first, since 2026-09-30 16:29:42Z)", waiting, StringComparison.Ordinal);
+        Assert.Contains($"'/src/first' variant 'x86_64-gcc-release' on local (leg 'first', test, pid {harness.Identity.CurrentId}, run run-first, since 2026-09-30 16:29:42Z)", waiting, StringComparison.Ordinal);
         Assert.Contains("'/src/second'", waiting, StringComparison.Ordinal);
 
         // Taken after the other two, and holding one of the two slots with the second.
@@ -136,6 +137,131 @@ public sealed class LegAdmissionTests
     }
 
     /// <summary>
+    /// A leg about to wait on the memory has WSL's page cache dropped first - memory this machine counts as in use and
+    /// could have back - and reads the memory again a minute later, once what the drop gives back has reached this
+    /// machine's count: its line says how much was dropped, and the memory before and after, and the leg starts at once
+    /// where that reading is below the limit.
+    /// </summary>
+    [Fact]
+    public async Task ALegAboutToWaitOnTheMemory_HasWslsPageCacheDropped_AndStartsOnceWhatCameBackReadsBelowTheLimit()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var said = new List<string>();
+        var drops = 0;
+
+        using var admitted = await AdmissionKit.Admission(harness, temp.Combine("admission.json"), new ScriptedGauge(93.8, 74.1), new ManualClock())
+            .AdmitAsync(
+                AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said) with
+                {
+                    DropPageCache = _ =>
+                    {
+                        drops++;
+                        return Task.FromResult<PageCacheDrop?>(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), 22 * AdmissionKit.Gibibyte));
+                    },
+                },
+                TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(1, drops);
+        Assert.Equal(60, admitted.Fact.WaitedSeconds);
+        Assert.Equal(74.1, admitted.Fact.MemoryPercent);
+        Assert.Equal(
+            [
+                "holds a heavy-leg slot, and waits for the memory 93.8% in use (93.8 of 100 by the test) to fall below 76%",
+                "WSL's page cache was dropped as root in wsl Ubuntu, 22 GiB of it, and 1m00s later the memory read 74.1% in use "
+                    + "(74.1 of 100 by the test), from 93.8% in use (93.8 of 100 by the test)",
+                "admitted after 1m00s, memory 74.1% in use (74.1 of 100 by the test)",
+            ],
+            said);
+    }
+
+    /// <summary>
+    /// WSL's page cache is dropped at most once a minute, whichever leg of the process is about to wait: one asking within
+    /// the minute of another's drop waits a poll without one. A drop's minute is cut at what is left of the time the leg
+    /// may wait, and its line says how long after the memory was read again.
+    /// </summary>
+    [Fact]
+    public async Task WslsPageCache_IsDroppedAtMostOnceAMinute_WhicheverLegIsAboutToWait()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var clock = new ManualClock();
+        var said = new List<string>();
+        var dropped = new List<TimeSpan>();
+        var admission = AdmissionKit.Admission(harness, temp.Combine("admission.json"), new ScriptedGauge(90), clock);
+
+        Task<PageCacheDrop?> DropAsync(CancellationToken token)
+        {
+            dropped.Add(clock.Moved);
+            return Task.FromResult<PageCacheDrop?>(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), 0));
+        }
+
+        using (var first = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30, maxWaitMinutes: 1.5), said, "first") with { DropPageCache = DropAsync },
+            TestContext.Current.CancellationToken))
+        {
+            Assert.False(first.Fact.Admitted);
+        }
+
+        said.Clear();
+
+        using var second = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30, maxWaitMinutes: 1), said, "second") with { DropPageCache = DropAsync },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(second.Fact.Admitted);
+        Assert.Equal([TimeSpan.Zero, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(120)], dropped);
+        Assert.Equal(
+            [
+                "holds a heavy-leg slot, and waits for the memory 90.0% in use (90 of 100 by the test) to fall below 76%",
+                "WSL's page cache was dropped as root in wsl Ubuntu, 0 bytes of it, and 30s later the memory read 90.0% in use "
+                    + "(90 of 100 by the test), from 90.0% in use (90 of 100 by the test)",
+            ],
+            said);
+    }
+
+    /// <summary>
+    /// A drop of WSL's page cache that could not be made is said once, however many times it is tried, and one with nothing
+    /// to drop says nothing: either way the leg waits as it would have, reading the memory every poll.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ADropThatCouldNotBeMade_IsSaidOnce_AndALegWaitsAsItWouldHave(bool failed)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var clock = new ManualClock();
+        var said = new List<string>();
+        var dropped = new List<TimeSpan>();
+        const string Why = "WSL's page cache was not dropped: WSL did not say which distributions run (exit 1): Wsl/Service/E_UNEXPECTED";
+
+        using var admitted = await AdmissionKit.Admission(harness, temp.Combine("admission.json"), new ScriptedGauge(90, 90, 90, 90, 70), clock)
+            .AdmitAsync(
+                AdmissionKit.Request(AdmissionKit.Rule(pollSeconds: 30), said) with
+                {
+                    DropPageCache = _ =>
+                    {
+                        dropped.Add(clock.Moved);
+                        return Task.FromResult(failed ? PageCacheDrop.NotDropped(Why) : null);
+                    },
+                },
+                TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted);
+        Assert.Equal(120, admitted.Fact.WaitedSeconds);
+        Assert.Equal([TimeSpan.Zero, TimeSpan.FromSeconds(60)], dropped);
+        Assert.Equal(
+            [
+                "holds a heavy-leg slot, and waits for the memory 90.0% in use (90 of 100 by the test) to fall below 76%",
+                .. failed ? [Why] : Array.Empty<string>(),
+                "admitted after 2m00s, memory 70.0% in use (70 of 100 by the test)",
+            ],
+            said);
+    }
+
+    /// <summary>
     /// A long wait says where it stands again at least every five minutes - with the memory in use as read now, and how
     /// long of the time it may wait it has waited - so a wait never goes silent for long: measured, a reader's pipe
     /// passed a line on only once the next one came, and a leg's one line of a 39-minute wait arrived with its admission.
@@ -190,6 +316,64 @@ public sealed class LegAdmissionTests
             line => Assert.StartsWith("waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
             line => Assert.StartsWith("still waits for one of this machine's 1 heavy-leg slot(s), after 5m00s of the 12m00s it may wait, 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal),
             line => Assert.StartsWith("still waits for one of this machine's 1 heavy-leg slot(s), after 10m00s of the 12m00s it may wait, 1 leg(s) ahead; held by '/src/first'", line, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A leg waiting only for slots its own command's legs hold - a WSL leg behind its command's two Windows legs, all
+    /// asked for at once by the process that dispatched them - is never refused for that wait, which is certain to end:
+    /// it waits them out however long they take, says that they are its own, and is taken when one gives its slot back.
+    /// </summary>
+    [Fact]
+    public async Task ALegWaitingOnlyForItsOwnCommandsLegs_IsNeverRefusedForThatWait()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "windows-debug", run: "run-mine"), AdmissionKit.Holder(harness, "windows-release", run: "run-mine"));
+
+        // Its own command's first leg gives its slot back after 90 minutes, half again what the leg may wait.
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock, onWait: () =>
+        {
+            if (clock.Moved >= TimeSpan.FromMinutes(90))
+            {
+                AdmissionKit.Write(record, [.. AdmissionKit.Read(record).Where(entry => entry.Leg != "windows-debug")]);
+            }
+        });
+
+        using var admitted = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 2, settleLeast: 0, settleMost: 0, pollSeconds: 60, maxWaitMinutes: 60), said),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted, admitted.Refusal);
+        Assert.Equal(90 * 60, admitted.Fact.WaitedSeconds);
+        Assert.Contains(said, line => line.StartsWith("waits for one of this machine's 2 heavy-leg slot(s)", StringComparison.Ordinal)
+            && line.Contains("its own command's", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The wait for slots another command's legs hold still counts, once its own command's legs are no longer all that
+    /// holds them: a leg waiting behind a leg of its own and one of another command is refused as it always was.
+    /// </summary>
+    [Fact]
+    public async Task ALegWaitingBehindAnotherCommandsLeg_IsRefused_AsItAlwaysWas()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "windows-debug", run: "run-mine"), AdmissionKit.Holder(harness, "theirs"));
+
+        using var admitted = await AdmissionKit.Admission(harness, record, new ScriptedGauge(30), clock)
+            .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 2, pollSeconds: 60, maxWaitMinutes: 60), said), TestContext.Current.CancellationToken);
+
+        Assert.False(admitted.Fact.Admitted);
+        Assert.Equal(60 * 60, admitted.Fact.WaitedSeconds);
+        Assert.StartsWith("not admitted after 1h00m waiting for one of this machine's 2 heavy-leg slot(s)", admitted.Refusal, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1011,7 +1195,7 @@ public sealed class LegAdmissionTests
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said, room: AdmissionKit.Room(10)), TestContext.Current.CancellationToken))
         {
             Assert.True(admitted.Fact.Admitted);
-            Assert.Equal("admitted at once, memory 30.0% in use (30 of 100 by the test); room ~10 GiB of 40 GiB free on '/data'", admitted.Fact.Describe());
+            Assert.Equal("admitted at once, memory 30.0% in use (30 of 100 by the test), and its build needs ~10 GiB; 40 GiB free on '/data'", admitted.Fact.Describe());
 
             var claim = Assert.Single(AdmissionKit.ReadClaims(record));
             Assert.Equal(("mine", "/data", 10 * AdmissionKit.Gibibyte), (claim.Holder.Leg, claim.Filesystem, claim.Bytes));
@@ -1054,8 +1238,10 @@ public sealed class LegAdmissionTests
         Assert.Equal(60, admitted.Fact.WaitedSeconds);
 
         var waiting = Assert.Single(said, line => line.StartsWith("holds a heavy-leg slot, and waits for room", StringComparison.Ordinal));
-        Assert.StartsWith("holds a heavy-leg slot, and waits for room: 40 GiB free on '/data', beside ~35 GiB claimed by '/src/first'", waiting, StringComparison.Ordinal);
-        Assert.EndsWith("and this leg needs ~10 GiB, as the test says", waiting, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "holds a heavy-leg slot, and waits for room: this leg needs ~10 GiB, as the test says; 40 GiB free on '/data', beside ~35 GiB claimed by '/src/first'",
+            waiting,
+            StringComparison.Ordinal);
         Assert.Equal("mine", Assert.Single(AdmissionKit.ReadClaims(record)).Holder.Leg);
     }
 
@@ -1080,13 +1266,17 @@ public sealed class LegAdmissionTests
                 TestContext.Current.CancellationToken);
 
         Assert.False(admitted.Fact.Admitted);
-        Assert.StartsWith("not admitted after 2m00s: it held a heavy-leg slot, and its build would not fit: 40 GiB free on '/data', beside ~35 GiB claimed by '/src/first'", admitted.Refusal, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "not admitted after 2m00s: it held a heavy-leg slot, and its build would not fit: this leg needs ~10 GiB, as the test says; 40 GiB free on '/data', "
+                + "beside ~35 GiB claimed by '/src/first'",
+            admitted.Refusal,
+            StringComparison.Ordinal);
         Assert.EndsWith($"; the room each heavy leg claims is recorded in '{HeavyLegSlots.RoomPathFor(record)}'", admitted.Refusal, StringComparison.Ordinal);
         Assert.Single(admitted.Fact.Holders ?? []);
 
         // Its line points at the record of the room, where the legs it names are, and says the room it last read.
         Assert.Equal(HeavyLegSlots.RoomPathFor(record), admitted.Fact.Record);
-        Assert.StartsWith("40 GiB free on '/data', beside ~35 GiB claimed by '/src/first'", admitted.Fact.Room, StringComparison.Ordinal);
+        Assert.StartsWith("this leg needs ~10 GiB, as the test says; 40 GiB free on '/data', beside ~35 GiB claimed by '/src/first'", admitted.Fact.Room, StringComparison.Ordinal);
         Assert.Equal("first", Assert.Single(AdmissionKit.ReadClaims(record)).Holder.Leg);
         Assert.Empty(AdmissionKit.Read(record));
     }
@@ -1137,7 +1327,7 @@ public sealed class LegAdmissionTests
             .AdmitAsync(AdmissionKit.Request(AdmissionKit.Rule(), said, room: AdmissionKit.Room(35)), TestContext.Current.CancellationToken))
         {
             Assert.True(admitted.Fact.Admitted);
-            Assert.Equal("unread, so ~35 GiB is claimed against every filesystem here: the volume is gone", admitted.Fact.Room);
+            Assert.Equal("its room is unread, so ~35 GiB is claimed against every filesystem here: the volume is gone", admitted.Fact.Room);
 
             var claim = Assert.Single(AdmissionKit.ReadClaims(record));
             Assert.Null(claim.Filesystem);
@@ -1186,8 +1376,11 @@ public sealed class LegAdmissionTests
                 TestContext.Current.CancellationToken);
 
         Assert.False(admitted.Fact.Admitted);
-        Assert.StartsWith("not admitted after 2m00s: it held a heavy-leg slot, and the room, last read as 40 GiB free on '/data'", admitted.Refusal, StringComparison.Ordinal);
-        Assert.EndsWith("could not be read again: the volume went away", admitted.Refusal, StringComparison.Ordinal);
+        Assert.StartsWith(
+            "not admitted after 2m00s: it held a heavy-leg slot, and the room could not be read again: the volume went away; it last read: this leg needs "
+                + "~10 GiB, as the test says; 40 GiB free on '/data'",
+            admitted.Refusal,
+            StringComparison.Ordinal);
         Assert.Single(said, line => line.StartsWith("holds a heavy-leg slot, and could not read the room again: the volume went away", StringComparison.Ordinal));
         Assert.Equal("first", Assert.Single(AdmissionKit.ReadClaims(record)).Holder.Leg);
     }

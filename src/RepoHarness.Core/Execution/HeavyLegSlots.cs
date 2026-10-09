@@ -36,7 +36,7 @@ public sealed record SlotEntry(
 {
     /// <summary>The entry as a waiting leg names who holds a slot: its tree, as a lock names it, then the process.</summary>
     public string Describe()
-        => $"{RunLock.TreeNamed(Host, Tree, Variant)} (leg '{Leg}', {Command}, {ProcessHolders.Describe(Machine, ProcessId, RunId, AskedUtc)})";
+        => $"{RunLock.TreeNamed(Host, Tree, Variant)} (leg '{Leg}', {Command}, {ProcessHolders.Describe(ProcessId, RunId, AskedUtc)})";
 }
 
 /// <summary>A heavy leg's claim on the room of one filesystem of its machine, held while its work runs.</summary>
@@ -61,8 +61,8 @@ public sealed record RoomClaim(SlotEntry Holder, long Bytes, string? Filesystem 
 internal sealed record RoomStanding(bool Fits, DiskSpace? Disk, long Claimed, IReadOnlyList<SlotEntry> Claimants, string? Unmeasured)
 {
     /// <summary>
-    /// The room as a line says it of <paramref name="room"/>: <c>40 GiB free on '/', beside ~12 GiB claimed by ..., and
-    /// this leg needs ~31 GiB, as its buildSpaceGiB, 31, declares</c>.
+    /// The room as a line says it of <paramref name="room"/>: <c>this leg needs ~31 GiB, as its buildSpaceGiB, 31,
+    /// declares; 40 GiB free on '/', beside ~12 GiB claimed by ...</c>.
     /// </summary>
     /// <exception cref="InvalidOperationException">The room was not read.</exception>
     public string Describe(RoomNeed room)
@@ -74,19 +74,22 @@ internal sealed record RoomStanding(bool Fits, DiskSpace? Disk, long Claimed, IR
             ? string.Empty
             : $", beside ~{DiskSpace.Size(Claimed)} claimed by {string.Join("; ", Claimants.Select(claimant => claimant.Describe()))}";
 
-        return $"{DiskSpace.Size(disk.FreeBytes)} free on '{disk.Filesystem}'{room.Where}{beside}, and this leg needs "
-            + $"~{DiskSpace.Size(room.Bytes)}, {room.Source}";
+        return disk.Against(DiskSpace.Needs("this leg", room.Bytes, room.Source), room.Where, beside);
     }
 }
 
 /// <summary>Where a leg stands among the heavy legs asking its machine for a slot.</summary>
 /// <param name="Holding">Whether it holds a slot.</param>
 /// <param name="Holders">The legs holding the machine's slots, first in line first: itself among them where it holds one.</param>
-/// <param name="Ahead">How many legs are ahead of it in line.</param>
+/// <param name="InLineAhead">The legs ahead of it in line, first first: those holding slots, then those waiting.</param>
 /// <param name="Slots">
 /// How many heavy legs may run at once while it waits: the fewest any leg up to it in line allows, its own included.
 /// </param>
-internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holders, int Ahead, int Slots);
+internal sealed record SlotStanding(bool Holding, IReadOnlyList<SlotEntry> Holders, IReadOnlyList<SlotEntry> InLineAhead, int Slots)
+{
+    /// <summary>How many legs are ahead of it in line.</summary>
+    public int Ahead => InLineAhead.Count;
+}
 
 /// <summary>
 /// The heavy legs asking this machine for a slot, in the order they asked: each leg holds one while it is fewer legs from
@@ -266,7 +269,7 @@ public sealed class HeavyLegSlots(IFileSystem fileSystem, IHarnessOutput output,
 
             return (
                 line.SequenceEqual(entries) ? null : line,
-                new SlotStanding(ahead < holders.Count, holders, ahead, line.Take(ahead + 1).Min(entry => entry.Slots)));
+                new SlotStanding(ahead < holders.Count, holders, [.. line.Take(ahead)], line.Take(ahead + 1).Min(entry => entry.Slots)));
         });
     }
 

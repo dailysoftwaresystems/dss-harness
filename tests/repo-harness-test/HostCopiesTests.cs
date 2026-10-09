@@ -427,7 +427,7 @@ public sealed class HostCopiesTests
         record.Claim(layout, Entry(onPi, created.Path));
         record.Claim(layout, Entry(onMac, created.Path, Mac));
 
-        var claims = new Claims { Held = { [held] = "vps pid 4242, run 20261007-101500-abcd" } };
+        var claims = new Claims { Held = { [held] = "pid 4242, run 20261007-101500-abcd" } };
         var service = Service(harness, new HashSet<HostId> { Pi, Mac }, claims: claims);
         var size = harness.FileSystem.DirectorySize(held) + harness.FileSystem.DirectorySize(free);
         var orphaned = harness.FileSystem.DirectorySize(orphan);
@@ -440,7 +440,7 @@ public sealed class HostCopiesTests
             [
                 created.Path,
                 $"ssh pi: its copy at '{onPi}' stays, and is still recorded: a mutation worker kept beside it is in use - '{held}': "
-                + "a sweep still running holds it: vps pid 4242, run 20261007-101500-abcd",
+                + "a sweep still running holds it: pid 4242, run 20261007-101500-abcd",
                 $"ssh mac: found nothing at '{onMac}' to remove; the 1 mutation worker(s) kept beside it were removed, {DiskSpace.Size(orphaned)}; "
                 + $"left beside it: '{somebodys}', nothing there says the harness made it, so it is yours to remove",
             ],
@@ -523,7 +523,7 @@ public sealed class HostCopiesTests
                 // Taken by a sweep the second time it is asked about: between the asking and the removal.
                 if (keptBy.StartsWith("a sweep took ", StringComparison.Ordinal) && Path.GetFullPath(copy) == other && ++asked == 2)
                 {
-                    claims.Held[other] = "pi pid 7, run 20261007-101500-abcd";
+                    claims.Held[other] = "pid 7, run 20261007-101500-abcd";
                 }
             },
         };
@@ -555,7 +555,7 @@ public sealed class HostCopiesTests
 
         var line = Assert.Single(deleted.Outcome.Details ?? [], said => said.StartsWith("ssh pi: ", StringComparison.Ordinal));
         var stays = $"ssh pi: its copy at '{onPi}' stays, and is still recorded: ";
-        var held = "a sweep still running holds it: pi pid 7, run 20261007-101500-abcd";
+        var held = "a sweep still running holds it: pid 7, run 20261007-101500-abcd";
         var before = keptBy == "a worker cannot be told" || alone
             ? string.Empty
             : $"; {(keptBy == "the copy could not be removed" ? 2 : 1)} mutation worker(s) kept beside it were removed before that, {DiskSpace.Size(went)}";
@@ -1539,12 +1539,12 @@ public sealed class HostCopiesTests
             Substitute.For<IHostCommandRunner>(),
             harness.Platform,
             harness.Output,
-            new Claims { Held = { [held] = "this machine pid 1, run r" } });
+            new Claims { Held = { [held] = "pid 1, run r" } });
 
         var removal = await factory.For(new HostReport { Host = HostId.Local }).RemoveWorkersAsync(tree, cancellationToken: cancellationToken);
 
         Assert.Empty(removal.Removed);
-        Assert.Equal([new WorkerLeft(held, "a sweep still running holds it: this machine pid 1, run r", WorkerLeftAs.Held)], removal.Left);
+        Assert.Equal([new WorkerLeft(held, "a sweep still running holds it: pid 1, run r", WorkerLeftAs.Held)], removal.Left);
         Assert.True(Directory.Exists(held));
     }
 
@@ -2124,7 +2124,7 @@ public sealed class HostCopiesTests
                 $"  {onPi}.worktree-alpha  {Size("alpha")}  worktree 'alpha'",
                 $"  {onPi}.worktree-beta  {Size("beta")}  the worktree at '{beta}'",
                 $"  {onPi}.worktree-lfprobe  {Size("lfprobe")}  gone from '{lfprobe}': 'dssharness delete-worktree lfprobe' removes it",
-                $"  {onPi}.worktree-zeta  {Size("zeta")}  not recorded here, so deleting a worktree here never reaches it; made by {zeta.CreatedBy} at {zeta.CreatedUtc}",
+                $"  {onPi}.worktree-zeta  {Size("zeta")}  not recorded here, so deleting a worktree here never reaches it; made by the harness at {zeta.CreatedUtc}",
                 $"  {onPi}.worktree-gamma  recorded here, and not there: 'dssharness delete-worktree gamma' forgets it",
                 "ssh old: recorded as keeping '/home/old/repo.worktree-old', and no configuration here declares it, so it was not asked",
             ],
@@ -2299,7 +2299,7 @@ public sealed class HostCopiesTests
             new ManifestBuilder(harness.FileSystem, harness.Platform),
             Local(harness),
             Substitute.For<ISyncTransportFactory>(),
-            new LegsService(harness.ContextLoader, Substitute.For<IHostInspector>(), harness.Platform, harness.Output),
+            new LegsService(harness.ContextLoader, Substitute.For<IHostInspector>(), new KnownTrees(), harness.Platform, harness.Output),
             harness.GitClient,
             harness.FileSystem,
             harness.Platform,

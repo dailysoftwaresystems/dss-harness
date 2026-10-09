@@ -95,7 +95,7 @@ public sealed class HoldAwakeTests
             new StringReader(HoldRequest(seconds: 600)),
             new StringWriter(),
             error,
-            (_, _, _) => throw new InvalidOperationException("A hold runs no command."),
+            (_, _, _, _) => throw new InvalidOperationException("A hold runs no command."),
             TestContext.Current.CancellationToken);
 
         var state = store.Read()!;
@@ -121,7 +121,7 @@ public sealed class HoldAwakeTests
         var launcher = new RecordingLauncher();
 
         var empty = await Agent(store, launcher).ServeAsync(
-            new StringReader(HoldRequest(seconds: -1)), new StringWriter(), new StringWriter(), (_, _, _) => Task.FromResult(0), TestContext.Current.CancellationToken);
+            new StringReader(HoldRequest(seconds: -1)), new StringWriter(), new StringWriter(), (_, _, _, _) => Task.FromResult(0), TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.UsageError, empty);
         Assert.Empty(launcher.Started);
@@ -131,7 +131,7 @@ public sealed class HoldAwakeTests
         using var error = new StringWriter();
 
         var unstarted = await Agent(store, failing).ServeAsync(
-            new StringReader(HoldRequest(seconds: 600)), new StringWriter(), error, (_, _, _) => Task.FromResult(0), TestContext.Current.CancellationToken);
+            new StringReader(HoldRequest(seconds: 600)), new StringWriter(), error, (_, _, _, _) => Task.FromResult(0), TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.HostUnavailable, unstarted);
         Assert.Contains("this host could not be held awake: 'dssharness' could not be started: gone", error.ToString(), StringComparison.Ordinal);
@@ -150,11 +150,11 @@ public sealed class HoldAwakeTests
         var launcher = new RecordingLauncher();
 
         await Agent(store, launcher).ServeAsync(
-            new StringReader(HoldRequest(seconds: 600)), new StringWriter(), new StringWriter(), (_, _, _) => Task.FromResult(0), TestContext.Current.CancellationToken);
+            new StringReader(HoldRequest(seconds: 600)), new StringWriter(), new StringWriter(), (_, _, _, _) => Task.FromResult(0), TestContext.Current.CancellationToken);
         Assert.NotNull(store.Read());
 
         var ended = await Agent(store, launcher).ServeAsync(
-            new StringReader(HoldRequest(seconds: 0)), new StringWriter(), new StringWriter(), (_, _, _) => Task.FromResult(0), TestContext.Current.CancellationToken);
+            new StringReader(HoldRequest(seconds: 0)), new StringWriter(), new StringWriter(), (_, _, _, _) => Task.FromResult(0), TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.Success, ended);
         Assert.Null(store.Read());

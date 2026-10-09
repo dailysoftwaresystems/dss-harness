@@ -105,7 +105,7 @@ internal static class SyncKit
             new ManifestBuilder(files, harness.Platform),
             local ?? Transport(harness, files),
             transports ?? Substitute.For<ISyncTransportFactory>(),
-            new LegsService(contexts, inspector ?? Substitute.For<IHostInspector>(), harness.Platform, harness.Output),
+            new LegsService(contexts, inspector ?? Substitute.For<IHostInspector>(), new KnownTrees(), harness.Platform, harness.Output),
             git ?? harness.GitClient,
             files,
             harness.Platform,

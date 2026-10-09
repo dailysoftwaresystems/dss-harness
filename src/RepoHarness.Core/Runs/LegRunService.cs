@@ -114,12 +114,14 @@ public sealed class LegRunService(
     ISyncTransportFactory transportFactory,
     RemoteLegRunner remoteLegs,
     LegAdmission admission,
+    IWslPageCache pageCache,
     KeepAwake keepAwake,
     DeveloperEnvironmentProvider developerEnvironments,
     IFileSystem fileSystem,
     IFilePermissions filePermissions,
     IHostPlatform platform,
-    IHarnessOutput output)
+    IHarnessOutput output,
+    CommandOrigin? origin = null)
 {
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly LegsService _legsService = legsService;
@@ -130,12 +132,16 @@ public sealed class LegRunService(
     private readonly ISyncTransportFactory _transportFactory = transportFactory;
     private readonly RemoteLegRunner _remoteLegs = remoteLegs;
     private readonly LegAdmission _admission = admission;
+    private readonly IWslPageCache _pageCache = pageCache;
     private readonly KeepAwake _keepAwake = keepAwake;
     private readonly DeveloperEnvironmentProvider _developerEnvironments = developerEnvironments;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IFilePermissions _filePermissions = filePermissions;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
+
+    /// <summary>Who the command runs for: on a host, the run of the machine that asked, which its legs' slots are recorded under.</summary>
+    private readonly CommandOrigin _origin = origin ?? new CommandOrigin(ServesAnotherMachine: false);
 
     /// <summary>
     /// Runs <paramref name="work"/> on every selected leg and reports the ledger.
@@ -618,11 +624,13 @@ public sealed class LegRunService(
             return null;
         }
 
+        // On an ssh host, under the run of the machine that dispatched the leg: its command's other legs there ask under
+        // it too, and a wait for slots only they hold does not count.
         return await _admission
             .AdmitAsync(
                 new AdmissionRequest(
                     rule,
-                    runId.Value,
+                    _origin.Dispatched?.RunId ?? runId.Value,
                     ledger.CommandName,
                     asking,
                     leg.Host.Host.ToString(),
@@ -632,9 +640,60 @@ public sealed class LegRunService(
                     room)
                 {
                     Settle = settle,
+
+                    // What this machine counts as in use and could have back: the page cache of WSL's virtual machine, which
+                    // holds what every distribution's builds read and wrote until it idles for minutes.
+                    DropPageCache = token => _pageCache.DropAsync(context, token),
                 },
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The least room <paramref name="leg"/>'s builds here leave free on each filesystem they fill - its machine's
+    /// <c>admission.minFreeGiB</c>, where that machine declares admission and the leg's work is heavy or admits each of
+    /// its units - or <see langword="null"/>, and nothing stops its builds for room.
+    /// </summary>
+    /// <remarks>
+    /// The machine is the one the leg's work runs on, as its admission reads it: for a WSL distribution's leg, the Windows
+    /// machine it runs on, whose drive its disk grows on. That drive is held to the floor as well, through its mount in
+    /// the distribution, where the machine that sent the leg named it - the distribution's own room is its virtual disk's,
+    /// which a full drive does not shrink - and where it was not, or is mounted nowhere here, the build is told why.
+    /// </remarks>
+    private RoomFloor? FloorOf(HarnessContext context, PlacedLeg leg, LegRunRequest request)
+    {
+        var workload = request.Workload.On(leg.Leg.Os);
+        var machine = leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings;
+
+        if (!(workload.Heavy || workload.AdmitsEachUnit)
+            || AdmissionSettings.RuleFor(machine.Admission, context.Config.Defaults.Admission) is not { MinFreeBytes: > 0 } rule)
+        {
+            return null;
+        }
+
+        if (request.Here is not { Kind: HostKind.Wsl })
+        {
+            return new RoomFloor(rule.MinFreeBytes, []);
+        }
+
+        if (_origin.Dispatched?.DiskImageDrive is not { } drive)
+        {
+            return new RoomFloor(
+                rule.MinFreeBytes,
+                [],
+                "the machine that sent this leg named no drive where WSL keeps this distribution's disk, so only the distribution's "
+                + "own room is held to admission.minFreeGiB");
+        }
+
+        var (mount, why) = WindowsDriveMounts.Of(_fileSystem, drive);
+
+        return mount is not null
+            ? new RoomFloor(rule.MinFreeBytes, [(mount, ", where WSL keeps its disk")])
+            : new RoomFloor(
+                rule.MinFreeBytes,
+                [],
+                $"the drive where WSL keeps this distribution's disk, {drive}, could not be found here, so only the distribution's own "
+                + $"room is held to admission.minFreeGiB: {why}");
     }
 
     /// <summary>
@@ -663,13 +722,26 @@ public sealed class LegRunService(
         // harness exists to prevent, wearing a green colour.
         if (leg.Remote && request.Here is null)
         {
-            return await _remoteLegs
+            var ended = await _remoteLegs
                 .RunAsync(
                     commandName,
                     leg,
                     request.RemoteArguments ?? [],
+                    runId,
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            // What a WSL leg read and wrote stays in its virtual machine's page cache, which this machine counts as in use
+            // until the virtual machine idles for minutes: dropped as the leg ends - before its slot is given back - where
+            // this machine admits its heavy legs by the memory. Not waited for: what comes back is the next wait's to read.
+            if (leg.Named.Kind == HostKind.Wsl
+                && AdmissionSettings.RuleFor(context.Config.Hosts.Local.Admission, context.Config.Defaults.Admission) is not null
+                && await _pageCache.DropAsync(context, cancellationToken).ConfigureAwait(false) is { } dropped)
+            {
+                ledger.Transition(leg.Name, $"as the leg ended, {dropped.Said}");
+            }
+
+            return ended;
         }
 
         // Held awake for as long as the leg's own work runs here, by the command this machine
@@ -699,7 +771,7 @@ public sealed class LegRunService(
             leg = leg with { DeveloperEnvironment = setUp.Environment };
         }
 
-        var working = leg;
+        var working = leg with { Floor = FloorOf(context, leg, request) };
         var entry = await work(
                 new LegWork(working, context, runId, runDirectory, request.Time)
                 {

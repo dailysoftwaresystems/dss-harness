@@ -55,7 +55,7 @@ public sealed partial class HelpTests
             .Select(property => JsonNamingPolicy.CamelCase.ConvertName(property.Name))
             .ToList();
 
-        Assert.Equal(["heavyLegs", "maxMemoryPercent", "settleSeconds", "pollSeconds", "maxWaitMinutes"], keys);
+        Assert.Equal(["heavyLegs", "maxMemoryPercent", "settleSeconds", "pollSeconds", "maxWaitMinutes", "minFreeGiB"], keys);
 
         foreach (var key in keys)
         {
@@ -69,6 +69,7 @@ public sealed partial class HelpTests
             $"([{string.Join(", ", AdmissionSettings.DefaultSettleSeconds)}])",
             $"({AdmissionSettings.DefaultPollSeconds})",
             string.Create(CultureInfo.InvariantCulture, $"({AdmissionSettings.DefaultMaxWaitMinutes})"),
+            string.Create(CultureInfo.InvariantCulture, $"from 0 to {AdmissionSettings.MostMinFreeGiB}; 0 stops no build ({AdmissionSettings.DefaultMinFreeGiB})"),
             $"at most {AdmissionSettings.MostSeconds}",
             string.Create(CultureInfo.InvariantCulture, $"at most {AdmissionSettings.MostWaitMinutes} minutes"),
             $"exit {LegExit.NotAdmitted}",
@@ -267,8 +268,8 @@ public sealed partial class HelpTests
             "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
             + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
             + "of its own - a worker's rebuilt from clean with it.",
-            "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build, or the "
-            + "main checkout's, last recorded",
+            "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build last "
+            + "recorded, else to the most any other tree of the repository on its machine recorded of it",
             "each read as its file holds it, less a UTF-8 byte order mark at its start and one line ending at its end,",
             "seven arms, one to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
             + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two files",

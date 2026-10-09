@@ -13,6 +13,7 @@ using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -677,7 +678,7 @@ public sealed class MutationServiceTests
             temp.Combine("runs", "r1"),
             Time: false);
 
-        var unbuilt = service.Subject(work, arms, force: false);
+        var unbuilt = service.Subject(work, arms, force: false, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]));
 
         Assert.Equal([("FOO", "1")], unbuilt.Project.CacheVars.Select(pair => (pair.Key, pair.Value)));
         Assert.Same(FetchedSet.None, unbuilt.Fetched);
@@ -685,7 +686,7 @@ public sealed class MutationServiceTests
         Assert.Null(unbuilt.PathReserve);
         Assert.Null(unbuilt.Hold);
         Assert.Null(unbuilt.ExpectedBuildBytes);
-        Assert.Equal("what the main checkout's copy of the same variant came to there", unbuilt.ExpectedBuildSource);
+        Assert.Empty(unbuilt.ExpectedBuildSource);
         Assert.False(unbuilt.Force);
 
         var googletest = Directory.CreateDirectory(Path.Combine(build, "_deps", "googletest-src")).FullName;
@@ -697,7 +698,7 @@ public sealed class MutationServiceTests
             Path.Combine(build, BuildRecord.FileName),
             new BuildRecord(null, variant.DirectoryName, null, new Dictionary<string, string>(), new Dictionary<string, DateTime>()) { Bytes = 4096 }.Write());
 
-        var built = service.Subject(work, arms, force: true);
+        var built = service.Subject(work, arms, force: true, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]));
 
         Assert.Equal(temp.Path, built.TreeRoot);
         Assert.Equal(MutationWorkers.Of(temp.Path, variant), built.Workers);
@@ -712,6 +713,82 @@ public sealed class MutationServiceTests
         Assert.Empty(built.Arms.Unselected);
         Assert.Same(config.Mutations, built.Settings);
         Assert.True(built.Force);
+    }
+
+    /// <summary>
+    /// A sweep of a leg whose own tree never built its variant on this machine counts its workers' builds by the most any
+    /// other tree of the repository here recorded of it, naming whose: the main checkout's copy had never built it where a
+    /// consumer's leg filled a disk, while three worktrees' copies beside it had.
+    /// </summary>
+    [Fact]
+    public async Task ALegsSweep_WhoseOwnTreeNeverBuiltItsVariant_CountsItsWorkersByTheMostAnotherTreeHereRecorded()
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable();
+        var (service, context) = Prepare(temp, config);
+        var arms = await service.ReadAsync(context, null, TestContext.Current.CancellationToken);
+        var variant = VariantKey.For(config, config.Legs["native"], "linux");
+        var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
+        var work = new LegWork(
+            new PlacedLeg("native", config.Legs["native"], host, config.Projects[0], variant, temp.Path, temp.Path, variant.DirectoryUnder(temp.Path), new LocalHostConfig(), Emulated: false),
+            context,
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+
+        foreach (var (tree, bytes) in new[] { ("plain", 4096L), ("xa", 8192L) })
+        {
+            var build = Directory.CreateDirectory(variant.DirectoryUnder(temp.Combine(tree))).FullName;
+
+            File.WriteAllText(
+                Path.Combine(build, BuildRecord.FileName),
+                new BuildRecord(null, variant.DirectoryName, null, new Dictionary<string, string>(), new Dictionary<string, DateTime>()) { Bytes = bytes }.Write());
+        }
+
+        var subject = service.Subject(
+            work,
+            arms,
+            force: false,
+            new RepositoryTreesFound(
+            [
+                new RepositoryTree(temp.Path, RepositoryTree.MainCheckout),
+                new RepositoryTree(temp.Combine("plain"), "worktree plain"),
+                new RepositoryTree(temp.Combine("xa"), "worktree o1/xa"),
+            ]));
+
+        Assert.Equal((8192L, "what worktree o1/xa's copy of the same variant came to there"), (subject.ExpectedBuildBytes, subject.ExpectedBuildSource));
+    }
+
+    /// <summary>
+    /// A sweep on a machine whose worktrees beside the main checkout could not be listed says so, naming the leg and why:
+    /// its workers' builds are then measured by its own tree's and the main checkout's alone.
+    /// </summary>
+    [Fact]
+    public async Task ASweepWhereTheTreesCouldNotBeListed_SaysSo_NamingTheLegAndWhy()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+
+        config.Hosts.Wsl["Example-Linux"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" };
+
+        var (service, _) = Prepare(
+            temp,
+            config,
+            harness: harness,
+            inspector: new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "x86_64" }),
+            trees: new KnownTrees { Unlisted = "the disk is gone" });
+
+        await service.RunAsync(
+            new MutationRequest(temp.Path, ["native"], null, Json: true, Here: HostId.Wsl("Example-Linux")),
+            RunId.New(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "leg 'native': the worktrees beside the main checkout could not be listed, so a worker's build is measured by its own tree's "
+            + "and the main checkout's alone: the disk is gone",
+            harness.StandardError.ToString(),
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -896,7 +973,8 @@ public sealed class MutationServiceTests
         IHostInspector? inspector = null,
         IFileSystem? files = null,
         ScriptedHostCommands? hosts = null,
-        IGitClient? git = null)
+        IGitClient? git = null,
+        KnownTrees? trees = null)
     {
         harness ??= new HarnessFactory();
 
@@ -911,7 +989,7 @@ public sealed class MutationServiceTests
         var loader = HostDoubles.Loader(config, temp.Path, temp.Path);
 
         return (
-            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files, hosts, git),
+            Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files, hosts, git, trees),
             new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config));
     }
 
@@ -928,7 +1006,8 @@ public sealed class MutationServiceTests
         IHostInspector inspector,
         IFileSystem? files = null,
         ScriptedHostCommands? hosts = null,
-        IGitClient? git = null)
+        IGitClient? git = null,
+        KnownTrees? trees = null)
     {
         var processes = Substitute.For<IProcessRunner>();
         var builds = Substitute.For<IBuildService>();
@@ -943,7 +1022,7 @@ public sealed class MutationServiceTests
 
         var legRuns = new LegRunService(
             loader,
-            new LegsService(loader, inspector, harness.Platform, harness.Output),
+            new LegsService(loader, inspector, new KnownTrees(), harness.Platform, harness.Output),
             new LegExecutor(harness.Platform, harness.Output),
             new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
@@ -951,6 +1030,7 @@ public sealed class MutationServiceTests
             Substitute.For<ISyncTransportFactory>(),
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
             AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), new ScriptedGauge(10), new ManualClock()),
+            new ScriptedPageCache(),
             new KeepAwake(new HeldProcesses(), harness.Output),
             new DeveloperEnvironmentProvider(harness.Platform, processes, harness.FileSystem, harness.Output),
             harness.FileSystem,
@@ -968,6 +1048,7 @@ public sealed class MutationServiceTests
             new BuildDirectoryGuard(harness.FileSystem, harness.Platform, harness.FilePermissions),
             new PhaseRunner(processes, harness.FileSystem, harness.Output),
             harness.PathBudget,
+            trees ?? new KnownTrees(),
             files ?? harness.FileSystem,
             new MutationFixtureStore(harness.FileSystem, Fixture(temp)),
             harness.Identity,

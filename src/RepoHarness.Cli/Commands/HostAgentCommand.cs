@@ -15,10 +15,10 @@ internal static class HostAgentCommand
 {
     /// <summary>Builds the command.</summary>
     /// <param name="run">
-    /// Runs a command line in a directory until it finishes or the token is cancelled; supplied by the program,
-    /// which holds the parser.
+    /// Runs a command line in a directory, with what the machine that asked says of it beside the line, until it
+    /// finishes or the token is cancelled; supplied by the program, which holds the parser.
     /// </param>
-    internal static Command Create(Func<string, string[], CancellationToken, Task<int>> run)
+    internal static Command Create(Func<string, string[], Dispatch, CancellationToken, Task<int>> run)
     {
         var command = new Command(
             HostAgentProtocol.CommandName,

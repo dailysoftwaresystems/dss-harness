@@ -35,7 +35,7 @@ public static class HostAgentProtocol
     /// and its own version. With the number left as it was, the same host refuses the request over
     /// whichever field it happens not to know, which says nothing about why.
     /// </remarks>
-    public const int Version = 6;
+    public const int Version = 7;
 
     /// <summary>
     /// How requests and answers are written. Dictionaries and lists are read with the converters
@@ -209,7 +209,8 @@ public sealed class HostAgentRequest
 
     /// <summary>
     /// The build directories there, absolute or from the home directory, whose room to measure and whose
-    /// record to read: each selected leg's own, and the main checkout's copy of the same variant. Info only.
+    /// record to read: each selected leg's own, and every other copy's there of the same variant - the main checkout's and
+    /// each worktree's. Info only.
     /// </summary>
     public List<string> Builds { get; init; } = [];
 
@@ -259,6 +260,25 @@ public sealed class HostAgentRequest
 
     /// <summary>The command and its arguments, exactly as they would be typed after <c>DssHarness</c>. Run only.</summary>
     public List<string> Arguments { get; init; } = [];
+
+    /// <summary>
+    /// The run of the machine that asked, where the command runs a leg of it: what a leg there asking the host's heavy-leg
+    /// slots is recorded under, so the legs of one command wait for each other's slots without that wait counting against
+    /// the host's limit. Run only; <see langword="null"/> where the command runs no leg of a run, as a sync's operations.
+    /// </summary>
+    /// <remarks>
+    /// Carried beside the command rather than in its arguments: nothing on a command line a host runs may say who asked
+    /// for it, or the command would answer to an argument its own user never typed.
+    /// </remarks>
+    public string? RunId { get; init; }
+
+    /// <summary>
+    /// For a leg of a WSL distribution, the drive of the machine that asked where WSL keeps the distribution's disk, as that
+    /// machine names it - <c>C:\</c> - which the leg's build fills as the disk grows, and which the distribution's own room
+    /// does not show: the leg holds its build to the floor on it through the drive's mount there. Run only;
+    /// <see langword="null"/> for any other leg, or where that machine could not measure the drive.
+    /// </summary>
+    public string? DiskImageDrive { get; init; }
 
     /// <summary>
     /// A value the machine that asked chose for this request, repeated in the host's completion line so
@@ -326,6 +346,27 @@ public sealed record HostAgentInfo
     /// compares exactly on Linux, and a map in this protocol is read back ignoring case.
     /// </summary>
     public List<BuildDirectoryRoom> Builds { get; init; } = [];
+}
+
+/// <summary>
+/// What the machine that asked a host to run a command says of it beside the command line - never on it, since nothing on
+/// a command line a host runs may say who asked for it.
+/// </summary>
+/// <param name="RunId">The run of that machine the command runs a leg of; <see langword="null"/> where it runs none.</param>
+/// <param name="DiskImageDrive">
+/// For a leg of a WSL distribution, the drive of that machine where WSL keeps the distribution's disk; see
+/// <see cref="HostAgentRequest.DiskImageDrive"/>.
+/// </param>
+public sealed record Dispatch(string? RunId, string? DiskImageDrive)
+{
+    /// <summary>What <paramref name="request"/> says of the command it asks for.</summary>
+    /// <param name="request">A run request.</param>
+    public static Dispatch Of(HostAgentRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return new Dispatch(request.RunId, request.DiskImageDrive);
+    }
 }
 
 /// <summary>What a build directory on a host holds, as its record says, and the room where it is.</summary>

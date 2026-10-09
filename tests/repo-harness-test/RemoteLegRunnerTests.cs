@@ -1,5 +1,6 @@
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
@@ -88,6 +89,67 @@ public sealed class RemoteLegRunnerTests
             Request(sent).Arguments);
         Assert.Equal(verbose, sent!.Arguments.Contains(HostAgentProtocol.VerboseOption));
         Assert.Equal(verbose, error.ToString().Contains("test: step 'compile': cc -c a.c", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A leg of a run is sent with that run beside its command, never in its arguments: a leg on the host asking its
+    /// heavy-leg slots is recorded under it, so the legs of one command wait for each other's slots without that wait
+    /// counting. A command that runs no leg of a run sends none.
+    /// </summary>
+    [Fact]
+    public async Task ALegOfARun_IsSentWithItsRun_BesideItsCommand()
+    {
+        var sent = new List<HostCommand>();
+        var run = RunId.New();
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent.Add(command);
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+            return HostResults.Finished(command, 0);
+        });
+
+        await Runner(hosts).RunAsync("build", Leg(), [], run, TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("clean", Leg(), [], TestContext.Current.CancellationToken);
+
+        Assert.Equal([run.Value, null], sent.Select(command => Request(command).RunId));
+        Assert.DoesNotContain(run.Value, Request(sent[0]).Arguments);
+    }
+
+    /// <summary>
+    /// A WSL distribution's leg is sent with the drive its disk grows on, as this machine measured it - its build fills that
+    /// drive, which the distribution's own room does not show - beside its command; a leg of any other host, and one whose
+    /// drive this machine could not measure, is sent none.
+    /// </summary>
+    [Fact]
+    public async Task AWslLeg_IsSentWithTheDriveItsDiskGrowsOn_AndNoOtherLegIs()
+    {
+        var sent = new List<HostCommand>();
+        var drive = new DiskSpace(476L << 30, 1862L << 30, "C:\\");
+        var wsl = Leg();
+        var ssh = wsl with
+        {
+            Host = wsl.Host with
+            {
+                Host = HostId.Ssh("pi"),
+                DiskImageSpace = drive,
+                Session = new HostSession(new HostConnection { Host = HostId.Ssh("pi"), Address = "192.0.2.10" }, ".dotnet/tools/dssharness"),
+            },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent.Add(command);
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+            return HostResults.Finished(command, 0);
+        });
+
+        await Runner(hosts).RunAsync("build", wsl with { Host = wsl.Host with { DiskImageSpace = drive } }, [], TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", ssh, [], TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", wsl, [], TestContext.Current.CancellationToken);
+
+        Assert.Equal(["C:\\", null, null], sent.Select(command => Request(command).DiskImageDrive));
+        Assert.DoesNotContain("C:\\", Request(sent[0]).Arguments);
     }
 
     /// <summary>
@@ -434,7 +496,7 @@ public sealed class RemoteLegRunnerTests
             false,
             3600,
             Unmeasured: "the host gave no reading",
-            Holders: ["'/srv/other' on local (leg 'other', build, box pid 7, run r, since 2026-09-30 16:29:42Z)"],
+            Holders: ["'/srv/other' on local (leg 'other', build, pid 7, run r, since 2026-09-30 16:29:42Z)"],
             Record: "/var/lib/dssharness/admission-x.json");
 
         var written = LedgerReport
@@ -686,7 +748,7 @@ public sealed class RemoteLegRunnerTests
     [Fact]
     public async Task AHostsLegRefusedForALock_IsThatLegsVerdict_AndEndsNoRun()
     {
-        const string Why = "a sweep still running holds its mutation workers: vps pid 4242, run 20261007-101500-abcd";
+        const string Why = "a sweep still running holds its mutation workers: pid 4242, run 20261007-101500-abcd";
 
         var report = LedgerReport.From([new LegEntry { Leg = "wsl-debug", Verdict = LegVerdict.RefusedLocked, Detail = Why }], durationWarningFactor: 0);
         var code = report.ExitCodeGiven(cancelled: false, unfinished: []);

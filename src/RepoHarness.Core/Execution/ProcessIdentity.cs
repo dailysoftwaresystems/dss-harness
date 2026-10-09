@@ -268,22 +268,40 @@ public static class ProcessHolders
         return string.Equals(machine, identity.CurrentMachine, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>A holder as a refusal names it: <c>HOST pid 12, run R, since 2026-09-30 16:32:14Z</c>.</summary>
-    /// <param name="machine">The machine it runs on.</param>
+    /// <summary>
+    /// A holder as a line names it: <c>pid 12, run R, since 2026-09-30 16:32:14Z</c> - never by the name of the machine it
+    /// runs on, which its record alone keeps: a host's lines are read on the machine that sent it work, and wherever that
+    /// machine's output goes.
+    /// </summary>
     /// <param name="processId">Its process id.</param>
     /// <param name="runId">Its run.</param>
     /// <param name="since">When it took what it holds, or asked for it.</param>
-    public static string Describe(string machine, int processId, string runId, DateTimeOffset since)
-        => string.Create(CultureInfo.InvariantCulture, $"{machine} pid {processId}, run {runId}, since {since:u}");
+    public static string Describe(int processId, string runId, DateTimeOffset since)
+        => string.Create(CultureInfo.InvariantCulture, $"pid {processId}, run {runId}, since {since:u}");
+
+    /// <summary>
+    /// A holder whose record names <paramref name="machine"/>, as a line names it: as
+    /// <see cref="Describe(int, string, DateTimeOffset)"/> does one on this machine, and one recorded on another said to be,
+    /// without naming it: <c>pid 12 on another machine, run R, since 2026-09-30 16:32:14Z</c>.
+    /// </summary>
+    /// <param name="identity">This process.</param>
+    /// <param name="machine">The machine the record names.</param>
+    /// <param name="processId">Its process id.</param>
+    /// <param name="runId">Its run.</param>
+    /// <param name="since">When it took what it holds, or asked for it.</param>
+    public static string Describe(this IProcessIdentity identity, string machine, int processId, string runId, DateTimeOffset since)
+        => identity.IsHere(machine)
+            ? Describe(processId, runId, since)
+            : string.Create(CultureInfo.InvariantCulture, $"pid {processId} on another machine, run {runId}, since {since:u}");
 
     /// <summary>What is said when a dead holder's <paramref name="what"/> is taken back.</summary>
     /// <param name="what">What it held, as a line names it.</param>
-    /// <param name="holder">The holder, as <see cref="Describe"/> names it.</param>
+    /// <param name="holder">The holder, as <see cref="Describe(IProcessIdentity, string, int, string, DateTimeOffset)"/> names it.</param>
     public static string Reclaimed(string what, string holder) => $"Reclaimed {what} from {holder}, which is no longer running.";
 
     /// <summary>What is said when <c>--force-lock</c> takes <paramref name="what"/> from a holder that may still run.</summary>
     /// <param name="what">What it held, as a line names it.</param>
-    /// <param name="holder">The holder, as <see cref="Describe"/> names it.</param>
+    /// <param name="holder">The holder, as <see cref="Describe(IProcessIdentity, string, int, string, DateTimeOffset)"/> names it.</param>
     public static string TakenByForce(string what, string holder) => $"Taking {what} from {holder} because --force-lock was given.";
 
     /// <summary>
@@ -296,7 +314,7 @@ public static class ProcessHolders
     public static string ElsewhereNote(this IProcessIdentity identity, string machine)
         => identity.IsHere(machine)
             ? string.Empty
-            : " (recorded on another machine, or on this one under an earlier name, which cannot be asked whether it still runs; --force-lock takes it)";
+            : " (that machine - or this one, under an earlier name - cannot be asked whether it still runs; --force-lock takes it)";
 
     /// <summary>
     /// What a holder's description ends with where the record carries no stamp, which is one an older build wrote.

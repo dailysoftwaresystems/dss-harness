@@ -8,7 +8,12 @@ namespace RepoHarness.Core.Repository;
 /// Whether the DssHarness on another machine asked for it, through this one's host agent, rather than
 /// somebody typing it here.
 /// </param>
-public sealed record CommandOrigin(bool ServesAnotherMachine);
+/// <param name="Dispatched">
+/// What the machine that asked for it says of it beside the command line, where one asked: the run it is a leg of - what a
+/// leg here asking this machine's heavy-leg slots is recorded under, so the legs of one command wait for each other's slots
+/// without that wait counting - and, for a WSL distribution's leg, the drive its disk grows on.
+/// </param>
+public sealed record CommandOrigin(bool ServesAnotherMachine, Hosts.Dispatch? Dispatched = null);
 
 /// <summary>
 /// Tells somebody who typed a command in a copy the harness synced to a host that the DssHarness running

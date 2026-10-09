@@ -137,10 +137,7 @@ public static partial class HostCopies
     /// </remarks>
     public static string NameOf(string worktreesDirectory, string treeRoot, StringComparison comparison)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(worktreesDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(treeRoot);
-
-        if ((WorktreeAddress.OfTree(worktreesDirectory, treeRoot, comparison) ?? Resolved(worktreesDirectory, treeRoot, comparison)) is { } address)
+        if (AddressOf(worktreesDirectory, treeRoot, comparison) is { } address)
         {
             return address.CopyName;
         }
@@ -149,6 +146,22 @@ public static partial class HostCopies
         var name = NotANameCharacter().Replace(leaf.ToLowerInvariant(), "-").Trim('-');
 
         return name.Length > 0 ? name : "worktree";
+    }
+
+    /// <summary>
+    /// The address of <paramref name="treeRoot"/> under <paramref name="worktreesDirectory"/>, or <see langword="null"/>
+    /// where it is no worktree there.
+    /// </summary>
+    /// <param name="worktreesDirectory">The worktrees root, as configured.</param>
+    /// <param name="treeRoot">The tree, as written or with its links resolved, as git names one.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    /// <remarks>Tried, as <see cref="NameOf"/> is, as written and with every link along either followed.</remarks>
+    public static WorktreeAddress? AddressOf(string worktreesDirectory, string treeRoot, StringComparison comparison)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreesDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeRoot);
+
+        return WorktreeAddress.OfTree(worktreesDirectory, treeRoot, comparison) ?? Resolved(worktreesDirectory, treeRoot, comparison);
     }
 
     /// <summary>The address of <paramref name="treeRoot"/> under <paramref name="worktreesDirectory"/> with every link along either followed; null where there is none, or a link cannot be read.</summary>

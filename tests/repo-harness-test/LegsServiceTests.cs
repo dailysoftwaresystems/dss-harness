@@ -7,6 +7,7 @@ using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -276,7 +277,7 @@ public sealed class LegsServiceTests
 
         Assert.False(placement.Runnable);
         Assert.Equal(LegVerdict.SkippedUnavailable, placement.Verdict);
-        Assert.Equal("ssh pi: 3 GiB free on '/', and this leg needs ~8 GiB, as its buildSpaceGiB, 8, declares", placement.Reason);
+        Assert.Equal("ssh pi: this leg needs ~8 GiB, as its buildSpaceGiB, 8, declares; 3 GiB free on '/'", placement.Reason);
     }
 
     /// <summary>
@@ -404,8 +405,85 @@ public sealed class LegsServiceTests
 
         Assert.False(placement.Runnable);
         Assert.Equal(
-            "ssh pi: 6 GiB free on '/', and this leg needs ~7 GiB, what the main checkout's copy of the same variant came to there",
+            "ssh pi: this leg needs ~7 GiB, what the main checkout's copy of the same variant came to there; 6 GiB free on '/'",
             placement.Reason);
+    }
+
+    /// <summary>
+    /// A worktree's first build of a variant the main checkout's copy never built there either needs the largest of what
+    /// the other worktrees' copies of that variant came to on the same host, naming whose: a consumer's leg was placed on
+    /// a host whose disk could not hold its build while three sibling copies there had each recorded about 11.4 GiB, and
+    /// filled the disk under two other legs.
+    /// </summary>
+    [Fact]
+    public async Task AWorktreesFirstBuild_NeedsTheLargestOfWhatItsSiblingsCopiesOfTheVariantCameTo_NamingWhose()
+    {
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Worktree = "feature" } },
+            rooms: (_, path) => path.StartsWith("/home/pi/repo.worktree-plain/", StringComparison.Ordinal)
+                ? Room(path, exists: true, recorded: 5L << 30, free: 6)
+                : path.StartsWith("/home/pi/repo.worktree-o1--xa/", StringComparison.Ordinal)
+                    ? Room(path, exists: true, recorded: 7L << 30, free: 6)
+                    : Room(path, exists: false, recorded: null, free: 6),
+            trees: new KnownTrees
+            {
+                Beside = host => host == HostId.Ssh("pi")
+                    ? [new RepositoryTree("/home/pi/repo.worktree-plain", "worktree plain"), new RepositoryTree("/home/pi/repo.worktree-o1--xa", "worktree o1/xa")]
+                    : [],
+            });
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var placement = Assert.Single(report.Placements);
+
+        Assert.False(placement.Runnable);
+        Assert.Equal("ssh pi: this leg needs ~7 GiB, what worktree o1/xa's copy of the same variant came to there; 6 GiB free on '/'", placement.Reason);
+        Assert.Contains("/home/pi/repo.worktree-plain/build/arm64-none-debug", fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
+    }
+
+    /// <summary>
+    /// A host running a leg another machine sent it measures the leg's first build against the worktrees' copies it keeps
+    /// beside its main copy too: the room its admission there claims is what keeps the other legs building on that disk
+    /// from being filled under.
+    /// </summary>
+    [Fact]
+    public async Task AHostRunningALegItWasSent_MeasuresItAgainstTheWorktreesCopiesThere()
+    {
+        var fixture = Create(
+            new() { ["leg"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Ssh = "pi" } },
+            rooms: (_, path) => path.StartsWith("/home/pi/repo.worktree-o1--xa", StringComparison.Ordinal)
+                ? Room(path, exists: true, recorded: 9L << 30, free: 30)
+                : Room(path, exists: false, recorded: null, free: 30),
+            trees: new KnownTrees { Beside = host => host == HostId.Local ? [new RepositoryTree("/home/pi/repo.worktree-o1--xa", "worktree o1/xa")] : [] });
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Ssh("pi"), TestContext.Current.CancellationToken);
+
+        var need = Assert.Single(report.Placements).Need;
+        Assert.NotNull(need);
+        Assert.Equal((9L << 30, "what worktree o1/xa's copy of the same variant came to there"), (need.Bytes, need.Source));
+    }
+
+    /// <summary>
+    /// Trees beside the main checkout's that could not be listed are said, with why, rather than taken for none: a leg
+    /// whose own tree never built its variant there is then measured by the main checkout's build alone.
+    /// </summary>
+    [Fact]
+    public async Task TreesThatCouldNotBeListed_AreSaid_AndTheMainCheckoutsBuildStillCounts()
+    {
+        var fixture = Create(
+            new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Worktree = "feature" } },
+            rooms: (_, path) => path.Contains(".worktree-", StringComparison.Ordinal)
+                ? Room(path, exists: false, recorded: null, free: 6)
+                : Room(path, exists: true, recorded: 7L << 30, free: 6),
+            trees: new KnownTrees { Unlisted = "the record cannot be read" });
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+
+        Assert.False(Assert.Single(report.Placements).Runnable);
+        Assert.Contains(
+            "ssh pi: the worktrees beside the main checkout could not be listed, so a leg whose own tree never built its variant there is "
+            + "measured by the main checkout's build alone: the record cannot be read",
+            fixture.Error.ToString(),
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -519,7 +597,7 @@ public sealed class LegsServiceTests
         var turned = report.Placements.Single(placement => placement.Leg.Name == "wsl");
         Assert.False(turned.Runnable);
         Assert.Equal(
-            "wsl Ubuntu: 8 GiB free on 'C:\\', where WSL keeps its disk, and this leg needs ~5 GiB, as its buildSpaceGiB, 5, declares, beside the ~5 GiB 'native' need there",
+            "wsl Ubuntu: this leg needs ~5 GiB, as its buildSpaceGiB, 5, declares; 8 GiB free on 'C:\\', where WSL keeps its disk, beside the ~5 GiB 'native' need there",
             turned.Reason);
     }
 
@@ -646,7 +724,8 @@ public sealed class LegsServiceTests
         Dictionary<string, LegConfig> legs,
         Action<HarnessConfig>? configure = null,
         Func<HostId, HostReport>? inspect = null,
-        Func<HostId, string, BuildDirectoryRoom>? rooms = null)
+        Func<HostId, string, BuildDirectoryRoom>? rooms = null,
+        KnownTrees? trees = null)
     {
         var config = new HarnessConfig
         {
@@ -669,7 +748,12 @@ public sealed class LegsServiceTests
         var output = new StringWriter();
         var error = new StringWriter();
 
-        var service = new LegsService(HostDoubles.Loader(config, Root), inspector, HostDoubles.Platform(), new ConsoleHarnessOutput(output, error, verbose: false));
+        var service = new LegsService(
+            HostDoubles.Loader(config, Root),
+            inspector,
+            trees ?? new KnownTrees(),
+            HostDoubles.Platform(),
+            new ConsoleHarnessOutput(output, error, verbose: false));
 
         return new Fixture(service, inspector, output, error);
     }

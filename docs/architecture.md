@@ -1237,7 +1237,7 @@ from the report.
 | `not-admitted` | A heavy leg waited its machine's `maxWaitMinutes` for a heavy-leg slot, for the memory in use to fall below the limit, or for room for its build beside what the other admitted legs claim, and nothing of it ran; or a unit of a sweep - a worker, an arm - waited so, and each arm the sweep had left once its machine refused one | **yes** |
 | `log-held` | Another live run owns this leg's log path | **yes** |
 | `poisoned` | The harness could not produce a verdict; one an exception ended names it, and how much memory the harness held as it gave the leg up. A mutation arm whose site could not be put back as it was, or whose driving ended in a failure nobody named | **yes** |
-| `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a mutation arm was not driven to a verdict: its sweep stopped, or ended by a refusal of the run, while it was driven or before; its own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test binary not passing | no: incomplete |
+| `stopped` | Its work was begun or due and was stopped before it reached a verdict of its own: something stopped its build from outside before it finished - ninja, which says why whenever it ends a build itself, said nothing of why, or said it was interrupted; read only where ninja ran the build - or a filesystem a heavy leg's build fills had less free than its machine's `minFreeGiB`; or a mutation arm was not driven to a verdict: its sweep stopped, or ended by a refusal of the run, while it was driven or before; its own build, or its paired control's, stopped from outside; no worker left to run it; or the unmutated run of its test binary not passing | no: incomplete |
 | `violated` | A mutation arm's declaration did not hold: a site or a cited text is not there, or a site is spelt otherwise than the tree spells it or is no file the sweep's reading of the tree holds; its before-text is not in its site exactly once, or is replaced by itself; its target or its runner is not built, or no object they build depends on a site; its mutation reddened other cases than its C rows, ran another number of cases, left a G row's case unrun or left out its diagnostic; a mutation declared to redden a test does not compile; or one declared to stop the build built, or its paired control did not | **yes** |
 | `survived` | A mutation arm's mutation built and ran, and no case reddened | **yes** |
 | `unattributed` | A mutation arm's run failed, and nothing ties the failure to a case: no report, one that is no JUnit report, a failing exit whose report names no failing case, or a run stopped for passing its bound, or as hung for printing nothing for `defaults.stallSeconds` | **yes** |
@@ -1423,7 +1423,12 @@ A leg holds its slot until its work ends - a runner's steps after its build, and
 run there, included - and keeps its lock while it waits, so another run of its variant is
 `refused-locked` meanwhile, as it would be while the leg ran. A waiting leg counts against its
 command's `maxParallelLegs` and `maxParallelLegsTotal` as a running one does, and each leg waits up to
-`maxWaitMinutes` of its own. A slot is held by the process that
+`maxWaitMinutes` of its own - not counting a wait for slots only legs of its own run hold, which is
+certain to end and which its line says is its own. Measured: a command's WSL leg, asked for at once
+with its two Windows legs by the process that dispatched them all, waited out its hour behind them and
+was `not-admitted`. A host serving a leg for another machine records the leg's slot under that
+machine's run, which the run request carries beside the command (`HostAgentRequest.RunId`, protocol
+7), so the legs one command sends there wait for each other the same way. A slot is held by the process that
 asked for it, never by a timeout: given back when the work ends, and, where that process ended
 first - a command that crashed or was killed holding a slot - reclaimed by the next leg that looks,
 and said to be. Every entry of the record is this machine's, whatever name it carries, so an entry
@@ -1460,10 +1465,24 @@ it start, claimed against every filesystem of the machine, since nothing says wh
 its line says why; one read before and not now decides nothing, as a memory reading lost does not. A
 WSL distribution's leg claims this machine's drive where WSL keeps its disk, where that drive was
 measured as it was placed; the room inside the distribution's own disk was counted as it was placed.
-An ssh host places and admits its own legs, a worktree's copy measured against the main checkout's
-copy there. Kept in a record of their own, `admission-<machine id>.room.json`, beside the slots': a
-build from before it, finding a member it does not know in the slots' record, would refuse that
-record.
+An ssh host places and admits its own legs, a worktree's copy measured against every other copy there,
+the main checkout's and each worktree's beside it. Kept in a record of their own,
+`admission-<machine id>.room.json`, beside the slots': a build from before it, finding a member it
+does not know in the slots' record, would refuse that record.
+
+**A build is held to a floor.** While a heavy leg builds, each filesystem its build fills is read
+again every 15 seconds, and the build is stopped once one has less free than its machine's
+`minFreeGiB` (2 where the section says nothing, from 0 to 1024; 0 stops none): `stopped`, exit 21,
+naming what was free and where, and what it built left for `clean`, as any build stopped part way
+leaves it. The room a leg claims is only what is said of its build, and a consumer's leg whose need
+nothing said filled a 47 GiB disk to 79 MiB, under two other legs, before it died; the floor holds
+every build of a heavy leg - a sweep's workers' too - its need said or not, and only where its
+machine declares admission. A WSL distribution's leg holds the drive its disk grows on as well,
+which the distribution's own room does not show: the machine that sends the leg names that drive
+beside its command, as it measured it, and the distribution reaches it through its mount there
+(`/mnt/c`, as `/proc/mounts` lists it); where it names none, or the drive is mounted nowhere, the
+build says only the distribution's own room is held. A room that cannot be read stops nothing, and
+is said once, as a leg is admitted without a room it could not read.
 
 **The machine is the physical one.** A WSL distribution runs on this machine, so this machine's
 command takes its heavy legs - by `hosts.local`'s rule, against this machine's slots and memory -
@@ -1486,9 +1505,26 @@ its build's need is known - and its line says so, as a leg placed where its room
 is; one that stops giving a reading it gave is read again, never taken on the reading it last gave. A leg is let start only at a reading its own line
 shows below the limit.
 
+**WSL's page cache is given back before a leg waits on it.** WSL's virtual machine keeps what every
+distribution's builds read and wrote as page cache, and gives it back only once it has idled for
+minutes, which a machine running legs there never does; this machine's commit counts all of it. A
+consumer's machine stood above its limit with no leg running, its virtual machine holding about 13
+GiB of clean cache, and every heavy leg there waited its hour out. So on Windows a leg about to wait
+on the memory has that cache dropped first - `sync; echo 1 > /proc/sys/vm/drop_caches`, as WSL's own
+root, which asks no password, in the first running distribution a WSL host of its repository reaches
+(every distribution runs in the one virtual machine) - at most once a minute, whichever leg of the
+process asks, and reads the memory again a minute later, in place of its poll: measured, a drop of
+24.2 GiB took 3 seconds, and the commit fell from 93.8 GiB to 73.9 GiB in two waves, the last 47
+seconds after. Its line says how much was dropped and the memory before and after, and the leg
+starts at once where that reading is below the limit. A WSL leg sent from a machine that declares
+admission drops it as the leg ends, its line saying so, without waiting: what comes back is the next
+wait's to read, and no command waits a minute for it. A distribution that is not running is never
+started for it, a drop that could not be made is said once in a wait, and one with nothing to drop
+says nothing.
+
 Unlike a held lock, which refuses at once, admission waits - because the slots and room it waits for
 come free as the legs ahead finish - but never silently and never for ever: while it waits the leg
-says who holds each slot (tree, variant, host, leg, command, machine, process, run, and since when it
+says who holds each slot (tree, variant, host, leg, command, process, run, and since when it
 asked) and, once it holds one, what the memory stands at, or the room free and who claims it; the
 wait is measured on the monotonic clock. A leg that waited `maxWaitMinutes` (60, above 0) is
 `not-admitted`, exit 7, naming what held the slots and the record they are kept in, the memory it
@@ -1912,6 +1948,12 @@ test or sync of the leg (see *Mutation testing*).
 
 - A held lock **refuses immediately**. It never waits: silently blocking for
   hours is worse than a refusal that names the holder.
+- A holder is named by its process, run and start - `pid 12, run R, since T` - never by its
+  machine's name, which only its record keeps, to tell a holder here from one elsewhere: a host's
+  lines reach the machine that sent it work, and wherever that machine's output goes, and a
+  consumer's display had to mask a host's name in every one. One recorded on another machine is
+  said to be - `pid 12 on another machine, ...` - unnamed; a heavy-leg slot, every one of which is
+  its machine's own whatever name it carries, never is.
 - Staleness is decided by **liveness, never by a timeout**. A timeout is a guess
   about how long honest work takes, and it eventually breaks an honest run.
 - A dead holder on this host is reclaimed automatically, and the reclaim is
@@ -2030,13 +2072,23 @@ heavy leg also claims its room as it is let start, held against every other comm
 
 - **What a build needs** is what its build directory comes to once built: the leg's
   `buildSpaceGiB`, or, left out, what a build of its variant recorded as it finished - in the
-  tree's own copy on that host, or else in the main checkout's copy there - less what the
-  directory already holds. A build records what its directory came to in its `.harness-build`,
-  summed from the walk it already makes of the directory as it finishes.
+  tree's own copy on that host, or else the most any other copy of the repository there recorded,
+  naming whose - less what the directory already holds. A build records what its directory came
+  to in its `.harness-build`, summed from the walk it already makes of the directory as it
+  finishes. The other copies are the main checkout's and every worktree's, an agent's or a plain
+  one: a consumer's leg, placed where neither its own tree's copy nor the main checkout's had built
+  its variant, filled a 47 GiB disk under two other legs while three worktrees' copies beside them
+  had each recorded about 11.4 GiB. The most of them, since one variant comes to about as much in
+  every tree, and a need said over keeps a leg out until there is room where one said under fills
+  the disk. On this machine they are the main checkout and every worktree git records; on a host
+  this machine sends legs to, its main copy and each worktree's copy this machine's record of host
+  copies holds there; and a host running a leg it was sent, which places it again, finds the
+  worktrees' copies beside its main copy itself. Trees that could not be listed are said, with why,
+  and the main checkout's copy still counts.
 - **Nothing is walked to decide.** Each host is asked, in the same measuring that finds its
   programs, the room on the filesystem its copies are kept on and, for each leg the command
-  builds, what that leg's build directory - and the main checkout's copy of the same variant -
-  holds as recorded, with the room where each is. The room is the filesystem's own count.
+  builds, what that leg's build directory - and every other copy's of the same variant - holds as
+  recorded, with the room where each is. The room is the filesystem's own count.
 - **Legs sharing a filesystem add up.** Legs building on one filesystem of one host are counted
   together, in the order they were selected, because every build directory stays once built. A
   leg that does not fit beside the ones before it is `skipped-unavailable`, naming what is free,
@@ -2577,8 +2629,9 @@ make. A claim whose sweep died is released and said; the copy it held is synced 
 worker is before it drives an arm.
 
 A worker needs its copy of the tree and what a build of the variant comes to - the leg's
-`buildSpaceGiB` where it declares one, else what the leg's own build directory, or the main
-checkout's copy of it, last recorded - less what it already holds. The
+`buildSpaceGiB` where it declares one, else what the leg's own build directory last recorded, else
+the most any other tree of the repository on its machine recorded of it - less what it already
+holds. The
 sweep runs the workers that fit the room, in order, saying it runs fewer; where not even the first
 does, the leg is `skipped-unavailable`, as a leg whose build does not fit is. A worker's build is
 kept within this machine's path limit as a worktree's is - the worker, its build directory, and
@@ -2729,7 +2782,7 @@ names each selected arm that did not pass, and why; `--json` carries every arm b
 A leg on a host is swept there, by the DssHarness there, on its own copy - with its own workers,
 its own admission and the arms `--arms` named - and its arms travel back beneath its line, their
 records staying on that host and its home written as `~`, as a leg's are (see "A host's home is
-`~`"); the answer changed shape, so the host-agent protocol is 6.
+`~`"); the answer changed shape, which raised the host-agent protocol to 6.
 
 ### Self-test
 
