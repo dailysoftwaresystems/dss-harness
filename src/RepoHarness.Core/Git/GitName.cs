@@ -29,6 +29,14 @@ public sealed record GitName(string Text, bool IsUtf8)
     /// </remarks>
     public string Quoted { get; init; } = Text;
 
+    /// <summary>
+    /// The paths <paramref name="names"/> name, as a set to ask of a path: a name that is not UTF-8 names no file this tool
+    /// can ask about, and is not in it.
+    /// </summary>
+    /// <param name="names">The names, as git listed them.</param>
+    public static IReadOnlySet<string> PathsOf(IEnumerable<GitName> names)
+        => names.Where(name => name.IsUtf8).Select(name => name.Text).ToHashSet(StringComparer.Ordinal);
+
     /// <summary>The name whose bytes <paramref name="bytes"/> carries, one to a character.</summary>
     /// <param name="bytes">What git printed for the name, read as Latin-1.</param>
     internal static GitName FromBytes(string bytes)

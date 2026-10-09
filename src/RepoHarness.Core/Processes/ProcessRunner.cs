@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using RepoHarness.Core.Platform;
 
@@ -193,6 +194,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             CloseQuietly(process.StandardInput);
         }
 
+        // What a line handler raised, now that the child has gone and every line it wrote has been read.
+        capturedOutput.Failed?.Throw();
+        capturedError.Failed?.Throw();
+
         stopwatch.Stop();
 
         if (stopped && cancellationToken.IsCancellationRequested)
@@ -202,8 +207,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         return new ProcessResult(
             ExitCode: stopped ? -1 : process.ExitCode,
-            StandardOutput: capturedOutput,
-            StandardError: capturedError,
+            StandardOutput: capturedOutput.Text,
+            StandardError: capturedError.Text,
             Duration: stopwatch.Elapsed,
             TimedOut: stopped);
     }
@@ -431,14 +436,20 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// billion characters. So only its last <see cref="TailLength"/> characters are kept, and a line of it is handed on in
     /// pieces of at most <see cref="LongestLine"/>, since a line that never ends would otherwise be held whole until it did.
     /// </para>
+    /// <para>
+    /// A handler that fails is handed no more lines, and the stream is still read to its end: a child writing more than a
+    /// pipe holds would otherwise block on a pipe nobody reads, and one whose input is held open - a host's agent, reading a
+    /// file back - would never end. What it raised is kept for the caller to raise once the child has gone.
+    /// </para>
     /// </remarks>
-    private static async Task<string> CaptureAsync(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut)
+    private static async Task<Captured> CaptureAsync(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut)
     {
         var tail = kept != StreamKept.Whole;
         var cutting = kept == StreamKept.Tail;
         var whole = tail ? null : new StringBuilder();
         var end = tail ? new StreamTail(TailLength) : null;
-        var lines = onLine is null ? null : new LineSplitter(onLine, cutting ? LongestLine : null, cutting ? cut : null);
+        ExceptionDispatchInfo? failed = null;
+        var lines = onLine is null ? null : new LineSplitter(Hand, cutting ? LongestLine : null, cutting ? cut : null);
         var buffer = new char[ReadBufferSize];
         int read;
 
@@ -454,8 +465,28 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // A last line with no line break after it is still a line.
         lines?.End();
 
-        return whole?.ToString() ?? end!.ToString();
+        return new Captured(whole?.ToString() ?? end!.ToString(), failed);
+
+        void Hand(string line)
+        {
+            if (failed is not null)
+            {
+                return;
+            }
+
+            try
+            {
+                onLine!(line);
+            }
+            catch (Exception ex)
+            {
+                failed = ExceptionDispatchInfo.Capture(ex);
+            }
+        }
     }
+
+    /// <summary>A stream read to its end: what is kept of it, and what its line handler raised, where it raised anything.</summary>
+    private sealed record Captured(string Text, ExceptionDispatchInfo? Failed);
 
     /// <summary>
     /// Writes a child's whole input, then closes it when <paramref name="close"/> is set, which is how the

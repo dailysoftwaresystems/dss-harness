@@ -366,6 +366,17 @@ public sealed class HarnessFactory
             cancellationToken);
     }
 
+    /// <summary>
+    /// Marks <paramref name="quotedName"/>, as <see cref="StageAsync"/> spells it, as one git takes for what its index holds
+    /// though no file is there, as a sparse checkout does: so a name no file system here can hold can be committed and sit
+    /// in a clean tree.
+    /// </summary>
+    /// <param name="repository">The repository's root.</param>
+    /// <param name="quotedName">The name, in double quotes, with git's escapes.</param>
+    /// <param name="cancellationToken">Cancels git.</param>
+    public Task SkipWorktreeAsync(string repository, string quotedName, CancellationToken cancellationToken)
+        => RunGitWithInputAsync(repository, ["update-index", "--skip-worktree", "--stdin"], quotedName + "\n", cancellationToken);
+
     /// <summary>Runs git with <paramref name="input"/> on its standard input, failing the test when git fails.</summary>
     private async Task<string> RunGitWithInputAsync(
         string directory,

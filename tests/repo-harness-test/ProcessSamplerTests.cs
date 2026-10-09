@@ -25,7 +25,7 @@ public sealed class ProcessSamplerTests
 
     /// <summary>The same variant's build directory in another tree of the repository: a worktree's copy beside the main one.</summary>
     private static readonly string OtherTreesBuildDirectory =
-        Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo.worktree-o1-xa", "build", "x86_64-gcc-release"));
+        Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo.worktree-o1--xa", "build", "x86_64-gcc-release"));
 
     [Fact]
     public async Task ASample_SeesThisMachinesProcesses_IncludingThisOne()
@@ -124,7 +124,7 @@ public sealed class ProcessSamplerTests
     [Fact]
     public void ABuildToolInAnotherTreesCopyOfThisLegsVariant_IsNotAContender()
     {
-        var elsewhere = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo.worktree-o1-xa", "build", "x86_64-msvc-release"));
+        var elsewhere = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo.worktree-o1--xa", "build", "x86_64-msvc-release"));
 
         var report = Classify([Sample(0, Process(4243, "ninja", $"ninja -C {elsewhere} all", parent: 9999))]);
 

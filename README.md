@@ -128,8 +128,9 @@ naming what held the slots and where they are recorded, the memory it waited on,
 claimed it, and nothing of it ran. On Windows, a leg about to wait on the memory has WSL's page cache
 dropped first - as root, at most once a minute - and reads the memory again a minute later; a WSL leg
 drops it as it ends. While a heavy leg builds, each filesystem it fills - for a WSL leg,
-the Windows drive its disk grows on too - is held to `minFreeGiB` (2 GiB): one that falls under it
-stops the build, `stopped`, what it built left for `clean`. Run `dssharness help admission` for the
+the Windows drive its disk grows on too - is held to `minFreeGiB` (2 GiB): one that falls under it,
+read every 15 seconds and again as a build fails, stops the build, `stopped`, what it built left for
+`clean`. Run `dssharness help admission` for the
 rules.
 
 ## Design

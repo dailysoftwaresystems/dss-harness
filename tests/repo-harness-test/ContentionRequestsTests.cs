@@ -10,7 +10,7 @@ public sealed class ContentionRequestsTests
 {
     private static readonly string Tree = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo"));
 
-    private static readonly string Worktree = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo.worktree-o1-xa"));
+    private static readonly string Worktree = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "repo.worktree-o1--xa"));
 
     /// <summary>
     /// Every build directory of the repository on the leg's machine has an owner: this tree's other legs of that machine's

@@ -50,8 +50,9 @@ public interface IWslPageCache
     /// <summary>
     /// Has WSL's virtual machine drop its clean page cache, as root in the first distribution a host of
     /// <paramref name="context"/> reaches that is running - every distribution runs in the one virtual machine, under one
-    /// kernel - and says how much it dropped, or why nothing was; <see langword="null"/> where there was nothing to drop:
-    /// this machine is not Windows, no host reaches a distribution, or none of those runs, and a stopped one holds nothing.
+    /// kernel - and says how much it dropped, or why nothing was: a host whose item cannot be read, where no other reaches a
+    /// distribution, among the reasons; <see langword="null"/> where there was nothing to drop: this machine is not Windows,
+    /// it declares no WSL host, or no distribution one reaches runs, and a stopped one holds nothing.
     /// </summary>
     /// <param name="context">The repository, whose WSL hosts name the distributions this tool may run a command in.</param>
     /// <param name="cancellationToken">Stops the drop.</param>
@@ -96,15 +97,21 @@ public sealed class WslPageCache(IHostSecretsStore secrets, IHostCommandRunner h
         }
 
         // Each host's distribution, read from its own item as connecting to it reads it: a host whose item cannot be read
-        // reaches nothing, and runs no leg to leave a cache.
-        var reached = context.Config.Hosts.Wsl.Keys
-            .Select(name => (Host: HostId.Wsl(name), Distribution: _secrets.ReadWslItem(context.Layout, name).Item?.Distribution))
+        // reaches nothing - its legs cannot run either - and is said where no other host reaches one, so a leg the cache
+        // keeps waiting is told why none was dropped.
+        var items = context.Config.Hosts.Wsl.Keys
+            .Select(name => (Host: HostId.Wsl(name), Read: _secrets.ReadWslItem(context.Layout, name)))
+            .ToList();
+        var reached = items
+            .Select(each => (each.Host, Distribution: each.Read.Item?.Distribution))
             .Where(each => each.Distribution is { Length: > 0 })
             .ToList();
 
         if (reached.Count == 0)
         {
-            return null;
+            return items.FirstOrDefault(each => each.Read.Item is null) is { Read: not null } unread
+                ? PageCacheDrop.NotDropped($"WSL's page cache was not dropped: {unread.Host}: {unread.Read.Problem}")
+                : null;
         }
 
         ProcessResult listed;

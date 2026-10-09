@@ -5,6 +5,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
+using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
 using RepoHarness.Core.Worktrees;
 
@@ -460,7 +461,8 @@ internal static class HostDoubles
         {
             PlatformId.Windows => PlatformNames.Windows,
             PlatformId.Linux => PlatformNames.Linux,
-            _ => throw new ArgumentOutOfRangeException(nameof(current), current, "Only Windows and Linux stand-ins are needed."),
+            PlatformId.MacOs => PlatformNames.MacOs,
+            _ => throw new ArgumentOutOfRangeException(nameof(current), current, "Only Windows, Linux and macOS stand-ins are needed."),
         });
         platform.Processor.Returns(processor);
         platform.PathComparison.Returns(current == PlatformId.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
@@ -507,9 +509,25 @@ internal sealed class KnownTrees : IRepositoryTrees
     public string? Unlisted { get; init; }
 
     public Task<RepositoryTreesFound> HereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken = default)
-        => Task.FromResult(Found(here is null ? context.Layout.MainCheckoutRoot : HostCopies.RepositoryPathOf(context.Config, here), HostId.Local));
+        => Task.FromResult(here is null ? Found(context.Layout.MainCheckoutRoot, HostId.Local) : Copies(context, here, HostId.Local));
 
-    public RepositoryTreesFound On(HarnessContext context, HostId host) => Found(HostCopies.RepositoryPathOf(context.Config, host), host);
+    public RepositoryTreesFound On(HarnessContext context, HostId host) => Copies(context, host, host);
+
+    /// <summary>
+    /// The copies <paramref name="keeper"/> keeps, with the trees the test puts beside them on <paramref name="host"/>: none
+    /// where it declares nowhere to keep one, said as the listing says it.
+    /// </summary>
+    private RepositoryTreesFound Copies(HarnessContext context, HostId keeper, HostId host)
+    {
+        try
+        {
+            return Found(HostCopies.RepositoryPathOf(context.Config, keeper), host);
+        }
+        catch (HarnessException ex)
+        {
+            return new([], ex.Message.TrimEnd('.'));
+        }
+    }
 
     private RepositoryTreesFound Found(string main, HostId host) => new([new RepositoryTree(main, RepositoryTree.MainCheckout), .. Beside(host)], Unlisted);
 }

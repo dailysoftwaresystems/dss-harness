@@ -1,10 +1,12 @@
 using System.Text.RegularExpressions;
+using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Testing;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -592,7 +594,38 @@ public sealed class TestServiceTests
         Assert.Equal(Path.Combine(drive, "integration", "run-tests"), runner.Started?.FileName);
     }
 
-    private static TestService Service(HarnessFactory factory, IProcessRunner? phaseRunner = null)
+    /// <summary>
+    /// The tests' sampling knows the repository's other trees on the machine, as a build's does: a shared tool working in
+    /// another tree's build directory of this leg's variant while the tests run is named as that tree's leg's, never
+    /// warned of as one no declared leg accounts for.
+    /// </summary>
+    [Fact]
+    public async Task ASharedToolWorkingInAnotherTreesBuildDirectory_IsNamedAsThatTreesLeg_WhileTheTestsRun()
+    {
+        using var temp = new TempDirectory();
+        using var other = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        var config = Config();
+        config.BuildConfigs["release"] = new BuildConfiguration();
+        config.Legs[Leg] = new LegConfig { Os = PlatformNames.Windows, Processor = PlatformNames.X64, Config = "release" };
+        config.Contention.SharedResourceTools.Add("toolcc");
+        var theirs = VariantKey.For(config, config.Legs[Leg], PlatformNames.Windows).DirectoryUnder(other.Path);
+        var table = new ProcessTableHolding(new SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
+
+        var result = await Service(factory, processTable: table).RunAsync(
+            config,
+            Request(temp, Child("tests passed"), successPattern: "tests passed") with
+            {
+                Beside = new RepositoryTreesFound([new RepositoryTree(other.Path, "worktree o1/xa")]),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Contains($"working in the build directory of worktree o1/xa's leg '{Leg}'", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    private static TestService Service(HarnessFactory factory, IProcessRunner? phaseRunner = null, IProcessTable? processTable = null)
         => new(
             new PhaseRunner(phaseRunner ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
             new InputFingerprint(factory.FileSystem, factory.Platform),
@@ -601,7 +634,7 @@ public sealed class TestServiceTests
             // Windows, and these tests are about the verdict rather than about a WMI query. It has
             // to answer, though — a reading that failed is reported as unmeasured, so a double that
             // quietly failed would make every one of these legs unmeasured and hide what they pin.
-            new ProcessSampler(new QuietProcessTable(), factory.Platform, factory.Output),
+            new ProcessSampler(processTable ?? new QuietProcessTable(), factory.Platform, factory.Output),
             factory.FileSystem,
             factory.GitClient,
             factory.Output);

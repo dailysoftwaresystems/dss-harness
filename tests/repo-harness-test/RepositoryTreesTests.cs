@@ -173,6 +173,28 @@ public sealed class RepositoryTreesTests
         Assert.Contains("records which hosts hold a copy of which worktree, and it cannot be read", found.Unlisted, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A host declaring nowhere to keep its copy - which nothing could have sent a leg to, since a sync keeps its copy
+    /// there - holds no tree of the repository: said as a listing that could not be made, with why, asked here and asked
+    /// of another machine alike, and never thrown, so no leg's work stops for it.
+    /// </summary>
+    [Fact]
+    public async Task AHostDeclaringNowhereToKeepItsCopy_HoldsNoTree_SaidWithWhy_NeverThrown()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var context = new HarnessContext(new HarnessLayout(temp.Path, temp.Path), new HarnessConfig());
+
+        var here = await Trees(harness).HereAsync(context, HostId.Ssh("pi"), TestContext.Current.CancellationToken);
+        var there = Trees(harness).On(context, HostId.Ssh("pi"));
+
+        foreach (var found in new[] { here, there })
+        {
+            Assert.Empty(found.Trees);
+            Assert.Equal("Host ssh pi declares no repositoryPath, so there is nowhere to keep its copy", found.Unlisted);
+        }
+    }
+
     private static RepositoryTrees Trees(HarnessFactory harness)
         => new(harness.GitClient, harness.LocalTransport, harness.FileSystem, harness.Platform);
 

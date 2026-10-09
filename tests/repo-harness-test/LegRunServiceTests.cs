@@ -265,6 +265,40 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A leg placed on a host is sent under the run that placed it, beside its command: the legs of one command there ask
+    /// the host's heavy-leg slots under one run, and wait for each other's without that wait counting.
+    /// </summary>
+    [Fact]
+    public async Task ALegPlacedOnAHost_IsSentUnderTheRunThatPlacedIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var run = RunId.New();
+        HostCommand? sent = null;
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true, UseStaged: true) { Workload = LegWorkload.Copy },
+            hosts: hosts,
+            runId: run);
+
+        Assert.Equal("passed", Verdicts(outcome)["arm"].Verdict);
+        Assert.NotNull(sent);
+        Assert.Equal(run.Value, JsonSerializer.Deserialize<HostAgentRequest>(sent.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.RunId);
+    }
+
+    /// <summary>
     /// A lock file nobody can use is no lock another run holds: it stops every run on every tree
     /// alike, so it ends this one as the refusal it is, rather than turning each leg away as locked
     /// and sending the reader to wait for a run that does not exist.
@@ -521,14 +555,15 @@ public sealed class LegRunServiceTests
         var other = new RepositoryTree(temp.Combine("other"), "worktree other");
         var tree = inWorktree ? feature.Root : temp.Path;
         RepositoryTreesFound? beside = null;
+        var config = OneLeg(harness);
 
         var outcome = await OutcomeAsync(
             temp,
             harness,
-            OneLeg(harness),
+            config,
             SshAndLocal(harness),
             new LegRunRequest(tree, null) { Workload = LegWorkload.Copy },
-            ran: leg => beside = leg.Beside,
+            ran: leg => beside = leg.BuildRequestFor(config, temp.Path, new ProjectConfig { Name = "app", Type = "cmake" }).Beside,
             tree: tree,
             trees: new KnownTrees { Beside = _ => [feature, other], Unlisted = unlisted });
 
@@ -1418,6 +1453,67 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A stop asked for while a WSL leg's end drops WSL's page cache loses nothing of the leg: its verdict, in hand by then,
+    /// is reported and recorded as any leg's is, and its line says the cache was not dropped, and why.
+    /// </summary>
+    [Fact]
+    public async Task AStopWhileAWslLegsEndDropsTheCache_KeepsTheLegsVerdict()
+    {
+        using var temp = new TempDirectory();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var harness = new HarnessFactory();
+        var cache = new ScriptedPageCache(PageCacheDrop.Dropped(HostId.Wsl("Ubuntu"), AdmissionKit.Gibibyte))
+        {
+            WhileDropping = token =>
+            {
+                stop.Cancel();
+                token.ThrowIfCancellationRequested();
+            },
+        };
+
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig
+            {
+                Local = new LocalHostConfig { Admission = new AdmissionSettings() },
+                Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } },
+            },
+            Legs = { ["remote"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" } },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "remote", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var inspector = new RecordingInspector(host => new HostReport
+        {
+            Host = host,
+            Os = host.Kind == HostKind.Local ? harness.Platform.PlatformKey : "linux",
+            Processor = host.Kind == HostKind.Local ? harness.Platform.Processor : "x86_64",
+            Session = host.Kind == HostKind.Local ? null : Session(host),
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            inspector,
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = Heavy },
+            hosts: hosts,
+            pageCache: cache,
+            cancellationToken: stop.Token);
+        var printed = harness.StandardOutput.ToString() + harness.StandardError.ToString();
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Contains("remote: as the leg ended, WSL's page cache was not dropped: the run was stopped first", printed, StringComparison.Ordinal);
+        Assert.Equal("passed", Verdicts(outcome)["remote"].Verdict);
+    }
+
+    /// <summary>
     /// A heavy leg's builds here - and a sweep's, each of whose workers builds - are held to the room its machine keeps
     /// free, admission.minFreeGiB, where that machine declares admission: 2 GiB where it says nothing. A light leg's are held
     /// to none, nor are those of a leg whose machine declares no admission, or keeps nothing free.
@@ -1453,10 +1549,11 @@ public sealed class LegRunServiceTests
             config,
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null) { Workload = workload },
-            ran: leg => (ran, held) = (true, leg.Floor));
+            ran: leg => (ran, held) = (true, leg.BuildRequestFor(config, temp.Path, new ProjectConfig { Name = "app", Type = "cmake" }).Floor));
 
         Assert.True(ran);
         Assert.Equal(floor, held?.Bytes);
+        Assert.Equal(floor is null ? null : "native", held?.Leg);
         Assert.Empty(held?.Also ?? []);
         Assert.Null(held?.Unwatched);
     }
@@ -2221,7 +2318,7 @@ public sealed class LegRunServiceTests
     /// <summary>
     /// Runs the command over <paramref name="config"/>, a leg on this machine passing unless
     /// <paramref name="work"/> says otherwise, and returns how it ended. The tree is the repository's
-    /// root unless <paramref name="tree"/> names a worktree of it.
+    /// root unless <paramref name="tree"/> names a worktree of it, and the run is <paramref name="runId"/> where one is given.
     /// </summary>
     private static async Task<CommandOutcome> OutcomeAsync(
         TempDirectory temp,
@@ -2244,7 +2341,9 @@ public sealed class LegRunServiceTests
         CommandOrigin? origin = null,
         IFileSystem? fileSystem = null,
         IWslPageCache? pageCache = null,
-        IRepositoryTrees? trees = null)
+        IRepositoryTrees? trees = null,
+        CancellationToken? cancellationToken = null,
+        RunId? runId = null)
     {
         var loader = HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
 
@@ -2272,7 +2371,7 @@ public sealed class LegRunServiceTests
 
         return await service.RunAsync(
             "test",
-            RunId.New(),
+            runId ?? RunId.New(),
             request,
             (leg, token) =>
             {
@@ -2280,6 +2379,6 @@ public sealed class LegRunServiceTests
                 return workAsync?.Invoke(leg, token)
                     ?? Task.FromResult(work?.Invoke(leg) ?? new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed });
             },
-            TestContext.Current.CancellationToken);
+            cancellationToken ?? TestContext.Current.CancellationToken);
     }
 }

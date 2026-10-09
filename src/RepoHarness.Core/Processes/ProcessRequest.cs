@@ -70,11 +70,12 @@ public sealed record ProcessRequest
 
     /// <summary>
     /// Invoked for each stdout line as it arrives, in addition to capture.
-    /// Raised on background threads, so implementations must be thread safe.
+    /// Raised on background threads, so implementations must be thread safe. One that throws is handed no more lines,
+    /// and what it threw is raised once the child has gone.
     /// </summary>
     public Action<string>? OnOutputLine { get; init; }
 
-    /// <summary>Invoked for each stderr line as it arrives, in addition to capture.</summary>
+    /// <summary>Invoked for each stderr line as it arrives, in addition to capture, as <see cref="OnOutputLine"/> is.</summary>
     public Action<string>? OnErrorLine { get; init; }
 
     /// <summary>

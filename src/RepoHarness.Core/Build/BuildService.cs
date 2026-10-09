@@ -273,7 +273,6 @@ public sealed class BuildService(
             ? RoomFloorWatch.Start(
                 _fileSystem,
                 least,
-                request.Leg,
                 buildDirectory,
                 _floorWait,
                 message => _output.Warn(CommandName, $"{request.Leg}: {message}"),
@@ -331,6 +330,13 @@ public sealed class BuildService(
 
             if (!result.Passed)
             {
+                // A phase that failed while a filesystem the build fills stood under its floor - filled between two readings,
+                // or as one stopped it - failed for want of room: stopped, as the next reading would have stopped it.
+                if (floor?.Now() is { } full)
+                {
+                    return await FinishAsync(ReachedVerdict.Of(LegVerdict.Stopped, full), null).ConfigureAwait(false);
+                }
+
                 // A build ninja did not end itself, or ended only because it was interrupted, was stopped from outside,
                 // which says nothing about the code.
                 var stopped = adapter is CMakeAdapter

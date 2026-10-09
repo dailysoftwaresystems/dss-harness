@@ -76,6 +76,13 @@ A missing working directory is reported as exactly that. Linux and macOS report 
 with the same error number as a missing executable, which would otherwise surface as
 "git is not installed".
 
+A caller's handler for the lines a child writes is handed no more once it fails, and the
+stream is still read to its end, what the handler raised being raised once the child has
+gone. Left to stop reading, a child writing more than a pipe holds blocks on it, and a
+host's agent - whose input is held open, so that it can tell the machine that asked has
+gone - never ends: a file read back from a host whose content was refused part way left
+its command waiting until something stopped it.
+
 A program named without a path is looked up in the `PATH` directories and nowhere else -
 the `PATH` the child is given, which ends with the directories the survey found a leg's
 programs in. Left to the runtime, it would be looked for beside the running executable and in
@@ -569,17 +576,21 @@ what the agent's base holds, asked of git as a fold asks it. refresh-agent hands
 it is given, refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
 comparison asked of the agent's worktree), and seed-agent hands them besides the main tree's uncommitted state. A
 symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. Both
-say when the agent's base is not the main tree's HEAD.
+say when the agent's base is not the main tree's HEAD. A path named otherwise than in UTF-8, committed or not, refuses
+any hand-over, named as git's quoting writes it: no file opens here by such a name.
 
 rebase-agent moves an agent's base to the main tree's HEAD (`AgentFold.MeasureRebaseAsync`). Each path the two commits
 hold differently (`git diff --name-only`, commit to commit) is shared - kept as its seed records it, since the seed,
 not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
 base holds it, and comes in as git holds it (`git checkout --no-overlay <commit>`, the paths on standard input and read
-literally), or changed by the agent - asked of git against both commits, with the files git does not track its own -
-which refuses the move unless `--settled` names it. The new base's paths are written first, then HEAD and the index
+literally), or changed by the agent - asked of git against both commits, with every file the old base does not hold
+its own, untracked, ignored or staged, and one holding the new base's bytes included - which refuses the move unless
+`--settled` names it. The new base's paths are written first, then HEAD and the index
 move (`git reset --mixed`), then the record and the worktree's base ref name the new base: a worktree standing on a
 commit the main tree's history holds that its record does not name is a move stopped part way, which rebase-agent
-finishes and fold-agent and delete-agent refuse, saying so.
+finishes and fold-agent and delete-agent refuse, saying so. One standing on a commit before its base was moved back by
+hand, which no move of its base does: each refuses it, saying how to put it back. Where git cannot say which a HEAD is,
+each says so and refuses, never guessing.
 
 An agent's contribution is a measurement (`AgentFold`): its worktree's status, and every path it shares with the
 main tree whether its status lists it or not, less the shared paths left as they were. Each path goes in exactly one
@@ -1429,7 +1440,8 @@ run there, included - and keeps its lock while it waits, so another run of its v
 `refused-locked` meanwhile, as it would be while the leg ran. A waiting leg counts against its
 command's `maxParallelLegs` and `maxParallelLegsTotal` as a running one does, and each leg waits up to
 `maxWaitMinutes` of its own - not counting a wait for slots only legs of its own run hold, which is
-certain to end and which its line says is its own. Measured: a command's WSL leg, asked for at once
+certain to end, which its line says is its own, and which a refusal for a wait after it names as not
+counted. Measured: a command's WSL leg, asked for at once
 with its two Windows legs by the process that dispatched them all, waited out its hour behind them and
 was `not-admitted`. A host serving a leg for another machine records the leg's slot under that
 machine's run, which the run request carries beside the command (`HostAgentRequest.RunId`, protocol
@@ -1479,7 +1491,9 @@ does not know in the slots' record, would refuse that record.
 again every 15 seconds, and the build is stopped once one has less free than its machine's
 `minFreeGiB` (2 where the section says nothing, from 0 to 1024; 0 stops none): `stopped`, exit 21,
 naming what was free and where, and what it built left for `clean`, as any build stopped part way
-leaves it. The room a leg claims is only what is said of its build, and a consumer's leg whose need
+leaves it. A build that fails between two readings - a disk filled faster than the next came - is
+read again as it fails, and is `stopped`, not `failed`, where a filesystem it fills is under the
+floor then: a full disk says nothing of its code. The room a leg claims is only what is said of its build, and a consumer's leg whose need
 nothing said filled a 47 GiB disk to 79 MiB, under two other legs, before it died; the floor holds
 every build of a heavy leg - a sweep's workers' too - its need said or not, and only where its
 machine declares admission. A WSL distribution's leg holds the drive its disk grows on as well,
@@ -1524,7 +1538,8 @@ seconds after. Its line says how much was dropped and the memory before and afte
 starts at once where that reading is below the limit. A WSL leg sent from a machine that declares
 admission drops it as the leg ends, its line saying so, without waiting: what comes back is the next
 wait's to read, and no command waits a minute for it. A distribution that is not running is never
-started for it, a drop that could not be made is said once in a wait, and one with nothing to drop
+started for it, a drop that could not be made is said once in a wait - a WSL host whose item cannot
+be read, where no other host reaches a distribution, among the reasons - and one with nothing to drop
 says nothing.
 
 Unlike a held lock, which refuses at once, admission waits - because the slots and room it waits for

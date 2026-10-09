@@ -1472,7 +1472,7 @@ public sealed class BuildServiceTests
                 return tick.WaitAsync(cancel);
             },
             token);
-        var request = Request(temp, [App]) with { Floor = new RoomFloor(2L << 30, []) };
+        var request = Request(temp, [App]) with { Floor = new RoomFloor(Leg, 2L << 30, []) };
 
         var result = await service.BuildAsync(Config(), request, token);
 
@@ -1484,6 +1484,43 @@ public sealed class BuildServiceTests
         Assert.NotEmpty(waited);
         Assert.All(waited, wait => Assert.Equal(TimeSpan.FromSeconds(15), wait));
         Assert.True(File.Exists(RecordOf(request, temp)));
+    }
+
+    /// <summary>
+    /// A build that fails while a filesystem it fills stands under its floor - filled between two readings, faster than the
+    /// next came - failed for want of room, which says nothing about the code: it is stopped, as that reading would have
+    /// stopped it, naming its leg as what cleans it though it builds as a sweep's worker does. One that fails with room to
+    /// spare failed.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ABuildThatFailsUnderItsFloor_IsStopped_ForWantOfRoom(bool full)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var factory = new HarnessFactory();
+        var rooms = new Rooms(factory.FileSystem);
+        var service = await FlooredAsync(
+            temp,
+            factory,
+            rooms,
+            new FailingAfter(() => rooms.Space = _ => new DiskSpace(full ? 1L << 30 : 100L << 30, 200L << 30, "/data")),
+            (_, cancel) => Task.Delay(Timeout.Infinite, cancel),
+            token);
+        var request = Request(temp, [App]) with { Leg = $"{Leg}/workers/1", Floor = new RoomFloor(Leg, 2L << 30, []) };
+
+        var result = await service.BuildAsync(Config(), request, token);
+
+        Assert.Equal(full ? LegVerdict.Stopped : LegVerdict.Failed, result.Verdict.Verdict);
+
+        if (full)
+        {
+            Assert.Equal(
+                "stopped with 1 GiB free on '/data', under the 2 GiB admission.minFreeGiB keeps free for every leg there; what it built is left for "
+                + $"'dssharness clean --legs {Leg}'",
+                result.Verdict.Detail);
+        }
     }
 
     /// <summary>
@@ -1503,7 +1540,7 @@ public sealed class BuildServiceTests
                 : new DiskSpace(100L << 30, 200L << 30, "/data"),
         };
         var service = await FlooredAsync(temp, factory, rooms, new UntilStopped(() => { }), (_, cancel) => Task.Delay(Timeout.Infinite, cancel), token);
-        var request = Request(temp, [App]) with { Floor = new RoomFloor(2L << 30, [("/mnt/c", ", where WSL keeps its disk")]) };
+        var request = Request(temp, [App]) with { Floor = new RoomFloor(Leg, 2L << 30, [("/mnt/c", ", where WSL keeps its disk")]) };
 
         var result = await service.BuildAsync(Config(), request, token);
 
@@ -1523,12 +1560,13 @@ public sealed class BuildServiceTests
         var factory = new HarnessFactory();
         var rooms = new Rooms(factory.FileSystem) { Space = _ => throw new IOException("The volume went away.") };
         var service = await FlooredAsync(temp, factory, rooms, new ReadThrice(rooms), (_, cancel) => Task.Delay(1, cancel), token);
-        var request = Request(temp, [App]) with { Floor = new RoomFloor(2L << 30, []) };
+        var request = Request(temp, [App]) with { Floor = new RoomFloor(Leg, 2L << 30, []) };
 
         var result = await service.BuildAsync(Config(), request, token);
         var line = $"{Leg}: the room on '{request.Variant.DirectoryUnder(temp.Path)}' could not be read, so the build is not stopped for want of it: The volume went away";
 
         Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.True(rooms.Asked.Count >= 3, $"the room was read {rooms.Asked.Count} time(s)");
         Assert.Single(factory.StandardError.ToString().Split('\n'), said => said.Contains(line, StringComparison.Ordinal));
     }
 
@@ -1540,7 +1578,7 @@ public sealed class BuildServiceTests
         var token = TestContext.Current.CancellationToken;
         var factory = new HarnessFactory();
         var service = await FlooredAsync(temp, factory, new Rooms(factory.FileSystem), new QuietRunner(0), (_, cancel) => Task.Delay(Timeout.Infinite, cancel), token);
-        var request = Request(temp, [App]) with { Floor = new RoomFloor(2L << 30, [], "the drive where WSL keeps its disk is mounted nowhere here") };
+        var request = Request(temp, [App]) with { Floor = new RoomFloor(Leg, 2L << 30, [], "the drive where WSL keeps its disk is mounted nowhere here") };
 
         Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
         Assert.Contains($"{Leg}: the drive where WSL keeps its disk is mounted nowhere here", factory.StandardError.ToString(), StringComparison.Ordinal);
@@ -2378,6 +2416,19 @@ public sealed class BuildServiceTests
             }
 
             return new ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false);
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>Each phase does <paramref name="happening"/>, then fails, having printed nothing.</summary>
+    private sealed class FailingAfter(Action happening) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            happening();
+
+            return Task.FromResult(new ProcessResult(1, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
         }
 
         public string? FindExecutable(string command) => command;

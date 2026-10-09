@@ -422,6 +422,9 @@ public sealed class HostAgentServiceTests
     [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git"]}""")]
     [InlineData("""{"kind":"info","unexpected":true}""")]
     [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git",7],"nonce":"0123456789abcdef0123456789abcdef"}""")]
+    [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git",{}],"nonce":"0123456789abcdef0123456789abcdef"}""")]
+    [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git",null],"nonce":"0123456789abcdef0123456789abcdef"}""")]
+    [InlineData("""{"kind":"run","directory":"/r","arguments":[null],"nonce":"0123456789abcdef0123456789abcdef"}""")]
     [InlineData("""{"kind":"info","emulators":{"qemu":{"hostOs":"linux","hostProcessor":"x86_64","processor":"arm64","witness":{"command":["w"],"pattern":"x"}},"QEMU":{}}}""")]
     public async Task ARequestThatCannotBeServed_IsAUsageError_Explained(string request)
     {

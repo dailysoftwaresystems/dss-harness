@@ -752,15 +752,18 @@ public sealed class AgentService(
 
             to = head;
         }
-        else if (agentHead is not null && await MainHoldsAsync(main, agentHead, cancellationToken).ConfigureAwait(false))
-        {
-            // Its worktree stands on a commit of the main tree's and its record still names the one it left: a move that
-            // stopped part way, finished where it was going.
-            to = agentHead;
-        }
         else
         {
-            return CommandOutcome.Refused(await HeadMovedAsync(main, record, path, agentHead, cancellationToken).ConfigureAwait(false));
+            var moved = await HeadMovedAsync(main, record, path, agentHead, cancellationToken).ConfigureAwait(false);
+
+            if (moved.StoppedAt is not { } stoppedAt)
+            {
+                return moved.Refusal;
+            }
+
+            // Its worktree stands on a commit of the main tree's after the one its record still names: a move that stopped
+            // part way, finished where it was going.
+            to = stoppedAt;
         }
 
         var moving = $"from {OrchestrationReports.Base(from)} to {(to == head ? "the main tree's HEAD " : "the main tree's commit ")}{OrchestrationReports.Base(to)}";
@@ -911,32 +914,49 @@ public sealed class AgentService(
             + "copy as its own change on the new base. --settled says you reconciled the path yourself; it is not a --force.";
     }
 
-    /// <summary>Whether the main tree's history holds <paramref name="commit"/>: its HEAD, or a commit before it. Not where git cannot say.</summary>
-    private async Task<bool> MainHoldsAsync(string main, string commit, CancellationToken cancellationToken)
+    /// <summary>
+    /// Why an agent whose HEAD is not its base cannot be worked with as it stands, and what puts it right - each told from
+    /// the main tree's history, never guessed where git cannot say: a move of its base that stopped part way, where its HEAD
+    /// is a commit that history holds after its base, which rebase-agent finishes; a HEAD moved back by hand, to a commit
+    /// before its base; and a commit made inside it otherwise.
+    /// </summary>
+    private async Task<HeadMoved> HeadMovedAsync(string main, AgentRecord record, string path, string? head, CancellationToken cancellationToken)
     {
+        var (at, based) = (OrchestrationReports.Base(head), OrchestrationReports.Base(record.Base));
+        bool holds, before;
+
         try
         {
-            return await _gitClient.MergeBaseAsync(main, commit, ["HEAD"], cancellationToken).ConfigureAwait(false) == commit;
+            // The main tree's history holds a commit that is where the two part; a HEAD a move put the agent on was the main
+            // tree's HEAD as that move began, which comes after the agent's base, never before it.
+            holds = head is not null && await _gitClient.MergeBaseAsync(main, head, ["HEAD"], cancellationToken).ConfigureAwait(false) == head;
+            before = holds && await _gitClient.MergeBaseAsync(main, head!, [record.Base!], cancellationToken).ConfigureAwait(false) == head;
         }
-        catch (HarnessException)
+        catch (HarnessException ex)
         {
-            return false;
+            return HeadMoved.Refusing(CommandOutcome.Failed(
+                HarnessExit.CommandFailed,
+                $"{Agent(record)}'s HEAD is {at}, and its base is {based}, and whether that HEAD is a commit the main tree's history holds - a move of its "
+                + $"base that stopped part way - or one made inside it cannot be told: {ex.Message.TrimEnd('.')}. Nothing was changed."));
         }
-    }
 
-    /// <summary>
-    /// Why an agent whose HEAD is not its base cannot be worked with as it stands, and what puts it right: a move of its base
-    /// that stopped part way where its HEAD is a commit the main tree's history holds, and a commit made inside it otherwise.
-    /// </summary>
-    private async Task<string> HeadMovedAsync(string main, AgentRecord record, string path, string? head, CancellationToken cancellationToken)
-        => head is not null && await MainHoldsAsync(main, head, cancellationToken).ConfigureAwait(false)
-            ? $"{Agent(record)}'s HEAD is {OrchestrationReports.Base(head)}, a commit the main tree's history holds, and its record names its base "
-                + $"{OrchestrationReports.Base(record.Base)}: moving its base stopped part way. "
-                + $"{OrchestrationReports.Line(RebaseCommand, record.Orchestrator, record.Name, "--apply")} finishes it."
-            : $"{Agent(record)}'s HEAD is {OrchestrationReports.Base(head)}, and its base is {OrchestrationReports.Base(record.Base)}: a commit made inside "
-                + "it hides its changes from git status, the only list of paths a fold reads, so folding it now would take part of its work and silently "
-                + $"drop the rest. Agents never commit; 'git -C \"{path}\" reset --soft {record.Base}' turns its commits back into uncommitted changes a "
-                + "fold reads, where that is what is wanted.";
+        return (holds, before) switch
+        {
+            (true, false) => HeadMoved.Stopped(
+                head!,
+                CommandOutcome.Refused(
+                    $"{Agent(record)}'s HEAD is {at}, a commit the main tree's history holds, and its record names its base {based}: moving its base stopped "
+                    + $"part way. {OrchestrationReports.Line(RebaseCommand, record.Orchestrator, record.Name, "--apply")} finishes it.")),
+            (true, true) => HeadMoved.Refusing(CommandOutcome.Refused(
+                $"{Agent(record)}'s HEAD is {at}, a commit before its base {based}: it was moved back by hand, which no move of its base does, so folding or "
+                + $"moving it now would weigh its work against the wrong commit. Put it back on its base the way it was moved off it - after a checkout, "
+                + $"'git -C \"{path}\" checkout {record.Base}'; after a reset, 'git -C \"{path}\" reset --soft {record.Base}' - and run again.")),
+            _ => HeadMoved.Refusing(CommandOutcome.Refused(
+                $"{Agent(record)}'s HEAD is {at}, and its base is {based}: a commit made inside it hides its changes from git status, the only list of paths a "
+                + "fold reads, so folding it now would take part of its work and silently drop the rest. Agents never commit; "
+                + $"'git -C \"{path}\" reset --soft {record.Base}' turns its commits back into uncommitted changes a fold reads, where that is what is wanted.")),
+        };
+    }
 
     public async Task<CommandOutcome> FoldAsync(
         string startDirectory,
@@ -2001,7 +2021,7 @@ public sealed class AgentService(
 
         return head == record.Base
             ? (null, seed)
-            : (CommandOutcome.Refused(await HeadMovedAsync(main, record, path, head, cancellationToken).ConfigureAwait(false)), null);
+            : ((await HeadMovedAsync(main, record, path, head, cancellationToken).ConfigureAwait(false)).Refusal, null);
     }
 
     /// <summary>
@@ -2298,6 +2318,27 @@ public sealed class AgentService(
 
     /// <summary>A sentence's opening words, to follow others.</summary>
     private static string Lower(string text) => text.Length == 0 ? text : char.ToLowerInvariant(text[0]) + text[1..];
+
+    /// <summary>
+    /// An agent's HEAD where it is not its recorded base: the commit a move of its base stopped part way at, which rebase-agent
+    /// finishes, or none; and why it cannot be folded or deleted as it stands - nor moved, where it stopped at none.
+    /// </summary>
+    private sealed record HeadMoved
+    {
+        private HeadMoved(string? stoppedAt, CommandOutcome refusal) => (StoppedAt, Refusal) = (stoppedAt, refusal);
+
+        /// <summary>The commit a move of its base stopped part way at; null where it is no such move.</summary>
+        public string? StoppedAt { get; }
+
+        /// <summary>Why it cannot be worked with as it stands.</summary>
+        public CommandOutcome Refusal { get; }
+
+        /// <summary>A move of its base that stopped part way at <paramref name="at"/>.</summary>
+        public static HeadMoved Stopped(string at, CommandOutcome refusal) => new(at, refusal);
+
+        /// <summary>Anything else: nothing here finishes it.</summary>
+        public static HeadMoved Refusing(CommandOutcome refusal) => new(null, refusal);
+    }
 
     /// <summary>What the directory at an agent's worktree path is.</summary>
     private enum Standing

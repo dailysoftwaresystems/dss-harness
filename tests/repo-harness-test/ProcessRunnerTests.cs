@@ -140,6 +140,37 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// A line handler that fails is handed no more lines, and its stream is still read to the end: a child writing more
+    /// than a pipe holds would otherwise block on a pipe nobody reads, and one whose input is held open, as a host's agent's
+    /// is, would never end. What the handler raised is raised once the child has gone, and a handler of the other stream
+    /// is handed every line of it.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ALineHandlerThatFails_IsRaisedOnceTheChildHasGone_NeverLeavingItBlockedOnItsPipe()
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        stop.CancelAfter(TimeSpan.FromSeconds(60));
+        var handed = 0;
+
+        var raised = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateRunner().RunAsync(
+            TestHost.ChildRequest("flood", "20000", "200") with
+            {
+                StandardInput = string.Empty,
+                HoldStandardInputOpen = true,
+                OnOutputLine = _ =>
+                {
+                    handed++;
+                    throw new InvalidOperationException("a line this caller cannot read");
+                },
+            },
+            stop.Token));
+
+        Assert.False(stop.IsCancellationRequested, "the child blocked on a pipe nobody read, until the run was stopped");
+        Assert.Equal("a line this caller cannot read", raised.Message);
+        Assert.Equal(1, handed);
+    }
+
+    /// <summary>
     /// A line that never ends, on a stream kept as a tail, arrives in pieces of at most the longest line handed on - cut
     /// where the caller says, where it says - each as soon as it is complete; on a stream kept whole it arrives whole, as
     /// an answer written on one line has to.

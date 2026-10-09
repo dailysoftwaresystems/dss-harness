@@ -229,7 +229,7 @@ public sealed class LegRunService(
 
         // The repository's trees on this machine, listed once, as the first leg whose work runs here begins it: whose build
         // directory a process found beside a leg works in is told by them.
-        var trees = new Lazy<Task<RepositoryTreesFound>>(() => TreesHereAsync(context, request.Here, cancellationToken));
+        var trees = new Lazy<Task<RepositoryTreesFound>>(() => _trees.HereAsync(context, request.Here, cancellationToken));
 
         try
         {
@@ -681,12 +681,13 @@ public sealed class LegRunService(
 
         if (request.Here is not { Kind: HostKind.Wsl })
         {
-            return new RoomFloor(rule.MinFreeBytes, []);
+            return new RoomFloor(leg.Name, rule.MinFreeBytes, []);
         }
 
         if (_origin.Dispatched?.DiskImageDrive is not { } drive)
         {
             return new RoomFloor(
+                leg.Name,
                 rule.MinFreeBytes,
                 [],
                 "the machine that sent this leg named no drive where WSL keeps this distribution's disk, so only the distribution's "
@@ -696,30 +697,13 @@ public sealed class LegRunService(
         var (mount, why) = WindowsDriveMounts.Of(_fileSystem, drive);
 
         return mount is not null
-            ? new RoomFloor(rule.MinFreeBytes, [(mount, ", where WSL keeps its disk")])
+            ? new RoomFloor(leg.Name, rule.MinFreeBytes, [(mount, ", where WSL keeps its disk")])
             : new RoomFloor(
+                leg.Name,
                 rule.MinFreeBytes,
                 [],
                 $"the drive where WSL keeps this distribution's disk, {drive}, could not be found here, so only the distribution's own "
                 + $"room is held to admission.minFreeGiB: {why}");
-    }
-
-    /// <summary>
-    /// The repository's trees on this machine - the main checkout, or a host's copy of it, and every worktree's beside it -
-    /// or, where they could not be listed, why.
-    /// </summary>
-    private async Task<RepositoryTreesFound> TreesHereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await _trees.HereAsync(context, here, cancellationToken).ConfigureAwait(false);
-        }
-        catch (HarnessException ex)
-        {
-            // A host declaring nowhere to keep its copy, which nothing could have sent a leg to: said as a listing that could
-            // not be made, and no leg's work stops for it.
-            return new RepositoryTreesFound([], ex.Message.TrimEnd('.'));
-        }
     }
 
     /// <summary>The trees of <paramref name="trees"/> but <paramref name="leg"/>'s own: the repository's other trees here.</summary>
@@ -768,10 +752,21 @@ public sealed class LegRunService(
             // until the virtual machine idles for minutes: dropped as the leg ends - before its slot is given back - where
             // this machine admits its heavy legs by the memory. Not waited for: what comes back is the next wait's to read.
             if (leg.Named.Kind == HostKind.Wsl
-                && AdmissionSettings.RuleFor(context.Config.Hosts.Local.Admission, context.Config.Defaults.Admission) is not null
-                && await _pageCache.DropAsync(context, cancellationToken).ConfigureAwait(false) is { } dropped)
+                && AdmissionSettings.RuleFor(context.Config.Hosts.Local.Admission, context.Config.Defaults.Admission) is not null)
             {
-                ledger.Transition(leg.Name, $"as the leg ended, {dropped.Said}");
+                try
+                {
+                    if (await _pageCache.DropAsync(context, cancellationToken).ConfigureAwait(false) is { } dropped)
+                    {
+                        ledger.Transition(leg.Name, $"as the leg ended, {dropped.Said}");
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // The leg's verdict is in hand, and a stop asked for while the cache drops takes nothing of it: the run
+                    // ends as a stopped run does, with this leg reported and recorded.
+                    ledger.Transition(leg.Name, "as the leg ended, WSL's page cache was not dropped: the run was stopped first");
+                }
             }
 
             return ended;

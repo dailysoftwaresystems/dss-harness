@@ -377,6 +377,98 @@ public sealed class LegAdmissionTests
     }
 
     /// <summary>
+    /// The time a leg spent behind its own command's legs alone is not counted against what it waits for after: fifty
+    /// minutes behind its own, then the whole hour it may wait for the memory once it holds the slot, refused at an hour and
+    /// fifty minutes, saying what of it did not count.
+    /// </summary>
+    [Fact]
+    public async Task ATimeSpentBehindItsOwnCommandsLegs_IsNotCountedAgainstWhatItWaitsForAfter_SayingSo()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "windows-debug", run: "run-mine"));
+
+        var admission = AdmissionKit.Admission(harness, record, new ScriptedGauge(90), clock, onWait: () =>
+        {
+            if (clock.Moved == TimeSpan.FromMinutes(50))
+            {
+                AdmissionKit.Write(record, [.. AdmissionKit.Read(record).Where(entry => entry.Leg != "windows-debug")]);
+            }
+        });
+
+        using var admitted = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, settleLeast: 0, settleMost: 0, pollSeconds: 60, maxWaitMinutes: 60), said),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(admitted.Fact.Admitted);
+        Assert.Equal(110 * 60, admitted.Fact.WaitedSeconds);
+        Assert.StartsWith(
+            "not admitted after 1h50m (50m00s of it behind its own command's legs, which does not count): it held a heavy-leg slot, and the memory",
+            admitted.Refusal,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A leg whose time ran out just as the slot passed from another command's leg to its own command's is kept waiting -
+    /// that wait is certain to end - and pauses a whole poll between looks while it does: its time spent, a pause cut to
+    /// what is left of it would be no pause at all, and the leg would read the machine's record without rest.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseTimeRanOutBehindAnotherCommand_ThenWaitsBehindItsOwnLegs_PausesAWholePollBetweenLooks()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var record = temp.Combine("admission.json");
+        var clock = new ManualClock();
+        var said = new List<string>();
+        var pauses = new List<TimeSpan>();
+
+        AdmissionKit.Write(record, AdmissionKit.Holder(harness, "theirs"));
+
+        var admission = new LegAdmission(
+            AdmissionKit.Slots(harness, record),
+            new ScriptedGauge(30),
+            clock,
+            (delay, _) =>
+            {
+                pauses.Add(delay);
+
+                if (delay <= TimeSpan.Zero)
+                {
+                    throw new InvalidOperationException($"a pause of {delay} between looks, after {clock.Moved}");
+                }
+
+                clock.Advance(delay);
+
+                // The other command's leg hands the slot to one of the leg's own command's as the hour ends, which gives it
+                // back a quarter of an hour later.
+                if (clock.Moved == TimeSpan.FromMinutes(60))
+                {
+                    AdmissionKit.Write(record, AdmissionKit.Holder(harness, "windows-debug", run: "run-mine"));
+                }
+                else if (clock.Moved == TimeSpan.FromMinutes(75))
+                {
+                    AdmissionKit.Write(record);
+                }
+
+                return Task.CompletedTask;
+            },
+            (least, _) => least);
+
+        using var admitted = await admission.AdmitAsync(
+            AdmissionKit.Request(AdmissionKit.Rule(heavyLegs: 1, settleLeast: 0, settleMost: 0, pollSeconds: 60, maxWaitMinutes: 60), said),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(admitted.Fact.Admitted, admitted.Refusal);
+        Assert.Equal(75 * 60, admitted.Fact.WaitedSeconds);
+        Assert.All(pauses.Skip(60), pause => Assert.Equal(TimeSpan.FromMinutes(1), pause));
+    }
+
+    /// <summary>
     /// A machine that looks rarely - a poll of an hour - still has a waiting leg say where it stands every five minutes,
     /// whatever it waits for: a slot, the memory, a count of the memory that stopped reading, room, or room where the
     /// memory was never read. Each wait before a look is cut at when the wait is next due to say so; cut only at what is

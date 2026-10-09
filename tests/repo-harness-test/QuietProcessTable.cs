@@ -16,3 +16,16 @@ internal sealed class QuietProcessTable : IProcessTable
             [new SampledProcess(Environment.ProcessId, null, "repo-harness-test", DateTimeOffset.UnixEpoch, "repo-harness-test")],
             null));
 }
+
+/// <summary>
+/// A process table that reads, and finds this test and <paramref name="others"/> - a shared tool working beside it, say -
+/// and nothing else, at every reading.
+/// </summary>
+/// <param name="others">What else the machine runs.</param>
+internal sealed class ProcessTableHolding(params SampledProcess[] others) : IProcessTable
+{
+    public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult(new ProcessTableReading(
+            [new SampledProcess(Environment.ProcessId, null, "repo-harness-test", DateTimeOffset.UnixEpoch, "repo-harness-test"), .. others],
+            null));
+}

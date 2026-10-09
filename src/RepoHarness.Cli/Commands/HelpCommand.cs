@@ -1088,12 +1088,14 @@ internal static class HelpCommand
         builder.AppendLine("While a heavy leg builds, each filesystem its build fills is read again every");
         builder.AppendLine($"{RoomFloorWatch.Every.TotalSeconds:0} seconds, and the build is stopped once one has less free than minFreeGiB:");
         builder.AppendLine($"stopped, exit {HarnessExit.Incomplete}, naming what was free and where, and what it built left for");
-        builder.AppendLine("clean. The room a leg claims is only what is said of its build; this holds every");
-        builder.AppendLine("build, its need said or not - a sweep's workers' too. A WSL leg holds the drive its");
-        builder.AppendLine("disk grows on as well, which this machine names as it sends the leg and the");
-        builder.AppendLine("distribution reaches through its mount there, /mnt/c as /proc/mounts lists it;");
-        builder.AppendLine("where it is mounted nowhere, the build says only the distribution's own room is");
-        builder.AppendLine("held. A room that cannot be read stops nothing, and is said once.");
+        builder.AppendLine("clean - and so is a build that failed with one under it, read again as it failed,");
+        builder.AppendLine("since a full disk says nothing of its code. The room a leg claims is only what is");
+        builder.AppendLine("said of its build; this holds every build, its need said or not - a sweep's");
+        builder.AppendLine("workers' too. A WSL leg holds the drive its disk grows on as well, which this");
+        builder.AppendLine("machine names as it sends the leg and the distribution reaches through its mount");
+        builder.AppendLine("there, /mnt/c as /proc/mounts lists it; where it is mounted nowhere, the build says");
+        builder.AppendLine("only the distribution's own room is held. A room that cannot be read stops nothing,");
+        builder.AppendLine("and is said once.");
         builder.AppendLine();
         builder.AppendLine("A check-mutations leg, whose sweep can last hours, is admitted unit by unit instead:");
         builder.AppendLine("each worker as it is made, claiming the room its copy and build still need, and each");
@@ -1150,24 +1152,25 @@ internal static class HelpCommand
         builder.AppendLine("memory again a minute later, once what was dropped has come back, its line");
         builder.AppendLine("saying how much was dropped and the memory before and after. A WSL leg sent from a");
         builder.AppendLine("machine that admits drops it as it ends, without waiting. A distribution that is");
-        builder.AppendLine("not running is never started for it, and a drop that could not be made is said once.");
+        builder.AppendLine("not running is never started for it, and a drop that could not be made is said");
+        builder.AppendLine("once - a WSL host whose item cannot be read, where no other reaches one, among the");
+        builder.AppendLine("reasons.");
         builder.AppendLine();
         builder.AppendLine("While it waits, a leg says who holds each slot - tree, variant, host, leg, command,");
         builder.AppendLine("process, run, and since when it asked, never the machine's name, which only the");
-        builder.AppendLine("record keeps - and, once it holds one, what the");
-        builder.AppendLine("memory stands at, or the room free and who claims it. It says so again, as it reads");
-        builder.AppendLine($"then and with how long it has waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - a poll longer than");
-        builder.AppendLine("that is cut at it, and a settle longer than that waited whole in pieces of it - so a");
-        builder.AppendLine("long wait never goes silent. Its line, and admission in --json, name how long it");
-        builder.AppendLine("waited, the memory it started at and the room it claimed; --json also names the record");
-        builder.AppendLine("it asked in. One");
+        builder.AppendLine("record keeps - and, once it holds one, what the memory stands at, or the room free");
+        builder.AppendLine("and who claims it. It says so again, as it reads then and with how long it has");
+        builder.AppendLine($"waited, at least every {LegAdmission.SaidAgainEvery.TotalMinutes:0} minutes - a poll longer than that is cut at it, and a");
+        builder.AppendLine("settle longer than that waited whole in pieces of it - so a long wait never goes");
+        builder.AppendLine("silent. Its line, and admission in --json, name how long it waited, the memory it");
+        builder.AppendLine("started at and the room it claimed; --json also names the record it asked in. One");
         builder.AppendLine($"that waited maxWaitMinutes is not-admitted, exit {LegExit.NotAdmitted}, naming what held the slots and");
         builder.AppendLine("where they are recorded, the memory it waited on, or the room, who claimed it and");
-        builder.AppendLine("where the claims are recorded: nothing of it ran, and nothing about the code is claimed.");
-        builder.AppendLine("A wait for slots only legs of its own run hold - a command's WSL leg behind its");
-        builder.AppendLine("Windows legs, asked for at once - is certain to end and does not count, and its line");
-        builder.AppendLine("says they are its own; on an ssh host, the legs one command sends there ask under");
-        builder.AppendLine("that command's run.");
+        builder.AppendLine("where the claims are recorded: nothing of it ran, and nothing about the code is");
+        builder.AppendLine("claimed. A wait for slots only legs of its own run hold - a command's WSL leg behind");
+        builder.AppendLine("its Windows legs, asked for at once - is certain to end and does not count: its line");
+        builder.AppendLine("says they are its own, and a refusal after it says how much of the wait did not");
+        builder.AppendLine("count. On an ssh host, the legs one command sends there ask under that command's run.");
         builder.AppendLine();
         builder.AppendLine("The slots are kept in <user data>/dssharness/admission-<machine id>.json, and the");
         builder.AppendLine("room the legs claim beside them in admission-<machine id>.room.json - the user");
@@ -2031,7 +2034,8 @@ internal static class HelpCommand
             + "put back as the main tree's HEAD holds it included, and otherwise one the main tree holds otherwise than the agent's "
             + "base, committed since or not. It is a dry run until --apply, refused, copying nothing, where the agent changed or "
             + "deleted one, and records them as handed to it, so its fold leaves them out; a symbolic link the main tree committed "
-            + "is named and never handed. Both say when the agent's base is not the main tree's HEAD.");
+            + "is named and never handed. Both say when the agent's base is not the main tree's HEAD. A path named otherwise than in "
+            + "UTF-8, committed or not, refuses any hand-over, naming it as git quotes it: no file opens here by such a name.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2039,11 +2043,13 @@ internal static class HelpCommand
             + "two commits hold differently that the agent holds as its base does comes into its worktree as git holds it - a "
             + "change, a new file, a deletion or a link - and its own changes, and what it was handed, stay: its seed still says "
             + "what it shares, and refresh-agent hands it any of those the main tree moved since. A path it changed that the main "
-            + "tree committed a change to since - an edit, a deletion, or a file of its own where the main tree committed one - "
-            + "refuses the move, nothing changed, unless --settled <path> names it: you reconciled its copy by hand, and it stays as "
-            + "its own change on the new base. What the new base brings is written first, then HEAD and the index move, then its "
-            + "record names the new base: run again after a move that stopped part way, it finishes it, and fold-agent and "
-            + "delete-agent say such a move is one.");
+            + "tree committed a change to since - an edit, a deletion, or a file of its own where the main tree committed one, "
+            + "ignored, staged or holding the same bytes included - refuses the move, nothing changed, unless --settled <path> names "
+            + "it: you reconciled its copy by hand, and it stays as its own change on the new base. What the new base brings is "
+            + "written first, then HEAD and the index move, then its record names the new base: run again after a move that "
+            + "stopped part way, it finishes it, and fold-agent and delete-agent say such a move is one. A HEAD moved back by hand, "
+            + "to a commit before its base, is no such move: each refuses it, saying how to put it back, and a HEAD git cannot "
+            + "place is said to be one, never guessed at.");
         builder.AppendLine();
         AppendWrapped(
             builder,

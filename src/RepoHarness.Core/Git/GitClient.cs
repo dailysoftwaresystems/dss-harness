@@ -184,6 +184,9 @@ public sealed class GitClient(
         => StatusAsync(directory, "all", cancellationToken);
 
     public async Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
+        => GitName.PathsOf(await ListNamesChangedSinceAsync(directory, commit, cancellationToken).ConfigureAwait(false));
+
+    public async Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
 
@@ -198,11 +201,7 @@ public sealed class GitClient(
 
         Ensure(result, $"read what the work tree changes since {commit}");
 
-        return Records(result.StandardOutput)
-            .Select(GitName.FromBytes)
-            .Where(name => name.IsUtf8)
-            .Select(name => name.Text)
-            .ToHashSet(StringComparer.Ordinal);
+        return [.. Records(result.StandardOutput).Select(GitName.FromBytes)];
     }
 
     /// <summary>

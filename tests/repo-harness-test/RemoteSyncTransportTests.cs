@@ -62,6 +62,7 @@ public sealed class RemoteSyncTransportTests
     [InlineData("short", "'a.bin' did not arrive whole from ssh vps: 3 of its 10 bytes did.")]
     [InlineData("long", "'a.bin' arrived in a shape this build cannot read: a piece of it is not base64, or carries more than the file was said to hold.")]
     [InlineData("not base64", "'a.bin' arrived in a shape this build cannot read: a piece of it is not base64, or carries more than the file was said to hold.")]
+    [InlineData("below nothing", "ssh vps said 'a.bin' holds -1 bytes, which no file it can send does.")]
     [InlineData("past the largest", "ssh vps said 'a.bin' holds 804519910 bytes, which no file it can send does.")]
     [InlineData("changed", "'a.bin' changed between ssh vps and here")]
     public async Task AFileReadBack_IsRefused_WhereWhatArrivedIsNotWhatItsAnswerSaid(string arrival, string expected)
@@ -73,6 +74,7 @@ public sealed class RemoteSyncTransportTests
             "short" => (10, FileContentHash.Of(three), [.. SyncServe.ContentLines(three)]),
             "long" => (3, FileContentHash.Of(three), [.. SyncServe.ContentLines("abcdef"u8.ToArray())]),
             "not base64" => (3, FileContentHash.Of(three), [SyncServe.ContentPrefix + "@@@@"]),
+            "below nothing" => (-1, FileContentHash.Of(three), []),
             "past the largest" => (SyncServe.LargestFile + 1, FileContentHash.Of(three), []),
             _ => (3, FileContentHash.Of("abd"u8.ToArray()), [.. SyncServe.ContentLines(three)]),
         };

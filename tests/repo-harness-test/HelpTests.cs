@@ -321,6 +321,79 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The admission topic says a heavy leg's build is held to minFreeGiB - read every few seconds, the seconds read from
+    /// the code, and again as a build fails - and stopped under it; that WSL's page cache is dropped before a wait on the
+    /// memory and as a WSL leg ends, a drop that could not be made said with why; that a holder's line never names its
+    /// machine; and that a wait behind legs of its own run alone does not count.
+    /// </summary>
+    [Fact]
+    public async Task TheAdmissionTopic_SaysTheFloor_TheCacheDrop_TheHolderUnnamed_AndTheOwnRunsWait()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "admission"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        foreach (var expected in new[]
+        {
+            $"While a heavy leg builds, each filesystem its build fills is read again every {RoomFloorWatch.Every.TotalSeconds:0} seconds, and the "
+                + $"build is stopped once one has less free than minFreeGiB: stopped, exit {HarnessExit.Incomplete}, naming what was free and where, "
+                + "and what it built left for clean - and so is a build that failed with one under it, read again as it failed, since a full disk "
+                + "says nothing of its code.",
+            "So a leg about to wait on the memory has that cache dropped first, as root (sync, then drop_caches) in a running distribution a WSL "
+                + "host of its repository reaches - at most once a minute, whichever leg asks - and reads the memory again a minute later",
+            "A WSL leg sent from a machine that admits drops it as it ends, without waiting.",
+            "a drop that could not be made is said once - a WSL host whose item cannot be read, where no other reaches one, among the reasons.",
+            "process, run, and since when it asked, never the machine's name, which only the record keeps",
+            "A wait for slots only legs of its own run hold - a command's WSL leg behind its Windows legs, asked for at once - is certain to "
+                + "end and does not count: its line says they are its own, and a refusal after it says how much of the wait did not count. On "
+                + "an ssh host, the legs one command sends there ask under that command's run.",
+        })
+        {
+            Assert.Contains(expected, said, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The verdicts topic says a heavy leg's build stopped for room is stopped, and that a shared tool working in a build
+    /// directory of another tree of the repository is named as that tree's leg's, only what no tree accounts for being
+    /// nobody's known.
+    /// </summary>
+    [Fact]
+    public async Task TheVerdictsTopic_SaysABuildStoppedForRoomIsStopped_AndWhoseAToolInAnotherTreeIs()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            "A heavy leg's build stopped for leaving less room than its machine's minFreeGiB is stopped too ('help admission').",
+            said,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "and one working in a build directory of another tree of the repository on that machine, a worktree's, an agent's or the main "
+            + "checkout's, as that tree's leg's: 'worktree o1/xa's leg 'linux-debug''. Only what no tree there accounts for is nobody's known, "
+            + "and where the other trees could not be listed the line says so.",
+            said,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The space topic says a leg's need, where its own tree's copy recorded none, is the most any other copy of the
+    /// repository on that host recorded, named in the line - its example the line as a leg says it.
+    /// </summary>
+    [Fact]
+    public async Task TheSpaceTopic_SaysANeedIsTheMostAnyOtherCopyRecorded_NamingWhose()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "space"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            "in this tree's copy, or else the most any other copy of the repository on that host recorded - the main checkout's, or a "
+            + "worktree's, an agent's or a plain one, named in the line - less what the directory already holds.",
+            said,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ssh vps: this leg needs ~11.4 GiB, what worktree o1/xa's copy of the same variant came to there; 3.2 GiB free on '/'",
+            said,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ExitCodeTopic_DocumentsEverySharedExitCode()
     {
@@ -1320,6 +1393,22 @@ public sealed partial class HelpTests
         Assert.Contains("one not found is said, and one found and not kept stops it before anything is closed", text, StringComparison.Ordinal);
         Assert.Contains("A path this process cannot look at is never read as absent: the fold fails, nothing written.", text, StringComparison.Ordinal);
         Assert.Contains("it removes the record last, so one that stops part way finishes when run again", text, StringComparison.Ordinal);
+        Assert.Contains("Seeding again hands besides every path the main tree holds otherwise than the agent shares it, committed or not.", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "a symbolic link the main tree committed is named and never handed. Both say when the agent's base is not the main tree's HEAD. A "
+            + "path named otherwise than in UTF-8, committed or not, refuses any hand-over, naming it as git quotes it: no file opens here by such "
+            + "a name.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "or a file of its own where the main tree committed one, ignored, staged or holding the same bytes included - refuses the move",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A HEAD moved back by hand, to a commit before its base, is no such move: each refuses it, saying how to put it back, and a HEAD "
+            + "git cannot place is said to be one, never guessed at.",
+            text,
+            StringComparison.Ordinal);
     }
 
     [Fact]

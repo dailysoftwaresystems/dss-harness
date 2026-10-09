@@ -156,10 +156,13 @@ public sealed record HostCommand
     /// </summary>
     public bool AsRoot { get; init; }
 
-    /// <summary>Receives each line the program writes to standard output, as it arrives.</summary>
+    /// <summary>
+    /// Receives each line the program writes to standard output, as it arrives. One that throws is handed no more lines,
+    /// and what it threw is raised once the program has gone.
+    /// </summary>
     public Action<string>? OnOutputLine { get; init; }
 
-    /// <summary>Receives each line the program writes to standard error, as it arrives.</summary>
+    /// <summary>Receives each line the program writes to standard error, as it arrives, as <see cref="OnOutputLine"/> does.</summary>
     public Action<string>? OnErrorLine { get; init; }
 
     /// <summary>

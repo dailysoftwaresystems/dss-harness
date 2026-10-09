@@ -490,13 +490,28 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         IReadOnlyList<string>? within,
         CancellationToken cancellationToken)
     {
-        var paths = new List<string>();
+        var names = (await _gitClient.ReadStatusAsync(directory, cancellationToken).ConfigureAwait(false)).SelectMany(entry => entry.Paths);
 
-        foreach (var name in (await _gitClient.ReadStatusAsync(directory, cancellationToken).ConfigureAwait(false)).SelectMany(entry => entry.Paths))
+        return [.. Weighed(directory, names, floor, within, consequence).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// The paths <paramref name="names"/> name that are weighed - off <paramref name="floor"/>, and under
+    /// <paramref name="within"/> where it is given - each one a record can keep: a name that is not UTF-8, or no record can
+    /// keep, is refused, never passed over.
+    /// </summary>
+    /// <param name="directory">The work tree they are in.</param>
+    /// <param name="names">The names, as git holds them; a directory's with its trailing slash.</param>
+    /// <param name="floor">The paths never moved between trees.</param>
+    /// <param name="within">Only the paths these cover; every path where null.</param>
+    /// <param name="consequence">What cannot be done with a path no record can keep, to end a sentence.</param>
+    private static IEnumerable<string> Weighed(string directory, IEnumerable<GitName> names, IReadOnlyList<string> floor, IReadOnlyList<string>? within, string consequence)
+    {
+        foreach (var name in names)
         {
             var path = name.Text.TrimEnd('/');
 
-            if (TreeFloor.Covers(floor, path) || (within is not null && !PathPatterns.Matches(within, path)))
+            if (!Covered(path, floor, within))
             {
                 continue;
             }
@@ -507,11 +522,14 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             }
 
             RequireKeepable(directory, path, consequence);
-            paths.Add(path);
-        }
 
-        return [.. paths.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+            yield return path;
+        }
     }
+
+    /// <summary>Whether <paramref name="path"/> is weighed: off <paramref name="floor"/>, and under <paramref name="within"/> where it is given.</summary>
+    private static bool Covered(string path, IReadOnlyList<string> floor, IReadOnlyList<string>? within)
+        => !TreeFloor.Covers(floor, path) && (within is null || PathPatterns.Matches(within, path));
 
     /// <summary>
     /// Refuses <paramref name="path"/>, which the tree at <paramref name="directory"/> changes, where no record of an agent
@@ -583,20 +601,12 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         ArgumentNullException.ThrowIfNull(seed);
 
         var uncommitted = await ChangedAsync(main, floor, HandingConsequence, within, cancellationToken).ConfigureAwait(false);
-        var sinceBase = await _gitClient.ListChangedSinceAsync(main, baseCommit, cancellationToken).ConfigureAwait(false);
-
-        bool Weighed(string path) => !TreeFloor.Covers(floor, path) && (within is null || PathPatterns.Matches(within, path));
-
-        var committed = sinceBase.Where(Weighed).ToList();
-
-        foreach (var path in committed)
-        {
-            RequireKeepable(main, path, HandingConsequence);
-        }
+        var sinceNamed = await _gitClient.ListNamesChangedSinceAsync(main, baseCommit, cancellationToken).ConfigureAwait(false);
+        var sinceBase = GitName.PathsOf(sinceNamed);
 
         var candidates = uncommitted
-            .Concat(committed)
-            .Concat(seed.Weighed.Where(Weighed))
+            .Concat(Weighed(main, sinceNamed, floor, within, HandingConsequence))
+            .Concat(seed.Weighed.Where(path => Covered(path, floor, within)))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -767,14 +777,18 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var sinceFrom = await _gitClient.ListChangedSinceAsync(worktree, from, cancellationToken).ConfigureAwait(false);
         var sinceTo = await _gitClient.ListChangedSinceAsync(worktree, to, cancellationToken).ConfigureAwait(false);
 
-        // What git does not track is the agent's own, and no diff against a commit lists it: a new file, or a directory
-        // git will not look into, whose every path below is the agent's too.
+        // A file the agent holds where its base held none is its own, whatever git makes of it - untracked, staged, or one
+        // git ignores, which no status lists - and no diff against a commit says so; so is everything below a directory git
+        // will not look into, a repository of its own, which status names as the directory.
         var untracked = (await _gitClient.ReadStatusAsync(worktree, cancellationToken).ConfigureAwait(false))
-            .Where(entry => entry.Index == '?')
+            .Where(entry => entry.Index == '?' && entry.Path.Text.EndsWith('/'))
             .Select(entry => entry.Path.Text)
             .ToList();
+        var based = await _gitClient.BlobIdsAtAsync(worktree, from, committed, cancellationToken).ConfigureAwait(false);
 
-        bool Untracked(string path) => untracked.Any(name => name == path || (name.EndsWith('/') && path.StartsWith(name, StringComparison.Ordinal)));
+        bool Own(string path)
+            => untracked.Any(directory => path.StartsWith(directory, StringComparison.Ordinal))
+                || (based[path] is null && _fileSystem.KindOf(Path.Combine(worktree, path)) != PathKind.None);
 
         var taken = new List<string>();
         var kept = new List<string>();
@@ -785,7 +799,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         foreach (var path in committed.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
         {
-            var own = Untracked(path);
+            var own = Own(path);
 
             if (shared.Of(path) is not null)
             {

@@ -42,9 +42,11 @@ public interface IRepositoryTrees
     /// <param name="context">The repository and its configuration.</param>
     /// <param name="here">The host this machine is to the machine that sent the legs here, or <see langword="null"/>.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
-    /// <exception cref="HarnessException">
-    /// <paramref name="here"/> declares no repositoryPath: nothing could have been sent to it, since a sync keeps its copy there.
-    /// </exception>
+    /// <remarks>
+    /// A host declaring nowhere to keep its copy holds none: nothing could have been sent to it, since a sync keeps its copy
+    /// there. Its trees are said as a listing that could not be made, with why, and never thrown, so no leg's work stops
+    /// for them.
+    /// </remarks>
     Task<RepositoryTreesFound> HereAsync(HarnessContext context, HostId? here, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -52,8 +54,8 @@ public interface IRepositoryTrees
     /// checkout's, where the configuration says, and each worktree's this machine's record of host copies holds there.
     /// </summary>
     /// <param name="context">The repository and its configuration.</param>
-    /// <param name="host">A WSL distribution or an ssh host that declares where it keeps the main checkout's copy.</param>
-    /// <exception cref="HarnessException">The host declares no repositoryPath.</exception>
+    /// <param name="host">A WSL distribution or an ssh host.</param>
+    /// <remarks>A host declaring nowhere to keep its copy holds none, said as <see cref="HereAsync"/> says it.</remarks>
     RepositoryTreesFound On(HarnessContext context, HostId host);
 }
 
@@ -82,9 +84,20 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
 
         if (here is not null)
         {
+            string declared;
+
+            try
+            {
+                declared = HostCopies.RepositoryPathOf(context.Config, here);
+            }
+            catch (HarnessException ex)
+            {
+                return Nowhere(ex);
+            }
+
             // Spelt with this host's home where the configuration keeps the copy under it, as every host's copy is spelt
             // where it is read: a path below a directory called '~' is nowhere.
-            var main = LocalSyncTransport.Home(HostCopies.RepositoryPathOf(context.Config, here));
+            var main = LocalSyncTransport.Home(declared);
 
             try
             {
@@ -137,7 +150,17 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(host);
 
-        var main = new RepositoryTree(HostCopies.RepositoryPathOf(context.Config, host), RepositoryTree.MainCheckout);
+        RepositoryTree main;
+
+        try
+        {
+            main = new RepositoryTree(HostCopies.RepositoryPathOf(context.Config, host), RepositoryTree.MainCheckout);
+        }
+        catch (HarnessException ex)
+        {
+            return Nowhere(ex);
+        }
+
         var spelt = host.ToString();
 
         try
@@ -156,4 +179,10 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
             return new RepositoryTreesFound([main], ex.Message.TrimEnd('.'));
         }
     }
+
+    /// <summary>
+    /// The trees of a host declaring nowhere to keep its copy, as <paramref name="why"/> says it: none - nothing could have
+    /// been sent to it, since a sync keeps its copy there - said as a listing that could not be made.
+    /// </summary>
+    private static RepositoryTreesFound Nowhere(HarnessException why) => new([], why.Message.TrimEnd('.'));
 }

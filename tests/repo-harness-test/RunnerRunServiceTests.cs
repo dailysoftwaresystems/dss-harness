@@ -2602,7 +2602,50 @@ public sealed class RunnerRunServiceTests
     private static LegIdentity Identity(string os)
         => new(Leg, os, "x86_64", "gcc", "release", "gcc-release", "local", RunId);
 
-    private static RunnerRunService Service(HarnessFactory factory, IProcessRunner? phases = null)
+    /// <summary>
+    /// A step's contention watch knows the repository's other trees on the machine, as a build's does: a shared tool working
+    /// in another tree's build directory of this leg's variant while the step runs is named as that tree's leg's, never
+    /// warned of as one no declared leg accounts for.
+    /// </summary>
+    [Fact]
+    public async Task ASharedToolWorkingInAnotherTreesBuildDirectory_IsNamedAsThatTreesLeg_WhileAStepRuns()
+    {
+        using var temp = new TempDirectory();
+        using var other = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, $"""
+            name: corpus
+            steps:
+              - name: measure
+                watchContention: true
+                run: |
+                  {Child} --version
+            """);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = Child });
+        config.BuildConfigs["release"] = new BuildConfiguration();
+        config.Legs[Leg] = new LegConfig { Os = factory.Platform.PlatformKey, Processor = factory.Platform.Processor, Config = "release" };
+        config.Contention.SharedResourceTools.Add("toolcc");
+        var variant = Core.Build.VariantKey.For(config, config.Legs[Leg], factory.Platform.PlatformKey);
+        var theirs = variant.DirectoryUnder(other.Path);
+        var table = new ProcessTableHolding(new Core.Platform.SampledProcess(7001, 9999, "toolcc", DateTimeOffset.UnixEpoch, $"toolcc \"{Path.Combine(theirs, "a.o")}\""));
+
+        var result = await Service(factory, processTable: table).RunAsync(
+            config,
+            Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" }) with
+            {
+                BuildDirectory = variant.DirectoryUnder(temp.Path),
+                Beside = new Core.Worktrees.RepositoryTreesFound([new Core.Worktrees.RepositoryTree(other.Path, "worktree o1/xa")]),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+        Assert.Contains($"working in the build directory of worktree o1/xa's leg '{Leg}'", factory.StandardError.ToString(), StringComparison.Ordinal);
+    }
+
+    private static RunnerRunService Service(HarnessFactory factory, IProcessRunner? phases = null, Core.Platform.IProcessTable? processTable = null)
         => new(
             new PhaseRunner(phases ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
             new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform),
@@ -2613,7 +2656,7 @@ public sealed class RunnerRunServiceTests
             new RunSegments(factory.FileSystem, factory.Output),
             new PredefinedActionRunner(factory.GitClient, factory.Output),
             new InputFingerprint(factory.FileSystem, factory.Platform),
-            new ProcessSampler(factory.ProcessTable, factory.Platform, factory.Output),
+            new ProcessSampler(processTable ?? factory.ProcessTable, factory.Platform, factory.Output),
             factory.GitClient,
             factory.Platform,
             factory.FileSystem,

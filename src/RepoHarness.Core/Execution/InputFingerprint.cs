@@ -331,7 +331,7 @@ public sealed class InputWatch : IDisposable
     private readonly string _root;
     private readonly List<FileSystemWatcher> _watchers = [];
     private string? _failure;
-    private int _heardElsewhere;
+    private readonly HashSet<string> _heardElsewhere = new(StringComparer.Ordinal);
 
     internal InputWatch(
         string root,
@@ -436,7 +436,7 @@ public sealed class InputWatch : IDisposable
             .OrderByDescending(group => group.Count)
             .ThenBy(group => group.Top, StringComparer.Ordinal))
         {
-            if (count <= MostDirectoriesWatched || group.Count == 1)
+            if (count <= MostDirectoriesWatched)
             {
                 break;
             }
@@ -502,14 +502,17 @@ public sealed class InputWatch : IDisposable
     internal IReadOnlyList<(string Directory, bool Recursive)> Watched
         => [.. _watchers.Select(watcher => (watcher.Path, watcher.IncludeSubdirectories)).OrderBy(watched => watched.Path, StringComparer.Ordinal)];
 
-    /// <summary>How many times the watch was told of a path no input is: what watching only where the inputs are keeps down.</summary>
-    internal int HeardElsewhere
+    /// <summary>
+    /// Each path no input is that the watch was told of, relative to the tree, in the order of their paths: what watching only
+    /// where the inputs are keeps down.
+    /// </summary>
+    internal IReadOnlyList<string> HeardElsewhere
     {
         get
         {
             lock (_gate)
             {
-                return _heardElsewhere;
+                return [.. _heardElsewhere.Order(StringComparer.Ordinal)];
             }
         }
     }
@@ -585,7 +588,7 @@ public sealed class InputWatch : IDisposable
         {
             if (!_tracked.TryGetValue(relative, out declared))
             {
-                _heardElsewhere++;
+                _heardElsewhere.Add(relative);
                 return;
             }
 

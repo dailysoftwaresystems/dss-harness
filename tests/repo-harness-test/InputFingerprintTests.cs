@@ -442,8 +442,41 @@ public sealed class InputFingerprintTests
     }
 
     /// <summary>
+    /// A watch takes as many watches as the tool allows itself and no more: directories of inputs that fit are each watched
+    /// for their own files, and where taking top-level directories whole still leaves more than fit, the tree is watched
+    /// whole, as one watch.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AWatch_TakesNoMoreWatchesThanItAllows(bool oneMore)
+    {
+        using var temp = new TempDirectory();
+        var inputs = Enumerable.Range(0, 64).Select(index => $"d{index:00}/f.cpp").ToList();
+
+        // A top-level directory of two directories of inputs: taken whole, it saves one watch, and one more is needed.
+        if (oneMore)
+        {
+            inputs.AddRange(["a/x/f.cpp", "a/y/f.cpp"]);
+        }
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, "f");
+        }
+
+        using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal);
+
+        Assert.Null(watch.Failure);
+        Assert.Equal(
+            oneMore ? [(temp.Path, true)] : inputs.Select(input => (temp.Combine(input[..input.IndexOf('/')]), false)).ToList(),
+            watch.Watched);
+    }
+
+    /// <summary>
     /// With a real watch, a write below a directory only a placeholder of it is tracked in is never heard - an agent's build
-    /// below the worktrees root - while an edit of the placeholder made and undone is still caught.
+    /// below the worktrees root - while a write beside the placeholder is, and an edit of the placeholder made and undone is
+    /// still caught.
     /// </summary>
     [Fact]
     public async Task AWriteBelowAnUntrackedSubtree_IsNotHeard_WhileAnEditOfTheTrackedFileIsCaught()
@@ -463,14 +496,15 @@ public sealed class InputFingerprintTests
         }
 
         temp.WriteFile(".worktrees/o1/ag/build/obj.o", "an agent's build");
+        temp.WriteFile(".worktrees/notes.txt", "beside the placeholder");
         temp.WriteFile(".worktrees/.gitkeep", "edited");
         await WaitForAsync(watch, ".worktrees/.gitkeep", TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(temp.Combine(".worktrees", ".gitkeep"), string.Empty, TestContext.Current.CancellationToken);
 
         var after = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
 
-        // Heard in order: word of the agent's write, had the watch been told of it, came before word of the edit after it.
-        Assert.Equal(0, watch.HeardElsewhere);
+        // Heard in order: word of either write, had the watch been told of it, came before word of the edit after both.
+        Assert.Equal([".worktrees/notes.txt"], watch.HeardElsewhere);
         Assert.Equal(InputChange.Moved, InputFingerprint.Compare(before, after, watch).Change);
     }
 

@@ -115,6 +115,29 @@ public sealed class MachineWideMutexTests
         Assert.Equal(expected.Select(TimeSpan.FromMilliseconds), asked);
     }
 
+    /// <summary>
+    /// A window already passed when the wait first looks - its thread held up past it - is one try that does not wait: what
+    /// is left of it is never handed to the system below nothing, which reads one millisecond below as for ever, and
+    /// refuses the rest.
+    /// </summary>
+    [Fact]
+    public void AWindowAlreadyPassedAtTheFirstLook_IsOneTryThatDoesNotWait()
+    {
+        var asked = new List<TimeSpan>();
+
+        var taken = MachineWideMutex.Wait(
+            slice =>
+            {
+                asked.Add(slice);
+                return false;
+            },
+            TimeSpan.FromMilliseconds(500),
+            () => TimeSpan.FromSeconds(1));
+
+        Assert.False(taken);
+        Assert.Equal([TimeSpan.Zero], asked);
+    }
+
     /// <summary>A mutex another user holds is refused at once: no retry makes it this user's.</summary>
     [Fact]
     public void AMutexAnotherUserHolds_IsRefusedAtOnce()

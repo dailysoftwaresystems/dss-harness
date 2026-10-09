@@ -68,9 +68,18 @@ public interface IGitClient
     /// Every tracked path whose working state under <paramref name="directory"/> differs from what <paramref name="commit"/>
     /// holds - its content, compared as git status compares it, the index's line-ending rules among them, or its mode
     /// where the repository trusts modes - its deletion included. An untracked file is not listed. Nothing is written.
+    /// A set to ask of a path: a name that is not UTF-8 is no path this tool can ask about, and is not in it -
+    /// <see cref="ListNamesChangedSinceAsync"/> lists every name.
     /// </summary>
     /// <exception cref="HarnessException">git could not compare the work tree with the commit.</exception>
     Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What <see cref="ListChangedSinceAsync"/> answers, every name as git holds it: a name that is not UTF-8 among them, for
+    /// a caller that takes each name listed as a path to work with, and refuses one it cannot open.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not compare the work tree with the commit.</exception>
+    Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The id of the blob <paramref name="commit"/> holds at each of <paramref name="paths"/>, or <see langword="null"/>

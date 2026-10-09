@@ -1096,6 +1096,114 @@ public sealed partial class CliEndToEndTests
         Assert.DoesNotContain(named, served.StandardError, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// A leg the real binary runs for another machine, as its host agent runs one, asks the host's heavy-leg slots under
+    /// the run the request says it is a leg of, beside its command: behind a slot only that run's legs hold, its wait is
+    /// its own command's, said so and never counted - here against a wait of about a second the host allows, which it
+    /// outlasts - and it starts once that leg gives its slot back.
+    /// </summary>
+    [Fact]
+    public async Task ALegAHostRunsForAnotherMachine_AsksItsSlotsUnderTheRunThatSentIt_SoAWaitBehindThatRunsLegsIsNotCounted()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var token = TestContext.Current.CancellationToken;
+        var (environment, holds) = OwnUserData(temp);
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            SshItems = { "pi" },
+            Hosts = new HostsConfig
+            {
+                Ssh =
+                {
+                    ["pi"] = new SshHostConfig
+                    {
+                        RepositoryPath = "~/repo",
+
+                        // One slot, looked at every second, and a limit of 100% of the memory, which any reading short of a
+                        // full machine is below.
+                        Admission = new AdmissionSettings
+                        {
+                            HeavyLegs = 1,
+                            MaxMemoryPercent = 100,
+                            SettleSeconds = [0, 0],
+                            PollSeconds = 1,
+                            MaxWaitMinutes = 0.02,
+                            MinFreeGiB = 0,
+                        },
+                    },
+                },
+            },
+            Tools = { new ToolConfig { Name = "dotnet" } },
+            Legs =
+            {
+                ["sent-here"] = new LegConfig
+                {
+                    Os = platform.PlatformKey,
+                    Processor = platform.Processor,
+                    Config = "debug",
+                    Test = new TestConfig { All = new TestInvocation { Runner = "dotnet", Args = ["--version"], SuccessPattern = @"^\d+\.\d+" } },
+                },
+            },
+        });
+
+        // The slot held by another leg of the run that sends this one, in the record the CLI keeps in the user's data it
+        // was given: this process's, which lives while the leg waits.
+        var record = Path.Combine(Path.GetDirectoryName(holds)!, HeavyLegSlots.FileNameFor(platform.MachineId.Id));
+        var run = RunId.New();
+        using var held = AdmissionKit.Slots(harness, record).Ask(run.Value, "test", "another", "ssh pi", "~/repo", "debug", 1);
+
+        const string Nonce = "0123456789abcdef0123456789abcdef";
+        var request = JsonSerializer.Serialize(
+            new HostAgentRequest
+            {
+                Kind = HostAgentRequestKind.Run,
+                Directory = temp.Path,
+                Arguments = ["test", "--no-build", "--legs", "sent-here", "--json", RemoteLegRunner.HereOption, "ssh pi"],
+                Nonce = Nonce,
+                RunId = run.Value,
+            },
+            HostAgentProtocol.JsonOptions);
+
+        var serving = CliRunner.RunAsync(["host-agent"], token, standardInput: request + "\n", environment: environment);
+
+        // In line behind the slot, and given a few of its looks there - each past the second it may wait - before the slot
+        // is given back.
+        await EventuallyAsync(() => Read(record)?.Contains("\"sent-here\"", StringComparison.Ordinal) == true, token);
+        await Task.Delay(TimeSpan.FromSeconds(3), token);
+        held.Dispose();
+
+        var served = await serving;
+
+        Assert.Equal(HarnessExit.Success, served.ExitCode);
+        Assert.Contains(
+            "sent-here: waits for one of this machine's 1 heavy-leg slot(s), 1 leg(s) ahead, each its own command's, which does not "
+            + "count against the",
+            served.StandardError,
+            StringComparison.Ordinal);
+
+        using var answer = JsonDocument.Parse(HostAgentProtocol.SinceServing(served.StandardOutput, Nonce));
+        Assert.Equal("passed", Assert.Single(answer.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("verdict").GetString());
+
+        // What the record holds as the CLI writes it; nothing where it is not there yet, or is held as it is written.
+        static string? Read(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+    }
+
     /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it never comes.</summary>
     private static async Task EventuallyAsync(Func<bool> done, CancellationToken cancellationToken)
     {

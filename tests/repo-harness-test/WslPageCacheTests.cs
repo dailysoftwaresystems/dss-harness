@@ -4,6 +4,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
+using RepoHarness.Core.Results;
 using RepoHarness.Core.Secrets;
 
 namespace RepoHarness.Tests;
@@ -40,14 +41,14 @@ public sealed class WslPageCacheTests
     }
 
     /// <summary>
-    /// Nothing is dropped, and nothing said, where there is nothing to drop: this machine is not Windows, no host reaches a
-    /// distribution - none is declared, or its item cannot be read - or none that one reaches is running, and a stopped
-    /// one, which holds no cache, is never started for it. Only where a host reaches one is WSL asked which run.
+    /// Nothing is dropped, and nothing said, where there is nothing to drop: this machine is not Windows - WSL runs nowhere
+    /// else - it declares no WSL host, or no distribution a host reaches is running, and a stopped one, which holds no cache,
+    /// is never started for it. Only where a host reaches one is WSL asked which run.
     /// </summary>
     [Theory]
     [InlineData("linux", false)]
+    [InlineData("macos", false)]
     [InlineData("no host", false)]
-    [InlineData("unread item", false)]
     [InlineData("none running", true)]
     public async Task NothingIsDropped_WhereThereIsNothingToDrop(string machine, bool asked)
     {
@@ -61,18 +62,42 @@ public sealed class WslPageCacheTests
             },
         };
 
-        var platform = machine == "linux" ? PlatformId.Linux : PlatformId.Windows;
-
-        var drop = machine switch
+        var platform = machine switch
         {
-            "no host" => await DropAsync(hosts, platform),
-            "unread item" => await DropAsync(hosts, platform, ("ubuntu", null)),
-            _ => await DropAsync(hosts, platform, ("ubuntu", "Ubuntu-24.04")),
+            "linux" => PlatformId.Linux,
+            "macos" => PlatformId.MacOs,
+            _ => PlatformId.Windows,
         };
+
+        var drop = machine == "no host"
+            ? await DropAsync(hosts, platform)
+            : await DropAsync(hosts, platform, ("ubuntu", "Ubuntu-24.04"));
 
         Assert.Null(drop);
         Assert.Empty(hosts.Calls);
         Assert.Equal(asked ? 1 : 0, listings);
+    }
+
+    /// <summary>
+    /// A host whose item cannot be read reaches no distribution - its legs cannot run either - and where no other host
+    /// reaches one, the drop is said not to be made, naming the host and why its item could not be read: a leg the cache
+    /// keeps waiting is told why none was dropped. Another host that reaches a running one drops it as ever.
+    /// </summary>
+    [Fact]
+    public async Task AHostWhoseItemCannotBeRead_IsSaid_WhereNoOtherReachesADistribution()
+    {
+        var hosts = new ScriptedHostCommands((_, _) => HostResults.Ok(Printed))
+        {
+            RunningWslDistributions = () => HostResults.Ok("Ubuntu-24.04\n"),
+        };
+
+        var alone = await DropAsync(hosts, PlatformId.Windows, ("ubuntu", null));
+        var beside = await DropAsync(hosts, PlatformId.Windows, ("ubuntu", null), ("other", "Ubuntu-24.04"));
+
+        Assert.NotNull(alone);
+        Assert.Equal((false, "WSL's page cache was not dropped: wsl ubuntu: '.harness-config/wslDistros/ubuntu/.env' could not be read"), (alone.Done, alone.Said));
+        Assert.NotNull(beside);
+        Assert.Equal("WSL's page cache was dropped as root in wsl other, 21.8 GiB of it", beside.Said);
     }
 
     /// <summary>
@@ -82,6 +107,7 @@ public sealed class WslPageCacheTests
     /// </summary>
     [Theory]
     [InlineData("listing failed", false, "WSL's page cache was not dropped: WSL did not say which distributions run (exit 1): Error code: Wsl/Service/E_UNEXPECTED")]
+    [InlineData("listing unreachable", false, "WSL's page cache was not dropped: 'wsl' could not be started: The file cannot be accessed by the system.")]
     [InlineData("WSL unreachable", false, "WSL's page cache was not dropped: wsl ubuntu could not be reached: 'wsl' could not be started: The file cannot be accessed by the system.")]
     [InlineData("drop failed", false, "WSL's page cache could not be dropped as root in wsl ubuntu (exit 2): sh: 1: cannot create /proc/sys/vm/drop_caches: Read-only file system")]
     [InlineData("drop timed out", false, "WSL's page cache could not be dropped as root in wsl ubuntu: there was no answer within 120 seconds")]
@@ -96,9 +122,12 @@ public sealed class WslPageCacheTests
             _ => HostResults.Ok(string.Empty),
         })
         {
-            RunningWslDistributions = () => failure == "listing failed"
-                ? HostResults.Failed(1, "Error code: Wsl/Service/E_UNEXPECTED\n")
-                : HostResults.Ok("Ubuntu-24.04\n"),
+            RunningWslDistributions = () => failure switch
+            {
+                "listing failed" => HostResults.Failed(1, "Error code: Wsl/Service/E_UNEXPECTED\n"),
+                "listing unreachable" => throw new HarnessException(HarnessExit.CommandFailed, "'wsl' could not be started: The file cannot be accessed by the system."),
+                _ => HostResults.Ok("Ubuntu-24.04\n"),
+            },
         };
 
         var drop = await DropAsync(hosts, PlatformId.Windows, ("ubuntu", "Ubuntu-24.04"));
