@@ -71,7 +71,10 @@ internal static class SeedAgentCommand
 
     internal static Command Create()
     {
-        var command = new Command(Name, "Seed a live agent again with the main tree's uncommitted state; refused where its worktree holds changes of its own - a copy it was handed and left alone is not one - unless --force.");
+        var command = new Command(
+            Name,
+            "Seed a live agent again with the main tree's uncommitted state, and every path the main tree holds otherwise than the agent shares it, committed or "
+            + "not; refused where its worktree holds changes of its own - a copy it was handed and left alone is not one - unless --force.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Options.Add(EmptyOption);
@@ -112,7 +115,9 @@ internal static class RefreshAgentCommand
     {
         var command = new Command(
             Name,
-            "Hand a live agent the main tree's changes under the paths, recorded as handed to it so its fold leaves them out; refused, copying nothing, where the agent changed or deleted one of them.");
+            "Hand a live agent every path under the paths that the main tree holds otherwise than the agent shares it - not what it was last handed, or "
+            + "not what its base holds - committed or not, recorded as handed to it so its fold leaves them out; refused, copying nothing, where the agent "
+            + "changed or deleted one of them.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Arguments.Add(PathsArgument);
@@ -125,6 +130,49 @@ internal static class RefreshAgentCommand
                 context.ParseResult.GetRequiredValue(OrchestratorArgument),
                 context.ParseResult.GetRequiredValue(AgentArgument),
                 context.ParseResult.GetValue(PathsArgument) ?? [],
+                context.ParseResult.GetValue(ApplyOption),
+                cancellationToken)));
+
+        return command;
+    }
+}
+
+/// <summary>Wires <c>DssHarness rebase-agent</c>.</summary>
+internal static class RebaseAgentCommand
+{
+    internal const string Name = AgentService.RebaseCommand;
+
+    private static readonly Argument<string> OrchestratorArgument = OrchestrationArguments.Orchestrator("The agent's orchestrator.");
+
+    private static readonly Argument<string> AgentArgument = OrchestrationArguments.Agent("The agent whose base to move.");
+
+    private static readonly Option<string[]> SettledOption = new(FoldAllowances.SettledOption)
+    {
+        HelpName = "path",
+        Description = "A path the agent changed that the main tree committed a change to since its base, whose copy you reconciled by hand: kept as its own change on the new base. Once for each path.",
+    };
+
+    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Move it; without it, only say what moving it would bring in and keep.");
+
+    internal static Command Create()
+    {
+        var command = new Command(
+            Name,
+            "Move a live agent's base to the main tree's HEAD: what the main tree committed since comes into its worktree as git holds it, and its own "
+            + "changes and what it was handed stay; refused, moving nothing, where it changed a path the main tree committed a change to since, "
+            + "unless --settled. Run again after one that stopped part way, it finishes it.");
+        command.Arguments.Add(OrchestratorArgument);
+        command.Arguments.Add(AgentArgument);
+        command.Options.Add(SettledOption);
+        command.Options.Add(ApplyOption);
+        GlobalOptions.AddTo(command);
+
+        command.SetAction(CommandRunner.Wrap(Name, (context, cancellationToken) => context.Get<IAgentService>()
+            .RebaseAsync(
+                context.Directory,
+                context.ParseResult.GetRequiredValue(OrchestratorArgument),
+                context.ParseResult.GetRequiredValue(AgentArgument),
+                context.ParseResult.GetValue(SettledOption) ?? [],
                 context.ParseResult.GetValue(ApplyOption),
                 cancellationToken)));
 

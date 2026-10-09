@@ -392,20 +392,37 @@ public sealed class WorktreeService(
             return null;
         }
 
-        var recorded = await _gitClient
-            .RunAsync(
-                layout.MainCheckoutRoot,
-                ["update-ref", BaseCommitRef(worktreeName), commit],
-                cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-
         // The commit is what the worktree was made from whether or not the record took: said, and still returned.
-        if (!recorded.Succeeded)
+        if (await WriteBaseCommitAsync(_gitClient, layout.MainCheckoutRoot, worktreeName, commit, cancellationToken).ConfigureAwait(false) is { } failure)
         {
-            _output.Detail(CreateCommand, $"could not record the base commit: {recorded.FailureMessage}");
+            _output.Detail(CreateCommand, $"could not record the base commit: {failure}");
         }
 
         return commit;
+    }
+
+    /// <summary>
+    /// Records <paramref name="commit"/> as the commit the worktree named <paramref name="worktreeName"/> stands on, under
+    /// <c>refs/harness/worktree-base/</c>: once when it is made, and again each time an agent's base is moved.
+    /// </summary>
+    /// <param name="gitClient">Writes the ref.</param>
+    /// <param name="mainCheckoutRoot">The main checkout's root.</param>
+    /// <param name="worktreeName">The worktree's name under the worktrees root.</param>
+    /// <param name="commit">The commit.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <returns>Why the record could not be written; null where it was.</returns>
+    internal static async Task<string?> WriteBaseCommitAsync(
+        IGitClient gitClient,
+        string mainCheckoutRoot,
+        string worktreeName,
+        string commit,
+        CancellationToken cancellationToken)
+    {
+        var recorded = await gitClient
+            .RunAsync(mainCheckoutRoot, ["update-ref", BaseCommitRef(worktreeName), commit], cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+
+        return recorded.Succeeded ? null : recorded.FailureMessage;
     }
 
     /// <summary>Reads the recorded base commit of one worktree, or null when none was recorded.</summary>

@@ -123,6 +123,29 @@ public interface IGitClient
     /// </remarks>
     Task IndexExactlyAsync(string directory, IReadOnlyCollection<string> paths, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Makes the work tree at <paramref name="directory"/>, and its index, hold at each of <paramref name="paths"/> what
+    /// <paramref name="commit"/> holds there, written through git's own filters and line-ending rules, and removes each
+    /// one it does not hold: <c>git checkout --no-overlay</c>, every path read literally. No other path is touched, and
+    /// HEAD does not move.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="paths">Paths relative to the root, with forward separators, as git names them.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not write them.</exception>
+    Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves the HEAD of the work tree at <paramref name="directory"/> - the branch it is on, where it is on one - and its
+    /// index to <paramref name="commit"/>, and leaves every file in the work tree as it is: <c>git reset --mixed</c>.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not move them.</exception>
+    Task ResetToAsync(string directory, string commit, CancellationToken cancellationToken = default);
+
     /// <summary>The index file git uses for the work tree at <paramref name="directory"/>, as an absolute path.</summary>
     /// <exception cref="HarnessException">git could not say.</exception>
     Task<string> GetIndexFileAsync(string directory, CancellationToken cancellationToken = default);

@@ -303,6 +303,57 @@ public sealed class GitClientTests
         Assert.Equal(["deleted.txt", "edited.txt"], changed.Order(StringComparer.Ordinal));
     }
 
+    /// <summary>
+    /// Checking paths out at a commit writes each as the commit holds it and removes each it does not hold, reads every path
+    /// literally - a name that reads as a wildcard matches only itself - and leaves every other path, and HEAD, alone.
+    /// </summary>
+    [Fact]
+    public async Task CheckOutAtAsync_WritesExactlyThePathsNamed_AsTheCommitHoldsThem()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("a[x]b.txt", "one\n");
+        temp.WriteFile("axb.txt", "one\n");
+        await harness.CommitAllAsync(temp.Path, "files", cancellationToken);
+        var first = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile("a[x]b.txt", "two\n");
+        temp.WriteFile("axb.txt", "two\n");
+        temp.WriteFile("new.txt", "new\n");
+        await harness.CommitAllAsync(temp.Path, "second", cancellationToken);
+        var second = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+
+        await harness.GitClient.CheckOutAtAsync(temp.Path, first, ["a[x]b.txt", "new.txt"], cancellationToken);
+
+        Assert.Equal("one\n", File.ReadAllText(temp.Combine("a[x]b.txt")));
+        Assert.Equal("two\n", File.ReadAllText(temp.Combine("axb.txt")));
+        Assert.False(File.Exists(temp.Combine("new.txt")));
+        Assert.Equal(second, await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken));
+    }
+
+    /// <summary>Resetting to a commit moves HEAD and the index there, and leaves every file in the work tree as it was.</summary>
+    [Fact]
+    public async Task ResetToAsync_MovesHeadAndTheIndex_AndNoFile()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("a.txt", "one\n");
+        await harness.CommitAllAsync(temp.Path, "first", cancellationToken);
+        var first = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile("a.txt", "two\n");
+        await harness.CommitAllAsync(temp.Path, "second", cancellationToken);
+
+        await harness.GitClient.ResetToAsync(temp.Path, first, cancellationToken);
+
+        Assert.Equal(first, await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken));
+        Assert.Equal("two\n", File.ReadAllText(temp.Combine("a.txt")));
+        Assert.Equal(["a.txt"], await harness.GitClient.ListChangedSinceAsync(temp.Path, first, cancellationToken));
+        Assert.Empty((await harness.RunGitAsync(temp.Path, ["diff", "--cached", "--name-only"], cancellationToken)).StandardOutput.Trim());
+    }
+
     /// <summary>A file the commit lists that git cannot read is never answered as no file there: that would take it for one the agent added.</summary>
     [Fact]
     public async Task BlobIdsAtAsync_RefusesAFileTheCommitListsButGitCannotRead()

@@ -33,7 +33,7 @@ public sealed partial class CliEndToEndTests
         [
             "init", "verify-git", "create-worktree", "delete-worktree", "list-worktree",
             "create-orchestrator", "delete-orchestrator", "list-orchestrator",
-            "create-agent", "seed-agent", "refresh-agent", "fold-agent", "delete-agent",
+            "create-agent", "seed-agent", "refresh-agent", "rebase-agent", "fold-agent", "delete-agent",
             "check-root-litter", "check-anchor-citations", "fix-line-endings", "check-ci-legs",
             "legs", "install-missing-tools", "sync", "build", "test", "run", "host-exec", "help",
         ];

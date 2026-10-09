@@ -1961,6 +1961,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>...] [--apply]");
+        builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] [{FoldAllowances.SettledOption} <path>]...");
         var allowances = $"[{FoldAllowances.SettledOption} <path>]... [{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
         builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {allowances}");
         builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] {allowances}");
@@ -1984,9 +1985,25 @@ internal static class HelpCommand
             + "of its own, is named and not handed; --empty hands it nothing. A symbolic link among it is refused before the "
             + "worktree is made, so nothing is left behind. seed-agent does it again, refused over changes of the agent's own - a "
             + "copy it was handed and left alone is not one - unless --force; --empty hands it nothing more, keeping what it was "
-            + "handed before. refresh-agent hands a live agent the main tree's changes under the paths given - the anchor "
-            + "registries' directory where none are - a dry run until --apply, refused, copying nothing, where the agent changed "
-            + "or deleted one, and records them as handed to it, so its fold leaves them out.");
+            + "handed before. Seeding again hands besides every path the main tree holds otherwise than the agent shares it, "
+            + "committed or not. refresh-agent hands a live agent every such path under the paths given - the anchor registries' "
+            + "directory where none are: one whose main-tree copy is not what the agent was last handed or folded, where it was, "
+            + "put back as the main tree's HEAD holds it included, and otherwise one the main tree holds otherwise than the agent's "
+            + "base, committed since or not. It is a dry run until --apply, refused, copying nothing, where the agent changed or "
+            + "deleted one, and records them as handed to it, so its fold leaves them out; a symbolic link the main tree committed "
+            + "is named and never handed. Both say when the agent's base is not the main tree's HEAD.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Rebasing. rebase-agent moves a live agent's base to the main tree's HEAD, a dry run until --apply. Each path the "
+            + "two commits hold differently that the agent holds as its base does comes into its worktree as git holds it - a "
+            + "change, a new file, a deletion or a link - and its own changes, and what it was handed, stay: its seed still says "
+            + "what it shares, and refresh-agent hands it any of those the main tree moved since. A path it changed that the main "
+            + "tree committed a change to since - an edit, a deletion, or a file of its own where the main tree committed one - "
+            + "refuses the move, nothing changed, unless --settled <path> names it: you reconciled its copy by hand, and it stays as "
+            + "its own change on the new base. What the new base brings is written first, then HEAD and the index move, then its "
+            + "record names the new base: run again after a move that stopped part way, it finishes it, and fold-agent and "
+            + "delete-agent say such a move is one.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2044,8 +2061,9 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "Every command that writes the main tree or an agent's worktree holds it, as a sync holds a copy - fold-agent, "
-            + "seed-agent, refresh-agent and delete-agent hold the agent's worktree as well as the main tree - so no leg builds in "
-            + "either meanwhile, and once one has written, an interruption waits for it to finish. delete-agent refuses to run from "
+            + "seed-agent, refresh-agent and delete-agent hold the agent's worktree as well as the main tree, and rebase-agent "
+            + "holds its worktree - so no leg builds in either meanwhile, and once one has written, an interruption waits for it "
+            + "to finish. delete-agent refuses to run from "
             + "inside the worktree it removes, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
             + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "

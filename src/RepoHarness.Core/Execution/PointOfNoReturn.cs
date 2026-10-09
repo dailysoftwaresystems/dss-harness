@@ -19,6 +19,7 @@ public static class PointOfNoReturn
         AgentService.CreateCommand,
         AgentService.SeedCommand,
         AgentService.RefreshCommand,
+        AgentService.RebaseCommand,
         AgentService.FoldCommand,
         AgentService.DeleteCommand,
         OrchestratorService.DeleteCommand,

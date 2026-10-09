@@ -1273,13 +1273,16 @@ public sealed partial class HelpTests
 
         Assert.Equal(0, result.ExitCode);
 
-        foreach (var command in new[] { "create-orchestrator", "delete-orchestrator", "list-orchestrator", "create-agent", "seed-agent", "refresh-agent", "fold-agent", "delete-agent" })
+        foreach (var command in new[] { "create-orchestrator", "delete-orchestrator", "list-orchestrator", "create-agent", "seed-agent", "refresh-agent", "rebase-agent", "fold-agent", "delete-agent" })
         {
             Assert.Contains($"  {ToolPackage.Command} {command} ", result.StandardOutput, StringComparison.Ordinal);
         }
 
         Assert.Contains("agents/<agent>/seed.json", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
+        Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
+        Assert.Contains("refuses the move, nothing changed, unless --settled <path> names it", text, StringComparison.Ordinal);
+        Assert.Contains("run again after a move that stopped part way, it finishes it", text, StringComparison.Ordinal);
         Assert.Contains("never forced, and its evidence check kept, so a file written late stops it", text, StringComparison.Ordinal);
         Assert.Contains("a file changed or new since is work, left for you", text, StringComparison.Ordinal);
         Assert.Contains("one not found is said, and one found and not kept stops it before anything is closed", text, StringComparison.Ordinal);

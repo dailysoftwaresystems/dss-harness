@@ -24,6 +24,7 @@ root.Subcommands.Add(ListOrchestratorCommand.Create());
 root.Subcommands.Add(CreateAgentCommand.Create());
 root.Subcommands.Add(SeedAgentCommand.Create());
 root.Subcommands.Add(RefreshAgentCommand.Create());
+root.Subcommands.Add(RebaseAgentCommand.Create());
 root.Subcommands.Add(FoldAgentCommand.Create());
 root.Subcommands.Add(DeleteAgentCommand.Create());
 root.Subcommands.Add(WriteAnchorCommand.Create());

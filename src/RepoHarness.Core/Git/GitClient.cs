@@ -443,6 +443,40 @@ public sealed class GitClient(
         }
     }
 
+    public async Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        if (paths.Count == 0)
+        {
+            return;
+        }
+
+        // The paths travel on standard input, NUL-separated, so no list of them outgrows a command line, and each is read
+        // literally: a name holding a wildcard or a colon never matches another path than its own.
+        var result = await RunCoreAsync(
+                directory,
+                ["--literal-pathspecs", "checkout", "--no-overlay", "--quiet", commit, "--pathspec-from-file=-", "--pathspec-file-nul"],
+                echoOutput: false,
+                untranslated: false,
+                indexFile: null,
+                string.Join('\0', paths),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(result, $"write what {commit} holds into '{directory}'");
+    }
+
+    public async Task ResetToAsync(string directory, string commit, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+
+        var result = await RunCoreAsync(directory, ["reset", "--mixed", "--quiet", commit, "--"], echoOutput: false, untranslated: false, cancellationToken).ConfigureAwait(false);
+
+        Ensure(result, $"move '{directory}' to {commit}");
+    }
+
     /// <summary>
     /// The object each of <paramref name="paths"/> holds, written to the repository, in the same order:
     /// its bytes as they stand, through no filter and no line-ending conversion.

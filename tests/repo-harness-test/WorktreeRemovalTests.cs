@@ -1239,6 +1239,18 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         return inner.IndexExactlyAsync(directory, paths, Token(cancellationToken));
     }
 
+    public Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+    {
+        BeforeEveryCall?.Invoke();
+        return inner.CheckOutAtAsync(directory, commit, paths, Token(cancellationToken));
+    }
+
+    public Task ResetToAsync(string directory, string commit, CancellationToken cancellationToken = default)
+    {
+        BeforeEveryCall?.Invoke();
+        return inner.ResetToAsync(directory, commit, Token(cancellationToken));
+    }
+
     public Task<string> GetIndexFileAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.GetIndexFileAsync(directory, Token(cancellationToken)));
 

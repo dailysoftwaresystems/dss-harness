@@ -116,6 +116,31 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>
+    /// A fold after the main tree committed writes the agent's own work and leaves what the main tree committed meanwhile:
+    /// a path the agent never changed is not its work, whatever the main tree's HEAD holds now, and a path it was handed and
+    /// left alone stays as the main tree changed and committed it since.
+    /// </summary>
+    [Fact]
+    public async Task AFoldAfterTheMainTreeCommitted_WritesOnlyTheAgentsOwnWork()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nhanded\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nhanded\nchanged since\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", TestContext.Current.CancellationToken);
+
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal("one\ncommitted\n", OrchestrationKit.Read(kit.Main, "a.txt"));
+        Assert.Equal("x\nhanded\nchanged since\n", OrchestrationKit.Read(kit.Main, "docs/x.md"));
+    }
+
+    /// <summary>
     /// --settled leaves a path reconciled by hand out, deletions included, which are asked about after it, so the rest of
     /// the agent's work goes in; the settled paths are named, and nothing is written for them.
     /// </summary>

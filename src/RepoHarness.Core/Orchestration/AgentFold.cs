@@ -56,12 +56,41 @@ public sealed record FoldPlan
 /// <param name="Stopped">Why it stopped part way; null where it wrote everything.</param>
 public sealed record FoldApplied(IReadOnlyList<string> Written, IReadOnlyList<string> Deleted, string? Stopped);
 
-/// <summary>What the main tree's uncommitted state hands an agent: each file copied, each deletion made, and each directory it cannot hand.</summary>
+/// <summary>
+/// What moving an agent's base from one commit to another does to its worktree, measured; nothing written. Every path the
+/// two commits hold differently is in exactly one list, or refused.
+/// </summary>
+public sealed record RebasePlan
+{
+    /// <summary>The paths the agent holds as its base does, which come into its worktree as the new base holds them.</summary>
+    public required IReadOnlyList<string> Taken { get; init; }
+
+    /// <summary>The paths it shares with the main tree - handed to it, or folded - which stay as they are: its seed still says what they are.</summary>
+    public required IReadOnlyList<string> Kept { get; init; }
+
+    /// <summary>The paths it holds as the new base does already.</summary>
+    public required IReadOnlyList<string> AlreadyThere { get; init; }
+
+    /// <summary>The paths it changed that were declared settled by hand: its copy stays, its own change on the new base.</summary>
+    public required IReadOnlyList<string> Settled { get; init; }
+
+    /// <summary>Why its base cannot be moved, path by path; empty where it can.</summary>
+    public required IReadOnlyList<string> Refusals { get; init; }
+}
+
+/// <summary>What the main tree hands an agent: each file copied, each deletion made, and what it cannot hand.</summary>
 /// <param name="Files">The changed files, each copied into the agent's worktree.</param>
 /// <param name="Deletions">The paths the main tree deleted, each removed from the agent's worktree.</param>
 /// <param name="Directories">The untracked directories git will not look into - repositories of their own - which a fold never moves: named, and not handed.</param>
-public sealed record Handable(IReadOnlyList<string> Files, IReadOnlyList<string> Deletions, IReadOnlyList<string> Directories)
+/// <param name="Links">
+/// The symbolic links the main tree committed since the agent's base, which are never handed as the files they lead to:
+/// named, and not handed; moving the agent's base brings each in as git holds it. One not committed refuses the hand-over.
+/// </param>
+public sealed record Handable(IReadOnlyList<string> Files, IReadOnlyList<string> Deletions, IReadOnlyList<string> Directories, IReadOnlyList<string>? Links = null)
 {
+    /// <summary>A hand-over of nothing.</summary>
+    public static Handable None { get; } = new([], [], []);
+
     /// <summary>How many paths are handed over: files and deletions.</summary>
     public int Count => Files.Count + Deletions.Count;
 }
@@ -85,6 +114,9 @@ public sealed record Handable(IReadOnlyList<string> Files, IReadOnlyList<string>
 /// <param name="platform">Whether files have an execute bit here, and how paths compare.</param>
 internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IFilePermissions permissions, IHostPlatform platform)
 {
+    /// <summary>What cannot be done with a path the main tree changes that no record can keep, to end a sentence.</summary>
+    private const string HandingConsequence = "it cannot be handed to an agent";
+
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IFilePermissions _permissions = permissions;
@@ -474,18 +506,29 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 throw name.Unreadable(consequence);
             }
 
-            if (OrchestrationRules.RelativePathProblem(path, $"'{ReportText.Printable(directory)}' changes a path that") is { } problem)
-            {
-                throw new HarnessException(
-                    HarnessExit.Refused,
-                    $"{problem}, and no record of an agent can keep a path another platform would read as somewhere else, so {consequence}. "
-                    + "Rename or remove it first. Nothing was written.");
-            }
-
+            RequireKeepable(directory, path, consequence);
             paths.Add(path);
         }
 
         return [.. paths.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// Refuses <paramref name="path"/>, which the tree at <paramref name="directory"/> changes, where no record of an agent
+    /// can keep it: rooted, or with an empty, <c>.</c> or <c>..</c> part, on some platform.
+    /// </summary>
+    /// <param name="directory">A work tree's root.</param>
+    /// <param name="path">A path it changes, as git names it.</param>
+    /// <param name="consequence">What cannot be done with a path no record can keep, to end a sentence.</param>
+    private static void RequireKeepable(string directory, string path, string consequence)
+    {
+        if (OrchestrationRules.RelativePathProblem(path, $"'{ReportText.Printable(directory)}' changes a path that") is { } problem)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"{problem}, and no record of an agent can keep a path another platform would read as somewhere else, so {consequence}. "
+                + "Rename or remove it first. Nothing was written.");
+        }
     }
 
     /// <summary>
@@ -502,13 +545,89 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// (<see cref="HarnessExit.Refused"/>).
     /// </exception>
     public async Task<Handable> HandableAsync(string main, IReadOnlyList<string> floor, IReadOnlyList<string>? within, CancellationToken cancellationToken)
+        => Classify(main, await ChangedAsync(main, floor, HandingConsequence, within, cancellationToken).ConfigureAwait(false), uncommitted: null);
+
+    /// <summary>
+    /// What the main tree under <paramref name="within"/> - all of it where null - holds differently from what the agent
+    /// shares with it, off the floor: each path whose main-tree copy is not what the agent's seed records both trees held
+    /// when it was last handed it or folded, or, for a path it shares nothing for, not what its base holds, as git status
+    /// compares - committed or not. A copy the agent was handed is stale once the main tree moves it, whether the main tree
+    /// moved it back to its HEAD or committed it since; one it was never handed is stale once the main tree's copy is not
+    /// its base's. Each such file, each such deletion, each untracked directory git will not look into and each link the
+    /// main tree committed, named and not handed; one it has not committed refuses it. Every path is checked before any is
+    /// copied.
+    /// </summary>
+    /// <param name="main">The main checkout's root.</param>
+    /// <param name="baseCommit">The commit the agent's worktree was made from.</param>
+    /// <param name="seed">What the agent shares with the main tree.</param>
+    /// <param name="floor">The paths never moved between trees.</param>
+    /// <param name="within">Only the paths these cover; every path where null.</param>
+    /// <param name="everyUncommitted">
+    /// Whether every path of the main tree's uncommitted state is handed besides, whatever the agent shares: what seeding
+    /// again hands, over changes of the agent's own where it is forced to.
+    /// </param>
+    /// <param name="cancellationToken">Stops the question.</param>
+    /// <exception cref="HarnessException">
+    /// A path the main tree has not committed is a symbolic link, or one is a path no record can keep
+    /// (<see cref="HarnessExit.Refused"/>), or git could not answer.
+    /// </exception>
+    public async Task<Handable> MovedAsync(
+        string main,
+        string baseCommit,
+        SeedRecord seed,
+        IReadOnlyList<string> floor,
+        IReadOnlyList<string>? within,
+        bool everyUncommitted,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+
+        var uncommitted = await ChangedAsync(main, floor, HandingConsequence, within, cancellationToken).ConfigureAwait(false);
+        var sinceBase = await _gitClient.ListChangedSinceAsync(main, baseCommit, cancellationToken).ConfigureAwait(false);
+
+        bool Weighed(string path) => !TreeFloor.Covers(floor, path) && (within is null || PathPatterns.Matches(within, path));
+
+        var committed = sinceBase.Where(Weighed).ToList();
+
+        foreach (var path in committed)
+        {
+            RequireKeepable(main, path, HandingConsequence);
+        }
+
+        var candidates = uncommitted
+            .Concat(committed)
+            .Concat(seed.Weighed.Where(Weighed))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        // A link is never read as the file it leads to, so it is weighed by what git says of it alone: changed since the
+        // agent's base, committed or not.
+        var links = candidates.Where(path => _fileSystem.KindOf(Path.Combine(main, path)) == PathKind.Link).ToHashSet(StringComparer.Ordinal);
+        var moved = await DiffersAsync(main, baseCommit, seed, [.. candidates.Where(path => !links.Contains(path))], sinceBase, cancellationToken).ConfigureAwait(false);
+
+        var handed = moved
+            .Concat(links)
+            .Concat(everyUncommitted ? uncommitted : [])
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal);
+
+        return Classify(main, [.. handed], uncommitted.ToHashSet(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// <paramref name="paths"/> sorted by what the main tree holds at each: a file to copy, a deletion to make, a directory
+    /// git will not look into, or a link - refused where the main tree has not committed it, named and not handed where
+    /// it has. <paramref name="uncommitted"/> is the main tree's uncommitted state; every path is in it where null.
+    /// </summary>
+    private Handable Classify(string main, IReadOnlyList<string> paths, IReadOnlySet<string>? uncommitted)
     {
         var files = new List<string>();
         var deletions = new List<string>();
         var directories = new List<string>();
         var links = new List<string>();
+        var committedLinks = new List<string>();
 
-        foreach (var path in await ChangedAsync(main, floor, "it cannot be handed to an agent", within, cancellationToken).ConfigureAwait(false))
+        foreach (var path in paths)
         {
             switch (_fileSystem.KindOf(Path.Combine(main, path)))
             {
@@ -522,14 +641,14 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                     directories.Add(path);
                     break;
                 default:
-                    links.Add(path);
+                    (uncommitted is null || uncommitted.Contains(path) ? links : committedLinks).Add(path);
                     break;
             }
         }
 
         return links.Count switch
         {
-            0 => new Handable(files, deletions, directories),
+            0 => new Handable(files, deletions, directories, committedLinks.Count > 0 ? committedLinks : null),
             1 => throw new HarnessException(
                 HarnessExit.Refused,
                 $"'{ReportText.Printable(links[0])}' is a symbolic link, which is never handed to an agent as the file it leads to: commit it, or remove "
@@ -608,6 +727,108 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     }
 
     /// <summary>
+    /// Measures moving the agent's base from <paramref name="from"/> to <paramref name="to"/>; writes nothing. Each path the
+    /// two commits hold differently, as git compares them, is one of: shared with the main tree, which stays as its seed
+    /// records it; held as <paramref name="to"/> holds it already; held as <paramref name="from"/> holds it, which comes in
+    /// as <paramref name="to"/> holds it; or changed by the agent - an edit, a deletion, or a file of its own git does not
+    /// track - which is refused, unless declared settled by hand, when its copy stays as its change on the new base.
+    /// </summary>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="from">The commit its worktree was made from.</param>
+    /// <param name="to">The commit its base moves to.</param>
+    /// <param name="seed">What it shares with the main tree.</param>
+    /// <param name="settled">The paths declared settled by hand.</param>
+    /// <param name="cancellationToken">Stops the measuring.</param>
+    /// <exception cref="HarnessException">git could not answer, or names a path that is not UTF-8.</exception>
+    public async Task<RebasePlan> MeasureRebaseAsync(
+        string worktree,
+        string from,
+        string to,
+        SeedRecord seed,
+        IReadOnlyCollection<string> settled,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+
+        var committed = new List<string>();
+
+        foreach (var name in await _gitClient.ListNamesAsync(worktree, ["diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", from, to, "--"], cancellationToken).ConfigureAwait(false))
+        {
+            if (!name.IsUtf8)
+            {
+                throw name.Unreadable("the agent's base cannot be moved");
+            }
+
+            committed.Add(name.Text);
+        }
+
+        var settledPaths = settled.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal);
+        var shared = new Baselines(seed);
+        var sinceFrom = await _gitClient.ListChangedSinceAsync(worktree, from, cancellationToken).ConfigureAwait(false);
+        var sinceTo = await _gitClient.ListChangedSinceAsync(worktree, to, cancellationToken).ConfigureAwait(false);
+
+        // What git does not track is the agent's own, and no diff against a commit lists it: a new file, or a directory
+        // git will not look into, whose every path below is the agent's too.
+        var untracked = (await _gitClient.ReadStatusAsync(worktree, cancellationToken).ConfigureAwait(false))
+            .Where(entry => entry.Index == '?')
+            .Select(entry => entry.Path.Text)
+            .ToList();
+
+        bool Untracked(string path) => untracked.Any(name => name == path || (name.EndsWith('/') && path.StartsWith(name, StringComparison.Ordinal)));
+
+        var taken = new List<string>();
+        var kept = new List<string>();
+        var already = new List<string>();
+        var settledHere = new List<string>();
+        var refused = new List<(string Path, string Why)>();
+        var at = OrchestrationReports.Base(from);
+
+        foreach (var path in committed.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+        {
+            var own = Untracked(path);
+
+            if (shared.Of(path) is not null)
+            {
+                kept.Add(path);
+            }
+            else if (!own && !sinceTo.Contains(path))
+            {
+                already.Add(path);
+            }
+            else if (!own && !sinceFrom.Contains(path))
+            {
+                taken.Add(path);
+            }
+            else if (settledPaths.Contains(path))
+            {
+                settledHere.Add(path);
+            }
+            else
+            {
+                refused.Add((path, own
+                    ? $"'{path}': the agent made it, and the main tree committed a file there since the agent's base {at}"
+                    : _fileSystem.KindOf(Path.Combine(worktree, path)) == PathKind.None
+                        ? $"the agent deleted '{path}', and the main tree committed a change to it since the agent's base {at}"
+                        : $"'{path}': the agent changed it, and the main tree committed a change to it since the agent's base {at}"));
+            }
+        }
+
+        foreach (var stray in settledPaths.Where(path => !settledHere.Contains(path, StringComparer.Ordinal)).Order(StringComparer.Ordinal))
+        {
+            refused.Add((stray, $"--settled '{stray}' names no path the agent changed that the main tree committed a change to since, so it settles nothing: check its spelling"));
+        }
+
+        return new RebasePlan
+        {
+            Taken = taken,
+            Kept = kept,
+            AlreadyThere = already,
+            Settled = settledHere,
+            Refusals = [.. refused.OrderBy(refusal => refusal.Path, StringComparer.Ordinal).Select(refusal => refusal.Why)],
+        };
+    }
+
+    /// <summary>
     /// Which of <paramref name="paths"/> the agent changed: its copy is not what it shares with the main tree - a file with
     /// other content or mode, absent where a file was, or a file where none was - or, for a path it shares nothing for,
     /// differs from its base as git status compares, or is a file its base does not hold. Handing the main tree's over any
@@ -618,21 +839,42 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="seed">What it shares with the main tree.</param>
     /// <param name="paths">The paths to ask about.</param>
     /// <param name="cancellationToken">Stops the reading.</param>
-    public async Task<IReadOnlyList<string>> EditedAsync(string worktree, string baseCommit, SeedRecord seed, IReadOnlyList<string> paths, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<string>> EditedAsync(string worktree, string baseCommit, SeedRecord seed, IReadOnlyList<string> paths, CancellationToken cancellationToken)
+        => DiffersAsync(worktree, baseCommit, seed, paths, movedSinceBase: null, cancellationToken);
+
+    /// <summary>
+    /// Which of <paramref name="paths"/> the tree at <paramref name="tree"/> - the agent's worktree or the main tree - holds
+    /// otherwise than the agent shares with the main tree: not what its seed records both trees held - a file with other
+    /// content or mode, absent where a file was, or a file where none was - or, for a path it shares nothing for, not what
+    /// the agent's base holds, as git status compares, or a file its base does not hold.
+    /// </summary>
+    /// <param name="tree">The tree to ask about.</param>
+    /// <param name="baseCommit">The commit the agent's worktree was made from.</param>
+    /// <param name="seed">What the agent shares with the main tree.</param>
+    /// <param name="paths">The paths to ask about.</param>
+    /// <param name="movedSinceBase">What git already said the tree changes since the base; asked where null.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    private async Task<IReadOnlyList<string>> DiffersAsync(
+        string tree,
+        string baseCommit,
+        SeedRecord seed,
+        IReadOnlyList<string> paths,
+        IReadOnlySet<string>? movedSinceBase,
+        CancellationToken cancellationToken)
     {
         var shared = new Baselines(seed);
-        var edited = new List<string>();
+        var differs = new List<string>();
         var unseeded = new List<(string Path, Side Side)>();
 
         foreach (var path in paths)
         {
-            var side = await SideAsync(Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false);
+            var side = await SideAsync(Path.Combine(tree, path), cancellationToken).ConfigureAwait(false);
 
             if (shared.Of(path) is { } baseline)
             {
                 if (side != baseline)
                 {
-                    edited.Add(path);
+                    differs.Add(path);
                 }
             }
             else
@@ -643,19 +885,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         if (unseeded.Count > 0)
         {
-            var based = await _gitClient.BlobIdsAtAsync(worktree, baseCommit, [.. unseeded.Select(entry => entry.Path)], cancellationToken).ConfigureAwait(false);
-            IReadOnlySet<string> moved = unseeded.Any(entry => based[entry.Path] is not null)
-                ? await _gitClient.ListChangedSinceAsync(worktree, baseCommit, cancellationToken).ConfigureAwait(false)
-                : new HashSet<string>(StringComparer.Ordinal);
+            var based = await _gitClient.BlobIdsAtAsync(tree, baseCommit, [.. unseeded.Select(entry => entry.Path)], cancellationToken).ConfigureAwait(false);
+            IReadOnlySet<string> moved = movedSinceBase ?? (unseeded.Any(entry => based[entry.Path] is not null)
+                ? await _gitClient.ListChangedSinceAsync(tree, baseCommit, cancellationToken).ConfigureAwait(false)
+                : new HashSet<string>(StringComparer.Ordinal));
 
-            // A path its base holds is its change where it differs from the base, its deletion included; one its base lacks
-            // is its change where it holds anything there.
-            edited.AddRange(unseeded
+            // A path its base holds differs where it is not what the base holds, its deletion included; one its base lacks
+            // differs where anything is there.
+            differs.AddRange(unseeded
                 .Where(entry => based[entry.Path] is not null ? moved.Contains(entry.Path) : entry.Side.Kind != Kind.Absent)
                 .Select(entry => entry.Path));
         }
 
-        return [.. edited.Order(StringComparer.Ordinal)];
+        return [.. differs.Order(StringComparer.Ordinal)];
     }
 
     /// <summary>

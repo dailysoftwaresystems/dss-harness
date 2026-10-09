@@ -14,8 +14,8 @@ If a behaviour cannot be expressed in `config.json`, that is a defect.
 
 Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `list-worktree`, the orchestrator commands (`create-orchestrator`, `delete-orchestrator`,
-`list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `fold-agent`,
-`delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
+`list-orchestrator`, `create-agent`, `seed-agent`, `refresh-agent`, `rebase-agent`,
+`fold-agent`, `delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
 `sync`, `build`, `test`, `run`, `check-mutations`, `clean` and `help`.
@@ -561,9 +561,25 @@ where the platform has one, its execute bit, and each deletion made there too an
 then what the agent shares with the main tree, path by path. An untracked directory git will not look into - a
 repository of its own - is named and not handed, since a fold never moves one. A symbolic link is refused rather than
 handed over as the file it leads to, before the worktree is made, so the refusal leaves nothing behind. seed-agent
-counts as the agent's own only a change of what it shares that it made itself; refresh-agent hands over the main
-tree's later changes under the paths it is given the same way, refused, copying nothing, where the agent changed or
-deleted one of them.
+counts as the agent's own only a change of what it shares that it made itself. What the main tree holds later is
+weighed against what the agent shares (`AgentFold.MovedAsync`), never against git status alone, which forgets a path
+the main tree commits or puts back as its HEAD holds it: a path the agent was handed or folded is stale once the main
+tree's copy is not the one its seed records, and any other once the main tree's copy - committed since or not - is not
+what the agent's base holds, asked of git as a fold asks it. refresh-agent hands over every such path under the paths
+it is given, refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
+comparison asked of the agent's worktree), and seed-agent hands them besides the main tree's uncommitted state. A
+symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. Both
+say when the agent's base is not the main tree's HEAD.
+
+rebase-agent moves an agent's base to the main tree's HEAD (`AgentFold.MeasureRebaseAsync`). Each path the two commits
+hold differently (`git diff --name-only`, commit to commit) is shared - kept as its seed records it, since the seed,
+not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
+base holds it, and comes in as git holds it (`git checkout --no-overlay <commit>`, the paths on standard input and read
+literally), or changed by the agent - asked of git against both commits, with the files git does not track its own -
+which refuses the move unless `--settled` names it. The new base's paths are written first, then HEAD and the index
+move (`git reset --mixed`), then the record and the worktree's base ref name the new base: a worktree standing on a
+commit the main tree's history holds that its record does not name is a move stopped part way, which rebase-agent
+finishes and fold-agent and delete-agent refuse, saying so.
 
 An agent's contribution is a measurement (`AgentFold`): its worktree's status, and every path it shares with the
 main tree whether its status lists it or not, less the shared paths left as they were. Each path goes in exactly one
