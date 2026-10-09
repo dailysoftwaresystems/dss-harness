@@ -577,7 +577,9 @@ it is given, refused, copying nothing, where the agent changed or deleted one of
 comparison asked of the agent's worktree), and seed-agent hands them besides the main tree's uncommitted state. A
 symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
 commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,
-one `cat-file --batch-check` process) - and a directory is a repository of its own only where it holds its own `.git`,
+one `cat-file --batch-check` process, and the commit's listing for what that does not answer as a file or a directory:
+git 2.43 answers a submodule's entry naming a commit the repository lacks as missing, as it does a path the commit does
+not hold) - and a directory is a repository of its own only where it holds its own `.git`,
 or the index holds a submodule's entry there: named, never handed. Any other directory holds no file at its path, its
 files weighed on paths of their own, so a file the main tree turned into a directory is handed as the file's deletion
 and the directory's files, and a directory it turned into a file as the files' deletions and the file - every deletion

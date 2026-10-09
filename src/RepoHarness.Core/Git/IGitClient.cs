@@ -83,7 +83,9 @@ public interface IGitClient
 
     /// <summary>
     /// What <paramref name="commit"/> holds at each of <paramref name="paths"/>: a file and its blob, a directory, a
-    /// submodule's entry and the commit it names, or nothing. One git process for them all.
+    /// submodule's entry and the commit it names - whether or not this repository holds that commit, on every version of
+    /// git - or nothing. One git process for them all, and one listing of the commit where git could not read one of them
+    /// by its object: a path the commit does not hold, or a submodule's entry naming a commit this repository does not.
     /// </summary>
     /// <exception cref="HarnessException">
     /// git could not read the commit, answer for every path, or read a file the commit lists.

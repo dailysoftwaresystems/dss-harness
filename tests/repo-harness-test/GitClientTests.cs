@@ -358,7 +358,8 @@ public sealed class GitClientTests
     /// What a commit holds at a path is told apart - a file with its blob, a directory, a submodule's entry whether this
     /// repository holds the commit it names or not, and nothing - and so it is for a name holding a line break, which git
     /// cannot be asked about line by line: a directory or a submodule answered as nothing is how a directory a commit held
-    /// was taken for one an agent made.
+    /// was taken for one an agent made. A submodule's entry naming a commit this repository does not hold is one git 2.43
+    /// answers as missing, and later versions as a submodule: told apart on each.
     /// </summary>
     [Fact]
     public async Task HeldAtAsync_TellsAFileADirectoryASubmoduleAndNothingApart()
@@ -373,7 +374,7 @@ public sealed class GitClientTests
         var blob = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:docs/x.md"], cancellationToken)).StandardOutput.Trim();
         var elsewhere = new string('1', held.Length);
 
-        foreach (var entry in new[] { $"160000,{held},lib/held", $"160000,{elsewhere},lib/elsewhere", $"100644,{blob},odd\nfile.md", $"100644,{blob},odd\ndir/inner.md", $"160000,{held},odd\nsub" })
+        foreach (var entry in new[] { $"160000,{held},lib/held", $"160000,{elsewhere},lib/elsewhere", $"160000,{elsewhere},lib/unasked", $"100644,{blob},odd\nfile.md", $"100644,{blob},odd\ndir/inner.md", $"160000,{held},odd\nsub" })
         {
             // Git for Windows protects the names NTFS cannot hold by refusing them, a line break among them.
             await harness.RunGitAsync(temp.Path, ["-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", entry], cancellationToken);
@@ -381,12 +382,12 @@ public sealed class GitClientTests
 
         await harness.RunGitAsync(temp.Path, ["commit", "-q", "-m", "entries"], cancellationToken);
 
-        var answered = await harness.GitClient.HeldAtAsync(
-            temp.Path,
-            "HEAD",
-            ["docs/x.md", "docs", "lib/held", "lib/elsewhere", "none.txt", "odd\nfile.md", "odd\ndir", "odd\nsub", "odd\nnone"],
-            cancellationToken);
+        string[] asked = ["docs/x.md", "docs", "lib/held", "lib/elsewhere", "none.txt", "odd\nfile.md", "odd\ndir", "odd\nsub", "odd\nnone"];
+        var answered = await harness.GitClient.HeldAtAsync(temp.Path, "HEAD", asked, cancellationToken);
 
+        // Each path asked about is answered, and nothing else: the submodule the commit holds at a path nobody asked about
+        // among them.
+        Assert.Equal(asked.Order(StringComparer.Ordinal), answered.Keys.Order(StringComparer.Ordinal));
         Assert.Equal(GitHeld.File(blob), answered["docs/x.md"]);
         Assert.Equal(GitHeld.Directory, answered["docs"]);
         Assert.Equal(GitHeld.Submodule(held), answered["lib/held"]);

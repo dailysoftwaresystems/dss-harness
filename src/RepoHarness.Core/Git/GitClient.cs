@@ -249,7 +249,6 @@ public sealed class GitClient(
         // A line break cannot travel as a line of git's batch input, so such a path is answered from the commit's
         // listing instead, as reading files at a commit does.
         var tree = paths.Any(HoldsLineBreak) ? await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false) : null;
-        var files = tree is null ? null : FilesIn(tree);
         var asked = paths.Where(path => !HoldsLineBreak(path)).Distinct(StringComparer.Ordinal).ToList();
 
         // The commit is asked about first, in the same process: git answers "missing" for a commit it cannot read
@@ -299,16 +298,26 @@ public sealed class GitClient(
             {
                 ["blob", var id] => GitHeld.File(id),
                 ["tree", _] => GitHeld.Directory,
-
-                // Only a submodule's entry names another kind of object: answered with the format asked for where this
-                // repository holds the commit it names, and as the commit and the word "submodule" where it does not.
-                ["commit" or "tag", var named] => GitHeld.Submodule(named),
-                [var named, "submodule"] => GitHeld.Submodule(named),
                 _ => Unanswered(asked[index]),
             };
         }
 
-        await RefuseListedButUnreadAsync(directory, commit, unanswered, files, cancellationToken).ConfigureAwait(false);
+        // What git did not answer as a file or a directory is a submodule's entry, or a path the commit does not hold. An
+        // entry is answered as the commit it names where this repository holds that commit; where it does not, as missing
+        // by git 2.43, which Ubuntu 24.04 ships, as the path is, and as a submodule by later versions. The commit's listing
+        // tells them apart on every version, and names the commit an entry does.
+        if (unanswered.Count > 0)
+        {
+            tree ??= await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false);
+            var unread = unanswered.ToHashSet(StringComparer.Ordinal);
+
+            foreach (var entry in tree.Where(entry => entry.Type == "commit" && entry.Name.IsUtf8 && unread.Contains(entry.Name.Text)))
+            {
+                held[entry.Name.Text] = GitHeld.Submodule(entry.ObjectId);
+            }
+
+            await RefuseListedButUnreadAsync(directory, commit, unanswered, FilesIn(tree), cancellationToken).ConfigureAwait(false);
+        }
 
         foreach (var path in paths.Where(HoldsLineBreak))
         {
