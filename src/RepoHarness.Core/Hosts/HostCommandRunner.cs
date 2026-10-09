@@ -135,11 +135,11 @@ public sealed record HostCommand
     public IReadOnlyList<string> Arguments { get; init; } = [];
 
     /// <summary>
-    /// Text written to the program's standard input, which is then closed unless
-    /// <see cref="HoldStandardInputOpen"/> is set; empty by default. ssh forwards whatever input it is
+    /// What is written to the program's standard input - text, or what a writer writes as it makes it - which is then
+    /// closed unless <see cref="HoldStandardInputOpen"/> is set; empty by default. ssh forwards whatever input it is
     /// given, so the program on the host reads exactly this, and nothing piped to DssHarness.
     /// </summary>
-    public string StandardInput { get; init; } = string.Empty;
+    public ChildInput StandardInput { get; init; } = string.Empty;
 
     /// <summary>
     /// Keeps standard input open until the program exits, so that a program watching for its end learns when

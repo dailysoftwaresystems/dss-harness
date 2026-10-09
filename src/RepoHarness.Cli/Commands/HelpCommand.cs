@@ -594,6 +594,12 @@ internal static class HelpCommand
         builder.AppendLine("the same path holding fewer files, and a step reading it would measure less than was");
         builder.AppendLine("built and pass. With '--dry-run' it carries nothing and lists what it would carry,");
         builder.AppendLine("as '--pull' does.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A file crosses whole, inside one request, whichever way it goes: one larger than "
+            + $"{SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture)} bytes is refused by name before anything is "
+            + "sent. Keep the smaller thing a later step reads - a packaged build rather than a build tree.");
 
         builder.AppendLine();
         builder.AppendLine("A step may ask for the guards the build and test verbs carry. Both are off unless");

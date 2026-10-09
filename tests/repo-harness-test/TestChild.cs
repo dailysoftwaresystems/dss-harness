@@ -29,6 +29,7 @@ internal static class TestChild
             "echo-command-line" => EchoCommandLine(standardOutput, arguments),
             "echo-crlf" => EchoLinesEndedWithCrlf(standardOutput, arguments),
             "echo-stdin" => EchoStandardInput(standardOutput),
+            "stdin-to-file" => StandardInputToFile(arguments),
             "read-line-then-watch" => ReadLineThenWatch(standardOutput, arguments),
             "sleep" => Sleep(arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
@@ -119,6 +120,17 @@ internal static class TestChild
     {
         using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
         output.Write("[" + input.ReadToEnd() + "]\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads standard input to its end and writes it into the file <c>arguments[0]</c> names: what a child that saw the end
+    /// of its input leaves behind, where its output would not be read.
+    /// </summary>
+    private static int StandardInputToFile(string[] arguments)
+    {
+        using var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
+        File.WriteAllText(arguments[0], input.ReadToEnd(), Utf8NoBom);
         return 0;
     }
 

@@ -421,6 +421,7 @@ public sealed class HostAgentServiceTests
     [InlineData("""{"kind":"run","arguments":[]}""")]
     [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git"]}""")]
     [InlineData("""{"kind":"info","unexpected":true}""")]
+    [InlineData("""{"kind":"run","directory":"/r","arguments":["verify-git",7],"nonce":"0123456789abcdef0123456789abcdef"}""")]
     [InlineData("""{"kind":"info","emulators":{"qemu":{"hostOs":"linux","hostProcessor":"x86_64","processor":"arm64","witness":{"command":["w"],"pattern":"x"}},"QEMU":{}}}""")]
     public async Task ARequestThatCannotBeServed_IsAUsageError_Explained(string request)
     {
@@ -563,6 +564,48 @@ public sealed class HostAgentServiceTests
             TestContext.Current.CancellationToken);
 
         Assert.Empty(processes.Started);
+    }
+
+    /// <summary>
+    /// A request written as it is encoded is one line - the very line the serializer writes of it whole - and reads back as
+    /// the request: each argument as its text, and what an argument carries as the base64 text of its bytes, however its
+    /// length falls against the pieces it is encoded in, and a text longer than what is gathered before it is written on.
+    /// </summary>
+    [Fact]
+    public void ARequestWrittenAsItIsEncoded_IsTheLineTheSerializerWrites_AndReadsBackWithWhatItCarriesAsBase64()
+    {
+        var random = new Random(9);
+        int[] lengths = [0, 1, HostAgentProtocol.CarriedPiece - 1, HostAgentProtocol.CarriedPiece, HostAgentProtocol.CarriedPiece + 1, (3 * HostAgentProtocol.CarriedPiece) + 2];
+        var carried = lengths.Select(length => { var bytes = new byte[length]; random.NextBytes(bytes); return bytes; }).ToList();
+        var longText = string.Concat(Enumerable.Repeat("João + \"quoted\" / ", 20_000));
+
+        var textOnly = new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Run,
+            Directory = "~/src/repo",
+            Arguments = [SyncServe.CommandName, SyncServe.Index, SyncServe.OperandsFollow, "/r", longText, "a+b/c=d"],
+            KeepAwakeEnvironment = new() { ["LANG"] = "pt_BR.UTF-8" },
+            Nonce = Nonce,
+        };
+
+        Assert.Equal(JsonSerializer.Serialize(textOnly, HostAgentProtocol.JsonOptions) + "\n", HostAgentProtocol.Input(textOnly).Read());
+
+        var line = HostAgentProtocol.Input(new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Run,
+            Directory = textOnly.Directory,
+            Arguments = [.. textOnly.Arguments, .. carried.Select(bytes => HostArgument.Carrying(bytes))],
+            Nonce = Nonce,
+        }).Read();
+
+        Assert.Single(line, character => character == '\n');
+        Assert.EndsWith("\n", line, StringComparison.Ordinal);
+
+        var read = JsonSerializer.Deserialize<HostAgentRequest>(line, HostAgentProtocol.JsonOptions)!;
+
+        Assert.Equal(
+            [.. textOnly.Arguments.Select(argument => argument.Text), .. carried.Select(Convert.ToBase64String)],
+            read.Arguments.Select(argument => argument.Text));
     }
 
     /// <summary>

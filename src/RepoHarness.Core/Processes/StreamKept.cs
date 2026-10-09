@@ -16,4 +16,12 @@ public enum StreamKept
     /// that writes gigabytes: past a billion characters a string cannot hold it, whatever memory the machine has free.
     /// </summary>
     Tail,
+
+    /// <summary>
+    /// Its last <see cref="ProcessRunner.TailLength"/> characters, as <see cref="Tail"/> keeps them, and each of its lines
+    /// handed on whole: for a caller that takes each line as an answer of its own, from a child whose lines are its own to
+    /// bound - a host's agent, which answers a line at a time - and keeps what it needs of them itself. Kept whole as well,
+    /// a file a host sent back was held here again in every line of it.
+    /// </summary>
+    TailOfWholeLines,
 }

@@ -489,21 +489,19 @@ public sealed class HostInspector(
         // host said into this host's reason, and unmarked that quotation is whatever its login shell printed.
         var nonce = HostAgentProtocol.NewNonce();
 
-        var request = JsonSerializer.Serialize(
-            new HostAgentRequest
-            {
-                Kind = HostAgentRequestKind.Info,
-                Nonce = nonce,
-                Emulators = new Dictionary<string, EmulatorConfig>(emulators, StringComparer.OrdinalIgnoreCase),
-                DeveloperEnvironments = new Dictionary<string, DeveloperEnvironmentConfig>(questions.DeveloperEnvironments, StringComparer.OrdinalIgnoreCase),
-                Programs = [.. questions.Programs],
-                ToolSearchDirectories = new Dictionary<string, List<string>>(
-                    questions.SearchDirectories,
-                    StringComparer.OrdinalIgnoreCase),
-                SpaceAt = questions.Room.SpaceAt,
-                Builds = [.. questions.Room.Builds],
-            },
-            HostAgentProtocol.JsonOptions);
+        var request = new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Info,
+            Nonce = nonce,
+            Emulators = new Dictionary<string, EmulatorConfig>(emulators, StringComparer.OrdinalIgnoreCase),
+            DeveloperEnvironments = new Dictionary<string, DeveloperEnvironmentConfig>(questions.DeveloperEnvironments, StringComparer.OrdinalIgnoreCase),
+            Programs = [.. questions.Programs],
+            ToolSearchDirectories = new Dictionary<string, List<string>>(
+                questions.SearchDirectories,
+                StringComparer.OrdinalIgnoreCase),
+            SpaceAt = questions.Room.SpaceAt,
+            Builds = [.. questions.Room.Builds],
+        };
 
         var budget = ProbeBudget
             + (EmulatorProbe.WitnessBudget * emulators.Count)
@@ -515,7 +513,7 @@ public sealed class HostInspector(
 
         try
         {
-            answer = await RunAsync(connection, toolPath, [HostAgentProtocol.CommandName], budget, cancellationToken, request + "\n", holdOpen: true)
+            answer = await RunAsync(connection, toolPath, [HostAgentProtocol.CommandName], budget, cancellationToken, HostAgentProtocol.Input(request), holdOpen: true)
                 .ConfigureAwait(false);
         }
         catch (HarnessException ex) when (HostConnector.Unreached(ex) is { } unreached)
@@ -713,7 +711,7 @@ public sealed class HostInspector(
         IReadOnlyList<string> arguments,
         TimeSpan budget,
         CancellationToken cancellationToken,
-        string input = "",
+        ChildInput? input = null,
         bool holdOpen = false)
         => _hostCommands.RunAsync(
             connection,
@@ -722,7 +720,7 @@ public sealed class HostInspector(
                 Program = program,
                 Arguments = arguments,
                 Timeout = budget,
-                StandardInput = input,
+                StandardInput = input ?? string.Empty,
                 HoldStandardInputOpen = holdOpen,
             },
             cancellationToken);

@@ -175,7 +175,9 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
     /// <summary>Writes the agent's start marker on both streams, where the command carries a request with a nonce.</summary>
     private static void Mark(HostCommand command, string glued = "")
     {
-        if (string.IsNullOrEmpty(command.StandardInput))
+        var input = command.StandardInput.Read();
+
+        if (string.IsNullOrEmpty(input))
         {
             return;
         }
@@ -184,7 +186,7 @@ internal sealed class ScriptedHostCommands(Func<HostConnection, HostCommand, Pro
 
         try
         {
-            request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions);
+            request = JsonSerializer.Deserialize<HostAgentRequest>(input, HostAgentProtocol.JsonOptions);
         }
         catch (JsonException)
         {
@@ -428,7 +430,7 @@ internal static class HostResults
     /// </remarks>
     public static ProcessResult Finished(HostCommand command, int exitCode, string error = "")
     {
-        var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions)
+        var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)
             ?? throw new InvalidOperationException("The host was sent no request.");
 
         var nonce = request.Nonce ?? throw new InvalidOperationException("The request carries no nonce.");

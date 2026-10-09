@@ -156,7 +156,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // can never block this on a full output pipe, nor this block it on a full input pipe.
         var standardInput = WriteInputAsync(
             process.StandardInput,
-            request.StandardInput ?? string.Empty,
+            request.StandardInput,
             close: !request.HoldStandardInputOpen);
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -434,10 +434,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </remarks>
     private static async Task<string> CaptureAsync(StreamReader reader, Action<string>? onLine, StreamKept kept, Func<string, int>? cut)
     {
-        var tail = kept == StreamKept.Tail;
+        var tail = kept != StreamKept.Whole;
+        var cutting = kept == StreamKept.Tail;
         var whole = tail ? null : new StringBuilder();
         var end = tail ? new StreamTail(TailLength) : null;
-        var lines = onLine is null ? null : new LineSplitter(onLine, tail ? LongestLine : null, tail ? cut : null);
+        var lines = onLine is null ? null : new LineSplitter(onLine, cutting ? LongestLine : null, cutting ? cut : null);
         var buffer = new char[ReadBufferSize];
         int read;
 
@@ -460,12 +461,25 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// Writes a child's whole input, then closes it when <paramref name="close"/> is set, which is how the
     /// child learns there is no more to read.
     /// </summary>
-    private static async Task WriteInputAsync(StreamWriter writer, string input, bool close)
+    /// <remarks>
+    /// Written on a thread of its own: a writer writes as it makes what it writes, for as long as the child takes to read
+    /// it. An input that could not be written whole is closed whatever <paramref name="close"/> says - a child holding its
+    /// input open waits for the rest of it, which would never come - and what stopped it, where that was not the child
+    /// ceasing to read, is raised once the child has gone.
+    /// </remarks>
+    private static async Task WriteInputAsync(StreamWriter writer, ChildInput? input, bool close)
     {
+        var whole = false;
+
         try
         {
-            await writer.WriteAsync(input.AsMemory()).ConfigureAwait(false);
-            await writer.FlushAsync().ConfigureAwait(false);
+            if (input is not null)
+            {
+                await Task.Run(() => input.WriteTo(writer.BaseStream)).ConfigureAwait(false);
+            }
+
+            await writer.BaseStream.FlushAsync().ConfigureAwait(false);
+            whole = true;
         }
         catch (IOException)
         {
@@ -474,7 +488,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
         finally
         {
-            if (close)
+            if (close || !whole)
             {
                 CloseQuietly(writer);
             }

@@ -20,6 +20,12 @@ public static class CliRunner
     /// <summary>The CLI assembly the tests run: the build a host's DssHarness is compared with.</summary>
     public static string CliAssemblyPath => CliAssembly.Value;
 
+    /// <summary>
+    /// The program that starts that assembly, beside it, as a host starts its DssHarness: what a host whose agent is this
+    /// build runs, where a test reaches one on this machine.
+    /// </summary>
+    public static string CliProgram => Path.ChangeExtension(CliAssembly.Value, OperatingSystem.IsWindows() ? ".exe" : null);
+
     /// <summary>Runs the CLI and returns its result.</summary>
     /// <param name="arguments">The command line after <c>DssHarness</c>.</param>
     /// <param name="cancellationToken">Stops the run.</param>

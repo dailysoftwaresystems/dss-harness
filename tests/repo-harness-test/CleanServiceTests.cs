@@ -225,7 +225,7 @@ public sealed class CleanServiceTests
         Assert.Equal(8L << 30, leg.GetProperty("space").GetProperty("buildBytes").GetInt64());
         Assert.Equal("/", leg.GetProperty("space").GetProperty("disk").GetProperty("filesystem").GetString());
 
-        var request = JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput!, HostAgentProtocol.JsonOptions)!;
+        var request = JsonSerializer.Deserialize<HostAgentRequest>(sent!.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
 
         Assert.Equal(HostTree, request.Directory);
         Assert.Equal(

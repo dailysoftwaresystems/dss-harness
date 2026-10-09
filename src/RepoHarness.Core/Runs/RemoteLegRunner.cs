@@ -108,19 +108,17 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         // relayed from there like every line of it.
         string[] verbosity = _output.IsVerbose ? [HostAgentProtocol.VerboseOption] : [];
 
-        var request = JsonSerializer.Serialize(
-            new HostAgentRequest
-            {
-                Kind = HostAgentRequestKind.Run,
-                Directory = leg.HostTreeRoot,
-                Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. verbosity, .. arguments],
-                Nonce = nonce,
-                RunId = run?.Value,
+        var request = new HostAgentRequest
+        {
+            Kind = HostAgentRequestKind.Run,
+            Directory = leg.HostTreeRoot,
+            Arguments = [commandName, "--legs", leg.Name, "--json", HereOption, leg.Host.Host.ToString(), .. verbosity, .. arguments],
+            Nonce = nonce,
+            RunId = run?.Value,
 
-                // The drive a WSL distribution's disk grows on, which the leg's build fills, and which only this machine sees.
-                DiskImageDrive = leg.Host.Host.Kind == HostKind.Wsl ? leg.Host.DiskImageSpace?.Filesystem : null,
-            },
-            HostAgentProtocol.JsonOptions);
+            // The drive a WSL distribution's disk grows on, which the leg's build fills, and which only this machine sees.
+            DiskImageDrive = leg.Host.Host.Kind == HostKind.Wsl ? leg.Host.DiskImageSpace?.Filesystem : null,
+        };
 
         var ledger = new System.Text.StringBuilder();
         var lines = new HostAgentLines(nonce);
@@ -139,7 +137,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                     Arguments = _output.IsVerbose
                         ? [HostAgentProtocol.CommandName, HostAgentProtocol.VerboseOption]
                         : [HostAgentProtocol.CommandName],
-                    StandardInput = request + "\n",
+                    StandardInput = HostAgentProtocol.Input(request),
                     HoldStandardInputOpen = true,
 
                     // What the host's command prints is relayed line by line, under --verbose every line of

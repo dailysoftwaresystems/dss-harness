@@ -10,6 +10,7 @@ using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
+using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Tests;
 
@@ -960,6 +961,23 @@ public sealed partial class HelpTests
 
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
         Assert.Contains("sync --pull' takes to bring it back", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The runner topic names the largest file that can cross to a host or back, the one the refusal names: a file crosses
+    /// whole, inside one request, and that request is one line of text a string must hold.
+    /// </summary>
+    [Fact]
+    public async Task RunnerTopic_NamesTheLargestFileThatCanCross_AsTheRefusalDoes()
+    {
+        var result = await CliRunner.RunAsync(["help", "runner"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Contains(
+            $"A file crosses whole, inside one request, whichever way it goes: one larger than {SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture)} bytes is refused by name before anything is sent.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(SyncServe.LargestFile.ToString(CultureInfo.InvariantCulture), SyncServe.TooLargeToCarry(SyncServe.LargestFile + 1, "a.bin", "ssh vps"), StringComparison.Ordinal);
     }
 
     /// <summary>

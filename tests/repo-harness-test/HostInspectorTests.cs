@@ -274,7 +274,7 @@ public sealed class HostInspectorTests
     /// <summary>The line the host's agent writes to mark where its own answer begins, for the nonce it was sent.</summary>
     private static string Marker(HostCommand command)
     {
-        var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions);
+        var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
 
         return HostAgentProtocol.StartedLine(request!.Nonce!);
     }
@@ -443,8 +443,8 @@ public sealed class HostInspectorTests
 
         var question = fixture.Commands.Single(HostAgentProtocol.CommandName);
         Assert.True(question.HoldStandardInputOpen);
-        Assert.Single(question.StandardInput, character => character == '\n');
-        Assert.EndsWith("\n", question.StandardInput, StringComparison.Ordinal);
+        Assert.Single(question.StandardInput.Read(), character => character == '\n');
+        Assert.EndsWith("\n", question.StandardInput.Read(), StringComparison.Ordinal);
 
         // Every other probe is given no input, so none can take input meant for something else.
         Assert.All(
@@ -500,7 +500,7 @@ public sealed class HostInspectorTests
             }
 
             if (command.Arguments.FirstOrDefault() == HostAgentProtocol.CommandName
-                && JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions) is { Kind: HostAgentRequestKind.Hold, HoldAwakeSeconds: 0 } end)
+                && JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions) is { Kind: HostAgentRequestKind.Hold, HoldAwakeSeconds: 0 } end)
             {
                 ended = true;
                 command.OnErrorLine?.Invoke(HostAgentProtocol.CompletionLine(end.Nonce!, HarnessExit.Success));
@@ -675,7 +675,7 @@ public sealed class HostInspectorTests
 
         using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(agent: command =>
         {
-            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions);
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
 
             var checks = request!.Emulators.Keys.ToDictionary(
                 name => name,
@@ -777,7 +777,7 @@ public sealed class HostInspectorTests
 
         using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(agent: command =>
         {
-            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions)!;
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
 
             if (request.Kind != HostAgentRequestKind.Hold)
             {
@@ -803,7 +803,7 @@ public sealed class HostInspectorTests
         await unreached.InspectAsync(HostId.Ssh(SshName));
         await unreached.Holds.LeaveHoldsAsync("test", TestContext.Current.CancellationToken);
 
-        Assert.DoesNotContain(unreached.Commands.Calls, call => call.Command.StandardInput.Contains("\"hold\"", StringComparison.Ordinal));
+        Assert.DoesNotContain(unreached.Commands.Calls, call => call.Command.StandardInput.Read().Contains("\"hold\"", StringComparison.Ordinal));
     }
 
     /// <summary>A name that answers from a given lookup on, each lookup taking the time it is told to.</summary>
@@ -836,7 +836,7 @@ public sealed class HostInspectorTests
 
         using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(agent: command =>
         {
-            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions);
+            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
 
             return HostResults.Ok(JsonSerializer.Serialize(
                 new HostAgentInfo
@@ -905,7 +905,7 @@ public sealed class HostInspectorTests
 
         using var fixture = new Fixture(PlatformId.Windows, respond: HostThat(agent: command =>
         {
-            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions);
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
             budgets.Add(command.Timeout);
 
             var checks = request!.DeveloperEnvironments.ToDictionary(

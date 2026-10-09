@@ -388,7 +388,7 @@ public sealed class HostAgentService(
             return await RefuseAsync(error, HarnessExit.UsageError, "the request names no command to run").ConfigureAwait(false);
         }
 
-        if (HostAgentProtocol.IsNotForwardable(request.Arguments[0]))
+        if (HostAgentProtocol.IsNotForwardable(request.Arguments[0].Text))
         {
             return await RefuseAsync(
                 error,
@@ -432,12 +432,12 @@ public sealed class HostAgentService(
             // never said how it finished rather than as the configuration error it is.
             await using var awake = _keepAwake.Hold(
                 HostAgentProtocol.CommandName,
-                request.Arguments[0],
+                request.Arguments[0].Text,
                 new LocalHostConfig { KeepAwake = [.. request.KeepAwake], Env = new(request.KeepAwakeEnvironment, StringComparer.OrdinalIgnoreCase) },
                 [.. request.KeepAwakeDirectories],
                 cancellationToken);
 
-            return await run(directory, [.. request.Arguments], Dispatch.Of(request), cancellationToken).ConfigureAwait(false);
+            return await run(directory, [.. request.Arguments.Select(argument => argument.Text)], Dispatch.Of(request), cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {

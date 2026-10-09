@@ -82,6 +82,16 @@ internal static class SyncKit
     }
 
     /// <summary>
+    /// The transport to a host on this machine whose agent is this build's own DssHarness, reached as any host is: each
+    /// request one line of JSON on its standard input, its command parsed there, its answer read from its output.
+    /// </summary>
+    public static RemoteSyncTransport AgentHere(HarnessFactory harness) => new(
+        HostId.Ssh("vps"),
+        new HostSession(new HostConnection { Host = HostId.Local }, CliRunner.CliProgram),
+        new HostCommandRunner(harness.ProcessRunner),
+        harness.Output);
+
+    /// <summary>
     /// A sync service over this machine's side, read through <paramref name="fileSystem"/> or the real one: its
     /// configuration read by <paramref name="loader"/>, its hosts surveyed by <paramref name="inspector"/> and reached
     /// through <paramref name="transports"/> - by default, nothing that could reach a host by accident - and its own

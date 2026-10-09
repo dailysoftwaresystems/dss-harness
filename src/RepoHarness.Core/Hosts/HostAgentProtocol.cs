@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Encodings.Web;
@@ -5,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Processes;
 
 namespace RepoHarness.Core.Hosts;
 
@@ -153,6 +155,96 @@ public static class HostAgentProtocol
         return line.StartsWith(prefix, StringComparison.Ordinal)
             && int.TryParse(line.AsSpan(prefix.Length), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exitCode);
     }
+
+    /// <summary>
+    /// How many bytes an argument carrying bytes (<see cref="HostArgument.Carrying"/>) is encoded in at a time: a multiple
+    /// of three, so each piece is whole base64, and small enough that its text is an object the runtime collects as soon as
+    /// it is dropped.
+    /// </summary>
+    internal const int CarriedPiece = 24 * 1024;
+
+    /// <summary>How much of a request is gathered before it is written on: what a piece of what it carries encodes to, twice.</summary>
+    private const int Gathered = 64 * 1024;
+
+    /// <summary>
+    /// <paramref name="request"/> as a host reads it: one line of JSON on its standard input, written as it is encoded, so
+    /// that nothing the size of what it carries - a batch of files a sync writes there - is ever held here as text.
+    /// </summary>
+    /// <param name="request">The request.</param>
+    public static ChildInput Input(HostAgentRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return ChildInput.WrittenBy(stream =>
+        {
+            var gathered = new GatheredWrites(stream, Gathered);
+
+            using (var writer = new Utf8JsonWriter(gathered, new JsonWriterOptions { Encoder = JsonOptions.Encoder }))
+            {
+                JsonSerializer.Serialize(writer, request, JsonOptions);
+            }
+
+            gathered.Line();
+        });
+    }
+
+    /// <summary>
+    /// What a request is written into: a buffer of its own, written on to the stream whenever the writer needs more room
+    /// than is left, so the request is never held whole. Grown only for one value longer than the buffer, which an argument
+    /// carrying bytes never is: it is written a piece at a time.
+    /// </summary>
+    private sealed class GatheredWrites(Stream stream, int size) : IBufferWriter<byte>
+    {
+        private byte[] _buffer = new byte[size];
+        private int _written;
+
+        public void Advance(int count) => _written += count;
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            MakeRoom(sizeHint);
+            return _buffer.AsMemory(_written);
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            MakeRoom(sizeHint);
+            return _buffer.AsSpan(_written);
+        }
+
+        /// <summary>Ends the request's line, and writes on whatever is gathered.</summary>
+        public void Line()
+        {
+            GetSpan(1)[0] = (byte)'\n';
+            Advance(1);
+            WriteOn();
+            stream.Flush();
+        }
+
+        /// <summary>Leaves at least <paramref name="sizeHint"/> bytes of room after what is gathered.</summary>
+        private void MakeRoom(int sizeHint)
+        {
+            var needed = Math.Max(sizeHint, 1);
+
+            if (_buffer.Length - _written >= needed)
+            {
+                return;
+            }
+
+            WriteOn();
+
+            if (_buffer.Length < needed)
+            {
+                _buffer = new byte[needed];
+            }
+        }
+
+        private void WriteOn()
+        {
+            stream.Write(_buffer, 0, _written);
+            _written = 0;
+        }
+    }
 }
 
 /// <summary>What a request asks for.</summary>
@@ -258,8 +350,11 @@ public sealed class HostAgentRequest
     /// </summary>
     public string? Directory { get; init; }
 
-    /// <summary>The command and its arguments, exactly as they would be typed after <c>DssHarness</c>. Run only.</summary>
-    public List<string> Arguments { get; init; } = [];
+    /// <summary>
+    /// The command and its arguments, exactly as they would be typed after <c>DssHarness</c>, an argument carrying bytes
+    /// as their base64 text. Run only.
+    /// </summary>
+    public List<HostArgument> Arguments { get; init; } = [];
 
     /// <summary>
     /// The run of the machine that asked, where the command runs a leg of it: what a leg there asking the host's heavy-leg

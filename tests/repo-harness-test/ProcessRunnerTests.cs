@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.Versioning;
+using System.Text;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 
@@ -271,6 +272,79 @@ public sealed class ProcessRunnerTests
         Assert.False(result.TimedOut, "The child never saw the end of its input.");
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("[" + Input + "]", result.StandardOutput.TrimEnd('\n'));
+    }
+
+    /// <summary>
+    /// An input a writer writes as it makes it reaches the child whole and in order, and is closed once written, as text
+    /// is: the child, reading to the end, finishes only once it is.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WritesAWrittenInputWhole_AndClosesIt()
+    {
+        var pieces = Enumerable.Range(0, 64).Select(index => $"piece {index} of João's input;").ToList();
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("echo-stdin") with
+            {
+                StandardInput = ChildInput.WrittenBy(stream =>
+                {
+                    foreach (var piece in pieces)
+                    {
+                        stream.Write(Encoding.UTF8.GetBytes(piece));
+                    }
+                }),
+                Timeout = TimeSpan.FromSeconds(60),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.TimedOut, "The child never saw the end of its input.");
+        Assert.Equal("[" + string.Concat(pieces) + "]", result.StandardOutput.TrimEnd('\n'));
+    }
+
+    /// <summary>
+    /// A writer that fails part way has the input closed though it was to be held open - the child would wait for the
+    /// rest, which never comes - and its failure raised once the child has gone, never taken for a child that stopped
+    /// reading.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ClosesAnInputItsWriterCouldNotFinish_AndRaisesWhyOnceTheChildHasGone()
+    {
+        using var temp = new TempDirectory();
+        var read = temp.Combine("read.txt");
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateRunner().RunAsync(
+            TestHost.ChildRequest("stdin-to-file", read) with
+            {
+                StandardInput = ChildInput.WrittenBy(stream =>
+                {
+                    stream.Write("request"u8);
+                    throw new InvalidOperationException("the writer stopped");
+                }),
+                HoldStandardInputOpen = true,
+                Timeout = TimeSpan.FromSeconds(60),
+            },
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("the writer stopped", failure.Message);
+
+        // Written only by a child that saw the end of its input, and ended on its own rather than by the budget.
+        Assert.Equal("request", await File.ReadAllTextAsync(read, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// Text is written as UTF-8 a piece at a time, so a character whose two halves fall either side of where one piece
+    /// ends and the next begins still reaches the child whole.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WritesTextAPieceAtATime_WithACharacterAcrossTwoPiecesWhole()
+    {
+        var input = new string('a', (16 * 1024) - 1) + "\U0001F600" + new string('b', 40 * 1024);
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("echo-stdin") with { StandardInput = input, Timeout = TimeSpan.FromSeconds(60) },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("[" + input + "]", result.StandardOutput.TrimEnd('\n'));
     }
 
     [Fact]

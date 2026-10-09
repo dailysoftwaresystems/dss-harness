@@ -1029,7 +1029,8 @@ different package under the same name. Only stable versions are published there:
 released on GitHub alone, so a machine running one cannot bring a host to its build, and
 is told so. The machine that reaches it asks it questions
 through a hidden `host-agent` command, with the request as one line of JSON on standard
-input, which it holds open until the host has finished: which build
+input - written as it is encoded, so a request carrying files is never held whole as text on
+the machine that sends it - which it holds open until the host has finished: which build
 it is, what the host is, and whether each emulator works there; or to run one of its own
 commands in the host's copy of the repository, which is what `host-exec` does.
 
@@ -2277,6 +2278,21 @@ directory here cannot drift apart.
 - **The result is verified, not assumed.** After the transfer the copy's manifest is read back and
   compared with the reading of the tree the sync was made from. A tree that still differs fails,
   names what differs, and says nothing should be run against it.
+- **What crosses is never held as text.** Files cross to a host in batches of up to 8 MiB or 512
+  files, a request each, written onto the host's standard input as it is encoded: each file's path,
+  then its bytes as base64, a piece at a time. A file read back - what `--pull` brings, and what
+  carrying an artefact reads to prove it landed - follows its answer a piece to a line and is
+  decoded as it arrives. Each value an operation takes is an argument of its own after `--`, so a
+  path starting with `@` or `-` is that path on the host, never a file of arguments or an option: a
+  file named `@notes` had its deletion read the file `notes` beside the copy and delete whatever
+  path that named. A consumer's first sync of a worktree of 85 MiB built each batch as text inside
+  text, and the serializer's buffers for it - six times a batch's length, rented to escape it - were
+  kept by the shared pool for the life of the process: the machine that carried it held 3.2 GiB,
+  flat, while the leg ran for minutes after. Carried now, the same tree leaves it about 40 MiB, and
+  reading back a 64 MiB file 90 MiB where it left 2 GiB. A file crosses whole, inside one request,
+  so the largest that can is one whose base64 text, with the rest of the request around it, a host
+  reads as one line, and one string holds: 804,519,909 bytes. A larger one is refused by name before
+  anything is sent.
 - **Staging is the two commands, not a flag.** `sync` transfers and stops — that is all it ever
   does — and `build`, `test`, `run` and `check-mutations` take `--use-staged` to act on what is already there without
   syncing again. A `--stage-only` on `sync` would name a mode `sync` is always in.

@@ -230,7 +230,7 @@ public sealed class HoldAwakeTests
         var sent = new List<HostAgentRequest>();
         var hosts = new ScriptedHostCommands((_, command) =>
         {
-            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions)!;
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
 
             lock (sent)
             {
@@ -275,7 +275,7 @@ public sealed class HoldAwakeTests
 
         var hosts = new ScriptedHostCommands((_, command) =>
         {
-            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions)!;
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
 
             lock (sent)
             {
@@ -307,7 +307,7 @@ public sealed class HoldAwakeTests
     {
         var hosts = new ScriptedHostCommands((_, command) =>
         {
-            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions)!;
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
 
             command.OnErrorLine?.Invoke(FailureLine.For(HostAgentProtocol.CommandName, "this host could not be held awake: the disk is full"));
             command.OnErrorLine?.Invoke(HostAgentProtocol.CompletionLine(request.Nonce!, HarnessExit.HostUnavailable));
@@ -332,7 +332,7 @@ public sealed class HoldAwakeTests
     {
         var hosts = new ScriptedHostCommands((_, command) =>
         {
-            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput, HostAgentProtocol.JsonOptions)!;
+            var request = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
 
             command.OnErrorLine?.Invoke(FailureLine.For(HostAgentProtocol.CommandName, "this host could not be held awake: 192.0.2.10 is busy"));
             command.OnErrorLine?.Invoke(HostAgentProtocol.CompletionLine(request.Nonce!, HarnessExit.HostUnavailable));

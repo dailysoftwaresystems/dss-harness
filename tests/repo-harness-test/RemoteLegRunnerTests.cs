@@ -999,7 +999,7 @@ public sealed class RemoteLegRunnerTests
         Assert.NotNull(sent);
 
         return System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(
-            sent.StandardInput!,
+            sent.StandardInput.Read(),
             HostAgentProtocol.JsonOptions)!;
     }
 

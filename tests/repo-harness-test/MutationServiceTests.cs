@@ -459,7 +459,7 @@ public sealed class MutationServiceTests
         Assert.All([selfTest, named, every], outcome => Assert.Equal(HarnessExit.Success, outcome.ExitCode));
 
         var sent = hosts.Calls
-            .Select(call => System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(call.Command.StandardInput!, HostAgentProtocol.JsonOptions)!)
+            .Select(call => System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(call.Command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!)
             .Where(request => request.Kind == HostAgentRequestKind.Run)
             .Select(request => string.Join(' ', request.Arguments))
             .ToList();

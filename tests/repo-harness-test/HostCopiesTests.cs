@@ -283,13 +283,13 @@ public sealed class HostCopiesTests
 
         var answering = new ScriptedHostCommands((_, command) =>
         {
-            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions);
+            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
             command.OnOutputLine?.Invoke(SyncServe.Answer(new SyncRemoveAnswer(CopyRemoval.Removed)));
             return HostResults.Finished(command, HarnessExit.Success);
         });
 
         Assert.Equal(CopyRemoval.Removed, await Remote(answering).RemoveCopyAsync(copy, cancellationToken));
-        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveCopy, copy], asked?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveCopy, SyncServe.OperandsFollow, copy], asked?.Arguments);
         Assert.Equal("~", asked?.Directory);
 
         var silent = new ScriptedHostCommands((_, command) => HostResults.Finished(command, HarnessExit.Success));
@@ -308,7 +308,7 @@ public sealed class HostCopiesTests
         var copy = hosts.Combine("repo.worktree-feature");
         await Local(new HarnessFactory()).CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
 
-        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveCopy, copy], cancellationToken);
+        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveCopy, SyncServe.OperandsFollow, copy], cancellationToken);
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
         Assert.Equal(CopyRemoval.Removed, SyncServe.ReadAnswer<SyncRemoveAnswer>(result.StandardOutput.Trim())?.Removal);
@@ -1907,7 +1907,7 @@ public sealed class HostCopiesTests
 
         var answering = new ScriptedHostCommands((_, command) =>
         {
-            asked.Add(JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions));
+            asked.Add(JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions));
             command.OnOutputLine?.Invoke(SyncServe.Answer(new SyncWorkersAnswer(answer)));
             return HostResults.Finished(command, HarnessExit.Success);
         });
@@ -1920,8 +1920,8 @@ public sealed class HostCopiesTests
             Assert.Equal(answer.Removed, told.Removed);
             Assert.Equal(answer.Left, told.Left);
         });
-        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, tree], asked[0]?.Arguments);
-        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, tree, SyncServe.MeasureOnly], asked[1]?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree], asked[0]?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree, SyncServe.MeasureOnly], asked[1]?.Arguments);
         Assert.All(asked, request => Assert.Equal("~", request?.Directory));
 
         var silent = new ScriptedHostCommands((_, command) => HostResults.Finished(command, HarnessExit.Success));
@@ -1954,13 +1954,13 @@ public sealed class HostCopiesTests
 
         Assert.True(copies.Claim(held, sweep, force: false).Taken);
 
-        var measured = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree, SyncServe.MeasureOnly], cancellationToken);
+        var measured = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree, SyncServe.MeasureOnly], cancellationToken);
 
         Assert.Equal(HarnessExit.Success, measured.ExitCode);
         Assert.Equal([free], SyncServe.ReadAnswer<SyncWorkersAnswer>(measured.StandardOutput.Trim())?.Workers.Removed.Select(worker => worker.Path));
         Assert.True(Directory.Exists(free));
 
-        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree], cancellationToken);
+        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree], cancellationToken);
         var answer = SyncServe.ReadAnswer<SyncWorkersAnswer>(result.StandardOutput.Trim())?.Workers;
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
@@ -1976,7 +1976,7 @@ public sealed class HostCopiesTests
 
         copies.Release(held, sweep);
 
-        var unknown = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, tree, "everything"], cancellationToken);
+        var unknown = await CliRunner.RunAsync(["sync-serve", SyncServe.RemoveWorkers, SyncServe.OperandsFollow, tree, "everything"], cancellationToken);
 
         Assert.Equal(HarnessExit.UsageError, unknown.ExitCode);
         Assert.True(Directory.Exists(held));
@@ -1997,13 +1997,13 @@ public sealed class HostCopiesTests
 
         var answering = new ScriptedHostCommands((_, command) =>
         {
-            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput!, HostAgentProtocol.JsonOptions);
+            asked = JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions);
             command.OnOutputLine?.Invoke(SyncServe.Answer(new SyncCopiesAnswer([kept])));
             return HostResults.Finished(command, HarnessExit.Success);
         });
 
         Assert.Equal([kept], await Remote(answering).ListCopiesAsync(main, cancellationToken));
-        Assert.Equal([SyncServe.CommandName, SyncServe.ListCopies, main], asked?.Arguments);
+        Assert.Equal([SyncServe.CommandName, SyncServe.ListCopies, SyncServe.OperandsFollow, main], asked?.Arguments);
         Assert.Equal("~", asked?.Directory);
 
         var silent = new ScriptedHostCommands((_, command) => HostResults.Finished(command, HarnessExit.Success));
@@ -2022,7 +2022,7 @@ public sealed class HostCopiesTests
         var main = hosts.Combine("repo");
         await Local(new HarnessFactory()).CreateRootAsync(main + ".worktree-feature", CopyMark.Complete, cancellationToken);
 
-        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.ListCopies, main], cancellationToken);
+        var result = await CliRunner.RunAsync(["sync-serve", SyncServe.ListCopies, SyncServe.OperandsFollow, main], cancellationToken);
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
 

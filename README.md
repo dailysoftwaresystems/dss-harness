@@ -297,7 +297,8 @@ every host and installs nothing, naming each command that would run. `sync` crea
 of the tree it runs in and keeps it in step, deletions included: the main checkout's at the host's
 `repositoryPath`, and each worktree's beside it, so worktrees do not wait for each other on a host.
 Deleting a worktree removes its copies from the hosts that hold one, and fails, naming it, while one
-stays. An
+stays. A file crosses whole, either way, so one larger than 804,519,909 bytes is refused by name
+before anything is sent. An
 emulator counts only once its witness proves it runs programs for its processor.
 
 `legs` runs the witness of each emulator the selected legs use, and both commands install
