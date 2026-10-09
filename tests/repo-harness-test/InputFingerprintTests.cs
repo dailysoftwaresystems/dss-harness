@@ -394,6 +394,86 @@ public sealed class InputFingerprintTests
         Assert.Equal(looks ? Array.Empty<string>() : ["config/c.lang.json"], watch.Changed);
     }
 
+    /// <summary>
+    /// A watch goes as deep as the inputs: a directory holding inputs is watched for its own files only, so a directory
+    /// tracked for one placeholder costs one shallow watch - the worktrees root, whose agents' builds overflowed a watch
+    /// taken all the way down and voided a main-tree run that only read its own inputs.
+    /// </summary>
+    [Fact]
+    public void AWatch_GoesAsDeepAsTheInputs()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(".worktrees/.gitkeep", string.Empty);
+        temp.WriteFile(".worktrees/o1/ag/build/obj.o", "an agent's build");
+        temp.WriteFile("src/a/x.cpp", "x");
+        temp.WriteFile("src/b/y.cpp", "y");
+        temp.WriteFile("README.md", "readme");
+
+        using var watch = new InputWatch(temp.Path, [".worktrees/.gitkeep", "src/a/x.cpp", "src/b/y.cpp", "README.md"], StringComparer.Ordinal);
+
+        Assert.Null(watch.Failure);
+        Assert.Equal(
+            [(temp.Path, false), (temp.Combine(".worktrees"), false), (temp.Combine("src", "a"), false), (temp.Combine("src", "b"), false)],
+            watch.Watched);
+    }
+
+    /// <summary>
+    /// Only past the watches the tool allows itself is a top-level directory watched all the way down - the one whose
+    /// inputs spread over the most directories first - so a tree whose sources fill many directories is watched as it was,
+    /// and a directory beside them tracked for one placeholder still costs one shallow watch.
+    /// </summary>
+    [Fact]
+    public void AWatchOverMoreDirectoriesThanItAllows_TakesTheWidestTopLevelDirectoryAllTheWayDown()
+    {
+        using var temp = new TempDirectory();
+        var sources = Enumerable.Range(0, 80).Select(index => $"src/d{index:00}/f.cpp").ToList();
+
+        foreach (var source in sources)
+        {
+            temp.WriteFile(source, "f");
+        }
+
+        temp.WriteFile(".worktrees/.gitkeep", string.Empty);
+
+        using var watch = new InputWatch(temp.Path, [.. sources, ".worktrees/.gitkeep"], StringComparer.Ordinal);
+
+        Assert.Null(watch.Failure);
+        Assert.Equal([(temp.Combine(".worktrees"), false), (temp.Combine("src"), true)], watch.Watched);
+    }
+
+    /// <summary>
+    /// With a real watch, a write below a directory only a placeholder of it is tracked in is never heard - an agent's build
+    /// below the worktrees root - while an edit of the placeholder made and undone is still caught.
+    /// </summary>
+    [Fact]
+    public async Task AWriteBelowAnUntrackedSubtree_IsNotHeard_WhileAnEditOfTheTrackedFileIsCaught()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile(".worktrees/.gitkeep", string.Empty);
+        Directory.CreateDirectory(temp.Combine(".worktrees", "o1", "ag", "build"));
+        string[] inputs = [".worktrees/.gitkeep"];
+        var fingerprint = Create();
+        var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+
+        using var watch = fingerprint.Watch(temp.Path, inputs, before);
+
+        if (watch.Failure is { } failure)
+        {
+            Assert.Skip($"This machine cannot watch the tree: {failure}");
+        }
+
+        temp.WriteFile(".worktrees/o1/ag/build/obj.o", "an agent's build");
+        temp.WriteFile(".worktrees/.gitkeep", "edited");
+        await WaitForAsync(watch, ".worktrees/.gitkeep", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(temp.Combine(".worktrees", ".gitkeep"), string.Empty, TestContext.Current.CancellationToken);
+
+        var after = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+
+        // Heard in order: word of the agent's write, had the watch been told of it, came before word of the edit after it.
+        Assert.Equal(0, watch.HeardElsewhere);
+        Assert.Equal(InputChange.Moved, InputFingerprint.Compare(before, after, watch).Change);
+    }
+
     private static InputFingerprint Create()
     {
         var factory = new HarnessFactory();

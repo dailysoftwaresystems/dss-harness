@@ -356,6 +356,19 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The config topic says a leg's inputs are watched only as deep as they lie, so a build in another tree below the
+    /// worktrees root is never heard.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_SaysInputsAreWatchedOnlyAsDeepAsTheyLie()
+    {
+        var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
+
+        Assert.Contains("process uses, gets no pass or fail at all. Its inputs are watched only as deep as they", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("the worktrees root, which init keeps in git by a placeholder, is never heard. Durations", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The config topic says a test count that differs is marked on its own, never as a timing, and
     /// how a set that differs on purpose is declared.
     /// </summary>

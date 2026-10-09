@@ -1605,6 +1605,16 @@ undone before word of it is looked at, and one of the same size undone in place 
 tool that also puts the old time back. The times are compared for equality alone, never
 ordered.
 
+The watch goes only as deep as the inputs: each directory holding one - the root among
+them - is watched for its own files only. A directory tracked for a placeholder, as init
+keeps the worktrees root and `.orchestrators`, costs one shallow watch, and other trees
+building below it are never heard. Measured: watched all the way down, an agent's build
+below the worktrees root overflowed the operating system's buffer, and a run in the main
+tree that only read its own inputs ended `unmeasured`. Past 64 watches, the top-level
+directories holding the most directories of inputs are watched all the way down instead,
+until the rest fit, and a tree with more than 64 top-level directories of inputs is
+watched whole.
+
 A leg on another machine tests that machine's copy, which holds still under it; what can
 move is the tree here, before the copy is made of it. So a run reads each tree its hosts'
 copies are made of once, as it begins and before any leg's work, and every copy is made from

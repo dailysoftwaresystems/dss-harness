@@ -2270,8 +2270,11 @@ internal static class HelpCommand
         builder.AppendLine("declares a successPattern, since exiting 0 is not proof anything ran. A leg whose");
         builder.AppendLine("test inputs change while it runs, whose host's copy could not be made the tree the");
         builder.AppendLine("run began with because a file in it changed first, or whose build directory another");
-        builder.AppendLine("process uses, gets no pass or fail at all. Durations that diverge between legs, or");
-        builder.AppendLine("that span a clock step or a host sleep, are marked suspect, and never change a verdict.");
+        builder.AppendLine("process uses, gets no pass or fail at all. Its inputs are watched only as deep as they");
+        builder.AppendLine("lie - each directory holding one, for its own files - so a build in another tree below");
+        builder.AppendLine("the worktrees root, which init keeps in git by a placeholder, is never heard. Durations");
+        builder.AppendLine("that diverge between legs, or that span a clock step or a host sleep, are marked");
+        builder.AppendLine("suspect, and never change a verdict.");
         builder.AppendLine();
         builder.AppendLine("A test count countPattern reads that differs from the other legs of the same project");
         builder.AppendLine("and test set is marked on its own - 'test count differs', and testCountDiffers and");
