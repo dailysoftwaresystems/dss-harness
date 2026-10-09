@@ -621,6 +621,30 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// A refresh given paths hands again only what the agent was handed under them: a path it was handed elsewhere, which
+    /// the main tree has moved since, stays as it was handed, for a refresh that names it.
+    /// </summary>
+    [Fact]
+    public async Task RefreshingUnderAPath_HandsAgainOnlyWhatTheAgentWasHandedUnderIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nhanded\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nhanded\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmoved since\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nmoved since\n");
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Contains("  docs/x.md", applied.Details!);
+        Assert.DoesNotContain("  a.txt", applied.Details!);
+        Assert.Equal("x\nmoved since\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+        Assert.Equal("one\nhanded\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
     /// What the main tree committed under the paths never moved between trees - the orchestrators' directory here, forced
     /// past its ignore rule - is never handed, committed or not, by seeding as by making.
     /// </summary>
@@ -666,6 +690,27 @@ public sealed class AgentServiceTests
             Assert.Contains(@"'docs/caf\351.md' is not named in UTF-8", refusal.Message, StringComparison.Ordinal);
             Assert.Contains("it cannot be handed to an agent", refusal.Message, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// A path the main tree committed that no record of an agent can keep - one another platform reads as rooted - refuses a
+    /// seeding, as an uncommitted one does: handed, it would be recorded as somewhere else on that platform.
+    /// </summary>
+    [Fact]
+    public async Task APathTheMainTreeCommittedThatNoRecordCanKeep_RefusesSeeding()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows cannot hold a colon in a file name, and git there commits none.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "C:weird.md", "rooted on Windows\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a name another platform reads as rooted", Token);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains("no record of an agent can keep a path another platform would read as somewhere else", refusal.Message, StringComparison.Ordinal);
     }
 
     /// <summary>

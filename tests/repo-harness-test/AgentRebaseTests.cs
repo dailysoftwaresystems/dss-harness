@@ -525,6 +525,53 @@ public sealed class AgentRebaseTests
         Assert.Equal(back, await HeadAsync(worktree));
     }
 
+    /// <summary>
+    /// A path the main tree committed since the agent's base whose name is not UTF-8 refuses the move, naming it: passed
+    /// over, the agent's base would move while its worktree went without what that commit brought there.
+    /// </summary>
+    [Fact]
+    public async Task APathTheMainTreeCommittedNamedOtherwiseThanInUtf8_RefusesTheMove_NamingIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base;
+        await kit.Harness.StageAsync(kit.Main, "\"docs/caf\\351.md\"", "bytes\n", Token);
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a name no file here can hold");
+        await kit.Harness.SkipWorktreeAsync(kit.Main, "\"docs/caf\\351.md\"", Token);
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => RebaseAsync(kit, apply: true));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(@"'docs/caf\351.md' is not named in UTF-8", refused.Message, StringComparison.Ordinal);
+        Assert.Contains("the agent's base cannot be moved", refused.Message, StringComparison.Ordinal);
+        Assert.Equal(from, kit.Record("ag").Base);
+    }
+
+    /// <summary>
+    /// A name the agent's worktree holds that is not UTF-8 is never taken for the file its text spells: such a name reads with
+    /// U+FFFD where its odd byte was, which a real file's name may hold, and that file - one the main tree committed a change
+    /// to, and the agent never touched - comes in as any other does.
+    /// </summary>
+    [Fact]
+    public async Task ANameNotInUtf8_IsNeverTakenForTheFileItsTextSpells()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "docs/caf�.md", "one\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a name holding U+FFFD", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        await kit.Harness.StageAsync(worktree, "\"docs/caf\\351.md\"", "bytes\n", Token);
+        await kit.Harness.SkipWorktreeAsync(worktree, "\"docs/caf\\351.md\"", Token);
+        OrchestrationKit.Write(kit.Main, "docs/caf�.md", "two\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var applied = await RebaseAsync(kit, apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("two\n", OrchestrationKit.Read(worktree, "docs/caf�.md"));
+    }
+
     private static Task<CommandOutcome> RebaseAsync(OrchestrationKit kit, bool apply, params string[] settled)
         => kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", settled, apply, Token);
 

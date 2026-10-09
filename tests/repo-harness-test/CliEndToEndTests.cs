@@ -1204,6 +1204,79 @@ public sealed partial class CliEndToEndTests
         }
     }
 
+    /// <summary>
+    /// A shared tool working in a build directory of another tree of the repository on this machine - here a worktree's -
+    /// is named as that tree's leg's while a leg's tests run, and while a runner's step does, through the real binary: the
+    /// trees a leg's work began among reach its tests and its runner as they reach its build.
+    /// </summary>
+    [Fact]
+    public async Task ASharedToolInAnotherTreesBuildDirectory_IsNamedAsThatTreesLeg_WhileTestsAndARunnerRun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var token = TestContext.Current.CancellationToken;
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Tools = { new ToolConfig { Name = "dotnet" } },
+            Contention = new ContentionConfig { SharedResourceTools = ["dotnet"] },
+            Legs =
+            {
+                ["native"] = new LegConfig
+                {
+                    Os = platform.PlatformKey,
+                    Processor = platform.Processor,
+                    Config = "debug",
+                    Test = new TestConfig { All = new TestInvocation { Runner = "dotnet", Args = ["--version"], SuccessPattern = @"^\d+\.\d+" } },
+                },
+            },
+            PredefinedRunners =
+            {
+                ["probe"] = new RunnerConfig
+                {
+                    Phases = [new RunnerPhase { Name = "probe", Command = ["dotnet", "--version"], WatchContention = true }],
+                },
+            },
+        };
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+
+        // Another tree of the repository, below the worktrees root, as create-worktree makes one.
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var worktree = Path.Combine(layout.WorktreesDirectoryUnder(config.Worktrees.Root), "plain");
+        await harness.RunGitAsync(temp.Path, ["worktree", "add", "--quiet", "--detach", worktree], token);
+
+        // A shared tool at work in that tree's build of the leg - a test binary there - for as long as the commands run.
+        var theirs = Path.Combine(VariantKey.For(config, config.Legs["native"], platform.PlatformKey).DirectoryUnder(worktree), "tests", "suite");
+        var start = new System.Diagnostics.ProcessStartInfo(TestHost.DotnetExecutable) { UseShellExecute = false, CreateNoWindow = true };
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+        start.ArgumentList.Add("120000");
+        start.ArgumentList.Add(theirs);
+        start.Environment[TestHost.ChildModeVariable] = "sleep";
+        using var tool = System.Diagnostics.Process.Start(start)!;
+
+        try
+        {
+            foreach (var command in new[] { new[] { "test", "--no-build" }, ["run", "probe"] })
+            {
+                var result = await CliRunner.RunAsync([.. command, "--legs", "native", "-C", temp.Path], token);
+
+                Assert.Equal(HarnessExit.Success, result.ExitCode);
+                Assert.Contains(
+                    $"dotnet (pid {tool.Id}), working in the build directory of worktree plain's leg 'native'",
+                    result.StandardError,
+                    StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            tool.Kill(entireProcessTree: true);
+            await tool.WaitForExitAsync(CancellationToken.None);
+        }
+    }
+
     /// <summary>Waits, a little at a time, for <paramref name="done"/>, and fails the test when it never comes.</summary>
     private static async Task EventuallyAsync(Func<bool> done, CancellationToken cancellationToken)
     {
