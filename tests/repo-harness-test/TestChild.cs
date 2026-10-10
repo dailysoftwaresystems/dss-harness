@@ -159,21 +159,20 @@ internal static class TestChild
 
     /// <summary>
     /// Closes its own end of its input, then goes on for the given milliseconds: what a carrier that stops taking what
-    /// it is written, and does not exit, looks like to whoever writes to it.
+    /// it is written, and does not exit, looks like to whoever writes to it. On Windows only: elsewhere the runtime
+    /// holds a second descriptor of its input, so closing the first leaves the pipe whole, and a shell that closes its
+    /// own is what stands in.
     /// </summary>
     private static int CloseInputThenSleep(string[] arguments)
     {
-        if (OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows())
         {
-            const int StandardInputHandle = -10;
-
-            CloseHandle(GetStdHandle(StandardInputHandle));
-        }
-        else
-        {
-            _ = close(0);
+            return 98;
         }
 
+        const int StandardInputHandle = -10;
+
+        CloseHandle(GetStdHandle(StandardInputHandle));
         Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
         return 0;
     }
@@ -186,10 +185,6 @@ internal static class TestChild
     [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static extern bool CloseHandle(nint handle);
-
-    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
-    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.SafeDirectories)]
-    private static extern int close(int descriptor);
 
     /// <summary>
     /// Reads lines for the given milliseconds, then writes back each it read: what a child that listens for a beat on

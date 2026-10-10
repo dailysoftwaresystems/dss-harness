@@ -526,8 +526,15 @@ public sealed class ProcessRunnerTests
     [InlineData("300", false)]
     public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor, bool lost)
     {
+        // A child that closes its own end of its input and goes on: this build's own on Windows, and a shell elsewhere,
+        // where the runtime keeps a second descriptor of its input that closing the first does not close.
+        var seconds = (int.Parse(runsFor, CultureInfo.InvariantCulture) / 1000.0).ToString("0.###", CultureInfo.InvariantCulture);
+        var child = OperatingSystem.IsWindows()
+            ? TestHost.ChildRequest("close-input-then-sleep", runsFor)
+            : new ProcessRequest { FileName = "sh", Arguments = ["-c", $"exec <&-; sleep {seconds}"] };
+
         var result = await CreateRunner().RunAsync(
-            TestHost.ChildRequest("close-input-then-sleep", runsFor) with
+            child with
             {
                 StandardInput = "request\n",
                 HoldStandardInputOpen = true,
