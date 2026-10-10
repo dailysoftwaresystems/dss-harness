@@ -293,6 +293,13 @@ public sealed class RemoteSyncTransport(
                 + $"and arrived as {arrived}.");
     }
 
+    /// <inheritdoc/>
+    public async Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
+        => await AskAsync<SyncDirectoryListing>(SyncServe.List, root, [relativeDirectory], cancellationToken).ConfigureAwait(false)
+            ?? throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"{Host} did not answer with what '{relativeDirectory}' holds.");
+
     /// <summary>How many bytes <paramref name="answer"/> says its file holds, refused where no file it can carry holds that many.</summary>
     /// <exception cref="HarnessException">The length is below nothing or past <see cref="SyncServe.LargestFile"/>.</exception>
     private int Told(SyncFileAnswer answer, string relativePath)

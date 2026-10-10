@@ -133,6 +133,20 @@ public static class SyncServe
     /// <summary>Reads one file out of the copy.</summary>
     public const string Read = "read";
 
+    /// <summary>Lists the files below one directory of the copy, each with its size, for a pull that names the directory.</summary>
+    public const string List = "list";
+
+    /// <summary>The most files a pull brings back from one directory it names.</summary>
+    /// <remarks>
+    /// A file read back crosses in a request of its own, and a request is a session on a host reached over ssh: a
+    /// directory named is a step's kept outputs, tens of files, never a build tree. A budget somebody chose, as
+    /// <see cref="LargestBatch"/> is, checked on the side that holds the directory, before a file of it is read.
+    /// </remarks>
+    public const int MostFilesPulledFromADirectory = 256;
+
+    /// <summary>The most bytes the files of one directory a pull names hold together, checked as their number is.</summary>
+    public const long LargestDirectoryPulled = 1024L * 1024 * 1024;
+
     /// <summary>Removes a whole copy the harness made, as deleting the worktree it holds asks.</summary>
     public const string RemoveCopy = "remove-copy";
 
@@ -657,6 +671,37 @@ public enum CopyMark
 /// a hash taken here of the bytes that arrived agrees with them whatever happened on the way.
 /// </param>
 public sealed record SyncFileAnswer(long Length, string ContentHash);
+
+/// <summary>What one directory of a copy holds, as a pull that names it brings it back.</summary>
+/// <param name="Files">Every file below it, by path relative to the copy's root, in the order of their paths.</param>
+public sealed record SyncDirectoryListing(IReadOnlyList<SyncListedFile> Files)
+{
+    /// <summary>
+    /// Every link below it, which the walk neither followed nor read - a directory's with a trailing separator - by path
+    /// relative to the copy's root: named, since what a link leads to is nothing the copy holds, and never brought back.
+    /// </summary>
+    public IReadOnlyList<string> Links { get; init; } = [];
+}
+
+/// <summary>One file a directory of a copy holds.</summary>
+/// <param name="Path">Where it is, relative to the copy's root, with forward separators.</param>
+/// <param name="Length">How many bytes it holds.</param>
+public sealed record SyncListedFile(string Path, long Length);
+
+/// <summary>What a pull brought back, or would.</summary>
+/// <param name="Files">Each file, relative to the copy's root: the files named, and every file below each directory named.</param>
+/// <param name="Links">Each link below a directory named, passed over: never followed, and never brought back.</param>
+public sealed record SyncPull(IReadOnlyList<string> Files, IReadOnlyList<string> Links)
+{
+    /// <summary>Whether <paramref name="path"/>, as a pull was given it, names a directory: it ends with a separator.</summary>
+    /// <param name="path">A path a pull names.</param>
+    public static bool NamesADirectory(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        return path.EndsWith('/') || path.EndsWith('\\');
+    }
+}
 
 /// <summary>One file a write carries, as the far side reads it.</summary>
 /// <param name="Path">Where it goes, relative to the copy's root.</param>

@@ -187,6 +187,9 @@ internal sealed class RecordingTransport(
     public Task<byte[]> ReadFileAsync(string root, string relativePath, CancellationToken cancellationToken = default)
         => inner.ReadFileAsync(root, relativePath, cancellationToken);
 
+    public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
+        => inner.ListFilesAsync(root, relativeDirectory, cancellationToken);
+
     public Task<CopyRemoval> RemoveCopyAsync(string root, CancellationToken cancellationToken = default)
         => inner.RemoveCopyAsync(root, cancellationToken);
 

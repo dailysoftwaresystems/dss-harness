@@ -558,6 +558,17 @@ internal static class HelpCommand
         builder.AppendLine($"tree - the path '{ToolPackage.Command} sync --pull' takes to bring it back from the host that");
         builder.AppendLine("kept it.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A path given to --pull that ends with '/' names a directory: every file below it is brought back, each checked as "
+            + "a file named is and each named in the report, as the path a later command takes. The host that holds it lists "
+            + "it first, and a directory that is not there, holds no file, holds more than "
+            + $"{SyncServe.MostFilesPulledFromADirectory.ToString(CultureInfo.InvariantCulture)} files or more than "
+            + $"{(SyncServe.LargestDirectoryPulled / (1024 * 1024)).ToString(CultureInfo.InvariantCulture)} MiB together fails the pull before "
+            + "any file crosses: each file comes in a request of its own, so a directory named is a step's kept outputs, never "
+            + "a build tree - keep that as one archive. A link below it is never followed: it is named, and nothing is brought "
+            + "back for it. With --dry-run the host is asked what the directory holds, and nothing is brought.");
+        builder.AppendLine();
         builder.AppendLine("Outputs are kept as soon as the step that made them passes, not at the end of the");
         builder.AppendLine("run, because a later step reads them. A step that FAILED keeps nothing, although it");
         builder.AppendLine("may have written the file: carrying evidence out of work that did not pass is what");

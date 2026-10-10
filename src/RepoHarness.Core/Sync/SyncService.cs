@@ -331,13 +331,23 @@ public interface ISyncService
     /// </remarks>
     Task SyncDirectoryAsync(SyncManifest source, ISyncTransport transport, string destinationRoot, CancellationToken cancellationToken = default);
 
-    /// <summary>Brings named files back from a copy into this tree, verified against a manifest.</summary>
+    /// <summary>
+    /// Brings files back from a copy into this tree, each checked against the hash the far side took of it and again
+    /// where it lands: each file named, and every file below each directory named - a path ending with a separator -
+    /// which the side holding it lists, and bounds, before any file crosses.
+    /// </summary>
     /// <param name="transport">How the copy is reached.</param>
     /// <param name="sourceRoot">The copy's root on the far side.</param>
     /// <param name="destinationRoot">Where the files land here.</param>
     /// <param name="paths">The paths to bring back, relative to the copy's root.</param>
     /// <param name="cancellationToken">Stops the transfer.</param>
-    Task<IReadOnlyList<string>> PullAsync(
+    /// <returns>Each file brought back, and each link below a directory named, which was not.</returns>
+    /// <exception cref="HarnessException">
+    /// A path names the whole copy (<see cref="HarnessExit.UsageError"/>); or a file named is not there, a directory named
+    /// is not one, holds no file, or holds more than a pull brings back (<see cref="HarnessExit.CommandFailed"/>) -
+    /// every directory before any file has crossed.
+    /// </exception>
+    Task<SyncPull> PullAsync(
         ISyncTransport transport,
         string sourceRoot,
         string destinationRoot,
@@ -465,6 +475,7 @@ public sealed class SyncService(
         }
 
         SyncSource? source = null;
+        var pulled = 0;
 
         foreach (var host in hosts)
         {
@@ -493,17 +504,32 @@ public sealed class SyncService(
 
             if (pull.Count > 0)
             {
-                if (options.DryRun)
+                // A directory named is listed by the host that holds it, on a dry run too: what it would bring back is
+                // what the host holds there now.
+                var expands = pull.Any(SyncPull.NamesADirectory);
+
+                if (options.DryRun && !expands)
                 {
                     details.Add($"{host.Host}: would bring back {pull.Count} named file(s) from '{destination}'");
                     continue;
                 }
 
-                var brought = await PullAsync(
-                        transport, destination, context.Layout.RepositoryRoot, pull, cancellationToken)
-                    .ConfigureAwait(false);
+                var brought = options.DryRun
+                    ? await ListedForPullAsync(transport, destination, pull, cancellationToken).ConfigureAwait(false)
+                    : await PullAsync(transport, destination, context.Layout.RepositoryRoot, pull, cancellationToken).ConfigureAwait(false);
 
-                details.Add($"{host.Host}: brought back {brought.Count} file(s)");
+                pulled += brought.Files.Count;
+                details.Add(options.DryRun
+                    ? $"{host.Host}: would bring back {brought.Files.Count} file(s) from '{destination}'"
+                    : $"{host.Host}: brought back {brought.Files.Count} file(s)");
+
+                if (expands)
+                {
+                    // Each by name: what a directory held is what nobody named, and the path a later command takes.
+                    details.AddRange(brought.Files.Select(file => $"  {file}"));
+                    details.AddRange(brought.Links.Select(link => $"{host.Host}: '{link}' is a link, never followed, so nothing was brought back for it"));
+                }
+
                 continue;
             }
 
@@ -556,8 +582,8 @@ public sealed class SyncService(
         // only the tree sync makes good on. A carry writes one run's artifacts and a pull reads a
         // handful of named files; either reported as "in step" tells somebody their host matches
         // this tree, which is the one thing neither of them did.
-        return FailedCheck(report, Summary(options, hosts.Count, pull.Count), context, details)
-            ?? CommandOutcome.Ok(Summary(options, hosts.Count, pull.Count), details);
+        return FailedCheck(report, Summary(options, hosts.Count, pull, pulled), context, details)
+            ?? CommandOutcome.Ok(Summary(options, hosts.Count, pull, pulled), details);
     }
 
     /// <summary>
@@ -599,8 +625,9 @@ public sealed class SyncService(
     /// <summary>What this run did, in one line, as the direction it ran in.</summary>
     /// <param name="options">What was asked for.</param>
     /// <param name="hosts">How many hosts were reached.</param>
-    /// <param name="pulled">How many files <c>--pull</c> named.</param>
-    private static string Summary(SyncOptions options, int hosts, int pulled)
+    /// <param name="pull">The paths <c>--pull</c> named.</param>
+    /// <param name="pulled">How many files were brought back, over every host.</param>
+    private static string Summary(SyncOptions options, int hosts, IReadOnlyList<string> pull, int pulled)
     {
         var count = hosts.ToString(CultureInfo.InvariantCulture);
 
@@ -614,9 +641,15 @@ public sealed class SyncService(
             return $"run '{runId}' carried to {count} host(s)";
         }
 
-        return pulled > 0
-            ? $"{pulled.ToString(CultureInfo.InvariantCulture)} named file(s) brought back from {count} host(s)"
-            : $"{count} host(s) in step";
+        if (pull.Count == 0)
+        {
+            return $"{count} host(s) in step";
+        }
+
+        // A directory named brings back what it held, which nobody counted beforehand.
+        return pull.Any(SyncPull.NamesADirectory)
+            ? $"{pulled.ToString(CultureInfo.InvariantCulture)} file(s) brought back from {count} host(s)"
+            : $"{pull.Count.ToString(CultureInfo.InvariantCulture)} named file(s) brought back from {count} host(s)";
     }
 
     /// <summary>Where <paramref name="host"/> keeps the copy of the tree the command runs in: see <see cref="HostCopies"/>.</summary>
@@ -1024,7 +1057,7 @@ public sealed class SyncService(
         => transport.WriteFileAsync(destinationRoot, HarnessLayout.ConfigFileRelative, source.Configuration, cancellationToken);
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<string>> PullAsync(
+    public async Task<SyncPull> PullAsync(
         ISyncTransport transport,
         string sourceRoot,
         string destinationRoot,
@@ -1034,9 +1067,11 @@ public sealed class SyncService(
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(paths);
 
+        // Every directory is listed, and refused where it is not one a pull brings back, before any file crosses.
+        var listed = await ListedForPullAsync(transport, sourceRoot, paths, cancellationToken).ConfigureAwait(false);
         var brought = new List<string>();
 
-        foreach (var path in paths)
+        foreach (var path in listed.Files)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -1046,7 +1081,64 @@ public sealed class SyncService(
             brought.Add(path);
         }
 
-        return brought;
+        return new SyncPull(brought, listed.Links);
+    }
+
+    /// <summary>
+    /// What a pull of <paramref name="paths"/> brings back, nothing brought yet: each file named, as named, and every file
+    /// below each directory named, as the side that holds it lists them - each once, in the order asked for.
+    /// </summary>
+    /// <param name="transport">How the copy is reached.</param>
+    /// <param name="sourceRoot">The copy's root on the far side.</param>
+    /// <param name="paths">The paths a pull names, relative to the copy's root.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    /// <exception cref="HarnessException">A directory named is the whole copy, is not a directory, or holds no file or too much.</exception>
+    private static async Task<SyncPull> ListedForPullAsync(
+        ISyncTransport transport,
+        string sourceRoot,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken)
+    {
+        var files = new List<string>();
+        var links = new List<string>();
+
+        foreach (var path in paths)
+        {
+            if (!SyncPull.NamesADirectory(path))
+            {
+                files.Add(path);
+                continue;
+            }
+
+            var directory = path.TrimEnd('/', '\\');
+
+            if (directory is "" or ".")
+            {
+                throw new HarnessException(
+                    HarnessExit.UsageError,
+                    $"--pull '{path}' names the whole copy, which a pull never brings back: name a directory in it, or the files.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var listing = await transport.ListFilesAsync(sourceRoot, directory, cancellationToken).ConfigureAwait(false);
+
+            // Said, and failed: a directory of kept outputs that holds none is not what whoever named it expects, and a pull
+            // that brought nothing and passed would say it had.
+            if (listing.Files.Count == 0)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"'{directory.Replace('\\', '/')}/' holds no file in '{sourceRoot}' on {transport.Host}"
+                    + (listing.Links.Count > 0 ? $", only {listing.Links.Count.ToString(CultureInfo.InvariantCulture)} link(s), which are never followed" : string.Empty)
+                    + ": nothing to bring back from it.");
+            }
+
+            files.AddRange(listing.Files.Select(file => file.Path));
+            links.AddRange(listing.Links);
+        }
+
+        return new SyncPull([.. files.Distinct(StringComparer.Ordinal)], [.. links.Distinct(StringComparer.Ordinal)]);
     }
 
     /// <summary>

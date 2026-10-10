@@ -2373,7 +2373,14 @@ directory here cannot drift apart.
   arrival. Evidence that a binary built here runs there is not evidence if nobody checked it
   survived the journey. A leg's line in `run --json` names each file its steps kept as
   `keptOutputs`, relative to the tree, so a caller passes those paths to `--pull` without walking
-  the host's tree for them.
+  the host's tree for them. A path ending with `/` names a directory instead: the host that holds it
+  lists every file below it with its size (`ISyncTransport.ListFilesAsync`, served as `sync-serve
+  list`), never following a link below it, and each file then crosses as a file named does, in a
+  request of its own. The side that holds the directory bounds it before a file of it is read - 256
+  files, 1 GiB together, no file past what one request carries - and one that is not there, is a
+  file, or holds no file fails the pull by name (`SyncService.ListedForPullAsync`), every directory
+  before any file has crossed. Each file brought back is named in the report, and each link passed
+  over; a dry run asks the host and names the same files.
 
 ## Predefined runners
 

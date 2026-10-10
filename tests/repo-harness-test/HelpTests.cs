@@ -1050,6 +1050,13 @@ public sealed partial class HelpTests
 
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
         Assert.Contains("sync --pull' takes to bring it back", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A path given to --pull that ends with '/' names a directory: every file below it is brought back, each checked as a file named is and "
+            + "each named in the report, as the path a later command takes. The host that holds it lists it first, and a directory that is not "
+            + "there, holds no file, holds more than 256 files or more than 1024 MiB together fails the pull before any file crosses",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("A link below it is never followed: it is named, and nothing is brought back for it.", text, StringComparison.Ordinal);
     }
 
     /// <summary>

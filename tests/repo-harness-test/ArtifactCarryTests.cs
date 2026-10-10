@@ -299,6 +299,40 @@ public sealed class ArtifactCarryTests
     }
 
     /// <summary>
+    /// A pull naming a directory says, host by host, each file it brought back - the path a later command takes - and how
+    /// many in all, since nobody counted what the directory held; its dry run asks the host what the directory holds and
+    /// names the same files, bringing none.
+    /// </summary>
+    [Fact]
+    public async Task APullOfADirectory_NamesEachFileItBroughtBack_AndItsDryRunNamesThemAndBringsNone()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var carriage = await WithAHostAsync(temp, cancellationToken);
+        var over = Path.Combine(carriage.Copy, "out", "deep");
+        Directory.CreateDirectory(over);
+        await File.WriteAllTextAsync(Path.Combine(carriage.Copy, "out", "report.txt"), "measured", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(over, "b.txt"), "b", cancellationToken);
+
+        var dry = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(DryRun: true), ["out/"], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, dry.ExitCode);
+        Assert.Equal("1 host(s) inspected; nothing was changed", dry.Message);
+        Assert.Equal(2, dry.Details!.Count(line => line is "  out/deep/b.txt" or "  out/report.txt"));
+        Assert.Contains(dry.Details!, line => line.Contains(": would bring back 2 file(s) from '", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, "out")));
+
+        var outcome = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), ["out/"], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("2 file(s) brought back from 1 host(s)", outcome.Message);
+        Assert.Contains(outcome.Details!, line => line.EndsWith(": brought back 2 file(s)", StringComparison.Ordinal));
+        Assert.Equal(["  out/deep/b.txt", "  out/report.txt"], outcome.Details!.Where(line => line.StartsWith("  ", StringComparison.Ordinal)));
+        Assert.Equal("measured", await File.ReadAllTextAsync(Path.Combine(temp.Path, "out", "report.txt"), cancellationToken));
+        Assert.Equal("b", await File.ReadAllTextAsync(Path.Combine(temp.Path, "out", "deep", "b.txt"), cancellationToken));
+    }
+
+    /// <summary>
     /// A carry writes an existing copy's own files and makes no copy of its own. Left to create
     /// one it would fill in a mistyped repositoryPath rather than let anybody notice it, and the
     /// directory it made would carry no marker - so the next ordinary sync would refuse, as a

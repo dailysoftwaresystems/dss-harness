@@ -125,6 +125,11 @@ internal static class SyncServeCommand
                             .RemoveEmptyDirectoriesAsync(root, SyncServe.Named(arguments), cancellationToken)
                             .ConfigureAwait(false)));
 
+                case SyncServe.List:
+                    return Answer(await transport
+                        .ListFilesAsync(root, Required(arguments, 1, operation), cancellationToken)
+                        .ConfigureAwait(false));
+
                 case SyncServe.Read:
                     var contents = await transport
                         .ReadFileAsync(root, Required(arguments, 1, operation), cancellationToken)

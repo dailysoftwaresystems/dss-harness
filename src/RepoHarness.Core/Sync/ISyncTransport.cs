@@ -207,6 +207,21 @@ public interface ISyncTransport
     /// that failed, <see cref="HarnessExit.CommandFailed"/>; or the path leaves the copy, refused.
     /// </exception>
     Task<byte[]> ReadFileAsync(string root, string relativePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What one directory of the copy holds, for a pull that names it: every file below it with its size, and every link
+    /// below it, which is neither followed nor read. Bounded where the directory is, before any file of it is read: no
+    /// more than <see cref="SyncServe.MostFilesPulledFromADirectory"/> files, no more than
+    /// <see cref="SyncServe.LargestDirectoryPulled"/> bytes together, and no file past <see cref="SyncServe.LargestFile"/>.
+    /// </summary>
+    /// <param name="root">The copy's root.</param>
+    /// <param name="relativeDirectory">The directory, relative to the root.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    /// <exception cref="HarnessException">
+    /// No directory is at the path - nothing, or a file - or it holds more than a pull brings back, said by name as a
+    /// transfer that failed, <see cref="HarnessExit.CommandFailed"/>; or the path leaves the copy, refused.
+    /// </exception>
+    Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default);
 }
 
 /// <summary>One file on its way into a copy: where it goes, and what it holds.</summary>

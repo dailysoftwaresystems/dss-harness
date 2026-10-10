@@ -1,4 +1,5 @@
 using RepoHarness.Core.Platform;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
@@ -753,6 +754,81 @@ public sealed class LocalSyncTransport(
                 $"'{relativePath}' is not in '{root}': nothing is at that path there.",
                 ex);
         }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The directory named is walked as it is spelt, a link along its path followed as a file's is: a build directory
+    /// pointed at another volume is ordinary. Below it no link is followed, and each is named.
+    /// </remarks>
+    public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
+    {
+        var expanded = Home(root);
+        var directory = Resolve(root, relativeDirectory);
+        var named = relativeDirectory.Replace('\\', '/').TrimEnd('/') + "/";
+
+        if (!_fileSystem.DirectoryExists(directory))
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                _fileSystem.FileExists(directory)
+                    ? $"'{named}' names a directory, and a file is at that path in '{root}': name it without the separator at its end."
+                    : $"'{named}' is not in '{root}': nothing is at that path there.");
+        }
+
+        var most = SyncServe.MostFilesPulledFromADirectory;
+
+        // One more than may cross, and no further: a directory holding a build tree is refused without every file of it
+        // being listed.
+        var walked = _fileSystem.EnumerateWrittenFiles(directory).Take(most + 1).ToList();
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (walked.Count > most)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{named}' holds more than {most.ToString(CultureInfo.InvariantCulture)} files in '{root}', the most a pull brings back from one "
+                + "directory, each in a request of its own: name a directory that holds fewer, or the files, or keep them as one archive.");
+        }
+
+        var files = new List<SyncListedFile>();
+        var links = new List<string>();
+
+        foreach (var file in walked)
+        {
+            var relative = ManifestBuilder.Relative(expanded, file.Path);
+
+            if (_fileSystem.IsLink(file.Path))
+            {
+                links.Add(relative);
+            }
+            else
+            {
+                files.Add(new SyncListedFile(relative, file.Length));
+            }
+        }
+
+        links.AddRange(_fileSystem.EnumerateDirectoryLinks(directory).Select(link => ManifestBuilder.Relative(expanded, link) + "/"));
+
+        if (files.FirstOrDefault(file => file.Length > SyncServe.LargestFile) is { } large)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, SyncServe.TooLargeToCarry(large.Length, large.Path, "this host"));
+        }
+
+        if (files.Sum(file => file.Length) is var bytes && bytes > SyncServe.LargestDirectoryPulled)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{named}' holds {bytes.ToString(CultureInfo.InvariantCulture)} bytes in '{root}', past the "
+                + $"{SyncServe.LargestDirectoryPulled.ToString(CultureInfo.InvariantCulture)} a pull brings back from one directory: name a directory "
+                + "that holds less, or the files, or keep the smaller thing a later step actually reads.");
+        }
+
+        return Task.FromResult(new SyncDirectoryListing([.. files.OrderBy(file => file.Path, StringComparer.Ordinal)])
+        {
+            Links = [.. links.Order(StringComparer.Ordinal)],
+        });
     }
 
     /// <summary>
