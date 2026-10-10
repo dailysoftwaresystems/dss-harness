@@ -877,7 +877,9 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"--arms names the arms to drive, as --legs names legs, and an unknown one is refused ({HarnessExit.UsageError}). "
+            $"--arms names the arms to drive, as --legs names legs, and an unknown one is refused ({HarnessExit.UsageError}) - "
+            + "once the registry itself can be swept: its own problems are listed first, every one of them, whatever --arms "
+            + "names. "
             + "On each leg the arms its S row does not name, and those --arms does not, are skipped-not-selected; an arm "
             + "selected whose S row names no selected leg is named in a warning before the sweep starts, and a sweep whose "
             + $"every selected arm is such a one is refused ({HarnessExit.UsageError}), naming each and where it runs: it would drive "

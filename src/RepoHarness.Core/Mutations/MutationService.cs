@@ -406,12 +406,14 @@ public sealed class MutationService(
             problems.AddRange(TextProblems(reading.Registry, root, carried.IsWithheldFromTransfer));
         }
 
-        Refuse(registry, problems);
-
-        var selected = ArmSelection.Resolve(reading.Registry, armNames);
+        // Every problem of the registry in one refusal, and before --arms is weighed against it: a scope naming no leg is
+        // the registry's whatever else is wrong with it, and whichever arms the command names - one it does not declare
+        // among them, which is a mistake of the command and is said once the registry itself can be swept.
         var scopes = ArmSelection.Scopes(context.Config, reading.Registry, problems);
 
         Refuse(registry, problems);
+
+        var selected = ArmSelection.Resolve(reading.Registry, armNames);
 
         if (selected.Any(arm => arm.Kind == RedKind.TestRed) && settings.ReportArgs is not { Count: > 0 })
         {

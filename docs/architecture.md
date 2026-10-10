@@ -2717,7 +2717,11 @@ leg's own tree, project and variant; sync's exclusions; the variant's configure;
 sources the leg's own build fetched; and ninja's records. A leg built by anything but CMake with the
 Ninja generator is refused too, naming the fix: only ninja's records say, for one configuration
 alone, which objects a mutation rebuilt. `--arms` selects arms as `--legs` selects legs, and an arm
-it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg. An arm
+it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg. It is
+weighed against the registry only once the registry can be swept (`MutationService.ReadAsync`): the
+S rows' legs are resolved with the rest of the registry's problems, so a scope naming neither a leg
+nor a leg set is listed beside them in one refusal, exit 12, whatever `--arms` names - an arm the
+registry does not declare, exit 10, hid it, in the one command that reads a registry and stops. An arm
 selected whose S row names no selected leg is warned of before the sweep starts; and a selection
 whose every arm is such a one is refused, exit 10, naming each and where it runs, before any host
 is touched: every leg would be skipped, and the run would pass having swept nothing. A host sweeping

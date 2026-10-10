@@ -263,6 +263,8 @@ public sealed partial class HelpTests
             "one that does not pass - a build that does not pass, a red case, no report, a failing exit, a hang - decides the leg's own verdict",
             "unattributed the run failed and nothing ties that to a case: no report, one that is no JUnit report - its line says why - a "
             + "failing exit whose report names no failing case, or a run past its bound, or silent for defaults.stallSeconds, stopped as hung",
+            $"an unknown one is refused ({HarnessExit.UsageError}) - once the registry itself can be swept: its own problems are listed "
+            + "first, every one of them, whatever --arms names.",
             "ARMS, below the table, names each arm selected that did not pass, and why;",
             "a worker a sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended, and one that "
             + "cannot be removed keeps it as a failure until that is put right - or --force deletes the worktree and leaves that worker,",

@@ -228,17 +228,51 @@ public sealed class MutationServiceTests
         Assert.Equal((HarnessExit.UsageError, "--arms names 'nowhere', which no A row of the registry declares"), (refusal.ExitCode, refusal.Message));
     }
 
-    /// <summary>A scope naming no leg is refused with the registry's other problems, as configuration.</summary>
-    [Fact]
-    public async Task AScopeNamingNoLeg_IsRefused()
+    /// <summary>
+    /// A scope naming no leg is the registry's problem, listed at its line as configuration whatever <c>--arms</c> names:
+    /// every arm, the scoped arm, another, or one the registry does not declare - which was refused first, as a usage
+    /// error, so the one command that reads a registry and stops said nothing of a row no sweep could start over.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("charge")]
+    [InlineData("depth")]
+    [InlineData("nobody-declared-this")]
+    public async Task AScopeNamingNoLeg_IsRefusedAsTheRegistrys_WhateverArmsNames(string? arms)
     {
         using var temp = new TempDirectory();
         var (service, context) = Prepare(temp, Sweepable(), [.. Arms, "S | charge | nowhere | where it is built"]);
 
+        var refusal = await Assert.ThrowsAsync<HarnessException>(
+            () => service.ReadAsync(context, arms is null ? null : [arms], TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid, string.Join(
+                Environment.NewLine,
+                $"The arms registry '{Registry}' cannot be swept: 1 problem(s), each to fix:",
+                "  - line 5: the S row of arm 'charge' names 'nowhere', which is neither a leg nor a leg set; declared legs: native")),
+            (refusal.ExitCode, refusal.Message));
+    }
+
+    /// <summary>
+    /// A scope naming no leg is listed with the registry's other problems, in one refusal: beside a row the registry does
+    /// not read it went unsaid, to be met by the run after that row was fixed.
+    /// </summary>
+    [Fact]
+    public async Task AScopeNamingNoLeg_IsListedBesideTheRegistrysOtherProblems()
+    {
+        using var temp = new TempDirectory();
+        var (service, context) = Prepare(temp, Sweepable(), [.. Arms, "S | charge | nowhere | where it is built", "Z | charge | x"]);
+
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
 
-        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
-        Assert.Contains("nowhere", refusal.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid, string.Join(
+                Environment.NewLine,
+                $"The arms registry '{Registry}' cannot be swept: 2 problem(s), each to fix:",
+                "  - line 6: 'Z' is no row this registry reads, which are A, C, G, B, M and S",
+                "  - line 5: the S row of arm 'charge' names 'nowhere', which is neither a leg nor a leg set; declared legs: native")),
+            (refusal.ExitCode, refusal.Message));
     }
 
     /// <summary>
