@@ -233,6 +233,11 @@ dssharness legs --legs linux-release,mac-x64-release
 dssharness host-exec --ssh mac-mini -- verify-git
 ```
 
+Nothing a host runs for this machine outlives the command that asked for it. Stopping that command
+ends its legs on every host at once; and a command killed where nothing closes its end of the
+connection leaves legs that stop within two minutes, on an ssh host as in a WSL distribution,
+because the host stops hearing the beat this machine writes while it is there (`help legs`).
+
 A host's section can also give its own `buildCores` and `testCores`, and an `env` that every
 process a leg starts there sees - each build phase, the test runner, each step of a runner - as
 the lowest layer, beneath the variant's, the test invocation's and the runner's own. A `PATH`

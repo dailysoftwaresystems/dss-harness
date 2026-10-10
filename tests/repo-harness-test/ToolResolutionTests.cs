@@ -1046,7 +1046,7 @@ public sealed class ToolResolutionTests
             new KeepAwake(processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
                 new RecordingLauncher(),
-                HomeShorthand.Of(platform, fileSystem));
+                HomeShorthand.Of(platform, fileSystem), new RecordingLastResort());
 
         // An emulator for another kind of host, so the witness never runs: only the search is measured.
         var emulators = new Dictionary<string, EmulatorConfig>(StringComparer.OrdinalIgnoreCase)

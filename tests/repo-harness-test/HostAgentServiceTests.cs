@@ -399,6 +399,198 @@ public sealed class HostAgentServiceTests
         Assert.False(cancelled);
     }
 
+    /// <summary>
+    /// A run whose asker stops writing its beat is cancelled though the input stays open - the sign that needs nothing of
+    /// whatever carries the input - once as many beats as a host lets pass have gone unheard, and says why where that
+    /// machine would read it, were it still there. What the run started stopped in time, so nothing more is ended.
+    /// </summary>
+    [Fact]
+    public async Task Run_CancelsTheCommand_WhenTheBeatFallsSilent_ThoughTheInputStaysOpen_AndSaysWhy()
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 1, "verify-git"));
+        using var error = new StringWriter();
+        var lastResort = new RecordingLastResort();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        // A beat every 20 ms as this host counts it, so eight unheard are 160 ms.
+        var exitCode = await Service(lastResort: lastResort, patience: new HostAgentPatience { BeatUnit = TimeSpan.FromMilliseconds(20) }).ServeAsync(
+            input,
+            new StringWriter(),
+            error,
+            async (_, _, _, token) =>
+            {
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    return HarnessExit.Success;
+                }
+                catch (OperationCanceledException)
+                {
+                    return HarnessExit.Cancelled;
+                }
+            },
+            cancellationToken).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+
+        Assert.Equal(HarnessExit.Cancelled, exitCode);
+        Assert.Contains(
+            "host-agent: FAIL - the machine that asked has gone - it wrote nothing on the input it holds open here for 1 s, where it writes a beat "
+            + "while it is there - so what it started here is stopped",
+            error.ToString(),
+            StringComparison.Ordinal);
+        Assert.EndsWith(HostAgentProtocol.CompletionLine(Nonce, HarnessExit.Cancelled) + Environment.NewLine, error.ToString(), StringComparison.Ordinal);
+        Assert.False(lastResort.Ended.IsCompleted);
+    }
+
+    /// <summary>
+    /// A run whose asker goes on writing its beat is left running, however long it takes; and one whose request says it
+    /// writes no beat is never cancelled for its silence.
+    /// </summary>
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(0, false)]
+    public async Task Run_LeavesTheCommandRunning_WhileTheBeatGoesOn_OrWhereTheRequestWritesNone(int beatSeconds, bool beating)
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds, "verify-git"));
+        using var error = new StringWriter();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        bool? cancelled = null;
+
+        var exitCode = await Service(patience: new HostAgentPatience { BeatUnit = TimeSpan.FromMilliseconds(20) }).ServeAsync(
+            input,
+            new StringWriter(),
+            error,
+            async (_, _, _, token) =>
+            {
+                // Four times as long as eight beats unheard.
+                for (var waited = 0; waited < 32; waited++)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
+
+                    if (beating)
+                    {
+                        input.Beat();
+                    }
+                }
+
+                cancelled = token.IsCancellationRequested;
+                return HarnessExit.Success;
+            },
+            cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, exitCode);
+        Assert.False(cancelled);
+        Assert.DoesNotContain("has gone", error.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An input that cannot be read has ended as surely as one that was closed, whatever the failure: the run is
+    /// cancelled, where a failure nobody caught left it running with nothing left to end it.
+    /// </summary>
+    [Theory]
+    [InlineData(typeof(IOException))]
+    [InlineData(typeof(InvalidOperationException))]
+    [InlineData(typeof(NotSupportedException))]
+    public async Task Run_CancelsTheCommand_WhenTheInputCannotBeRead_WhateverTheFailure(Type failure)
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, "verify-git"));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var serving = Service().ServeAsync(
+            input,
+            new StringWriter(),
+            new StringWriter(),
+            async (_, _, _, token) =>
+            {
+                started.SetResult();
+
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    return HarnessExit.Success;
+                }
+                catch (OperationCanceledException)
+                {
+                    return HarnessExit.Cancelled;
+                }
+            },
+            cancellationToken);
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+        input.Fail((Exception)Activator.CreateInstance(failure, "the input broke")!);
+
+        Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+    }
+
+    /// <summary>
+    /// What a run started that has not stopped within the host's patience of being cancelled is ended by the agent's last
+    /// resort, and the agent with it, saying so and how the request finished: a command stuck reading what a process its
+    /// child left behind still holds would otherwise keep the host for good, with nobody reading it.
+    /// </summary>
+    [Fact]
+    public async Task Run_EndsWhatItStarted_AndItself_WhereTheCommandHasNotStoppedInTimeOnceCancelled()
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, "verify-git"));
+        using var error = new StringWriter();
+        var lastResort = new RecordingLastResort();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var serving = Service(lastResort: lastResort, patience: new HostAgentPatience { Unwind = TimeSpan.FromMilliseconds(100) }).ServeAsync(
+            input,
+            new StringWriter(),
+            error,
+            (_, _, _, _) =>
+            {
+                // Never stops for its token, as a command whose child's output never ends.
+                started.SetResult();
+                return release.Task;
+            },
+            cancellationToken);
+
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+            Assert.False(lastResort.Ended.IsCompleted);
+
+            input.End();
+
+            Assert.Equal(HarnessExit.Cancelled, await lastResort.Ended.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+            Assert.Equal(HarnessExit.Cancelled, await serving.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+            Assert.Contains(
+                "host-agent: FAIL - what the request started here was cancelled - the input it holds open here ended - and had not stopped 1 s later, so "
+                + "its processes are ended, and this one with them",
+                error.ToString(),
+                StringComparison.Ordinal);
+            Assert.EndsWith(HostAgentProtocol.CompletionLine(Nonce, HarnessExit.Cancelled) + Environment.NewLine, error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            release.TrySetResult(HarnessExit.Success);
+        }
+    }
+
+    /// <summary>
+    /// Every request says the beat its asker writes, and the beat written for it is the one it says: a request that says
+    /// none is written none.
+    /// </summary>
+    [Fact]
+    public void ARequest_SaysTheBeatItsAskerWrites_AndIsWrittenThatBeat()
+    {
+        var run = new HostAgentRequest { Kind = HostAgentRequestKind.Run };
+        var read = JsonSerializer.Deserialize<HostAgentRequest>(JsonSerializer.Serialize(run, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
+
+        Assert.Equal(8, HostAgentProtocol.Version);
+        Assert.Equal(15, read.BeatSeconds);
+        Assert.Equal(new InputBeat(TimeSpan.FromSeconds(15), "host-agent: beat"), HostAgentProtocol.BeatOf(read));
+        Assert.Null(HostAgentProtocol.BeatOf(new HostAgentRequest { Kind = HostAgentRequestKind.Run, BeatSeconds = 0 }));
+    }
+
     [Theory]
     [InlineData(HostExecService.CommandName)]
     [InlineData(HostAgentProtocol.CommandName)]
@@ -620,15 +812,21 @@ public sealed class HostAgentServiceTests
     private static PlatformId ThisPlatform => OperatingSystem.IsWindows() ? PlatformId.Windows : PlatformId.Linux;
 
     private static string RunRequest(string directory, params string[] arguments)
+        => RunRequest(directory, HostAgentProtocol.BeatSeconds, arguments);
+
+    /// <summary>A run request whose asker says it writes a beat every <paramref name="beatSeconds"/> seconds; none where zero.</summary>
+    private static string RunRequest(string directory, int beatSeconds, params string[] arguments)
         => JsonSerializer.Serialize(
-            new HostAgentRequest { Kind = HostAgentRequestKind.Run, Directory = directory, Arguments = [.. arguments], Nonce = Nonce },
+            new HostAgentRequest { Kind = HostAgentRequestKind.Run, Directory = directory, Arguments = [.. arguments], Nonce = Nonce, BeatSeconds = beatSeconds },
             HostAgentProtocol.JsonOptions);
 
     private static HostAgentService Service(
         string? home = null,
         IProcessRunner? keepingAwake = null,
         PlatformId current = PlatformId.Linux,
-        IFileSystem? files = null)
+        IFileSystem? files = null,
+        IHostAgentLastResort? lastResort = null,
+        HostAgentPatience? patience = null)
     {
         var platform = HostDoubles.Platform(current, "arm64", home);
 
@@ -648,7 +846,9 @@ public sealed class HostAgentServiceTests
             new KeepAwake(keepingAwake ?? processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
                 new RecordingLauncher(),
-                HomeShorthand.Of(platform, fileSystem));
+                HomeShorthand.Of(platform, fileSystem),
+                lastResort ?? new RecordingLastResort(),
+                patience);
     }
 
     /// <summary>The real file system, except that every filesystem is mounted at <paramref name="mount"/>.</summary>

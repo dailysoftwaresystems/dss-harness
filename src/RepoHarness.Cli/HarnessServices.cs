@@ -99,6 +99,7 @@ internal static class HarnessServices
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();
         services.AddSingleton<EmulatorProbe>();
+        services.AddSingleton<IHostAgentLastResort, HostAgentLastResort>();
         services.AddSingleton<HostAgentService>();
 
         // Reaching a host: its own directory under .harness-config says where it is, a name is

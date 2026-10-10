@@ -369,6 +369,7 @@ public sealed class RemoteSyncTransport(
                     Arguments = [HostAgentProtocol.CommandName],
                     StandardInput = HostAgentProtocol.Input(request),
                     HoldStandardInputOpen = true,
+                    StandardInputBeat = HostAgentProtocol.BeatOf(request),
 
                     // The answer arrives on standard output as one line, read whole, and a file's content
                     // after it a line at a time, each taken as it comes and kept nowhere else; standard error

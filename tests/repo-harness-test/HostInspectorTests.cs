@@ -1449,7 +1449,7 @@ public sealed class HostInspectorTests
                 new KeepAwake(processRunner, new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false)),
                 new HoldAwakeStore(new PhysicalFileSystem(FilePermissionsFactory.Create()), Path.Combine(TestHost.TemporaryRoot, "holds", Guid.NewGuid().ToString("N") + ".json")),
                 new RecordingLauncher(),
-                HomeShorthand.Of(platform, fileSystem));
+                HomeShorthand.Of(platform, fileSystem), new RecordingLastResort());
             var secrets = new HostSecretsStore(fileSystem, Permissions, platform);
             _lookup = new FixedLookup(resolves ? resolvesTo ?? ["192.0.2.10"] : []);
             var addresses = new HostAddressResolver(_lookup, TimeProvider.System, TimeSpan.Zero);

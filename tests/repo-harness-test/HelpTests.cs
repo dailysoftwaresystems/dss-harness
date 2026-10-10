@@ -1037,6 +1037,27 @@ public sealed partial class HelpTests
 
         Assert.Contains($"{LegsExit.Unavailable,3}  legs, sync:", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains($"{HarnessExit.HostUnavailable,3}  host-exec:", result.StandardOutput, StringComparison.Ordinal);
+
+        // What ends a run on its hosts, from the numbers both ends count by.
+        var prose = Words(result.StandardOutput);
+
+        Assert.Contains(
+            "Nothing a host runs for this machine outlives the command that asked for it - a leg, a host-exec, a sync's operation - whatever carries "
+            + "it there.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"when the beat this machine writes on it every {HostAgentProtocol.BeatSeconds} seconds has gone unheard for "
+            + $"{HostAgentProtocol.BeatSeconds * HostAgentProtocol.BeatsMissed}: a dispatcher killed where nothing closes its end of the connection leaves "
+            + "a leg that stops within that time, on an ssh host as in a WSL distribution",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What the host started that has not stopped a minute after it was cancelled - a command reading the output of something its child left "
+            + "running - is ended with its processes, and the host's DssHarness with it, so the host is never held by a run nobody reads. To end a "
+            + "run on its hosts, stop the command that dispatched it.",
+            prose,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

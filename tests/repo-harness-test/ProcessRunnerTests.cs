@@ -453,6 +453,42 @@ public sealed class ProcessRunnerTests
         Assert.Equal(["[request]", expected], Lines(result.StandardOutput));
     }
 
+    /// <summary>
+    /// A beat is written on an input held open, a line each time its interval passes, for as long as the child runs, so
+    /// that a child counting on it knows this process is still there; an input that is not held open is written none.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_WritesABeatOnAnInputHeldOpen_UntilTheChildExits_AndNoneOnOneThatIsNot(bool hold)
+    {
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("read-lines-for", "1500") with
+            {
+                StandardInput = "request\n",
+                HoldStandardInputOpen = hold,
+                StandardInputBeat = new InputBeat(TimeSpan.FromMilliseconds(100), "still here"),
+                Timeout = TimeSpan.FromSeconds(60),
+            },
+            TestContext.Current.CancellationToken);
+
+        var lines = Lines(result.StandardOutput);
+
+        Assert.False(result.TimedOut);
+        Assert.Equal("[request]", lines[0]);
+
+        if (hold)
+        {
+            // Fifteen intervals passed; a loaded machine writes fewer, and never none.
+            Assert.InRange(lines.Count, 4, 16);
+            Assert.All(lines.Skip(1), line => Assert.Equal("[still here]", line));
+        }
+        else
+        {
+            Assert.Single(lines);
+        }
+    }
+
     [Fact]
     public async Task RunAsync_ReportsAMissingExecutable_AsNotFound()
     {

@@ -39,7 +39,34 @@ public static class HostAgentProtocol
     /// and its own version. With the number left as it was, the same host refuses the request over
     /// whichever field it happens not to know, which says nothing about why.
     /// </remarks>
-    public const int Version = 7;
+    public const int Version = 8;
+
+    /// <summary>
+    /// How often, in seconds, the machine that asked writes <see cref="BeatLine"/> on the input it holds open while a run
+    /// request is served: what every request says of itself, unless it says otherwise.
+    /// </summary>
+    public const int BeatSeconds = 15;
+
+    /// <summary>
+    /// How many beats in a row a host lets pass unheard before it takes the machine that asked to have gone, and cancels
+    /// what the request started: enough that a connection stalled for a moment, or a machine busy for one, loses no run.
+    /// </summary>
+    public const int BeatsMissed = 8;
+
+    /// <summary>What a beat writes: anything read on the input counts as one, and this says what it is to whoever reads a capture.</summary>
+    public const string BeatLine = CommandName + ": beat";
+
+    /// <summary>
+    /// The beat the machine that asked writes for <paramref name="request"/> while it holds its input open, as the request
+    /// says it will; <see langword="null"/> where the request says it writes none.
+    /// </summary>
+    /// <param name="request">The request.</param>
+    public static InputBeat? BeatOf(HostAgentRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return request.BeatSeconds > 0 ? new InputBeat(TimeSpan.FromSeconds(request.BeatSeconds), BeatLine) : null;
+    }
 
     /// <summary>
     /// How requests and answers are written. Dictionaries and lists are read with the converters
@@ -379,6 +406,20 @@ public sealed class HostAgentRequest
     /// <see langword="null"/> for any other leg, or where that machine could not measure the drive.
     /// </summary>
     public string? DiskImageDrive { get; init; }
+
+    /// <summary>
+    /// How often, in seconds, the machine that asked writes a beat on the input it holds open while the request is
+    /// served; zero where it writes none. Run only: a host that hears nothing for
+    /// <see cref="HostAgentProtocol.BeatsMissed"/> beats takes that machine to have gone, as it does when the input ends,
+    /// and cancels what the request started.
+    /// </summary>
+    /// <remarks>
+    /// The end of the input is how a host learns the machine that asked has gone, and it is only as good as whatever
+    /// carries the input: a consumer's leg ran on to its end on a host reached over ssh, with nobody reading it, after its
+    /// dispatcher was killed, where the same leg on a host reached through WSL was cancelled at once. A beat that stops
+    /// says so on every carriage.
+    /// </remarks>
+    public int BeatSeconds { get; init; } = HostAgentProtocol.BeatSeconds;
 
     /// <summary>
     /// A value the machine that asked chose for this request, repeated in the host's completion line so

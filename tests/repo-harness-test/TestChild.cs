@@ -31,6 +31,7 @@ internal static class TestChild
             "echo-stdin" => EchoStandardInput(standardOutput),
             "stdin-to-file" => StandardInputToFile(arguments),
             "read-line-then-watch" => ReadLineThenWatch(standardOutput, arguments),
+            "read-lines-for" => ReadLinesFor(standardOutput, arguments),
             "sleep" => Sleep(arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
@@ -151,6 +152,33 @@ internal static class TestChild
         var ended = reading.Wait(int.Parse(arguments[0], CultureInfo.InvariantCulture)) && reading.Result < 0;
 
         output.Write(ended ? "ended\n" : "held\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// Reads lines for the given milliseconds, then writes back each it read: what a child that listens for a beat on
+    /// its input hears. The reader is left undisposed, since a read may still be pending when this process exits.
+    /// </summary>
+    private static int ReadLinesFor(TextWriter output, string[] arguments)
+    {
+        var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
+        var read = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        _ = Task.Run(() =>
+        {
+            while (input.ReadLine() is { } line)
+            {
+                read.Enqueue(line);
+            }
+        });
+
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+
+        foreach (var line in read)
+        {
+            output.Write("[" + line + "]\n");
+        }
+
         return 0;
     }
 

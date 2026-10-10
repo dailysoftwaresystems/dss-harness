@@ -408,7 +408,7 @@ public sealed class HoldAwakeTests
             new KeepAwake(new HeldProcesses(), new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false), store),
             store,
             launcher,
-            HomeShorthand.Of(platform, fileSystem));
+            HomeShorthand.Of(platform, fileSystem), new RecordingLastResort());
     }
 
     private static async Task Until(Func<bool> done)

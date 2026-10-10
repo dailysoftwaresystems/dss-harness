@@ -1087,6 +1087,26 @@ the machine that sends it - which it holds open until the host has finished: whi
 it is, what the host is, and whether each emulator works there; or to run one of its own
 commands in the host's copy of the repository, which is what `host-exec` does.
 
+Nothing a run request starts outlives the machine that asked for it (`HostAgentService`). That
+machine has gone when the input it holds open ends, or can no longer be read, whatever the failure;
+and, since the end of an input is only as good as whatever carries it - a consumer's leg ran on to
+its end on a host reached over ssh, with nobody reading it, after its dispatcher was killed, where
+the same leg in a WSL distribution was cancelled at once - when the beat it writes on that input
+has stopped. Every request says how often its asker writes one (`HostAgentRequest.BeatSeconds`, 15,
+protocol 8); the process runner writes it for as long as the input is held open
+(`ProcessRequest.StandardInputBeat`, set from the request by `HostAgentProtocol.BeatOf` wherever a
+run request is sent: a leg, `host-exec`, each of a sync's operations), and the host takes anything
+read on its input as one. Eight in a row unheard (`BeatsMissed`), two minutes, and the host cancels
+what the request started, first saying why on its error stream: the one sign that can be wrong, so
+a machine still there, whose beats were held up, reads why its run stopped. A hang-up of the
+agent's session cancels it the same way (`HangUp`), rather than ending the agent where it stands
+with its children left running. What was cancelled is given a minute to stop
+(`HostAgentPatience.Unwind`); a command that has not - one reading to its end the output of
+something its child left running, which never ends - is ended by the agent's last resort
+(`HostAgentLastResort`): every process the agent started, each with its tree, as the process table
+lists them, then the agent itself, exit 130. There is no verb that stops a run on its hosts,
+because stopping the command that dispatched it is that verb, on every carriage.
+
 Both ends must be the same build, so before anything runs on a host:
 
 - A host without DssHarness has this machine's version installed.
@@ -1484,7 +1504,7 @@ whoever holds the slots: that leg takes the next slot given back, for as long as
 it. Measured: a command's WSL leg, asked for at once with its two Windows legs by the process that
 dispatched them all, waited out its hour behind them and was `not-admitted`. A host serving a leg for
 another machine records the leg's slot under that machine's run, which the run request carries beside
-the command (`HostAgentRequest.RunId`, protocol 7), so the legs one command sends there wait for each
+the command (`HostAgentRequest.RunId`, since protocol 7), so the legs one command sends there wait for each
 other the same way; a request naming its run by what is no run id, or naming a blank drive where WSL
 keeps the disk, is refused, and nothing it asks for runs. A slot is held by the process that asked
 for it, never by a timeout: given back when the work ends, and, where that process ended

@@ -155,10 +155,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // Written while both output streams are being read, so a child that answers as it reads
         // can never block this on a full output pipe, nor this block it on a full input pipe.
+        using var exited = new CancellationTokenSource();
         var standardInput = WriteInputAsync(
             process.StandardInput,
             request.StandardInput,
-            close: !request.HoldStandardInputOpen);
+            close: !request.HoldStandardInputOpen,
+            request.HoldStandardInputOpen ? request.StandardInputBeat : null,
+            exited.Token);
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (request.Timeout is { } budget)
@@ -180,6 +183,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             KillTree(process);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
         }
+
+        // No beat is written to a child that has gone.
+        await exited.CancelAsync().ConfigureAwait(false);
 
         // The process has exited, but what it wrote just before exiting can still be in the
         // pipes. Reading both streams to their end is what guarantees none of it is lost.
@@ -513,9 +519,10 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// Written on a thread of its own: a writer writes as it makes what it writes, for as long as the child takes to read
     /// it. An input that could not be written whole is closed whatever <paramref name="close"/> says - a child holding its
     /// input open waits for the rest of it, which would never come - and what stopped it, where that was not the child
-    /// ceasing to read, is raised once the child has gone.
+    /// ceasing to read, is raised once the child has gone. An input held open is then written <paramref name="beat"/>,
+    /// where one is given, until <paramref name="exited"/> says the child has gone.
     /// </remarks>
-    private static async Task WriteInputAsync(StreamWriter writer, ChildInput? input, bool close)
+    private static async Task WriteInputAsync(StreamWriter writer, ChildInput? input, bool close, InputBeat? beat, CancellationToken exited)
     {
         var whole = false;
 
@@ -528,6 +535,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
             await writer.BaseStream.FlushAsync().ConfigureAwait(false);
             whole = true;
+
+            if (!close && beat is not null)
+            {
+                await BeatAsync(writer.BaseStream, beat, exited).ConfigureAwait(false);
+            }
         }
         catch (IOException)
         {
@@ -540,6 +552,27 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             {
                 CloseQuietly(writer);
             }
+        }
+    }
+
+    /// <summary>Writes <paramref name="beat"/> to <paramref name="input"/>, a line each time its interval passes, until <paramref name="exited"/>.</summary>
+    /// <exception cref="IOException">The child stopped reading.</exception>
+    private static async Task BeatAsync(Stream input, InputBeat beat, CancellationToken exited)
+    {
+        var line = Utf8NoBom.GetBytes(beat.Line + "\n");
+
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(beat.Every, exited).ConfigureAwait(false);
+                await input.WriteAsync(line, exited).ConfigureAwait(false);
+                await input.FlushAsync(exited).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+        {
+            // The child has gone, and its input with it.
         }
     }
 

@@ -393,6 +393,56 @@ internal sealed class HeldOpenReader(string line) : TextReader
     }
 }
 
+/// <summary>A last resort that ends nothing, and records that it was asked to and with what code.</summary>
+internal sealed class RecordingLastResort : IHostAgentLastResort
+{
+    private readonly TaskCompletionSource<int> _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>The code the agent asked to end with, once it has asked.</summary>
+    public Task<int> Ended => _ended.Task;
+
+    public Task EndAsync(int exitCode)
+    {
+        _ended.TrySetResult(exitCode);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// An input that holds one request, then stays open: silent, until it is told to write a beat, to fail, or to end, as the
+/// machine that asked would.
+/// </summary>
+internal sealed class BeatingReader(string line) : TextReader
+{
+    private readonly System.Threading.Channels.Channel<object> _events = System.Threading.Channels.Channel.CreateUnbounded<object>();
+    private bool _lineRead;
+
+    /// <summary>Writes a beat, as the machine that asked does while it is there.</summary>
+    public void Beat() => _events.Writer.TryWrite("beat");
+
+    /// <summary>Makes the next read fail with <paramref name="failure"/>.</summary>
+    public void Fail(Exception failure) => _events.Writer.TryWrite(failure);
+
+    /// <summary>Ends the input.</summary>
+    public void End() => _events.Writer.TryComplete();
+
+    public override ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken)
+    {
+        _lineRead = !_lineRead ? true : throw new InvalidOperationException("The request was read twice.");
+        return ValueTask.FromResult<string?>(line);
+    }
+
+    public override async ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+    {
+        if (!await _events.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return 0;
+        }
+
+        return await _events.Reader.ReadAsync(cancellationToken).ConfigureAwait(false) is Exception failure ? throw failure : 1;
+    }
+}
+
 /// <summary>Process results for scripted hosts.</summary>
 internal static class HostResults
 {

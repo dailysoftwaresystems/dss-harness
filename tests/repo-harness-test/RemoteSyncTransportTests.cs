@@ -2,6 +2,7 @@ using System.Text;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
 
@@ -94,6 +95,35 @@ public sealed class RemoteSyncTransportTests
             .ReadFileAsync("/home/dev/repo", "empty.txt", TestContext.Current.CancellationToken);
 
         Assert.Empty(read);
+    }
+
+    /// <summary>
+    /// Each of a sync's requests holds the host's input open and writes on it the beat the request says, as a leg's does:
+    /// a sync's operation on a host is cancelled there too once neither its asker's input nor its beat reaches it.
+    /// </summary>
+    [Fact]
+    public async Task ASyncsRequest_HoldsItsInputOpen_AndWritesTheBeatItSays()
+    {
+        HostCommand? sent = null;
+
+        var transport = new RemoteSyncTransport(
+            HostId.Ssh("vps"),
+            new HostSession(new HostConnection { Host = HostId.Ssh("vps") }, "dssharness"),
+            new ScriptedHostCommands((_, command) =>
+            {
+                sent = command;
+                return HostResults.Finished(command, HarnessExit.Success);
+            }),
+            new ConsoleHarnessOutput(new StringWriter(), new StringWriter(), verbose: false));
+
+        await transport.DeleteFileAsync("/home/dev/repo", "a.txt", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(sent);
+        Assert.True(sent.HoldStandardInputOpen);
+        Assert.Equal(new InputBeat(TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds), HostAgentProtocol.BeatLine), sent.StandardInputBeat);
+        Assert.Equal(
+            HostAgentProtocol.BeatSeconds,
+            System.Text.Json.JsonSerializer.Deserialize<HostAgentRequest>(sent.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.BeatSeconds);
     }
 
     /// <summary>A host whose agent answers a read with <paramref name="length"/> and <paramref name="hash"/>, then <paramref name="pieces"/>.</summary>

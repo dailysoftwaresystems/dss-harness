@@ -111,6 +111,11 @@ public sealed class HostExecServiceTests
 
         // One line, with the input held open: stopping this process ends it on the host, which cancels the command.
         Assert.True(command.HoldStandardInputOpen);
+
+        // And a beat written on it for as long as it is held, which the request says: its silence cancels the command
+        // where the end of the input never reaches the host.
+        Assert.Equal(new InputBeat(TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds), HostAgentProtocol.BeatLine), command.StandardInputBeat);
+        Assert.Equal(HostAgentProtocol.BeatSeconds, JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.BeatSeconds);
         Assert.Single(command.StandardInput.Read(), character => character == '\n');
         Assert.EndsWith("\n", command.StandardInput.Read(), StringComparison.Ordinal);
 
