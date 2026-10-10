@@ -484,8 +484,9 @@ public sealed class MutationService(
 
     /// <summary>
     /// What is wrong with the texts <paramref name="registry"/>'s rows cite, read as the tree holds them: each that is not a
-    /// file, and each before-text, control before-text or diagnostic holding nothing - which occurs everywhere, and which
-    /// every run would say.
+    /// file; each before-text, control before-text or diagnostic holding nothing - which occurs everywhere, and which
+    /// every run would say; and each text of an arm that shares a byte of its file with another of that arm's, as the
+    /// tree holds the file, said at the later row's line.
     /// </summary>
     private IEnumerable<string> TextProblems(MutationRegistry registry, string root, Func<string, bool> withheld)
     {

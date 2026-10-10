@@ -475,6 +475,7 @@ public sealed class ProcessRunnerTests
         var lines = Lines(result.StandardOutput);
 
         Assert.False(result.TimedOut);
+        Assert.Null(result.BeatLost);
         Assert.Equal("[request]", lines[0]);
 
         if (hold)
@@ -488,6 +489,56 @@ public sealed class ProcessRunnerTests
         {
             Assert.Single(lines);
         }
+    }
+
+    /// <summary>
+    /// A beat stops when the child has gone, however long its interval: a run is never held for a beat still to be
+    /// written, and a child that exited took no beat that was lost.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_StopsBeating_OnceTheChildHasGone_HoweverLongTheBeatsInterval()
+    {
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("sleep", "200") with
+            {
+                StandardInput = "request\n",
+                HoldStandardInputOpen = true,
+                StandardInputBeat = new InputBeat(TimeSpan.FromMinutes(10), "still here"),
+                Timeout = TimeSpan.FromMinutes(5),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Null(result.BeatLost);
+        Assert.InRange(result.Duration, TimeSpan.Zero, TimeSpan.FromMinutes(2));
+    }
+
+    /// <summary>
+    /// A beat that can no longer be written to a child still running is said, with why, and the input is closed: the
+    /// child - a carrier to another machine - has stopped hearing this process and goes on, and whatever counts on the
+    /// beat at its far end will give this process up. Passed over, as the child ceasing to read its input always was,
+    /// that left whoever started it with a run stopped for a machine that had gone, and nothing here to say why.
+    /// A child that takes its input with it as it exits has lost no beat.
+    /// </summary>
+    [Theory]
+    [InlineData("4000", true)]
+    [InlineData("300", false)]
+    public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor, bool lost)
+    {
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("close-input-then-sleep", runsFor) with
+            {
+                StandardInput = "request\n",
+                HoldStandardInputOpen = true,
+                StandardInputBeat = new InputBeat(TimeSpan.FromMilliseconds(100), "still here"),
+                Timeout = TimeSpan.FromMinutes(5),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(lost, result.BeatLost is { Length: > 0 });
     }
 
     [Fact]

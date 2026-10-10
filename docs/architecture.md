@@ -577,8 +577,10 @@ it is given - or anywhere in the tree, off the floor, with `--all` (`RefreshRequ
 no path beside it - refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
 comparison asked of the agent's worktree). The refusal names each such path and the arguments that leave them:
 `--except <path>`, once for each, takes that path out of what is handed, so the rest goes over and it stays the agent's
-change, weighed by its fold against what the main tree holds; it is listed in every report, and one naming a path the
-refresh would not have refused is refused as a stray `--settled` is. What is left out is still weighed as in the way of
+change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed, would be,
+or needed no handing, and one naming a path the refresh would not have refused is refused as a stray `--settled` is. A
+refresh that stops part way says the line that asks for it again with everything it was asked (`RefreshRequest.Arguments`):
+its paths or `--all`, and each `--except`. What is left out is still weighed as in the way of
 what is handed. seed-agent hands the same paths besides the main tree's uncommitted state. A
 symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
 commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,
@@ -1126,6 +1128,15 @@ could not end, or why none could be listed. The one thing started on a host to o
 that asked for it is the process holding the host awake between commands (`holdAwakeSeconds`),
 which ends on its own seconds. There is no verb that stops a run on its hosts, because stopping
 the command that dispatched it is that verb, on every carriage.
+
+The beat can fail at this end too: the process that carries the request - ssh, wsl.exe - stops
+taking what is written to it and goes on. The process runner then waits two seconds for it to be
+seen exiting, which says the rest itself, and otherwise closes the input and records why
+(`ProcessResult.BeatLost`): the host is told by the end of its input, at once, and not left to
+count a silence. Each sender of a run request - a leg, `host-exec`, a sync's operation - warns
+with it (`HostProbes.BeatLost`), since the host then stops what it was asked for a machine that
+has gone, and that machine is here, reading how its command ended. Passed over, as a child ceasing
+to read its input always was, the run ended two minutes later with nothing at this end to say why.
 
 This machine's own DssHarness has one door too (`update-tool`, `ToolUpdateService`). Measured on a
 consumer's Windows host: a `dotnet tool update` typed by one session while another's commands ran
@@ -2767,7 +2778,9 @@ diagnostic - and C, G, B, M and S rows, each following the A row of its arm, add
 redden, a neighbour that must run and stay green, a BUILD-RED arm's paired control, another site
 mutated with it, and the legs it runs on. An M row's site is another file, or - naming a file the
 arm already mutates, as the tree's own file system compares names - a further text of that file
-(`MutationSite.Further`): a consumer's mutants were several places of one file, thousands of lines
+(`MutationSite.Further`), which it must spell as the arm's first row for that file spells it: the
+one spelling held to the tree's, so a row that names the file otherwise is the registry's problem
+at its line. A consumer's mutants were several places of one file, thousands of lines
 apart, either edit alone another program or no change at all, and one text spanning them would
 break at any edit of a line between. Every text of a file is replaced together
 (`SiteEdit.ApplyAll`): each is looked for in the file as the tree holds it, never as another of

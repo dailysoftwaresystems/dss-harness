@@ -32,6 +32,7 @@ internal static class TestChild
             "stdin-to-file" => StandardInputToFile(arguments),
             "read-line-then-watch" => ReadLineThenWatch(standardOutput, arguments),
             "read-lines-for" => ReadLinesFor(standardOutput, arguments),
+            "close-input-then-sleep" => CloseInputThenSleep(arguments),
             "sleep" => Sleep(arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
@@ -155,6 +156,40 @@ internal static class TestChild
         output.Write(ended ? "ended\n" : "held\n");
         return 0;
     }
+
+    /// <summary>
+    /// Closes its own end of its input, then goes on for the given milliseconds: what a carrier that stops taking what
+    /// it is written, and does not exit, looks like to whoever writes to it.
+    /// </summary>
+    private static int CloseInputThenSleep(string[] arguments)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            const int StandardInputHandle = -10;
+
+            CloseHandle(GetStdHandle(StandardInputHandle));
+        }
+        else
+        {
+            _ = close(0);
+        }
+
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+        return 0;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    private static extern nint GetStdHandle(int handle);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CloseHandle(nint handle);
+
+    [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.SafeDirectories)]
+    private static extern int close(int descriptor);
 
     /// <summary>
     /// Reads lines for the given milliseconds, then writes back each it read: what a child that listens for a beat on

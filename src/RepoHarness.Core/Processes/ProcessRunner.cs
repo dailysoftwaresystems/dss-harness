@@ -191,7 +191,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         // pipes. Reading both streams to their end is what guarantees none of it is lost.
         var capturedOutput = await standardOutput.ConfigureAwait(false);
         var capturedError = await standardError.ConfigureAwait(false);
-        await standardInput.ConfigureAwait(false);
+        var beatLost = await standardInput.ConfigureAwait(false);
 
         if (request.HoldStandardInputOpen)
         {
@@ -215,8 +215,18 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             StandardOutput: capturedOutput.Text,
             StandardError: capturedError.Text,
             Duration: stopwatch.Elapsed,
-            TimedOut: stopped);
+            TimedOut: stopped)
+        {
+            BeatLost = beatLost,
+        };
     }
+
+    /// <summary>
+    /// How long a child whose input can no longer be written is given to be found exiting, before the beat is said to
+    /// have been lost to a child still running: a child that exits takes its input with it a moment before it is seen
+    /// to have gone.
+    /// </summary>
+    private static readonly TimeSpan GoingGrace = TimeSpan.FromSeconds(2);
 
     public string? FindExecutable(string command)
     {
@@ -522,9 +532,15 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// ceasing to read, is raised once the child has gone. An input held open is then written <paramref name="beat"/>,
     /// where one is given, until <paramref name="exited"/> says the child has gone.
     /// </remarks>
-    private static async Task WriteInputAsync(StreamWriter writer, ChildInput? input, bool close, InputBeat? beat, CancellationToken exited)
+    /// <returns>
+    /// Why the beat stopped while the child was still running, or <see langword="null"/> where it did not. The input is
+    /// closed then: a beat that fails without a word leaves the child counting a silence, and whoever started it with
+    /// nothing to say why the child gave up on it.
+    /// </returns>
+    private static async Task<string?> WriteInputAsync(StreamWriter writer, ChildInput? input, bool close, InputBeat? beat, CancellationToken exited)
     {
         var whole = false;
+        string? beatLost = null;
 
         try
         {
@@ -538,7 +554,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
             if (!close && beat is not null)
             {
-                await BeatAsync(writer.BaseStream, beat, exited).ConfigureAwait(false);
+                beatLost = await BeatAsync(writer.BaseStream, beat, exited).ConfigureAwait(false);
             }
         }
         catch (IOException)
@@ -548,16 +564,18 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
         finally
         {
-            if (close || !whole)
+            if (close || !whole || beatLost is not null)
             {
                 CloseQuietly(writer);
             }
         }
+
+        return beatLost;
     }
 
     /// <summary>Writes <paramref name="beat"/> to <paramref name="input"/>, a line each time its interval passes, until <paramref name="exited"/>.</summary>
-    /// <exception cref="IOException">The child stopped reading.</exception>
-    private static async Task BeatAsync(Stream input, InputBeat beat, CancellationToken exited)
+    /// <returns>Why a beat could not be written to a child that was still running, or <see langword="null"/> where every one was.</returns>
+    private static async Task<string?> BeatAsync(Stream input, InputBeat beat, CancellationToken exited)
     {
         var line = Utf8NoBom.GetBytes(beat.Line + "\n");
 
@@ -566,13 +584,26 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             while (true)
             {
                 await Task.Delay(beat.Every, exited).ConfigureAwait(false);
-                await input.WriteAsync(line, exited).ConfigureAwait(false);
-                await input.FlushAsync(exited).ConfigureAwait(false);
+
+                try
+                {
+                    await input.WriteAsync(line, exited).ConfigureAwait(false);
+                    await input.FlushAsync(exited).ConfigureAwait(false);
+                }
+                catch (IOException ex)
+                {
+                    // Its input no longer takes anything. A child that is exiting says the rest itself, and is seen
+                    // to have gone within a moment; one that goes on has stopped hearing this process.
+                    await Task.Delay(GoingGrace, exited).ConfigureAwait(false);
+
+                    return ex.Message;
+                }
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
         {
             // The child has gone, and its input with it.
+            return null;
         }
     }
 

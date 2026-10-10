@@ -214,6 +214,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             Show(held);
         }
 
+        if (HostProbes.BeatLost(result) is { } unheard)
+        {
+            _output.Warn(commandName, $"{leg.Host.Host}: {unheard}");
+        }
+
         if (lines.Finished is not { } finished)
         {
             // Never a failed verdict: the command may not have run, or run only in part, and

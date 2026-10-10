@@ -46,6 +46,16 @@ public sealed record RefreshRequest
         return OrchestrationRules.PathsProblem(Paths, "a path to refresh") ?? OrchestrationRules.PathsProblem(Except, ExceptOption);
     }
 
+    /// <summary>
+    /// The arguments that ask for this refresh again, each as a command line takes it: its paths, or
+    /// <see cref="AllOption"/>, then <see cref="ExceptOption"/> for each path left as the agent changed it. Nothing where it
+    /// names none, which is a refresh of the registries' directory.
+    /// </summary>
+    public string Arguments()
+        => string.Join(
+            ' ',
+            new[] { All ? AllOption : string.Join(' ', Paths.Select(OrchestrationReports.Argument)), ExceptArguments(Except) }.Where(part => part.Length > 0));
+
     /// <summary>The arguments that leave <paramref name="paths"/> as the agent changed them, each as a command line takes it.</summary>
     /// <param name="paths">The paths, as git names them.</param>
     public static string ExceptArguments(IEnumerable<string> paths)

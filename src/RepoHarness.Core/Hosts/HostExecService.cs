@@ -183,6 +183,11 @@ public sealed class HostExecService(
             },
             cancellationToken).ConfigureAwait(false);
 
+        if (HostProbes.BeatLost(result) is { } unheard)
+        {
+            _output.Warn(CommandName, $"{host}: {unheard}");
+        }
+
         var shown = string.Join(' ', arguments);
 
         // The command's exit code comes from its completion line, never from the transport: ssh exits 255, and

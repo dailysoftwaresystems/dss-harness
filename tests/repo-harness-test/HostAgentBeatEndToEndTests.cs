@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Text;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Processes;
@@ -64,10 +67,99 @@ public sealed class HostAgentBeatEndToEndTests
         Assert.DoesNotContain("has gone", result.StandardError, StringComparison.Ordinal);
     }
 
-    /// <summary>This build's agent, asked to run the napping step in <paramref name="temp"/>, its input held open and its beat written.</summary>
-    private static ProcessRequest Agent(TempDirectory temp, int beatSeconds)
+    /// <summary>
+    /// The same host, its session hung up while its leg runs - its input still open, and no beat asked of its asker, so
+    /// that nothing else says that machine has gone: on Linux and macOS it stops the leg as a cancellation does and says
+    /// how the request finished, where a process that took the hang-up as its own end left the step running under
+    /// nobody.
+    /// </summary>
+    [Fact]
+    public async Task AHostWhoseSessionIsHungUp_StopsTheLegItWasRunning_AndSaysHowItFinished()
     {
-        var request = new HostAgentRequest
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows ends a process whose console closes, whatever it answers.");
+
+        using var temp = new TempDirectory();
+        await NappingRepositoryAsync(temp);
+
+        var asked = Asked(temp, beatSeconds: 0);
+        var start = new ProcessStartInfo(TestHost.DotnetExecutable)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        foreach (var argument in new[] { "exec", CliRunner.CliAssemblyPath, HostAgentProtocol.CommandName })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var agent = Process.Start(start) ?? throw new InvalidOperationException("The agent did not start.");
+
+        try
+        {
+            var serving = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var said = new StringBuilder();
+
+            var reading = Task.Run(
+                async () =>
+                {
+                    while (await agent.StandardError.ReadLineAsync(Token) is { } line)
+                    {
+                        lock (said)
+                        {
+                            said.AppendLine(line);
+                        }
+
+                        if (HostAgentProtocol.IsStartedLine(line, Nonce))
+                        {
+                            serving.TrySetResult();
+                        }
+                    }
+                },
+                Token);
+            var written = agent.StandardOutput.ReadToEndAsync(Token);
+
+            HostAgentProtocol.Input(asked).WriteTo(agent.StandardInput.BaseStream);
+            await agent.StandardInput.BaseStream.FlushAsync(Token);
+            await serving.Task.WaitAsync(TimeSpan.FromMinutes(2), Token);
+
+            // Long enough for the leg to have started its step.
+            await Task.Delay(TimeSpan.FromSeconds(5), Token);
+
+            using (var hangUp = Process.Start("kill", ["-HUP", agent.Id.ToString(CultureInfo.InvariantCulture)]))
+            {
+                await hangUp.WaitForExitAsync(Token);
+            }
+
+            await agent.WaitForExitAsync(Token).WaitAsync(TimeSpan.FromSeconds(NapSeconds - 30), Token);
+            await reading.WaitAsync(TimeSpan.FromSeconds(30), Token);
+            await written.WaitAsync(TimeSpan.FromSeconds(30), Token);
+
+            string all;
+
+            lock (said)
+            {
+                all = said.ToString();
+            }
+
+            Assert.NotEqual(HarnessExit.Success, agent.ExitCode);
+            Assert.True(HostAgentProtocol.TryReadCompletionLine(all.TrimEnd().Split('\n')[^1].TrimEnd('\r'), Nonce, out var finished), all);
+            Assert.Equal(agent.ExitCode, finished);
+        }
+        finally
+        {
+            if (!agent.HasExited)
+            {
+                agent.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
+    /// <summary>The request to run the napping step in <paramref name="temp"/>, its asker writing a beat every <paramref name="beatSeconds"/> seconds; none where zero.</summary>
+    private static HostAgentRequest Asked(TempDirectory temp, int beatSeconds)
+        => new()
         {
             Kind = HostAgentRequestKind.Run,
             Directory = temp.Path,
@@ -75,6 +167,11 @@ public sealed class HostAgentBeatEndToEndTests
             Nonce = Nonce,
             BeatSeconds = beatSeconds,
         };
+
+    /// <summary>This build's agent, asked to run the napping step in <paramref name="temp"/>, its input held open and its beat written.</summary>
+    private static ProcessRequest Agent(TempDirectory temp, int beatSeconds)
+    {
+        var request = Asked(temp, beatSeconds);
 
         return new ProcessRequest
         {

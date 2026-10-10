@@ -93,6 +93,27 @@ public sealed class HostExecServiceTests
         Assert.Empty(fixture.Commands.Calls);
     }
 
+    /// <summary>
+    /// Where this machine could no longer write to the connection while the host worked, it says so, from this end: the
+    /// host stops what it was asked for a machine that has gone, and that machine is here, reading how its command
+    /// ended with nothing else to say why.
+    /// </summary>
+    [Fact]
+    public async Task ABeatThatCouldNoLongerBeWritten_IsSaidFromThisEnd_WithWhy()
+    {
+        var fixture = Create(respond: (_, command) => HostResults.Finished(command, HarnessExit.Cancelled) with { BeatLost = "The pipe is being closed." });
+
+        var outcome = await fixture.Service.RunAsync(Root, "vps", null, ["verify-git"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Contains(
+            "ssh vps: this machine could no longer write to the connection it holds open to the host (The pipe is being closed), so the host was "
+            + "told this machine had gone, and stops what it was asked",
+            fixture.Error.ToString() + fixture.Output,
+            StringComparison.Ordinal);
+        Assert.Null(HostProbes.BeatLost(HostResults.Ok(string.Empty)));
+    }
+
     [Fact]
     public async Task TheCommand_TravelsAsOneLineHeldOpen_AndItsExitCodeComesFromItsCompletionLine()
     {

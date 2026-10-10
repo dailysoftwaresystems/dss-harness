@@ -407,6 +407,11 @@ public sealed class RemoteSyncTransport(
                 cancellationToken)
             .ConfigureAwait(false);
 
+        if (HostProbes.BeatLost(result) is { } unheard)
+        {
+            _output.Warn(SyncService.CommandName, $"{Host}: {unheard}");
+        }
+
         if (lines.Finished is not { } exitCode)
         {
             throw new HarnessException(

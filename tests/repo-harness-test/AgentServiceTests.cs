@@ -767,6 +767,75 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// A refresh that stops part way says the line that asks for it again with everything it was asked - its paths, or
+    /// --all, and each path left as the agent changed it. Said bare, that line asked for another refresh: of the
+    /// registries' directory alone, and refused over the very changes this one was told to leave.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "--all --except a.txt")]
+    [InlineData(false, "a.txt b.txt docs --except a.txt")]
+    public async Task ARefreshThatStopsPartWay_SaysTheLineThatAsksForItAgain_WithEverythingItWasAsked(bool all, string asked)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var agents = kit.Harness.Agents(new UncopyableFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "docs", "x.md")), kit.Harness.AnchorRegistryService);
+        var request = all ? new RefreshRequest { All = true, Except = ["a.txt"] } : new RefreshRequest { Paths = ["a.txt", "b.txt", "docs"], Except = ["a.txt"] };
+
+        var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", request, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith("Refreshing agent 'ag' of 'o1' stopped after 1 of 2 path(s): ", stopped.Message, StringComparison.Ordinal);
+        Assert.EndsWith(
+            $"Its seed records the 1 handed; run 'dssharness refresh-agent o1 ag {asked} --apply' again once that is dealt with.",
+            stopped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("one\nagent edit\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>The arguments that ask for a refresh again are its own, each as a command line takes it: none for the registries' directory.</summary>
+    [Fact]
+    public void TheArgumentsThatAskForARefreshAgain_AreItsOwn()
+    {
+        Assert.Equal(string.Empty, new RefreshRequest().Arguments());
+        Assert.Equal("--all", new RefreshRequest { All = true }.Arguments());
+        Assert.Equal("docs \"with space\"", RefreshRequest.Under("docs", "with space").Arguments());
+        Assert.Equal("docs --except a.txt --except \"b c.txt\"", new RefreshRequest { Paths = ["docs"], Except = ["a.txt", "b c.txt"] }.Arguments());
+    }
+
+    /// <summary>
+    /// A path left as the agent changed it is handed nothing, and is in the way of what is handed like anything else of
+    /// the agent's: where the main tree now holds a directory at it, the refresh is refused, naming it, and nothing is
+    /// written - leaving it out by name never lets a file of the main tree's be written through it.
+    /// </summary>
+    [Fact]
+    public async Task APathLeftAsTheAgentChangedIt_IsStillInTheWayOfWhatIsHanded_WhereTheMainTreeHoldsADirectoryThere()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        OrchestrationKit.Write(kit.Main, "b.txt/inner.txt", "inner\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a directory where a file was", Token);
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Except = ["b.txt"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "Refreshing agent 'ag' of 'o1' would write over or through 1 path(s) of its own - b.txt - where the main tree holds a directory, or a "
+            + "file in place of the directory they are in: move them aside, and run again. Nothing was written.",
+            refused.Message);
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
     /// An --except naming a path the refresh would not have refused - one the agent did not change, one the main tree did
     /// not move, or one outside the paths refreshed - leaves nothing out, and is refused as the typo it usually is, with
     /// nothing copied; one that could name nothing in the tree is a usage error.

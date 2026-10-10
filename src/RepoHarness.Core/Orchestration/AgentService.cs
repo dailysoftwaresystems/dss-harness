@@ -683,6 +683,11 @@ public sealed class AgentService(
         var all = moved.Files.Concat(moved.Deletions).Order(StringComparer.Ordinal).ToList();
         var behind = await BehindAsync(main, record).ConfigureAwait(false);
 
+        // The line that asks for this refresh again, with everything it was asked: its paths or --all, and each path left
+        // as the agent changed it. Said bare, it asked for another refresh - of the registries' directory alone, and
+        // refused over the very changes this one was told to leave.
+        var again = OrchestrationReports.Line(RefreshCommand, record.Orchestrator, record.Name, request.Arguments(), "--apply");
+
         // Never silent: a path left out without a word is how a change of the main tree's goes missing while the refresh succeeds.
         IReadOnlyList<string> leftLines = left.Count == 0
             ? []
@@ -726,7 +731,7 @@ public sealed class AgentService(
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
                     $"Refreshing {Lower(Agent(record))} handed over what it could and could not record it: {ex.Message.TrimEnd('.')}. Run "
-                    + $"{OrchestrationReports.Line(RefreshCommand, record.Orchestrator, record.Name, "--apply")} again once that is dealt with.",
+                    + $"{again} again once that is dealt with.",
                     [seedLine]);
             }
 
@@ -734,7 +739,7 @@ public sealed class AgentService(
                 ? CommandOutcome.Failed(
                     HarnessExit.Incomplete,
                     $"Refreshing {Lower(Agent(record))} stopped after {handed} of {all.Count} path(s): {stopped}. Its seed records the {handed} handed; "
-                    + $"run {OrchestrationReports.Line(RefreshCommand, record.Orchestrator, record.Name, "--apply")} again once that is dealt with.",
+                    + $"run {again} again once that is dealt with.",
                     [seedLine])
                 : CommandOutcome.Ok(
                     $"refreshed {all.Count} path(s) into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out",

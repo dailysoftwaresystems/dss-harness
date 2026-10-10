@@ -1077,8 +1077,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "What the host started that has not stopped 60 seconds after it was cancelled - a command reading the output of something its child "
             + "left running - is ended with its processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a "
-            + "command that finishes what it began - a deletion, a fold, a hand-over - is given 120, as it is where it is typed and interrupted. To "
-            + "end a run on its hosts, stop the command that dispatched it.",
+            + "command that finishes what it began - a deletion, a fold, a hand-over - is given 120, as it is where it is typed and interrupted. "
+            + "Where this machine can no longer write to the connection while a host works, it closes it, so the host stops at once and not after "
+            + "a silence, and says so here with why. To end a run on its hosts, stop the command that dispatched it.",
             prose,
             StringComparison.Ordinal);
 

@@ -316,6 +316,23 @@ public static partial class HostProbes
     }
 
     /// <summary>
+    /// That this machine stopped being heard by a host while what it had asked of it was still running, and why, where
+    /// <paramref name="result"/> says so; <see langword="null"/> where it does not. A host that hears no beat, or whose
+    /// input ends, stops what it was asked and says the machine that asked has gone: said from this end too, since that
+    /// machine is here, reading it.
+    /// </summary>
+    /// <param name="result">What running a request through a connection produced.</param>
+    public static string? BeatLost(ProcessResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        return result.BeatLost is { } why
+            ? $"this machine could no longer write to the connection it holds open to the host ({why.TrimEnd('.')}), so the host was told this "
+                + "machine had gone, and stops what it was asked"
+            : null;
+    }
+
+    /// <summary>
     /// Why a program a host was asked to run never reported how it finished: that the host could not be
     /// reached, as <see cref="Unreached"/> says it, where ssh never connected; otherwise that the program
     /// may not have run, or run only in part, with the exit the connection ended with and what it said last.

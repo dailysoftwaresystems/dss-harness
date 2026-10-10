@@ -40,7 +40,8 @@ public sealed record ArmPreflight
 
     /// <summary>
     /// What is wrong with each text the arm cites that cannot be used as the worker's copy holds it, as a line says it:
-    /// one the copy does not hold as a file, or a before-text holding nothing, which occurs everywhere.
+    /// one the copy does not hold as a file, a before-text holding nothing, which occurs everywhere, or two texts of one
+    /// file that share a byte of it as the copy holds that file.
     /// </summary>
     public IReadOnlyList<string> TextProblems { get; init; } = [];
 

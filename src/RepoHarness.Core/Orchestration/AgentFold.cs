@@ -812,8 +812,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="seed">What it shares with the main tree.</param>
     /// <param name="settled">The paths declared settled by hand.</param>
     /// <param name="finishing">
-    /// Whether this finishes a move its record says stopped part way: what that move wrote is held as <paramref name="to"/>
-    /// holds it, a file its base did not hold among it, where otherwise such a file is the agent's own.
+    /// Whether this finishes a move its record says stopped part way: a file its base did not hold that git lists as
+    /// unchanged since <paramref name="to"/> is then what that move wrote, and is held as <paramref name="to"/> holds it.
+    /// Otherwise such a file is the agent's own - unless it is the very file <paramref name="to"/> holds there, read and
+    /// compared, which is held as <paramref name="to"/> holds it whether a move is being finished or not.
     /// </param>
     /// <param name="cancellationToken">Stops the measuring.</param>
     /// <exception cref="HarnessException">git could not answer, or names a path that is not UTF-8.</exception>
