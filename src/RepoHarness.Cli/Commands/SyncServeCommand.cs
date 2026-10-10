@@ -52,7 +52,9 @@ internal static class SyncServeCommand
             switch (operation)
             {
                 case SyncServe.Inspect:
-                    return Answer(await transport.InspectAsync(root, cancellationToken).ConfigureAwait(false));
+                    return Answer(await transport
+                        .InspectAsync(root, SyncServe.WantedIn(arguments, 1), cancellationToken)
+                        .ConfigureAwait(false));
 
                 case SyncServe.Create:
                     await transport
@@ -62,8 +64,37 @@ internal static class SyncServeCommand
                     return Done();
 
                 case SyncServe.InitRepository:
-                    await transport.InitialiseRepositoryAsync(root, cancellationToken).ConfigureAwait(false);
+                    await transport
+                        .InitialiseRepositoryAsync(root, SyncServe.ObjectFormatIn(arguments), cancellationToken)
+                        .ConfigureAwait(false);
+
                     return Done();
+
+                case SyncServe.HistoryPiece:
+                    await transport
+                        .SendHistoryAsync(
+                            root,
+                            Required(arguments, 1, operation),
+                            SyncServe.OffsetIn(Required(arguments, 2, operation)),
+                            new SyncFileWrite(Required(arguments, 1, operation), Required(arguments, 3, operation)).Bytes(),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+
+                    return Done();
+
+                case SyncServe.TakeHistory:
+                    return Answer(await transport
+                        .TakeHistoryAsync(
+                            root,
+                            new RepoHarness.Core.Git.GitHistoryTaken(
+                                SyncServe.WantedIn(arguments, 3)
+                                    ?? throw new HarnessException(
+                                        HarnessExit.UsageError,
+                                        $"sync operation '{operation}' was given no commit to take. The two ends are different builds."),
+                                SyncServe.Given(arguments, 1, operation),
+                                SyncServe.Given(arguments, 2, operation)),
+                            cancellationToken)
+                        .ConfigureAwait(false));
 
                 case SyncServe.Index:
                     await transport

@@ -223,6 +223,19 @@ internal sealed class MutationLegRunner(
 
         public async Task<LegEntry> RunAsync(CancellationToken cancellationToken)
         {
+            try
+            {
+                return await SweepAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                // What was packed of the tree's history for the workers goes with the sweep's reading of it.
+                _reading?.Dispose();
+            }
+        }
+
+        private async Task<LegEntry> SweepAsync(CancellationToken cancellationToken)
+        {
             var unselected = _subject.Arms.Unselected
                 .Select(arm => (arm.Arm, Entry: Undriven(arm.Arm, ReachedVerdict.Of(LegVerdict.SkippedNotSelected, arm.Reason))))
                 .ToList();
@@ -393,8 +406,14 @@ internal sealed class MutationLegRunner(
                 return (WorkerRoom.Plan([], wanted, tooLong, room: null, unmeasured: null, source: null), []);
             }
 
-            // A worker's copy is the tree and the dependency sources it is given, as the sweep's readings count them.
-            var copy = _reading.Files.Entries.Values.Sum(entry => entry.Size) + _fetched.Sum(read => read.Bytes);
+            // A worker's copy is the tree and the dependency sources it is given, as the sweep's readings count them, and
+            // what git keeps there of the tree's history: asked only where a worker is yet to be made, since it is packed
+            // to be counted - once, for every worker this reading makes, and before the room is measured, so the pack
+            // itself is within what is measured.
+            var history = Enumerable.Range(1, fit).All(number => _runner._fileSystem.DirectoryExists(Worker(number)))
+                ? 0
+                : await _runner._copies.HistoryBytesAsync(_reading, cancellationToken).ConfigureAwait(false);
+            var copy = _reading.Files.Entries.Values.Sum(entry => entry.Size) + _fetched.Sum(read => read.Bytes) + history;
             var needs = Enumerable.Range(1, fit)
                 .Select(number =>
                 {

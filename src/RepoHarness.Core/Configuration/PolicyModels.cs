@@ -115,6 +115,22 @@ public sealed class SyncConfig
     public double MaxDeleteFraction { get; init; } = DefaultMaxDeleteFraction;
 
     /// <summary>
+    /// How much of the tree's git history a copy is sent, so that git there answers about HEAD as it does here:
+    /// <c>head</c>, the commit HEAD names and nothing behind it - a copy then holds of what is behind only what it held
+    /// already - or <c>full</c>, every commit behind it too.
+    /// </summary>
+    /// <remarks>
+    /// The commit itself always goes: a copy whose HEAD named another commit, or none, answered every question a step
+    /// asked git about HEAD for a tree other than the one the step was handed. What is behind it is a choice, because a
+    /// first carry of it is the size of the repository where the commit alone is about the size of the tree.
+    /// </remarks>
+    public string History { get; init; } = Git.GitHistoryWanted.HeadOnly;
+
+    /// <summary>Whether <see cref="History"/> asks for every commit behind HEAD.</summary>
+    [JsonIgnore]
+    public bool WholeHistory => string.Equals(History, Git.GitHistoryWanted.Full, StringComparison.Ordinal);
+
+    /// <summary>
     /// The floor together with <see cref="NeverTransfer"/>: everything sync must withhold, and
     /// equally everything it must never delete. A path the harness will not write is one it cannot
     /// know the source lacks, so deleting it would remove the host's own state — its git repository,

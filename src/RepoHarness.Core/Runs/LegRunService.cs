@@ -227,6 +227,9 @@ public sealed class LegRunService(
         // What each host's copy is marked, read once per copy, for a run on what is already staged there.
         var stagedMarks = new ConcurrentDictionary<string, Lazy<Task<CopyMark>>>(LegPlan.TreeKeyComparer);
 
+        // Each tree as it was read for the copies on other machines, where any is.
+        IReadOnlyDictionary<string, Task<SyncSource>>? sources = null;
+
         try
         {
             // A run on this machine that ended holding its own directory - most likely killed, or stopped with its
@@ -242,9 +245,9 @@ public sealed class LegRunService(
 
             if (!request.UseStaged && placed.Any(leg => leg.Remote))
             {
-                var sources = await ReadSourcesAsync(placed, commandName, cancellationToken).ConfigureAwait(false);
+                var read = sources = await ReadSourcesAsync(placed, commandName, cancellationToken).ConfigureAwait(false);
 
-                syncTree = (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, sources, lockedTrees, token);
+                syncTree = (treeKey, token) => SyncTreeAsync(context, placed, treeKey, runId, request.ForceLock, read, lockedTrees, token);
             }
 
             LegExecution execution;
@@ -289,6 +292,12 @@ public sealed class LegRunService(
         }
         finally
         {
+            // What was packed of each tree's history for its copies goes with the reading of it.
+            foreach (var read in sources?.Values.Where(read => read.IsCompletedSuccessfully) ?? [])
+            {
+                read.Result.Dispose();
+            }
+
             await _logOwnership.ReleaseAsync(runDirectory, runId, CancellationToken.None).ConfigureAwait(false);
         }
     }

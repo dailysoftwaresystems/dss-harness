@@ -1797,6 +1797,48 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// A worker yet to be made needs, with its copy of the tree's files, what git keeps there of the tree's history - the
+    /// commit, and every commit behind it where they are asked for, which is the size of the repository. It is asked
+    /// once for the sweep, since it is packed to be counted, and not at all where every worker's copy is there already.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerYetToBeMade_NeedsWhatGitKeepsOfTheTreesHistory_AskedOnceAndOnlyWhereOneIsToBeMade()
+    {
+        var copy = TreeFiles.Values.Sum(text => (long)text.Length);
+
+        using var full = new Sweep { ExpectedBuildBytes = 1L << 30 };
+        full.Copies.History = 3L << 30;
+        full.Files = new ScriptedRoom(full.Harness.FileSystem, 10);
+
+        var turned = await full.RunAsync([DepthType]);
+
+        Assert.StartsWith(
+            $"its first worker needs ~{DiskSpace.Size(copy + (3L << 30) + (1L << 30))}, each worker's build as declared; ",
+            turned.Detail,
+            StringComparison.Ordinal);
+        Assert.Equal(1, full.Copies.HistoryAsked);
+
+        using var one = new Sweep();
+        Directory.CreateDirectory(one.Worker(1));
+
+        await one.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(1, one.Copies.HistoryAsked);
+
+        using var none = new Sweep();
+        Directory.CreateDirectory(none.Worker(1));
+        Directory.CreateDirectory(none.Worker(2));
+
+        var swept = await none.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(LegVerdict.Passed, swept.Verdict);
+        Assert.Equal(0, none.Copies.HistoryAsked);
+
+        // And the sweep's reading is let go with the sweep, with whatever was packed of it.
+        Assert.True(none.Reading!.Disposed);
+    }
+
+    /// <summary>
     /// No room for even one worker turns the leg away, as a leg whose build does not fit is turned away, each arm with it,
     /// and nothing is copied; room for fewer than it wanted runs fewer, saying so.
     /// </summary>
@@ -2980,7 +3022,7 @@ public sealed class MutationLegRunnerTests
                 entries[path] = new SyncEntry(path, bytes.Length, FileContentHash.Of(bytes));
             }
 
-            return new SyncSource(context, new SyncExclusions(new SyncConfig(), ".worktrees"), new SyncManifest(Tree, entries), []);
+            return new SyncSource(context, new SyncExclusions(new SyncConfig(), ".worktrees"), new SyncManifest(Tree, entries), [], history: null);
         }
     }
 
@@ -3065,6 +3107,17 @@ public sealed class MutationLegRunnerTests
         public void Release(string worker, RunId runId) => Released.Enqueue(worker);
 
         public string? HeldBy(string worker) => Held.GetValueOrDefault(worker);
+
+        /// <summary>What git keeps of the tree's history in a worker made new, and how many times it was asked.</summary>
+        public long History { get; set; }
+
+        public int HistoryAsked;
+
+        public Task<long> HistoryBytesAsync(SyncSource source, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref HistoryAsked);
+            return Task.FromResult(History);
+        }
 
         public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)
         {

@@ -929,7 +929,8 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A sweep runs the workers whose copy and build fit the room left - a build of the variant coming to the leg's "
+            "A sweep runs the workers whose copy and build fit the room left - a copy being the tree's files and what git "
+            + "keeps there of its history, and a build of the variant coming to the leg's "
             + "buildSpaceGiB where it declares one, else to what the leg's own build last recorded, else to the most any "
             + "other tree of the repository on its machine recorded of it - and whose build stays within the path limit, "
             + "reckoned as a worktree's is; where not even the first does, the leg is skipped-unavailable, saying why, and "
@@ -1584,7 +1585,8 @@ internal static class HelpCommand
         builder.AppendLine("ends it, and the host cancels the command. The command line ssh hands a remote");
         builder.AppendLine("shell holds only fixed words, so no argument is ever reinterpreted by sh, cmd or");
         builder.AppendLine("PowerShell. host-exec runs in the host's copy of the tree it is typed in, which");
-        builder.AppendLine($"'{ToolPackage.Command} sync' creates and keeps in step with that tree.");
+        builder.AppendLine($"'{ToolPackage.Command} sync' creates and keeps in step with that tree - its files, and the");
+        builder.AppendLine("commit its git HEAD names ('help config').");
         builder.AppendLine();
         // From the numbers both ends count by, so no sentence here can come to say another time than the host keeps.
         var patience = new HostAgentPatience();
@@ -2342,7 +2344,9 @@ internal static class HelpCommand
         builder.AppendLine("  predefinedRunners  multi-phase procedures such as a corpus test or a benchmark");
         builder.AppendLine($"  exec           named commands to run through '{ToolPackage.Command} exec'");
         builder.AppendLine("  commit         commit template and sign-off policy");
-        builder.AppendLine("  sync           what the tree mirror carries, and what it must never carry");
+        builder.AppendLine("  sync           what the tree mirror carries, and what it must never carry; history,");
+        builder.AppendLine("                 how much git history a copy is given: 'head' (the commit HEAD names,");
+        builder.AppendLine("                 the default) or 'full' (every commit behind it too)");
         builder.AppendLine("  contention     tools that, running against a leg's build directory, void its result");
         builder.AppendLine("  worktrees      naming, path budget and path limit");
         builder.AppendLine("  anchors        the pending and done anchor registries, and how new ids are spelled");
@@ -2465,7 +2469,23 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("A leg on a host reached through WSL or ssh runs in that host's copy of its tree:");
         builder.AppendLine("the files the sync writes there from this tree, in a git repository of the host's own -");
-        builder.AppendLine("one the sync made, or one it took over - whose history is not this checkout's. Each");
+        builder.AppendLine("one the sync made, or one it took over. Each sync makes its HEAD name the commit this");
+        builder.AppendLine("tree is at, so what a step asks git about HEAD - which commit, what a file held there -");
+        builder.AppendLine("is answered there as it is here. What changed since is answered for the files the copy");
+        builder.AppendLine("holds: one this tree tracks and the sync withholds reads as deleted, one it carries");
+        builder.AppendLine("untracked as added, and one git stores converted here - line endings, a clean filter -");
+        builder.AppendLine("as changed, since the copy's index holds each file's bytes. The commit crosses as a");
+        builder.AppendLine("pack of git's own, less what the copy holds, and nothing crosses while its HEAD names");
+        builder.AppendLine("the commit and it holds what is asked. By default the commit alone crosses: a question");
+        builder.AppendLine("about a commit behind it that the copy lacks fails there, in git's own words.");
+        builder.AppendLine("\"sync\": { \"history\": \"full\" } gives the copy every commit behind it too, once, and");
+        builder.AppendLine("each later one as it is made; a partial clone then has git fetch what it left out. A");
+        builder.AppendLine("copy the sync took over has its HEAD moved where it names another commit - detached,");
+        builder.AppendLine("and said the once it leaves a branch - and no branch, tag or commit of it changes: it");
+        builder.AppendLine("gains the objects sent, and where it lacks the commit before the one it is given, git");
+        builder.AppendLine("reads it as a shallow repository from then on, said too, which 'git fetch --unshallow'");
+        builder.AppendLine("there undoes. The copy's branches, remotes and stash are still its own, and a");
+        builder.AppendLine("submodule's history is not carried. Each");
         builder.AppendLine("sync makes its index hold the files it carried, so a build there fingerprints its");
         builder.AppendLine("inputs and keeps its directory as a build here does. A test that checks this");
         builder.AppendLine("checkout's state has nothing to say about that copy, so an invocation's");

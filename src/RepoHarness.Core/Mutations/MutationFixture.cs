@@ -206,11 +206,13 @@ public static class MutationFixture
             StringComparer.Ordinal);
 
         // A configuration of nothing: the fixture's workers are built with the leg's, which no file in them is read for.
+        // And no commit: the fixture is this assembly's, and no repository's tree.
         return new SyncSource(
             new HarnessContext(new HarnessLayout(directory, directory), config),
             new SyncExclusions(config.Sync, config.Worktrees.Root),
             new SyncManifest(directory, entries),
-            "{}\n"u8.ToArray());
+            "{}\n"u8.ToArray(),
+            history: null);
     }
 
     /// <summary>

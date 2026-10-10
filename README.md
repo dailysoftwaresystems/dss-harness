@@ -319,6 +319,12 @@ sets one up only on the machine it runs on, and nothing is installed for it. `--
 every host and installs nothing, naming each command that would run. `sync` creates the host's copy
 of the tree it runs in and keeps it in step, deletions included: the main checkout's at the host's
 `repositoryPath`, and each worktree's beside it, so worktrees do not wait for each other on a host.
+The copy's git HEAD names the commit this tree is at, so a step that asks git about HEAD is answered
+on a host as it is here: the commit alone by default, and every commit behind it with
+`"sync": { "history": "full" }`. A clone the sync took over has its HEAD moved, detached, where it
+names another commit, and no branch, tag or commit of it changed; given a commit without the one
+before it, git reads it as a shallow repository from then on, which the sync says, with what undoes
+it.
 Deleting a worktree removes its copies from the hosts that hold one, and fails, naming it, while one
 stays. A file crosses whole, either way, so one larger than 804,519,909 bytes is refused by name
 before anything is sent. An

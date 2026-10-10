@@ -680,6 +680,10 @@ public sealed class SyncServiceTests
             Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
             Assert.Equal(SyncKit.Moved(reached[1], "src/a.c", "changed", copies[reached[1].Name]), outcome.Message);
             Assert.Contains($"{reached[0]}: {copies[reached[0].Name]}", outcome.Details ?? []);
+
+            // What was packed of the tree's history for the first host's copy went with the command's reading of the tree.
+            Assert.NotNull(await harness.GitClient.ResolveCommitAsync(copies[reached[0].Name], "HEAD", cancellationToken));
+            Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(temp.Path, ".git"), "dssharness-history-*"));
         }
         finally
         {

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 
@@ -40,8 +41,9 @@ public static class SyncServe
     public const string Manifest = "manifest";
 
     /// <summary>
-    /// Reports whether the copy's root exists, whether the harness created it and whether its last sync finished, and
-    /// what configuration it holds.
+    /// Reports whether the copy's root exists, whether the harness created it and whether its last sync finished, what
+    /// configuration it holds, and - where it is a git repository of its own - where its HEAD stands and what it holds
+    /// of the history asked of it: <c>inspect &lt;root&gt;</c>, then, where a tree is synced, what <see cref="Asking"/> spells.
     /// </summary>
     public const string Inspect = "inspect";
 
@@ -51,8 +53,118 @@ public static class SyncServe
     /// </summary>
     public const string Create = "create";
 
-    /// <summary>Makes the copy a git repository, which the harness there needs to find anything.</summary>
+    /// <summary>
+    /// Makes the copy a git repository, which the harness there needs to find anything:
+    /// <c>init-repository &lt;root&gt;</c>, then how one made there names its objects, where the tree synced says.
+    /// </summary>
     public const string InitRepository = "init-repository";
+
+    /// <summary>How a repository names its objects, as an <see cref="InitRepository"/> request carries it; none where it carries none.</summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <exception cref="HarnessException">It is no such word: the two ends are different builds.</exception>
+    public static string? ObjectFormatIn(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count <= 1)
+        {
+            return null;
+        }
+
+        // A word of letters and digits, as git's own are: it becomes part of an option on git's command line.
+        return arguments[1].Length > 0 && arguments[1].All(char.IsAsciiLetterOrDigit)
+            ? arguments[1]
+            : throw new HarnessException(
+                HarnessExit.UsageError,
+                $"'{arguments[1]}' is not how a git repository names its objects. The two ends are different builds.");
+    }
+
+    /// <summary>
+    /// Keeps a piece of a pack of git objects aside in the copy's repository until the whole of it is taken:
+    /// <c>history-piece &lt;root&gt; &lt;pack&gt; &lt;bytes before it&gt; &lt;content&gt;</c>.
+    /// </summary>
+    public const string HistoryPiece = "history-piece";
+
+    /// <summary>
+    /// Takes the pack sent, where one was, and moves the copy's HEAD to the commit of the tree synced:
+    /// <c>take-history &lt;root&gt; &lt;pack&gt; &lt;commit left out&gt;</c>, each of those two <see cref="Nothing"/> where
+    /// there is none, then what <see cref="Asking"/> spells.
+    /// </summary>
+    public const string TakeHistory = "take-history";
+
+    /// <summary>What stands where an operation takes a value and there is none: no object's name, and never empty.</summary>
+    public const string Nothing = "-";
+
+    /// <summary>
+    /// What a request says of the history asked of a copy: the commit, how much behind it, how the tree's repository
+    /// names its objects, then each commit that repository's own history stops at; <see cref="Nothing"/> for the commit
+    /// where the tree has none yet, and nothing at all where what is synced is no repository's tree.
+    /// </summary>
+    /// <param name="wanted">What is asked, or <see langword="null"/> where nothing is.</param>
+    public static IReadOnlyList<string> Asking(GitHistoryWanted? wanted)
+        => wanted is null ? [] : [wanted.Commit ?? Nothing, wanted.Depth, wanted.ObjectFormat, .. wanted.Boundary];
+
+    /// <summary>The history a request asks of a copy, as <see cref="Asking"/> spelled it from <paramref name="at"/> on.</summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <param name="at">Where the commit stands among them.</param>
+    /// <returns>What is asked, or <see langword="null"/> where the request asks for none.</returns>
+    /// <exception cref="HarnessException">
+    /// It arrived in part, or names how much is asked in a word this build does not know: the two ends are different builds.
+    /// </exception>
+    /// <remarks>
+    /// Refused rather than read as less: a history taken short of what was asked would leave the copy's HEAD where
+    /// the sync then says it is not.
+    /// </remarks>
+    public static GitHistoryWanted? WantedIn(IReadOnlyList<string> arguments, int at)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count <= at)
+        {
+            return null;
+        }
+
+        if (arguments.Count < at + 3 || arguments[at + 1] is not (GitHistoryWanted.HeadOnly or GitHistoryWanted.Full))
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                "The history asked of the copy arrived in a shape this build cannot read: a commit, then "
+                + $"'{GitHistoryWanted.HeadOnly}' or '{GitHistoryWanted.Full}', then how its objects are named. The two ends are different builds.");
+        }
+
+        return new GitHistoryWanted(
+            Given(arguments, at, Inspect),
+            arguments[at + 1] == GitHistoryWanted.Full,
+            arguments[at + 2],
+            [.. arguments.Skip(at + 3)]);
+    }
+
+    /// <summary>The value at <paramref name="index"/> of a request, or <see langword="null"/> where it is <see cref="Nothing"/>.</summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <param name="index">Where the value stands.</param>
+    /// <param name="operation">The operation, for the refusal.</param>
+    /// <exception cref="HarnessException">The request is too short to hold it: the two ends are different builds.</exception>
+    public static string? Given(IReadOnlyList<string> arguments, int index, string operation)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        return index < arguments.Count
+            ? string.Equals(arguments[index], Nothing, StringComparison.Ordinal) ? null : arguments[index]
+            : throw new HarnessException(
+                HarnessExit.UsageError,
+                $"sync operation '{operation}' needs {(index + 1).ToString(CultureInfo.InvariantCulture)} argument(s); it was given "
+                + $"{arguments.Count.ToString(CultureInfo.InvariantCulture)}.");
+    }
+
+    /// <summary>How many bytes of a pack a piece starts after, as a <see cref="HistoryPiece"/> request carries it.</summary>
+    /// <param name="text">The number, in digits.</param>
+    /// <exception cref="HarnessException">It is no such number: the two ends are different builds.</exception>
+    public static long OffsetIn(string text)
+        => long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var offset)
+            ? offset
+            : throw new HarnessException(
+                HarnessExit.UsageError,
+                $"'{text}' is not how many bytes of a pack came before a piece of it. The two ends are different builds.");
 
     /// <summary>What mark a <see cref="Create"/> request asks for, spelled as the enum's own name.</summary>
     /// <param name="arguments">The request's arguments, the copy's root first.</param>
@@ -633,7 +745,15 @@ public enum CopyOrigin
 /// What the configuration the copy holds is, by content, so a sync knows whether placing its own changes the copy;
 /// <see langword="null"/> where it holds none, or one that cannot be read.
 /// </param>
-public sealed record SyncInspectAnswer(bool Exists, CopyMark Mark, string? Configuration = null);
+public sealed record SyncInspectAnswer(bool Exists, CopyMark Mark, string? Configuration = null)
+{
+    /// <summary>
+    /// Where the HEAD of the copy's git repository stands, how that repository names its objects and what it holds of
+    /// the history asked of it; <see langword="null"/> where the root is not the top of a repository of its own - one
+    /// is then made for it, which holds nothing.
+    /// </summary>
+    public GitHistoryHeld? Repository { get; init; }
+}
 
 /// <summary>What a copy's marker says about how it came to be, and whether the last sync of it finished.</summary>
 public enum CopyMark

@@ -1131,7 +1131,7 @@ public sealed class MutationServiceTests
             new LegExecutor(harness.Platform, harness.Output),
             new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
-            Substitute.For<ISyncService>(),
+            SyncKit.ServiceDouble(),
             Substitute.For<ISyncTransportFactory>(),
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
             AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), new ScriptedGauge(10), new ManualClock()),

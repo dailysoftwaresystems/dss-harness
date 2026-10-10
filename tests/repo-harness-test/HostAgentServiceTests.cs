@@ -933,7 +933,7 @@ public sealed class HostAgentServiceTests
         var run = new HostAgentRequest { Kind = HostAgentRequestKind.Run };
         var read = JsonSerializer.Deserialize<HostAgentRequest>(JsonSerializer.Serialize(run, HostAgentProtocol.JsonOptions), HostAgentProtocol.JsonOptions)!;
 
-        Assert.Equal(8, HostAgentProtocol.Version);
+        Assert.Equal(9, HostAgentProtocol.Version);
         Assert.Equal(15, read.BeatSeconds);
         Assert.Equal(new InputBeat(TimeSpan.FromSeconds(15), "host-agent: beat"), HostAgentProtocol.BeatOf(read));
         Assert.Null(HostAgentProtocol.BeatOf(new HostAgentRequest { Kind = HostAgentRequestKind.Run, BeatSeconds = 0 }));

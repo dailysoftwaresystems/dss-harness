@@ -137,7 +137,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         try
         {
-            process.Start();
+            await StartAsync(process, cancellationToken).ConfigureAwait(false);
 
             // Before the readers below, so nothing the child says can arrive ahead of the fact that
             // it started.
@@ -219,6 +219,55 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         {
             BeatLost = beatLost,
         };
+    }
+
+    /// <summary>
+    /// How long a program that will not start for being written is started again before that is its failure.
+    /// </summary>
+    /// <remarks>
+    /// Linux starts no program a descriptor still holds open for writing, and a process forked while the program was
+    /// being written - by any thread of the process writing it, for a child of its own - holds that descriptor until it
+    /// becomes the program it was forked for: a moment, in which a program written and closed a line earlier is "busy".
+    /// Seen in this tool's own suite, which writes a script and starts it beside tests starting children of their own:
+    /// one start failed so in a run of some five thousand tests.
+    /// </remarks>
+    private static readonly TimeSpan BusyGrace = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long between two tries of a program that is busy.</summary>
+    private static readonly TimeSpan BusyPause = TimeSpan.FromMilliseconds(20);
+
+    /// <summary>"Text file busy", as Linux and macOS number it.</summary>
+    internal const int TextFileBusy = 26;
+
+    /// <summary>Starts <paramref name="process"/>, again for as long as <see cref="BusyGrace"/> where it is being written.</summary>
+    private static Task StartAsync(Process process, CancellationToken cancellationToken)
+        => StartAsync(() => process.Start(), !OperatingSystem.IsWindows(), BusyGrace, cancellationToken);
+
+    /// <summary>
+    /// Runs <paramref name="start"/>, and again every <see cref="BusyPause"/> for as long as <paramref name="grace"/>
+    /// where it fails as a program being written does and <paramref name="busyPasses"/> says that passes on this system.
+    /// Any other failure, and that one once the grace is spent, is the start's own.
+    /// </summary>
+    /// <param name="start">Starts the program, raising as <see cref="Process.Start()"/> does where it cannot.</param>
+    /// <param name="busyPasses">Whether a program held open for writing is refused here, and so worth trying again: not on Windows, where the number means something else.</param>
+    /// <param name="grace">How long it is tried again.</param>
+    /// <param name="cancellationToken">Stops the waiting between two tries.</param>
+    internal static async Task StartAsync(Action start, bool busyPasses, TimeSpan grace, CancellationToken cancellationToken)
+    {
+        var tried = Stopwatch.StartNew();
+
+        while (true)
+        {
+            try
+            {
+                start();
+                return;
+            }
+            catch (Win32Exception ex) when (busyPasses && ex.NativeErrorCode == TextFileBusy && tried.Elapsed < grace)
+            {
+                await Task.Delay(BusyPause, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>

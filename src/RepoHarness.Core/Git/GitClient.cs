@@ -18,7 +18,7 @@ namespace RepoHarness.Core.Git;
 /// The variables every git command starts without; asked of git through <paramref name="processRunner"/>
 /// where none is given.
 /// </param>
-public sealed class GitClient(
+public sealed partial class GitClient(
     IProcessRunner processRunner,
     IHarnessOutput output,
     IFilePermissions? filePermissions = null,
@@ -758,18 +758,8 @@ public sealed class GitClient(
         return entries;
     }
 
-    public async Task<string> GetIndexFileAsync(string directory, CancellationToken cancellationToken = default)
-    {
-        var result = await RunAsync(
-            directory,
-            ["rev-parse", "--git-path", "index"],
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        Ensure(result, "find the index");
-
-        // git answers relative to the directory it ran in, where it can.
-        return Path.GetFullPath(Path.Combine(directory, result.StandardOutput.Trim()));
-    }
+    public Task<string> GetIndexFileAsync(string directory, CancellationToken cancellationToken = default)
+        => GitPathAsync(directory, "index", "find the index", cancellationToken);
 
     public async Task<IReadOnlyList<string>> FindEditedFilesAsync(
         string directory,
@@ -1153,16 +1143,8 @@ public sealed class GitClient(
 
     public async Task<IReadOnlyList<string>> ListMergeHeadsAsync(string directory, CancellationToken cancellationToken = default)
     {
-        var result = await RunAsync(
-            directory,
-            ["rev-parse", "--git-path", "MERGE_HEAD"],
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        Ensure(result, "find where git records a merge in progress");
-
-        // git answers relative to the directory it ran in, where it can. One line per commit coming in: an octopus merge
-        // brings several.
-        var path = Path.GetFullPath(Path.Combine(directory, result.StandardOutput.Trim()));
+        // One line per commit coming in: an octopus merge brings several.
+        var path = await GitPathAsync(directory, "MERGE_HEAD", "find where git records a merge in progress", cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -1626,7 +1608,7 @@ public sealed class GitClient(
         bool echoOutput,
         bool untranslated,
         string? indexFile,
-        string? standardInput,
+        ChildInput? standardInput,
         CancellationToken cancellationToken,
         Encoding? outputEncoding = null)
     {

@@ -1,5 +1,6 @@
 using System.Globalization;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
@@ -50,19 +51,47 @@ public sealed class RemoteSyncTransport(
 
     /// <inheritdoc/>
     public async Task<bool> RootExistsAsync(string root, CancellationToken cancellationToken = default)
-        => (await InspectAsync(root, cancellationToken).ConfigureAwait(false)).Exists;
+        => (await InspectAsync(root, cancellationToken: cancellationToken).ConfigureAwait(false)).Exists;
 
     /// <inheritdoc/>
     public async Task<CopyMark> ReadMarkAsync(string root, CancellationToken cancellationToken = default)
-        => (await InspectAsync(root, cancellationToken).ConfigureAwait(false)).Mark;
+        => (await InspectAsync(root, cancellationToken: cancellationToken).ConfigureAwait(false)).Mark;
 
     /// <inheritdoc/>
     public Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default)
         => AskAsync<object>(SyncServe.Create, root, [mark.ToString()], cancellationToken);
 
     /// <inheritdoc/>
-    public Task InitialiseRepositoryAsync(string root, CancellationToken cancellationToken = default)
-        => AskAsync<object>(SyncServe.InitRepository, root, [], cancellationToken);
+    public Task InitialiseRepositoryAsync(string root, string? objectFormat = null, CancellationToken cancellationToken = default)
+        => AskAsync<object>(SyncServe.InitRepository, root, objectFormat is null ? [] : [objectFormat], cancellationToken);
+
+    /// <inheritdoc/>
+    public Task SendHistoryAsync(string root, string pack, long offset, byte[] piece, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(piece);
+
+        return AskAsync<object>(
+            SyncServe.HistoryPiece,
+            root,
+            [pack, offset.ToString(CultureInfo.InvariantCulture), HostArgument.Carrying(piece)],
+            cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<GitHeadMoved> TakeHistoryAsync(string root, GitHistoryTaken taken, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(taken);
+
+        return await AskAsync<GitHeadMoved>(
+                    SyncServe.TakeHistory,
+                    root,
+                    [taken.Pack ?? SyncServe.Nothing, taken.LeftOut ?? SyncServe.Nothing, .. SyncServe.Asking(taken.Wanted).Select(HostArgument.Of)],
+                    cancellationToken)
+                .ConfigureAwait(false)
+            ?? throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{Host} did not answer whether the HEAD of '{root}' was moved to {taken.Wanted.Commit}.");
+    }
 
     /// <inheritdoc/>
     public Task IndexAsync(string root, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
@@ -310,8 +339,8 @@ public sealed class RemoteSyncTransport(
                 $"{Host} said '{relativePath}' holds {answer.Length.ToString(CultureInfo.InvariantCulture)} bytes, which no file it can send does.");
 
     /// <inheritdoc/>
-    public async Task<SyncInspectAnswer> InspectAsync(string root, CancellationToken cancellationToken = default)
-        => await AskAsync<SyncInspectAnswer>(SyncServe.Inspect, root, [], cancellationToken).ConfigureAwait(false)
+    public async Task<SyncInspectAnswer> InspectAsync(string root, GitHistoryWanted? wanted = null, CancellationToken cancellationToken = default)
+        => await AskAsync<SyncInspectAnswer>(SyncServe.Inspect, root, [.. SyncServe.Asking(wanted).Select(HostArgument.Of)], cancellationToken).ConfigureAwait(false)
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
                 $"{Host} did not answer whether '{root}' exists.");

@@ -18,7 +18,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `fold-agent`, `delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
-`sync`, `build`, `test`, `run`, `check-mutations`, `clean` and `help`.
+`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean` and `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
 the present tense it is enforced, and a gap between the two is a defect in the tool rather
@@ -1095,7 +1095,7 @@ and, since the end of an input is only as good as whatever carries it - a consum
 its end on a host reached over ssh, with nobody reading it, after its dispatcher was killed, where
 the same leg in a WSL distribution was cancelled at once - when the beat it writes on that input
 has stopped. Every request says how often its asker writes one (`HostAgentRequest.BeatSeconds`, 15,
-protocol 8); the process runner writes it for as long as the input is held open
+since protocol 8; protocol 9 is the copy's history, below); the process runner writes it for as long as the input is held open
 (`ProcessRequest.StandardInputBeat`, set from the request by `HostAgentProtocol.BeatOf` wherever a
 run request is sent: a leg, `host-exec`, each of a sync's operations), and the host takes anything
 read on its input as one. Eight in a row unheard (`BeatsMissed`), two minutes, and the host cancels
@@ -2064,6 +2064,12 @@ while a gate ran turned a green suite red, with four test processes live at once
 - Commands run as argument lists, never through a shell, so no shell's process
   emulation sits between the harness and a runner. MSYS's emulation was measured losing
   tests from a parallel test run with no failure reported.
+- A program the process runner starts that will not start because something holds it open for
+  writing is started again, every 20 ms for up to two seconds (`ProcessRunner.StartAsync`), before
+  that is its failure. Linux starts no program so held, and a process forked while the program was
+  being written - by any thread, for a child of its own - holds it until it becomes the program it
+  was forked for. Met in this tool's own suite, on a hosted Linux runner: a script written, closed
+  and started at once failed with "Text file busy".
 
 ## Cross-leg contamination
 
@@ -2343,10 +2349,10 @@ directory here cannot drift apart.
 - **The marker records which it was.** Afterwards a copy taken over and one the tool made are the
   same directory, and only one of them deleted somebody's files; the marker is the only thing left
   that can say so.
-- **What survives an adoption is narrower than it looks.** Its `.git` and so every commit in it,
-  the rest of `.harness-config`, the worktrees root and whatever `sync.neverTransfer` names are
-  protected from the deletion — though `config.json` there is replaced with this tree's, which the
-  refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
+- **What survives an adoption is narrower than it looks.** Its `.git` and so every commit, branch
+  and tag in it, the rest of `.harness-config`, the worktrees root and whatever `sync.neverTransfer`
+  names are protected from the deletion — though `config.json` there is replaced with this tree's,
+  and its git HEAD is moved, detached, to this tree's commit where it names another, both of which the refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
   git which ignored files exist **here**. A directory only the host has — a build tree under a name
   `sync.neverTransfer` does not carry, a `node_modules`, a virtual environment — is ignored by
   nothing this side can see and is deleted like any other file. It appears in the list the refusal
@@ -2388,8 +2394,82 @@ directory here cannot drift apart.
   every build there after the first started from clean and every such guard watched nothing,
   without a word. A file written through a link in the copy is outside it and is not staged; the
   write is warned of, and the verification refuses the copy. A tree git tracks nothing in is now
-  said, by a build and by a step that asked for its inputs held still. The copy's history stays its
-  own.
+  said, by a build and by a step that asked for its inputs held still.
+- **The copy's HEAD names the commit the tree was at** when it was read (`SyncService.CarryHistoryAsync`),
+  so what a step asks git about HEAD - which commit, what a file held there - is answered in the
+  copy as it is in the tree. It never was: a copy this tool made named no commit, and a clone it
+  took over named whichever its owner left it at, so a consumer's runner, whose program reads
+  `git rev-parse HEAD` and `git show HEAD:<path>`, passed its local leg and failed its host leg
+  over files that were byte for byte the same, and nothing said why. The commit is read with the
+  tree (`SyncSource.History`), so every copy of one reading names one commit, whatever is committed
+  meanwhile. The question rides on the request a sync opens with (`inspect` answers, with whose
+  the directory is, where its repository's HEAD stands and what it holds of the commit asked for),
+  so it is weighed before anything is written there, and a sync that finds the copy's HEAD naming
+  the commit, and holding what is asked, costs no request more and sends nothing. Otherwise this
+  machine packs what the copy lacks (`git pack-objects --revs`), sends it a piece to a request,
+  none larger than a batch of files (`history-piece`, kept in the copy's git directory under
+  `dssharness-incoming`), and the copy takes it (`take-history`, `GitClient.TakeHistoryAsync`):
+  `git index-pack` reads the pack whole where it was kept, checking each object, and only then is it
+  moved among the repository's own, its index first - git's own taking of a fetch writes the pack
+  a second time, into a temporary file among the repository's packs, which a take stopped part way
+  would leave there, the size of the pack, for nothing to clear. Then every object the commit
+  names is walked (`git rev-list --objects`), and only then is HEAD moved - itself, detached
+  (`git update-ref --no-deref`), never the branch it was on, and not at all where it names the
+  commit already. A pack that is none, or one the copy is then found short of, leaves HEAD where
+  it was, and the sync fails with what git said of it. A sync with only a HEAD to move marks the
+  copy unfinished until it has, as one with files to write does, and a dry run says what it would
+  do to HEAD and does none of it.
+  - *How much.* `sync.history` is `head` by default: the commit and what its tree names, packed as git
+    packs a clone of depth one (`--shallow <commit>`), less what the tree of the copy's own HEAD already
+    gives it (`^<its HEAD>^{tree}`). A question about a commit behind it that the copy does not
+    hold fails in the copy, in git's own words. `full` packs every commit behind it too, less those
+    behind the copy's own HEAD (`^<its HEAD>`), where the copy holds them all: a copy given the
+    commit alone before is sent all of it, the commit included, once. A tree whose own repository is
+    a shallow clone gives a copy all it holds and no more - the commits its history stops at go
+    with the question, so the copy is not read as still short of them, and sent the whole again
+    with every sync. A partial clone asked for `full` has git fetch, from its remote, what it left
+    out, or fail where it cannot. In the walk of a `full` take, what the copy's own HEAD, branches
+    and tags reach is trusted to be whole, as git trusts it in a fetch.
+  - *One pack to a reading.* Every copy made from one reading that lacks the same of its history is
+    sent the same pack, made once (`HistoryPacks`, the `SyncSource`'s own, removed with it) - a
+    sweep's workers were otherwise each packed the same commit. It is kept in the tree's own git
+    directory, under `dssharness-history-<id>`: on the volume that already holds the repository,
+    never a temporary directory a system may keep in memory, and there before the room a sweep's
+    workers need is measured. Each such directory is recorded as its process's own in
+    `<directory>.owner.json` beside it, written first, and the next reading that packs removes one
+    whose process no longer runs - what a sync that was killed left, which nothing else would
+    clear. One recorded by another machine cannot be asked, and stands.
+  - *Where history stops.* git reads a commit listed in the repository's `shallow` file as one with no
+    parent, and one not listed with a parent missing as damage. After each take the list is made
+    exactly true of the commits it could have changed for - those listed before, the commit taken,
+    and those the tree's own history stops at: each the copy holds, a parent of which it does not, is
+    listed, and no other. So a commit whose parents arrived stops being a boundary, and history that
+    arrived a commit at a time reads as far back as it goes. Where the commit alone was asked for
+    and the history behind it cannot be walked - a commit an earlier take that stopped left without
+    its parents, recorded nowhere - the commit taken is listed too. Written under the lock git
+    takes, never past one that is there, and left as written where the walk then fails: it is true
+    of what the repository holds, whether or not that is all the commit names.
+  - *A copy taken over.* Its HEAD is moved like any copy's, where it names another commit, and no
+    branch, tag or commit of its repository changes: the branch it was on names the commit it
+    named. What does change is said. The repository gains the objects sent; its index is the
+    sync's, as any copy's is; and one that held every commit behind its own, given a commit
+    without the one before it, is a shallow repository to git from then on - a fetch there brings
+    nothing from behind that commit until `git fetch --unshallow` is run there. The takeover's list
+    says HEAD will move, and that this can follow, before either happens; the sync says, the once
+    it happens, which branch HEAD left and where it was, and that the repository is now a shallow
+    one; `git reflog` there has the move too. After that its HEAD is on no branch, and moving it
+    moves nothing of anybody's.
+  - *What is still the copy's own.* Its branches, remotes, tags and stash, and a submodule's
+    history, which is not carried. What changed since HEAD is answered for the files the copy
+    holds, each by its bytes: a file this tree tracks and the sync withholds reads there as
+    deleted, one it carries untracked as added, and one git stores converted on this machine - line
+    endings (`core.autocrlf`), a clean filter - as changed. A tree whose HEAD names no commit yet
+    gives a copy none, and the sync says so where the copy's HEAD names one. A copy whose
+    repository names its objects another way than the tree's (`sha1`, `sha256`) can hold no commit
+    of the tree's: the sync is refused before anything is written there, naming both, and a copy
+    made for a tree names them as the tree does. An object's name is taken from another machine
+    only whole - 40 or 64 lowercase hexadecimal digits (`GitObjectId.Require`) - before it reaches
+    a command line or a file's name.
 - **Content, never timestamps.** A file is written only when its content differs. An unchanged
   file is not touched, so its modification time does not move and an incremental build on that
   host stays correct; a changed file is rewritten now, so its time advances. Nothing compares two
@@ -2855,7 +2935,9 @@ which never makes the copy it claims: the sync that makes a copy refuses a direc
 make. A claim whose sweep died is released and said; the copy it held is synced again, as every
 worker is before it drives an arm.
 
-A worker needs its copy of the tree and what a build of the variant comes to - the leg's
+A worker needs its copy of the tree - its files, and what git keeps there of its history: the commit
+the tree was at, and every commit behind it under `sync.history: full` - and what a build of the
+variant comes to - the leg's
 `buildSpaceGiB` where it declares one, else what the leg's own build directory last recorded, else
 the most any other tree of the repository on its machine recorded of it - less what it already
 holds. The

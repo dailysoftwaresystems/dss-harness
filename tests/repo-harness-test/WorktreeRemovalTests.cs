@@ -1322,6 +1322,30 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<bool?> IsShallowAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.IsShallowAsync(directory, Token(cancellationToken)));
 
+    public Task<GitHistoryWanted> DescribeHistoryAsync(string directory, bool whole, CancellationToken cancellationToken = default)
+        => Call(() => inner.DescribeHistoryAsync(directory, whole, Token(cancellationToken)));
+
+    /// <summary>What each pack made left out, in the order they were made.</summary>
+    public List<string?> Packed { get; } = [];
+
+    public Task<GitHistoryPack> PackHistoryAsync(string directory, GitHistoryWanted wanted, string? leftOut, string into, CancellationToken cancellationToken = default)
+    {
+        Packed.Add(leftOut);
+        return Call(() => inner.PackHistoryAsync(directory, wanted, leftOut, into, Token(cancellationToken)));
+    }
+
+    public Task<GitHistoryHeld> ReadHistoryAsync(string directory, GitHistoryWanted? wanted, CancellationToken cancellationToken = default)
+        => Call(() => inner.ReadHistoryAsync(directory, wanted, Token(cancellationToken)));
+
+    public Task ReceiveHistoryAsync(string directory, string pack, long offset, byte[] piece, CancellationToken cancellationToken = default)
+    {
+        BeforeEveryCall?.Invoke();
+        return inner.ReceiveHistoryAsync(directory, pack, offset, piece, Token(cancellationToken));
+    }
+
+    public Task<GitHeadMoved> TakeHistoryAsync(string directory, GitHistoryTaken taken, CancellationToken cancellationToken = default)
+        => Call(() => inner.TakeHistoryAsync(directory, taken, Token(cancellationToken)));
+
     public Task<string?> ReadFileAtCommitAsync(
         string directory,
         string commit,

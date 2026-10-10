@@ -1,3 +1,4 @@
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 
@@ -56,14 +57,19 @@ public interface ISyncTransport
     /// Whether the copy's root is there and what the harness has recorded about it, in one answer.
     /// </summary>
     /// <param name="root">The copy's root.</param>
+    /// <param name="wanted">
+    /// The commit the tree synced is at and how much behind it the copy is asked to hold, where the answer is to say
+    /// what of it the copy's repository holds; <see langword="null"/> to ask only where that repository's HEAD stands.
+    /// </param>
     /// <param name="cancellationToken">Stops the question.</param>
     /// <remarks>
     /// Asked as one question rather than as <see cref="RootExistsAsync"/> and then
     /// <see cref="ReadMarkAsync"/>. Over ssh those are two round trips for something the far side
     /// answers in one, and between them the directory can change — so the mark that decides whether
-    /// a sync may delete could describe a directory other than the one found.
+    /// a sync may delete could describe a directory other than the one found. What the copy's repository holds rides
+    /// on it for the same reason, and for one more: a sync decides by the answer before it writes anything.
     /// </remarks>
-    Task<SyncInspectAnswer> InspectAsync(string root, CancellationToken cancellationToken = default);
+    Task<SyncInspectAnswer> InspectAsync(string root, GitHistoryWanted? wanted = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Makes the copy a git repository, because the DssHarness on that host finds everything through
@@ -71,8 +77,34 @@ public interface ISyncTransport
     /// repository's work tree is given one of its own.
     /// </summary>
     /// <param name="root">The copy's root.</param>
+    /// <param name="objectFormat">
+    /// How a repository made here names its objects - as the tree's own does, so it can hold that tree's commits - or
+    /// <see langword="null"/> to leave that to git.
+    /// </param>
     /// <param name="cancellationToken">Stops the work.</param>
-    Task InitialiseRepositoryAsync(string root, CancellationToken cancellationToken = default);
+    Task InitialiseRepositoryAsync(string root, string? objectFormat = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sends the copy a piece of a pack of git objects it lacks, which it keeps aside until
+    /// <see cref="TakeHistoryAsync"/> takes the pack whole.
+    /// </summary>
+    /// <param name="root">The copy's root.</param>
+    /// <param name="pack">The name git gave the pack.</param>
+    /// <param name="offset">How many bytes of the pack came before this piece; a piece at the start begins the pack again.</param>
+    /// <param name="piece">The bytes: at most <see cref="SyncServe.LargestBatch"/> of them, the budget a batch of files is held to.</param>
+    /// <param name="cancellationToken">Stops the write.</param>
+    Task SendHistoryAsync(string root, string pack, long offset, byte[] piece, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes the copy's HEAD name the commit <paramref name="taken"/> asks for, once it holds all that commit names:
+    /// takes the pack sent, where one was, and moves HEAD itself, detached - never the branch it was on - where it names
+    /// another commit. No branch, tag or commit of the copy's repository is changed, and no file of the copy.
+    /// </summary>
+    /// <param name="root">The copy's root.</param>
+    /// <param name="taken">The commit, how much behind it, and the pack sent for it.</param>
+    /// <param name="cancellationToken">Stops the work.</param>
+    /// <returns>Where the copy's HEAD was before, and whether it was moved.</returns>
+    Task<GitHeadMoved> TakeHistoryAsync(string root, GitHistoryTaken taken, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Makes the copy's git index hold exactly <paramref name="paths"/>: the files the sync placed there, so

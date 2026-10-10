@@ -71,6 +71,15 @@ internal interface IWorkerCopies
     Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken);
 
     /// <summary>
+    /// How many bytes of the tree's git history a worker made new from <paramref name="source"/> keeps: the commit the
+    /// tree was at, and those behind it where <c>sync.history</c> asks for them. Packed to be counted, once for every
+    /// worker the reading makes; nothing where the reading names no commit.
+    /// </summary>
+    /// <param name="source">The sweep's one reading of the tree.</param>
+    /// <param name="cancellationToken">Stops the packing.</param>
+    Task<long> HistoryBytesAsync(SyncSource source, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Reads the dependency sources at <paramref name="directory"/> as each worker is given them, once for every
     /// worker: every file by size and hash, never a clone's own <c>.git</c>.
     /// </summary>
@@ -246,6 +255,14 @@ internal sealed class WorkerCopies(
     /// <inheritdoc/>
     public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)
         => _syncService.SyncAsync(source, _transport, worker, new SyncOptions(), cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<long> HistoryBytesAsync(SyncSource source, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return source.NewCopyHistoryBytesAsync(cancellationToken);
+    }
 
     /// <inheritdoc/>
     public Task<SyncManifest> ReadFetchedAsync(string directory, CancellationToken cancellationToken)

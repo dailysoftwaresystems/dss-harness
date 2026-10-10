@@ -1681,6 +1681,13 @@ public static partial class HarnessConfigValidator
             problems.Add(
                 $"sync.maxDeleteFraction must be between 0 (no bound) and 1, found {Number(sync.MaxDeleteFraction)}");
         }
+
+        if (sync.History is not (Git.GitHistoryWanted.HeadOnly or Git.GitHistoryWanted.Full))
+        {
+            problems.Add(
+                $"sync.history must be '{Git.GitHistoryWanted.HeadOnly}' (a copy is given the commit HEAD names) or "
+                + $"'{Git.GitHistoryWanted.Full}' (and every commit behind it), found '{sync.History}'");
+        }
     }
 
     /// <summary>
