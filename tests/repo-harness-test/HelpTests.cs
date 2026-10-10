@@ -1054,20 +1054,31 @@ public sealed partial class HelpTests
         var prose = Words(result.StandardOutput);
 
         Assert.Contains(
-            "Nothing a host runs for this machine outlives the command that asked for it - a leg, a host-exec, a sync's operation - whatever carries "
-            + "it there.",
+            "No leg, host-exec or sync's operation a host runs for this machine outlives the command that asked for it, whatever carries it there; "
+            + "only what holds a host awake between commands (holdAwakeSeconds) is started to outlast one.",
             prose,
             StringComparison.Ordinal);
+
+        // The silence a host lets pass, how often it looks for it, and so the longest a leg runs on unheard: 15, 8 and 4.
+        Assert.Equal((15, 8, 4), (HostAgentProtocol.BeatSeconds, HostAgentProtocol.BeatsMissed, HostAgentProtocol.SilenceLooks));
         Assert.Contains(
-            $"when the beat this machine writes on it every {HostAgentProtocol.BeatSeconds} seconds has gone unheard for "
-            + $"{HostAgentProtocol.BeatSeconds * HostAgentProtocol.BeatsMissed}: a dispatcher killed where nothing closes its end of the connection leaves "
-            + "a leg that stops within that time, on an ssh host as in a WSL distribution",
+            "when the beat this machine writes on it every 15 seconds has gone unheard for 120, which the host looks for every 30: a dispatcher "
+            + "killed where nothing closes its end of the connection leaves a leg that is cancelled within 150 seconds of its last beat, on an ssh "
+            + "host as in a WSL distribution",
             prose,
             StringComparison.Ordinal);
+        Assert.Contains("On Linux and macOS a session hung up cancels it the same way.", prose, StringComparison.Ordinal);
+
+        // What a cancelled command is given to stop in, from the patience a host is built with: one that finishes what
+        // it began as long as the command line gives it where it is typed.
+        Assert.Equal(
+            (TimeSpan.FromSeconds(60), RepoHarness.Core.Worktrees.WorktreeService.DefaultInterruptionGrace),
+            (new HostAgentPatience().Unwind, new HostAgentPatience().Finishing));
         Assert.Contains(
-            "What the host started that has not stopped a minute after it was cancelled - a command reading the output of something its child left "
-            + "running - is ended with its processes, and the host's DssHarness with it, so the host is never held by a run nobody reads. To end a "
-            + "run on its hosts, stop the command that dispatched it.",
+            "What the host started that has not stopped 60 seconds after it was cancelled - a command reading the output of something its child "
+            + "left running - is ended with its processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a "
+            + "command that finishes what it began - a deletion, a fold, a hand-over - is given 120, as it is where it is typed and interrupted. To "
+            + "end a run on its hosts, stop the command that dispatched it.",
             prose,
             StringComparison.Ordinal);
 

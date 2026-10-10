@@ -53,6 +53,15 @@ public static class HostAgentProtocol
     /// </summary>
     public const int BeatsMissed = 8;
 
+    /// <summary>
+    /// How many times a host looks at the silence on a request's input in the time it lets pass: so a run is cancelled
+    /// within that time and a quarter of it of the last beat heard, never sooner than the time itself.
+    /// </summary>
+    public const int SilenceLooks = 4;
+
+    /// <summary>The longest beat a request may say its asker writes: an hour, past which a host would wait most of a day on silence.</summary>
+    public const int LongestBeatSeconds = 3600;
+
     /// <summary>What a beat writes: anything read on the input counts as one, and this says what it is to whoever reads a capture.</summary>
     public const string BeatLine = CommandName + ": beat";
 

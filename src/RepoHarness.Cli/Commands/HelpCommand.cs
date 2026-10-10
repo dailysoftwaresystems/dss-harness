@@ -1579,19 +1579,29 @@ internal static class HelpCommand
         builder.AppendLine("PowerShell. host-exec runs in the host's copy of the tree it is typed in, which");
         builder.AppendLine($"'{ToolPackage.Command} sync' creates and keeps in step with that tree.");
         builder.AppendLine();
+        // From the numbers both ends count by, so no sentence here can come to say another time than the host keeps.
+        var patience = new HostAgentPatience();
+        var beat = TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds);
+        var silence = beat * HostAgentProtocol.BeatsMissed;
+
+        static string Seconds(TimeSpan span) => span.TotalSeconds.ToString(CultureInfo.InvariantCulture);
+
         AppendWrapped(
             builder,
-            "Nothing a host runs for this machine outlives the command that asked for it - a leg, a host-exec, a sync's "
-            + "operation - whatever carries it there. The host stops it when the input held open ends, which is how a command "
+            "No leg, host-exec or sync's operation a host runs for this machine outlives the command that asked for it, "
+            + "whatever carries it there; only what holds a host awake between commands (holdAwakeSeconds) is started to "
+            + "outlast one. The host stops it when the input held open ends, which is how a command "
             + "interrupted or stopped here ends it at once; and, since an input that never ends says nothing, when the beat "
-            + $"this machine writes on it every {HostAgentProtocol.BeatSeconds.ToString(CultureInfo.InvariantCulture)} seconds has "
-            + $"gone unheard for {(HostAgentProtocol.BeatSeconds * HostAgentProtocol.BeatsMissed).ToString(CultureInfo.InvariantCulture)}: "
-            + "a dispatcher killed where nothing closes its end of the connection leaves a leg that stops within that time, on "
-            + "an ssh host as in a WSL distribution, and the host says why where this machine would read it. A session hung "
-            + "up cancels it the same way. What the host started that has not stopped a minute after it was cancelled - a "
-            + "command reading the output of something its child left running - is ended with its processes, and the host's "
-            + "DssHarness with it, so the host is never held by a run nobody reads. To end a run on its hosts, stop the "
-            + "command that dispatched it.");
+            + $"this machine writes on it every {Seconds(beat)} seconds has gone unheard for {Seconds(silence)}, which the host "
+            + $"looks for every {Seconds(silence / HostAgentProtocol.SilenceLooks)}: a dispatcher killed where nothing closes "
+            + "its end of the connection leaves a leg that is cancelled within "
+            + $"{Seconds(silence + (silence / HostAgentProtocol.SilenceLooks))} seconds of its last beat, on an ssh host as in a "
+            + "WSL distribution, and the host says why where this machine would read it. On Linux and macOS a session hung up "
+            + $"cancels it the same way. What the host started that has not stopped {Seconds(patience.Unwind)} seconds after it "
+            + "was cancelled - a command reading the output of something its child left running - is ended with its "
+            + "processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a command that "
+            + $"finishes what it began - a deletion, a fold, a hand-over - is given {Seconds(patience.Finishing)}, as it is "
+            + "where it is typed and interrupted. To end a run on its hosts, stop the command that dispatched it.");
         builder.AppendLine();
         builder.AppendLine("A host answering this machine writes its home as ~: in every line of DssHarness's");
         builder.AppendLine("own - a leg's reason, a lock or free-space message, a failure quoting git or the");

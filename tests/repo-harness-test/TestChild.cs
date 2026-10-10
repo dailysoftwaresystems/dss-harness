@@ -39,6 +39,7 @@ internal static class TestChild
             "flood-both" => Flood(standardOutput, arguments) + Flood(standardError, arguments),
             "print-file" => PrintFile(standardOutput, arguments),
             "spawn-grandchild" => SpawnGrandchild(arguments),
+            "last-resort" => LastResort(standardOutput, arguments),
             "print-env" => PrintEnvironment(standardOutput, arguments),
             "write-file" => WriteFile(arguments),
             "watch-process" => WatchProcess(arguments),
@@ -335,6 +336,45 @@ internal static class TestChild
 
         Thread.Sleep(int.Parse(sleepMilliseconds, CultureInfo.InvariantCulture));
         return 0;
+    }
+
+    /// <summary>
+    /// Starts a sleeping child, says its id, then does what a host's agent does at its last resort, on this machine's
+    /// own process table: ends what it started, says what that came to, and ends itself with the code
+    /// <c>arguments[0]</c> names.
+    /// </summary>
+    private static int LastResort(TextWriter output, string[] arguments)
+    {
+        var start = new ProcessStartInfo(TestHost.DotnetExecutable)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+        start.ArgumentList.Add("120000");
+        start.Environment[TestHost.ChildModeVariable] = "sleep";
+
+        using var sleeper = Process.Start(start)
+            ?? throw new InvalidOperationException("The sleeping child did not start.");
+
+        output.Write(sleeper.Id.ToString(CultureInfo.InvariantCulture) + "\n");
+
+        var platform = new RepoHarness.Core.Platform.HostPlatform();
+        var table = RepoHarness.Core.Platform.ProcessTableFactory.Create(
+            platform,
+            new RepoHarness.Core.Processes.ProcessRunner(platform, RepoHarness.Core.Platform.FilePermissionsFactory.Create()));
+
+        // Longer than an agent gives it: a busy machine's table is read slowly, and this is no test of that budget.
+        var resort = new RepoHarness.Core.Hosts.HostAgentLastResort(table, platform, TimeSpan.FromMinutes(5));
+
+        output.Write(resort.EndStartedAsync().GetAwaiter().GetResult() + "\n");
+        output.Flush();
+        resort.End(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+
+        return 99;
     }
 
     private static int PrintEnvironment(TextWriter output, string[] arguments)

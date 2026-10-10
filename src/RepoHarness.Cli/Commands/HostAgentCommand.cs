@@ -46,7 +46,8 @@ internal static class HostAgentCommand
             using var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
             // A session hung up is the machine that asked gone: what the request started is cancelled, as it is when
-            // the input ends, rather than this process ending where it stands with its children left running.
+            // the input ends, rather than this process ending where it stands with its children left running - on
+            // Linux and macOS, which leave a hang-up to the process; Windows ends one whose console closes.
             using var hungUp = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             using var hangUp = HangUp.Cancels(hungUp);
 

@@ -99,7 +99,7 @@ internal static class HarnessServices
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();
         services.AddSingleton<EmulatorProbe>();
-        services.AddSingleton<IHostAgentLastResort, HostAgentLastResort>();
+        services.AddSingleton<IHostAgentLastResort>(provider => new HostAgentLastResort(provider.GetRequiredService<IProcessTable>(), provider.GetRequiredService<IHostPlatform>()));
         services.AddSingleton<IOwnProgram, OwnProgram>();
         services.AddSingleton(provider => new ToolUpdateService(
             provider.GetRequiredService<IProcessTable>(),

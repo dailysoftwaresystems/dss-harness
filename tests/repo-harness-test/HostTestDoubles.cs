@@ -393,19 +393,33 @@ internal sealed class HeldOpenReader(string line) : TextReader
     }
 }
 
-/// <summary>A last resort that ends nothing, and records that it was asked to and with what code.</summary>
+/// <summary>
+/// A last resort that ends nothing: it answers what a test says it found, or fails as a test says it does, and records
+/// that the agent then asked to end and with what code.
+/// </summary>
 internal sealed class RecordingLastResort : IHostAgentLastResort
 {
     private readonly TaskCompletionSource<int> _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <summary>What ending what the agent started came to, as it says it.</summary>
+    public string Found { get; init; } = "2 processes it started were ended, each with what it started (pid 41, pid 42)";
+
+    /// <summary>What ending what the agent started raises instead, where a test says it fails.</summary>
+    public Exception? Fails { get; init; }
+
+    /// <summary>Whether the agent asked for what it started to be ended.</summary>
+    public bool Asked { get; private set; }
+
     /// <summary>The code the agent asked to end with, once it has asked.</summary>
     public Task<int> Ended => _ended.Task;
 
-    public Task EndAsync(int exitCode)
+    public Task<string> EndStartedAsync()
     {
-        _ended.TrySetResult(exitCode);
-        return Task.CompletedTask;
+        Asked = true;
+        return Fails is null ? Task.FromResult(Found) : Task.FromException<string>(Fails);
     }
+
+    public void End(int exitCode) => _ended.TrySetResult(exitCode);
 }
 
 /// <summary>

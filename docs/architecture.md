@@ -1097,15 +1097,35 @@ protocol 8); the process runner writes it for as long as the input is held open
 (`ProcessRequest.StandardInputBeat`, set from the request by `HostAgentProtocol.BeatOf` wherever a
 run request is sent: a leg, `host-exec`, each of a sync's operations), and the host takes anything
 read on its input as one. Eight in a row unheard (`BeatsMissed`), two minutes, and the host cancels
-what the request started, first saying why on its error stream: the one sign that can be wrong, so
-a machine still there, whose beats were held up, reads why its run stopped. A hang-up of the
-agent's session cancels it the same way (`HangUp`), rather than ending the agent where it stands
-with its children left running. What was cancelled is given a minute to stop
-(`HostAgentPatience.Unwind`); a command that has not - one reading to its end the output of
-something its child left running, which never ends - is ended by the agent's last resort
+what the request started: it looks at that silence four times in the two minutes (`SilenceLooks`),
+so the cancellation comes between two minutes and two and a half after the last beat heard, never
+sooner. It first says why on its error stream - the one sign that can be wrong, so a machine still
+there, whose beats were held up, reads why its run stopped - from another thread and for two
+seconds at most (`HostAgentPatience.Saying`): the console's writer writes where it is called, and
+one whose reader had stopped reading held the cancellation it came before for as long as the
+connection stood, which is the very machine the beat is there to notice. A request saying a beat
+no machine writes - less than none, or more than an hour (`LongestBeatSeconds`) - is refused
+before anything runs. On Linux and macOS a hang-up of the agent's session cancels it the same way
+(`HangUp`), rather than ending the agent where it stands with its children left running; Windows
+ends a process whose console closes whatever it answers, so nothing is promised of it there.
+
+What was cancelled is given a minute to stop (`HostAgentPatience.Unwind`), and a command past its
+point of no return (`PointOfNoReturn`) two (`Finishing`), which is what the command line gives one
+interrupted where it was typed: a deletion goes on once cancelled and stops git shortly before
+that time is up to say what is left, and cut off at a minute it was ended part way with nothing
+said. A command that has not stopped by then - one reading to its end the output of something its
+child left running, which never ends - is ended by the agent's last resort
 (`HostAgentLastResort`): every process the agent started, each with its tree, as the process table
-lists them, then the agent itself, exit 130. There is no verb that stops a run on its hosts,
-because stopping the command that dispatched it is that verb, on every carriage.
+lists them, then the agent itself, exit 130, whatever the ending of them came to. Which processes
+those are is read from one table: the parent's start and each child's by the same clock - on Linux
+one that counts from the machine's start, so that held against the agent's own start as the
+runtime tells it every child read as older than its parent and none was ended - and never the
+console the agent runs in, which Windows lists as its child (`conhost`) and ends everything in the
+console with. The agent's last line says what that came to: each process ended, by its id, each it
+could not end, or why none could be listed. The one thing started on a host to outlast the request
+that asked for it is the process holding the host awake between commands (`holdAwakeSeconds`),
+which ends on its own seconds. There is no verb that stops a run on its hosts, because stopping
+the command that dispatched it is that verb, on every carriage.
 
 This machine's own DssHarness has one door too (`update-tool`, `ToolUpdateService`). Measured on a
 consumer's Windows host: a `dotnet tool update` typed by one session while another's commands ran
