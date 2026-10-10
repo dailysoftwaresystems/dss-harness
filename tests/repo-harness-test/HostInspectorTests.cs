@@ -604,7 +604,12 @@ public sealed class HostInspectorTests
         var exception = await Assert.ThrowsAsync<HarnessException>(() => fixture.InspectAsync(HostId.Wsl(Distro)));
 
         Assert.Equal(HarnessExit.Refused, exception.ExitCode);
-        Assert.Contains("dotnet tool update --global DssHarness --version 1.3.0", exception.Message, StringComparison.Ordinal);
+        // Through the one door a machine's own tool is updated by, never a bare update typed beside whatever is running.
+        Assert.EndsWith(
+            "Versions only move up, so update this machine first, once no DssHarness runs on it: "
+            + "dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool",
+            exception.Message,
+            StringComparison.Ordinal);
         AssertToolUntouched(fixture);
     }
 

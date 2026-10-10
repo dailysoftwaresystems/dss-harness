@@ -8,6 +8,18 @@ dotnet tool install --global dssharness
 dssharness --help
 ```
 
+To update it later, on a machine anything else may be running it on:
+
+```bash
+dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool --wait
+```
+
+That runs the newest release beside the installed one and updates it only once no `dssharness`
+process is running on the machine, naming each it waits for. A bare `dotnet tool update` typed
+beside a running command takes the tool away from every command typed meanwhile, and on Windows
+fails. `dssharness update-tool` is the same door typed short, where the system lets a running
+program be replaced; on Windows it changes nothing and says the line above.
+
 ## Why
 
 A repository's build and test work usually accumulates as a pile of paired
@@ -74,6 +86,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `check-ci-legs` | Report each CI leg, separating a real failure from a budget overrun, by the job and step names `ci` declares (`help ci`) |
 | `legs [--legs a,b]` | Measure the hosts and show where each leg can run, or why it cannot |
 | `install-missing-tools [--legs a,b] [--dry-run]` | Install or update what each configured leg's host is missing; `--dry-run` names each command and runs none |
+| `update-tool [--wait] [--tool-path <directory>]` | Update this machine's installed DssHarness to the newest release, only while no other `dssharness` process runs here: refused naming each (13), or waited for with `--wait`; on Windows run it from beside the installed tool, as above (`help legs`) |
 | `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own; `--pull <path>` instead brings a file back from it, or every file below a directory named with a `/` at its end |
 | `build [--legs a,b] [--time]` | Build every selected leg, in its own variant-keyed build directory |
 | `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |

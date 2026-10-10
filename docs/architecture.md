@@ -1107,6 +1107,32 @@ something its child left running, which never ends - is ended by the agent's las
 lists them, then the agent itself, exit 130. There is no verb that stops a run on its hosts,
 because stopping the command that dispatched it is that verb, on every carriage.
 
+This machine's own DssHarness has one door too (`update-tool`, `ToolUpdateService`). Measured on a
+consumer's Windows host: a `dotnet tool update` typed by one session while another's commands ran
+took the tool's shim away for ten seconds, failed and put it back, twice, and every command
+anybody typed meanwhile found no tool (127). The update moves the installed version's directory
+aside before it writes the new one, and Windows moves no directory a running program has loaded
+files from; elsewhere the move succeeds and takes the files from under what is running. So
+`update-tool` reads the process table and moves the installation - this user's global tools, or
+the directory `--tool-path` names - up to the newest release nuget.org lists only while no other
+process named `dssharness` runs on the machine: with one running it changes nothing and names
+each by its process id and the command it was asked, never the rest of its line, which may hold
+an input's value (exit 13); with `--wait` it looks again every five seconds, saying who it waits
+for as it starts and every five minutes; and a wait asked from inside a running DssHarness, which
+would never end, is refused. It says the update done only once `dotnet tool list` shows that
+release, and a failure with what dotnet said, each DssHarness that started while it ran, and
+what is listed since (exit 20). The command asking is a DssHarness too: typed by its name on
+Windows it is itself what stops the update, so there it changes nothing and says the one command
+that does, on every system - `dotnet tool exec DssHarness --yes --source <nuget.org> --
+update-tool`, the newest release run as the program `dotnet` from the package cache, holding none
+of the installed files (measured: an update beside such a copy went through in a second), with
+the update's own outcome as its exit code. Elsewhere the installed tool replaces its own files
+while it runs, having first loaded every assembly beside it (`IOwnProgram.LoadWhole`), so nothing
+it has left to do asks for a file that is gone. A DssHarness is told by the name of its program,
+as a host's is, so a build from source running beside the installed tool is counted: wrongly, and
+safely. What is left open is the moment between the last look and the update, in which a command
+just started can still stop it: the failure then names that command.
+
 Both ends must be the same build, so before anything runs on a host:
 
 - A host without DssHarness has this machine's version installed.
@@ -1114,7 +1140,8 @@ Both ends must be the same build, so before anything runs on a host:
   not updated while DssHarness is running there: an update replaces a running tool's
   files underneath it on Linux and macOS, and fails part way on Windows.
 - A host that is ahead stops everything (exit 13) until this machine is updated, with the
-  command that updates it. Moving the host down would undo somebody else's update.
+  command that updates it - `update-tool`, run from beside the installed tool. Moving the host
+  down would undo somebody else's update.
 - The version and the SHA-256 of the tool's assembly are both compared. A build from source
   reports the same version as the published package, while the assembly installed from one
   package is the same bytes on every operating system.

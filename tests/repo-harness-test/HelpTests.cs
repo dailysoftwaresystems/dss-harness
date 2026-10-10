@@ -1060,6 +1060,38 @@ public sealed partial class HelpTests
             + "run on its hosts, stop the command that dispatched it.",
             prose,
             StringComparison.Ordinal);
+
+        // The one door this machine's own tool is updated through, from the names and the codes the command uses.
+        Assert.Contains(
+            "This machine's own DssHarness is updated through 'dssharness update-tool', never by a 'dotnet tool update' typed beside running "
+            + "commands:",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"only while no other DssHarness process runs on the machine: with one running it changes nothing and names each by its process and "
+            + $"command ({HarnessExit.Refused}), and with --wait it waits for them to end, saying who it waits for as it starts and every "
+            + $"{ToolUpdateService.SaidAgainEvery.TotalMinutes} minutes - but for a wait asked from inside a running DssHarness, which would never "
+            + "end and is refused.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Windows replaces no program while it runs, and 'dssharness update-tool' is itself a DssHarness running: there it changes nothing and "
+            + "says the one command that does, which is the door on every system",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "  dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool --wait",
+            result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>The overview lists update-tool among the commands a machine is set up with.</summary>
+    [Fact]
+    public async Task TheOverview_ListsUpdateTool()
+    {
+        var result = await CliRunner.RunAsync(["help"], TestContext.Current.CancellationToken);
+
+        Assert.Contains("  dssharness update-tool             Update this machine's DssHarness, while none runs here", result.StandardOutput, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -1220,6 +1220,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {ToolPackage.Command} init                    Create .harness-config and seed config.json");
         builder.AppendLine($"  {ToolPackage.Command} legs                    Show where each leg can run, or why it cannot");
         builder.AppendLine($"  {ToolPackage.Command} install-missing-tools   Install what each leg's host is missing");
+        builder.AppendLine($"  {ToolPackage.Command} {ToolUpdateService.CommandName}             Update this machine's {ToolPackage.Id}, while none runs here");
         builder.AppendLine($"  {ToolPackage.Command} sync                    Put each host's copy in step with this tree");
         builder.AppendLine($"  {ToolPackage.Command} build                   Build every selected leg");
         builder.AppendLine($"  {ToolPackage.Command} test                    Build and test every selected leg");
@@ -1534,6 +1535,28 @@ internal static class HelpCommand
         builder.AppendLine("is said with whether the host then answered as this build ('updated DssHarness A to B,");
         builder.AppendLine("and it answers as B'), and what stopped it answering after one is said as coming after");
         builder.AppendLine("it ('updated DssHarness A to B, then the host could not be reached: ...').");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"This machine's own {ToolPackage.Id} is updated through '{ToolPackage.Command} {ToolUpdateService.CommandName}', never by a "
+            + $"'dotnet tool update' typed beside running commands: an update beside a running {ToolPackage.Id} fails on Windows after "
+            + "taking the tool away for ten seconds, and takes its files from under it elsewhere, and whatever anybody types "
+            + $"meanwhile finds no tool (127, from the shell). {ToolUpdateService.CommandName} moves the installation up to the "
+            + $"newest release nuget.org lists, from nuget.org alone, only while no other {ToolPackage.Id} process runs on the machine: "
+            + $"with one running it changes nothing and names each by its process and command ({HarnessExit.Refused}), and with "
+            + $"{ToolUpdateService.WaitOption} it waits for them to end, saying who it waits for as it starts and every "
+            + $"{ToolUpdateService.SaidAgainEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - but for a wait asked from inside "
+            + $"a running {ToolPackage.Id}, which would never end and is refused. It says the update done only once the tool is listed "
+            + $"as that release, and a failure with what dotnet said and what is listed since ({HarnessExit.CommandFailed}). A tool "
+            + $"installed with dotnet's --tool-path is named with {ToolUpdateService.ToolPathOption}.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"Windows replaces no program while it runs, and '{ToolPackage.Command} {ToolUpdateService.CommandName}' is itself a "
+            + $"{ToolPackage.Id} running: there it changes nothing and says the one command that does, which is the door on every system - "
+            + "the newest release run beside the installed one, without installing it, its exit code the update's:");
+        builder.AppendLine();
+        builder.AppendLine($"  {ToolUpdateService.FromBeside(new ToolUpdateRequest(Wait: true))}");
         builder.AppendLine();
         builder.AppendLine("The DssHarness on a host is reached through a hidden host-agent command, with the");
         builder.AppendLine("request on standard input, held open while the host works: interrupting host-exec");
