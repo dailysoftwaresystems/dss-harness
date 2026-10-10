@@ -1260,6 +1260,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         return inner.CheckOutAtAsync(directory, commit, paths, Token(cancellationToken));
     }
 
+    public Task<IReadOnlySet<string>> ListHeldAsAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListHeldAsAtAsync(directory, commit, paths, Token(cancellationToken)));
+
     public Task ResetToAsync(string directory, string commit, CancellationToken cancellationToken = default)
     {
         BeforeEveryCall?.Invoke();

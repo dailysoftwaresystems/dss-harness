@@ -172,13 +172,13 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nregistry row\n");
         OrchestrationKit.Write(kit.Main, "docs/new.md", "new\n");
 
-        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: false, Token);
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: false, Token);
 
         Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
         Assert.Equal(["  docs/new.md", "  docs/x.md"], dry.Details);
         Assert.Equal("x\n", OrchestrationKit.Read(worktree, "docs/x.md"));
 
-        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
         Assert.Equal("x\nregistry row\n", OrchestrationKit.Read(worktree, "docs/x.md"));
@@ -191,7 +191,7 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(worktree, "docs/x.md", "x\nagent's own\n");
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nanother row\n");
 
-        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains("changed 1 of the path(s) to refresh - docs/x.md -", refused.Message);
@@ -212,7 +212,7 @@ public sealed class AgentServiceTests
             Token);
         Assert.True(written.Written);
 
-        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under(), apply: true, Token);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
         Assert.Contains("D-TEST-REFRESH-ROW", OrchestrationKit.Read(worktree, written.To.RelativePath));
@@ -228,7 +228,7 @@ public sealed class AgentServiceTests
         File.Delete(Path.Combine(worktree, "docs", "x.md"));
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nregistry row\n");
 
-        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains("changed 1 of the path(s) to refresh - docs/x.md -", refused.Message);
@@ -348,7 +348,7 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
 
-        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["b.txt"], apply: true, Token);
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("b.txt"), apply: true, Token);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains("changed 1 of the path(s) to refresh - b.txt -", refused.Message);
@@ -365,7 +365,7 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(worktree, "n.txt", "the agent's\n");
         OrchestrationKit.Write(kit.Main, "n.txt", "the main tree's\n");
 
-        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["n.txt"], apply: true, Token);
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("n.txt"), apply: true, Token);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains("changed 1 of the path(s) to refresh - n.txt -", refused.Message);
@@ -412,7 +412,7 @@ public sealed class AgentServiceTests
         await kit.CreateAgentAsync("ag");
 
         var settled = await kit.FoldAsync("ag", apply: true, "/etc/passwd");
-        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["../outside"], apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("../outside"), apply: true, Token);
 
         Assert.Equal(HarnessExit.UsageError, settled.ExitCode);
         Assert.Equal(HarnessExit.UsageError, refreshed.ExitCode);
@@ -433,7 +433,7 @@ public sealed class AgentServiceTests
 
         OrchestrationKit.Write(first, "b.txt", "two\nfirst's edit\n");
         Assert.True((await kit.FoldAsync("first", apply: true)).Succeeded);
-        Assert.True((await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", ["b.txt"], apply: true, Token)).Succeeded);
+        Assert.True((await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", RefreshRequest.Under("b.txt"), apply: true, Token)).Succeeded);
         Assert.Equal("two\nfirst's edit\n", OrchestrationKit.Read(second, "b.txt"));
 
         OrchestrationKit.Write(first, "b.txt", "two\n");
@@ -441,13 +441,13 @@ public sealed class AgentServiceTests
         Assert.True(undone.Succeeded, OrchestrationKit.Describe(undone));
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
 
-        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", ["b.txt"], apply: false, Token);
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", RefreshRequest.Under("b.txt"), apply: false, Token);
 
         Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
         Assert.Contains("  b.txt", dry.Details!);
         Assert.Equal("two\nfirst's edit\n", OrchestrationKit.Read(second, "b.txt"));
 
-        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", ["b.txt"], apply: true, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "second", RefreshRequest.Under("b.txt"), apply: true, Token);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
         Assert.Equal("two\n", OrchestrationKit.Read(second, "b.txt"));
@@ -467,13 +467,13 @@ public sealed class AgentServiceTests
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nhanded row\n");
-        Assert.True((await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token)).Succeeded);
+        Assert.True((await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token)).Succeeded);
 
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nhanded row\nanother row\n");
         OrchestrationKit.Write(kit.Main, "docs/new.md", "new\n");
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
 
-        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: false, Token);
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: false, Token);
 
         Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
         Assert.Equal(["  docs/new.md", "  docs/x.md"], dry.Details!.Take(2));
@@ -483,7 +483,7 @@ public sealed class AgentServiceTests
             + "since reaches it as copies it is handed; 'dssharness rebase-agent o1 ag --apply' moves its base there",
             Assert.Single(dry.Details!.Skip(2)));
 
-        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
         Assert.Equal("x\nhanded row\nanother row\n", OrchestrationKit.Read(worktree, "docs/x.md"));
@@ -503,7 +503,7 @@ public sealed class AgentServiceTests
 
         await kit.GitAsync(kit.Main, "checkout", "--", "b.txt");
 
-        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["b.txt"], apply: true, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("b.txt"), apply: true, Token);
         var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
@@ -526,7 +526,7 @@ public sealed class AgentServiceTests
         await kit.GitAsync(kit.Main, "checkout", "--", "b.txt");
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
 
-        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["a.txt", "b.txt"], apply: false, Token);
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt", "b.txt"), apply: false, Token);
 
         Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
         Assert.StartsWith("dry run: 2 path(s) would be refreshed", dry.Message, StringComparison.Ordinal);
@@ -612,7 +612,7 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted elsewhere\n");
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
 
-        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
         Assert.Equal("refreshed 1 path(s) into agent 'ag' of 'o1', recorded as handed to it, so its fold leaves them out", applied.Message);
@@ -635,13 +635,196 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nmoved since\n");
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nmoved since\n");
 
-        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
         Assert.Contains("  docs/x.md", applied.Details!);
         Assert.DoesNotContain("  a.txt", applied.Details!);
         Assert.Equal("x\nmoved since\n", OrchestrationKit.Read(worktree, "docs/x.md"));
         Assert.Equal("one\nhanded\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
+    /// A refresh asked for every path hands whatever the main tree moved anywhere in the tree, committed or not, off the
+    /// paths never handed to an agent - the orchestrators' directory here, forced past its ignore rule - and takes no path
+    /// beside it; the whole tree named as a path says to ask for every path instead.
+    /// </summary>
+    [Fact]
+    public async Task RefreshingEveryPath_HandsWhateverTheMainTreeMoved_OffTheFloor_AndTakesNoPath()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "docs/new.md", "new\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, ".orchestrators/o1/note.md", "the orchestrator's own\n");
+        await kit.GitAsync(kit.Main, "add", "--force", ".orchestrators/o1/note.md");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nnot committed\n");
+
+        var both = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Paths = ["docs"] }, apply: true, Token);
+        var whole = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("."), apply: true, Token);
+
+        Assert.Equal(HarnessExit.UsageError, both.ExitCode);
+        Assert.Equal("--all weighs every path the main tree moved, so it takes no path beside it: give the paths, or --all", both.Message);
+        Assert.Equal(HarnessExit.UsageError, whole.ExitCode);
+        Assert.Equal("'.' names the whole tree, not a path in it: pass --all to weigh every path the main tree moved", whole.Message);
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: false, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal("dry run: 3 path(s) would be refreshed into agent 'ag' of 'o1'; pass --apply to hand them over", dry.Message);
+        Assert.Equal(["  a.txt", "  b.txt", "  docs/new.md"], dry.Details!.Take(3));
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("one\ncommitted\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal("two\nnot committed\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal("new\n", OrchestrationKit.Read(worktree, "docs/new.md"));
+        Assert.False(File.Exists(Path.Combine(worktree, ".orchestrators", "o1", "note.md")));
+
+        var again = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every changed path", again.Message);
+    }
+
+    /// <summary>
+    /// A refresh refused over paths the agent changed names every one of them, and the arguments that leave them as they
+    /// are; given those, it hands every other path, says which it left, and leaves each as the agent changed it, its own
+    /// work for its fold to weigh. Nothing is left out that nobody named: one of two named still refuses, naming both.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshRefusedOverTheAgentsChanges_NamesEachAndHowToLeaveThem_AndHandsTheRestOnceTheyAreNamed()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\nagent edit\n");
+        File.Delete(Path.Combine(worktree, "b.txt"));
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "docs/with space.md", "new\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        OrchestrationKit.Write(worktree, "docs/with space.md", "the agent's\n");
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "Agent 'ag' of 'o1' changed 3 of the path(s) to refresh - a.txt, b.txt, docs/with space.md - and refreshing would undo those changes. Nothing was copied.",
+            refused.Message);
+        Assert.Equal(
+            [
+                "  a.txt",
+                "  b.txt",
+                "  docs/with space.md",
+                "To hand it every other path and leave these as it changed them, run again with --except <path> for each:",
+                "  --except a.txt --except b.txt --except \"docs/with space.md\"",
+                "--except says the path stays the agent's change, for its fold to weigh against what the main tree holds; it is not a --force.",
+                $"log {kit.Layout.LogFile("ag")}",
+            ],
+            refused.Details);
+        Assert.Equal("x\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+
+        var one = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Except = ["a.txt"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, one.ExitCode);
+        Assert.Contains("changed 2 of the path(s) to refresh - b.txt, docs/with space.md -", one.Message, StringComparison.Ordinal);
+        Assert.Contains("  --except a.txt --except b.txt --except \"docs/with space.md\"", one.Details!);
+        Assert.Equal("x\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+
+        var request = new RefreshRequest { All = true, Except = ["a.txt", "b.txt", "docs/with space.md"] };
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", request, apply: false, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal(
+            ["  docs/x.md", "3 path(s) it changed, named with --except, to leave as it changed them:", "  a.txt", "  b.txt", "  docs/with space.md"],
+            dry.Details!.Take(5));
+        Assert.Equal("x\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", request, apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("refreshed 1 path(s) into agent 'ag' of 'o1', recorded as handed to it, so its fold leaves them out", applied.Message);
+        Assert.Equal(
+            ["  docs/x.md", "3 path(s) it changed, named with --except, left as it changed them:", "  a.txt", "  b.txt", "  docs/with space.md"],
+            applied.Details!.Take(5));
+        Assert.Equal("x\ncommitted\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+        Assert.Equal("one\nagent edit\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.False(File.Exists(Path.Combine(worktree, "b.txt")));
+        Assert.Equal("the agent's\n", OrchestrationKit.Read(worktree, "docs/with space.md"));
+        Assert.DoesNotContain("a.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Weighed);
+
+        var again = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", request, apply: true, Token);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every other changed path", again.Message);
+        Assert.Equal("3 path(s) it changed, named with --except, left as it changed them:", again.Details![0]);
+    }
+
+    /// <summary>
+    /// An --except naming a path the refresh would not have refused - one the agent did not change, one the main tree did
+    /// not move, or one outside the paths refreshed - leaves nothing out, and is refused as the typo it usually is, with
+    /// nothing copied; one that could name nothing in the tree is a usage error.
+    /// </summary>
+    [Fact]
+    public async Task AnExceptNamingNoPathTheRefreshWouldRefuse_IsRefused_AndNothingIsCopied()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nmain edit\n");
+
+        var unchanged = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Except = ["a.txt", "docs/x.md", "b.txt"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, unchanged.ExitCode);
+        Assert.Equal(
+            "--except 'b.txt', 'docs/x.md' names no path to refresh that agent 'ag' of 'o1' changed, so it leaves nothing out: check its spelling. Nothing was copied.",
+            unchanged.Message);
+        Assert.Equal("x\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+
+        var outside = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { Paths = ["docs"], Except = ["a.txt"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, outside.ExitCode);
+        Assert.StartsWith("--except 'a.txt' names no path to refresh under docs that agent 'ag' of 'o1' changed", outside.Message, StringComparison.Ordinal);
+        Assert.Equal("x\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+
+        var usage = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Except = ["../x"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.UsageError, usage.ExitCode);
+        Assert.Equal("--except, '../x', is not a path relative to the tree, spelt with forward slashes", usage.Message);
+    }
+
+    /// <summary>
+    /// The command line carries both: --all for every path, and --except once for each path left as the agent changed it.
+    /// </summary>
+    [Fact]
+    public async Task TheRefreshCommand_TakesAll_AndAnExceptForEachPath()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\nagent edit\n");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nmain edit\n");
+
+        var refused = await CliRunner.RunAsync(["refresh-agent", "o1", "ag", "--all", "--apply"], Token, workingDirectory: kit.Main);
+        var applied = await CliRunner.RunAsync(["refresh-agent", "o1", "ag", "--all", "--except", "a.txt", "--except", "b.txt", "--apply"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains("  --except a.txt --except b.txt", refused.StandardOutput + refused.StandardError, StringComparison.Ordinal);
+        Assert.Equal(0, applied.ExitCode);
+        Assert.Equal("x\nmain edit\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+        Assert.Equal("one\nagent edit\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "b.txt"));
     }
 
     /// <summary>
@@ -681,7 +864,7 @@ public sealed class AgentServiceTests
         await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a name no file here can hold");
         await kit.Harness.SkipWorktreeAsync(kit.Main, "\"docs/caf\\351.md\"", Token);
 
-        var refreshed = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: false, Token));
+        var refreshed = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: false, Token));
         var seeded = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token));
 
         foreach (var refusal in new[] { refreshed, seeded })
@@ -740,7 +923,7 @@ public sealed class AgentServiceTests
         var main = kit.Main;
         var git = new InterceptingGitClient(kit.Harness.GitClient) { ResolveCommitFails = (directory, reference) => directory == main && reference == "HEAD" };
 
-        var refreshed = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RefreshAsync(kit.Main, "o1", "ag", ["a.txt"], apply: true, Token);
+        var refreshed = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
 
         Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
         Assert.Contains("whether the main tree's HEAD is still its base cannot be told: git could not resolve 'HEAD': fatal: unable to read index", refreshed.Details!);
@@ -798,7 +981,7 @@ public sealed class AgentServiceTests
         File.Delete(Path.Combine(kit.Main, "b.txt"));
         OrchestrationKit.Write(kit.Main, "b.txt/inner.txt", "inner\n");
 
-        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["b.txt", "lib"], apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("b.txt", "lib"), apply: true, Token);
 
         Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
         Assert.Equal(["  b.txt", "  b.txt/inner.txt"], refreshed.Details!.Take(2));
@@ -821,7 +1004,7 @@ public sealed class AgentServiceTests
         Directory.Delete(Path.Combine(kit.Main, "docs"), recursive: true);
         OrchestrationKit.Write(kit.Main, "docs", "a file now\n");
 
-        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
         Assert.Equal(["  docs", "  docs/x.md"], refreshed.Details!.Take(2));
@@ -852,7 +1035,7 @@ public sealed class AgentServiceTests
         TestLinks.DirectoryLink(Path.Combine(worktree, "linked"), elsewhere.Path);
         TestLinks.DirectoryLink(Path.Combine(worktree, "docs", "elsewhere"), elsewhere.Path);
 
-        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs", "linked", "notes"], apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs", "linked", "notes"), apply: true, Token);
         var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: true, Token);
 
         foreach (var refusal in new[] { refreshed, seeded })
@@ -896,7 +1079,7 @@ public sealed class AgentServiceTests
         await kit.CreateAgentAsync("ag");
         await kit.Harness.CommitAllAsync(kit.Main, "what was handed, committed", Token);
 
-        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["a.txt"], apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
 
         Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
         Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every changed path under a.txt", refreshed.Message);
@@ -914,7 +1097,7 @@ public sealed class AgentServiceTests
         var worktree = await kit.CreateAgentAsync("ag");
         TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(kit.Main, "docs", "linked.md"), "x.md"));
 
-        var refreshed = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token));
+        var refreshed = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token));
         var seeded = await Assert.ThrowsAsync<HarnessException>(() => kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token));
 
         foreach (var refusal in new[] { refreshed, seeded })
@@ -942,7 +1125,7 @@ public sealed class AgentServiceTests
         await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a name no file here can hold, and a change");
         await kit.Harness.SkipWorktreeAsync(kit.Main, "\"src/caf\\351.md\"", Token);
 
-        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
         Assert.Equal("x\ncommitted\n", OrchestrationKit.Read(worktree, "docs/x.md"));

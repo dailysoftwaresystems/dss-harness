@@ -1402,6 +1402,15 @@ public sealed partial class HelpTests
         Assert.Contains("agents/<agent>/seed.json", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
         Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
+        Assert.Contains($"  {ToolPackage.Command} refresh-agent <o> <a> [<path>... | --all] [--except <path>]... [--apply]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("the anchor registries' directory where none are, and anywhere in the tree with --all, which takes no path beside it", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A refresh refused over the agent's changes names every path it changed, and the arguments that leave them: --except <path>, once for "
+            + "each, hands it every other path and leaves that one as the agent changed it, its own work for its fold to weigh against what the main "
+            + "tree holds - said in the report, never silently; it is not a --force, nothing is left out that nobody named, and one naming a path "
+            + "the refresh would not have refused is refused, nothing copied.",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("refuses the move, nothing changed, unless --settled <path> names it", text, StringComparison.Ordinal);
         Assert.Contains(
             $"a move that stopped part way, exit {HarnessExit.Incomplete}, is finished where it was going by running it again, what it wrote held as "
@@ -1428,7 +1437,12 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "or anything of its own where the main tree committed a file, ignored, staged or holding the same bytes included - refuses the move",
+            "or anything of its own where the main tree committed a file, ignored or staged included - refuses the move",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A file it made that is the very file the main tree committed there - the same content as git compares it, and the same mode where git "
+            + "trusts one - is no such change: it is listed as held as the new base holds it already, and nothing is written.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(

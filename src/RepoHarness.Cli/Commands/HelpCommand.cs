@@ -2012,7 +2012,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {OrchestratorService.CreateCommand} <o> --model <id> [--parallel <n>] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
-        builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>...] [--apply]");
+        builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]... [--apply]");
         builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] [{FoldAllowances.SettledOption} <path>]...");
         var allowances = $"[{FoldAllowances.SettledOption} <path>]... [{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
         builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {allowances}");
@@ -2039,12 +2039,18 @@ internal static class HelpCommand
             + "copy it was handed and left alone is not one - unless --force; --empty hands it nothing more, keeping what it was "
             + "handed before. Seeding again hands besides every path the main tree holds otherwise than the agent shares it, "
             + "committed or not. refresh-agent hands a live agent every such path under the paths given - the anchor registries' "
-            + "directory where none are: one whose main-tree copy is not what the agent was last handed or folded, where it was, "
+            + $"directory where none are, and anywhere in the tree with {RefreshRequest.AllOption}, which takes no path beside it: one "
+            + "whose main-tree copy is not what the agent was last handed or folded, where it was, "
             + "put back as the main tree's HEAD holds it included, and otherwise one the main tree holds otherwise than the agent's "
             + "base, committed since or not. It is a dry run until --apply, refused, copying nothing, where the agent changed or "
             + "deleted one, and records them as handed to it, so its fold leaves them out; a symbolic link the main tree committed "
             + "is named and never handed, and so is a submodule's entry. A file the main tree turned into a directory, or a "
             + "directory it turned into a file, is handed as git holds it: what goes is removed first, then what comes is copied. "
+            + "A refresh refused over the agent's changes names every path it changed, and the arguments that leave them: "
+            + $"{RefreshRequest.ExceptOption} <path>, once for each, hands it every other path and leaves that one as the agent "
+            + "changed it, its own work for its fold to weigh against what the main tree holds - said in the report, never "
+            + "silently; it is not a --force, nothing is left out that nobody named, and one naming a path the refresh would not "
+            + "have refused is refused, nothing copied. "
             + "What the agent holds of its own where what it is handed needs room - a file or a link where a directory goes, or "
             + "files of its own in a directory a file replaces - refuses the hand-over, forced or not, naming each: copied, it "
             + "would write over them, or through the link out of its worktree. Neither hands anything while a move of the agent's "
@@ -2059,10 +2065,12 @@ internal static class HelpCommand
             + "change, a new file, a deletion, a link, a submodule's entry, a file turned into a directory, or a directory into a "
             + "file or a submodule's entry - and its own changes, and what it was handed, stay: its seed still says what it shares, "
             + "and refresh-agent hands it any of those the main tree moved since. A path it changed that the main tree committed a "
-            + "change to since - an edit, a deletion, or anything of its own where the main tree committed a file, ignored, staged "
-            + "or holding the same bytes included - refuses the move, nothing changed, unless --settled <path> names it: you "
-            + "reconciled its copy by hand, and it stays as its own change on the new base. So does whatever of the agent's what "
-            + "comes in would go over: a file or a link where the new base holds a directory, and what it keeps - its own, settled "
+            + "change to since - an edit, a deletion, or anything of its own where the main tree committed a file, ignored or "
+            + "staged included - refuses the move, nothing changed, unless --settled <path> names it: you reconciled its copy by "
+            + "hand, and it stays as its own change on the new base. A file it made that is the very file the main tree "
+            + "committed there - the same content as git compares it, and the same mode where git trusts one - is no such "
+            + "change: it is listed as held as the new base holds it already, and nothing is written. Whatever of the agent's "
+            + "what comes in would go over refuses the move too: a file or a link where the new base holds a directory, and what it keeps - its own, settled "
             + "or shared - in a directory where the new base holds a file, or a submodule's entry that would hide it from git; each "
             + "is named, with what to do. Its record names where the move goes before anything is written, then the new base's "
             + "paths are written, HEAD and the index move, and its record names the new base: a move that stopped part way, exit "

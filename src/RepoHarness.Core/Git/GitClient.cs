@@ -484,6 +484,79 @@ public sealed class GitClient(
         Ensure(result, $"write what {commit} holds into '{directory}'");
     }
 
+    public async Task<IReadOnlySet<string>> ListHeldAsAtAsync(
+        string directory,
+        string commit,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commit);
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var asked = paths.ToHashSet(StringComparer.Ordinal);
+        var files = asked.Count == 0
+            ? []
+            : (await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false))
+                .Where(entry => entry.IsFile && entry.Name.IsUtf8 && asked.Contains(entry.Name.Text))
+                .ToList();
+
+        if (files.Count == 0)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        // An index of this question's own, holding the commit's entry for each file asked about and nothing else: git then
+        // compares each with the work tree as it would once the work tree's index held it, whatever that index holds now -
+        // nothing, for a file never added. Its own name, so two questions at once never share one.
+        var index = Path.Combine(Path.GetTempPath(), $"dssharness-index-{Guid.NewGuid():N}");
+
+        try
+        {
+            var entries = new StringBuilder();
+
+            foreach (var file in files)
+            {
+                entries.Append(file.Mode).Append(' ').Append(file.ObjectId).Append(" 0\t").Append(file.Name.Text).Append('\0');
+            }
+
+            // --no-split-index writes it whole: a split index would otherwise be written as a new shared index file in the
+            // work tree's git directory.
+            var written = await RunWithIndexAsync(
+                    directory,
+                    index,
+                    ["update-index", "--no-split-index", "-z", "--index-info"],
+                    entries.ToString(),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            Ensure(written, $"write an index to compare the work tree with {commit}");
+
+            // The diff git status makes, not diff-files: an entry with no record of its file's stat is then read and
+            // compared, through the clean filters and the line-ending rules, and never listed for its stat alone.
+            var differing = await RunCoreAsync(
+                    directory,
+                    ["--no-optional-locks", "diff", "--name-only", "-z", "--no-renames", "--ignore-submodules=none", "--"],
+                    echoOutput: false,
+                    untranslated: false,
+                    index,
+                    standardInput: null,
+                    cancellationToken,
+                    Encoding.Latin1)
+                .ConfigureAwait(false);
+
+            Ensure(differing, $"compare the work tree with {commit}");
+
+            var changed = GitName.PathsOf([.. Records(differing.StandardOutput).Select(GitName.FromBytes)]);
+
+            return files.Select(file => file.Name.Text).Where(path => !changed.Contains(path)).ToHashSet(StringComparer.Ordinal);
+        }
+        finally
+        {
+            Remove(index);
+            Remove(index + ".lock");
+        }
+    }
+
     public async Task ResetToAsync(string directory, string commit, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commit);
@@ -1314,8 +1387,8 @@ public sealed class GitClient(
         // holding a tab keeps it.
         return [.. Records(result.StandardOutput).Select(entry =>
             entry.IndexOf('\t', StringComparison.Ordinal) is var tab and > 0
-                && entry[..tab].Split(' ') is [_, var type, var objectId]
-                ? new TreeEntry(type, objectId, GitName.FromBytes(entry[(tab + 1)..]))
+                && entry[..tab].Split(' ') is [var mode, var type, var objectId]
+                ? new TreeEntry(mode, type, objectId, GitName.FromBytes(entry[(tab + 1)..]))
                 : throw new HarnessException(
                     HarnessExit.CommandFailed,
                     $"git listed a tree entry in a form this build cannot read: '{GitName.FromBytes(entry).Quoted}'"))];
@@ -1466,10 +1539,11 @@ public sealed class GitClient(
     }
 
     /// <summary>One entry of a commit's tree, as <c>git ls-tree</c> lists it.</summary>
+    /// <param name="Mode">The octal mode, such as 100644 for a file, 100755 for an executable one or 120000 for a link.</param>
     /// <param name="Type">What the entry is: <c>blob</c>, <c>tree</c>, or <c>commit</c> for a submodule's.</param>
     /// <param name="ObjectId">The object git holds the entry in.</param>
     /// <param name="Name">The entry's path, from the repository's root.</param>
-    private sealed record TreeEntry(string Type, string ObjectId, GitName Name)
+    private sealed record TreeEntry(string Mode, string Type, string ObjectId, GitName Name)
     {
         /// <summary>
         /// Whether the entry is a file - a symbolic link is one, its text the path it points at -

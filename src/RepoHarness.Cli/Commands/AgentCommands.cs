@@ -105,8 +105,19 @@ internal static class RefreshAgentCommand
 
     private static readonly Argument<string[]> PathsArgument = new("path")
     {
-        Description = "The paths to refresh, relative to the tree; the directory the anchor registries are kept in where none is given.",
+        Description = $"The paths to refresh, relative to the tree; the directory the anchor registries are kept in where none is given and {RefreshRequest.AllOption} is not.",
         Arity = ArgumentArity.ZeroOrMore,
+    };
+
+    private static readonly Option<bool> AllOption = new(RefreshRequest.AllOption)
+    {
+        Description = "Weigh every path the main tree moved, anywhere in the tree but what is never handed to an agent; takes no path beside it.",
+    };
+
+    private static readonly Option<string[]> ExceptOption = new(RefreshRequest.ExceptOption)
+    {
+        HelpName = "path",
+        Description = "A path to refresh that the agent changed: left as it changed it, for its fold to weigh, and the rest handed over. Once for each path.",
     };
 
     private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Hand them over; without it, only say what would be handed over.");
@@ -115,12 +126,14 @@ internal static class RefreshAgentCommand
     {
         var command = new Command(
             Name,
-            "Hand a live agent every path under the paths that the main tree holds otherwise than the agent shares it - not what it was last handed, or "
-            + "not what its base holds - committed or not, recorded as handed to it so its fold leaves them out; refused, copying nothing, where the agent "
-            + "changed or deleted one of them.");
+            $"Hand a live agent every path under the paths, or anywhere with {RefreshRequest.AllOption}, that the main tree holds otherwise than the agent "
+            + "shares it - not what it was last handed, or not what its base holds - committed or not, recorded as handed to it so its fold leaves them "
+            + $"out; refused, copying nothing, where the agent changed or deleted one of them, unless {RefreshRequest.ExceptOption} names it.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Arguments.Add(PathsArgument);
+        command.Options.Add(AllOption);
+        command.Options.Add(ExceptOption);
         command.Options.Add(ApplyOption);
         GlobalOptions.AddTo(command);
 
@@ -129,7 +142,12 @@ internal static class RefreshAgentCommand
                 context.Directory,
                 context.ParseResult.GetRequiredValue(OrchestratorArgument),
                 context.ParseResult.GetRequiredValue(AgentArgument),
-                context.ParseResult.GetValue(PathsArgument) ?? [],
+                new RefreshRequest
+                {
+                    Paths = context.ParseResult.GetValue(PathsArgument) ?? [],
+                    All = context.ParseResult.GetValue(AllOption),
+                    Except = context.ParseResult.GetValue(ExceptOption) ?? [],
+                },
                 context.ParseResult.GetValue(ApplyOption),
                 cancellationToken)));
 

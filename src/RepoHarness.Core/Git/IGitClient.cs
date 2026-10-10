@@ -148,6 +148,20 @@ public interface IGitClient
     Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Which of <paramref name="paths"/> the work tree at <paramref name="directory"/> holds as <paramref name="commit"/>
+    /// holds them, each a file there: compared as git status would compare them were the commit's entry the index's - the
+    /// content through the clean filters and the line-ending rules, and the mode where the repository trusts modes -
+    /// whatever the work tree's own index says of the path, nothing included. A path the commit holds no file at is in no
+    /// answer. Nothing in the repository is written.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="paths">Paths relative to the root, with forward separators, as git names them.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not list the commit or compare the files.</exception>
+    Task<IReadOnlySet<string>> ListHeldAsAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Moves the HEAD of the work tree at <paramref name="directory"/> - the branch it is on, where it is on one - and its
     /// index to <paramref name="commit"/>, and leaves every file in the work tree as it is: <c>git reset --mixed</c>.
     /// </summary>

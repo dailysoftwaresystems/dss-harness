@@ -573,8 +573,13 @@ weighed against what the agent shares (`AgentFold.MovedAsync`), never against gi
 the main tree commits or puts back as its HEAD holds it: a path the agent was handed or folded is stale once the main
 tree's copy is not the one its seed records, and any other once the main tree's copy - committed since or not - is not
 what the agent's base holds, asked of git as a fold asks it. refresh-agent hands over every such path under the paths
-it is given, refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
-comparison asked of the agent's worktree), and seed-agent hands them besides the main tree's uncommitted state. A
+it is given - or anywhere in the tree, off the floor, with `--all` (`RefreshRequest`), which names no prefix and takes
+no path beside it - refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
+comparison asked of the agent's worktree). The refusal names each such path and the arguments that leave them:
+`--except <path>`, once for each, takes that path out of what is handed, so the rest goes over and it stays the agent's
+change, weighed by its fold against what the main tree holds; it is listed in every report, and one naming a path the
+refresh would not have refused is refused as a stray `--settled` is. What is left out is still weighed as in the way of
+what is handed. seed-agent hands the same paths besides the main tree's uncommitted state. A
 symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
 commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,
 one `cat-file --batch-check` process, and the commit's listing for what that does not answer as a file or a directory:
@@ -596,8 +601,12 @@ hold differently (`git diff --name-only`, commit to commit) is shared - kept as 
 not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
 base holds it, and comes in as git holds it (`git checkout --no-overlay <commit>`, the paths on standard input and read
 literally), or changed by the agent - asked of git against both commits, with anything where the old base holds
-nothing its own, untracked, ignored or staged, and one holding the new base's bytes included - which refuses the move
-unless `--settled` names it. What each commit holds at a path is told apart (`HeldAtAsync`): a directory the old base
+nothing its own, untracked, ignored or staged - which refuses the move unless `--settled` names it. One thing the agent
+made is not its change: a file that is the very file the new base holds there, which is held as the new base holds it
+already (`IGitClient.ListHeldAsAtAsync`: the new base's entry for each such file put in an index of the question's own,
+and `git diff` asked against it, so the content is compared through the clean filters and the line-ending rules and the
+mode where the repository trusts one, as status will compare them once the index has moved - whatever the worktree's
+own index says of the path, nothing for an untracked file). What each commit holds at a path is told apart (`HeldAtAsync`): a directory the old base
 held, now a file or a submodule's entry, is held as the old base holds it while the agent's worktree holds a directory
 or nothing there, and a submodule's entry as git compares it, so neither is taken for something the agent made.
 Nothing of the agent's is written over or hidden: git removes a file or a link where a path it writes needs a

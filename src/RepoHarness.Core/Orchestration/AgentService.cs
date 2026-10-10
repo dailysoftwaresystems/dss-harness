@@ -34,12 +34,13 @@ public interface IAgentService
     Task<CommandOutcome> SeedAsync(string startDirectory, string orchestrator, string agent, bool empty, bool force, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Hands a live agent every path under <paramref name="paths"/> - the anchor registries' directory where none are given -
-    /// that the main tree holds otherwise than the agent shares it, committed or not, and records them as handed to it, so
-    /// its fold leaves them out; refused, copying nothing, where the agent changed or deleted one of them. A dry run until
+    /// Hands a live agent every path <paramref name="request"/> weighs - under the paths it names, the anchor registries'
+    /// directory where it names none, or anywhere in the tree - that the main tree holds otherwise than the agent shares it,
+    /// committed or not, and records them as handed to it, so its fold leaves them out; refused, copying nothing, where the
+    /// agent changed or deleted one of them that the request does not leave as it is, by name. A dry run until
     /// <paramref name="apply"/>.
     /// </summary>
-    Task<CommandOutcome> RefreshAsync(string startDirectory, string orchestrator, string agent, IReadOnlyList<string> paths, bool apply, CancellationToken cancellationToken = default);
+    Task<CommandOutcome> RefreshAsync(string startDirectory, string orchestrator, string agent, RefreshRequest request, bool apply, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Moves a live agent's base to the main tree's HEAD: what the main tree committed since comes into its worktree as git
@@ -564,13 +565,13 @@ public sealed class AgentService(
         string startDirectory,
         string orchestrator,
         string agent,
-        IReadOnlyList<string> paths,
+        RefreshRequest request,
         bool apply,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(request);
 
-        if ((Shape(orchestrator, agent) ?? OrchestrationRules.PathsProblem(paths, "a path to refresh")) is { } shape)
+        if ((Shape(orchestrator, agent) ?? request.Problem()) is { } shape)
         {
             return CommandOutcome.Usage(shape);
         }
@@ -582,12 +583,12 @@ public sealed class AgentService(
             return refusal;
         }
 
-        var outcome = await RefreshLiveAsync(at, paths, apply, cancellationToken).ConfigureAwait(false);
+        var outcome = await RefreshLiveAsync(at, request, apply, cancellationToken).ConfigureAwait(false);
         return apply ? _log.Record(at.Layout!, agent, RefreshCommand, outcome) : outcome;
     }
 
     /// <summary>Refreshing a live agent, once it is found.</summary>
-    private async Task<CommandOutcome> RefreshLiveAsync(AgentAt at, IReadOnlyList<string> paths, bool apply, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> RefreshLiveAsync(AgentAt at, RefreshRequest request, bool apply, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var floor = Floor(context);
@@ -606,16 +607,22 @@ public sealed class AgentService(
             return off.Refusal;
         }
 
-        var prefixes = paths.Count > 0 ? [.. paths.Select(PathPatterns.Normalize)] : await RegistryDirectoriesAsync(context, cancellationToken).ConfigureAwait(false);
+        // Every path the main tree moved, off the floor, where all are asked for: no prefix names them.
+        IReadOnlyList<string>? prefixes = request.All
+            ? null
+            : request.Paths.Count > 0 ? [.. request.Paths.Select(PathPatterns.Normalize)] : await RegistryDirectoriesAsync(context, cancellationToken).ConfigureAwait(false);
 
-        if (prefixes.FirstOrDefault(prefix => TreeFloor.Covers(floor, prefix)) is { } floored)
+        if (prefixes?.FirstOrDefault(prefix => TreeFloor.Covers(floor, prefix)) is { } floored)
         {
             return CommandOutcome.Usage($"'{floored}' is never handed to an agent: {string.Join(", ", floor)} stay in their own tree.");
         }
 
+        var under = prefixes is null ? string.Empty : $" under {string.Join(", ", prefixes)}";
+        var except = request.Except.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal);
         Handable handable;
         Handable moved;
         IReadOnlyList<string> changed;
+        IReadOnlyList<string> left;
         IReadOnlyList<string> inTheWay;
 
         try
@@ -630,8 +637,16 @@ public sealed class AgentService(
             };
 
             // Never over a change of the agent's own - an edit, or a deletion - handed to it or not, nor over or through
-            // anything of its own where what it is handed needs room.
-            changed = await _fold.EditedAsync(path, record.Base!, seed, [.. moved.Files, .. moved.Deletions], cancellationToken).ConfigureAwait(false);
+            // anything of its own where what it is handed needs room. One left as it is by name is handed nothing, and is in
+            // the way of what is handed like anything else of the agent's.
+            var edited = await _fold.EditedAsync(path, record.Base!, seed, [.. moved.Files, .. moved.Deletions], cancellationToken).ConfigureAwait(false);
+            left = [.. edited.Where(except.Contains)];
+            changed = [.. edited.Where(relative => !except.Contains(relative))];
+            moved = moved with
+            {
+                Files = [.. moved.Files.Where(relative => !except.Contains(relative))],
+                Deletions = [.. moved.Deletions.Where(relative => !except.Contains(relative))],
+            };
             inTheWay = _fold.InTheWayOfHanding(path, moved);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -639,11 +654,25 @@ public sealed class AgentService(
             return CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied.");
         }
 
+        // Never silent, and never a guess: a name that leaves nothing out is the typo it usually is.
+        if (except.Where(relative => !left.Contains(relative, StringComparer.Ordinal)).Order(StringComparer.Ordinal).ToList() is { Count: > 0 } stray)
+        {
+            return CommandOutcome.Refused(
+                $"{RefreshRequest.ExceptOption} {ReportText.Listed([.. stray.Select(relative => $"'{relative}'")])} names no path to refresh{under} that "
+                + $"{Lower(Agent(record))} changed, so it leaves nothing out: check its spelling. Nothing was copied.");
+        }
+
         if (changed.Count > 0)
         {
             return CommandOutcome.Refused(
                 $"{Agent(record)} changed {changed.Count} of the path(s) to refresh - {ReportText.Listed(changed)} - and refreshing would undo those "
-                + "changes. Nothing was copied.");
+                + "changes. Nothing was copied.",
+                [
+                    .. changed.Select(relative => $"  {relative}"),
+                    $"To hand it every other path and leave these as it changed them, run again with {RefreshRequest.ExceptOption} <path> for each:",
+                    $"  {RefreshRequest.ExceptArguments(left.Concat(changed).Order(StringComparer.Ordinal))}",
+                    $"{RefreshRequest.ExceptOption} says the path stays the agent's change, for its fold to weigh against what the main tree holds; it is not a --force.",
+                ]);
         }
 
         if (inTheWay.Count > 0)
@@ -654,18 +683,23 @@ public sealed class AgentService(
         var all = moved.Files.Concat(moved.Deletions).Order(StringComparer.Ordinal).ToList();
         var behind = await BehindAsync(main, record).ConfigureAwait(false);
 
+        // Never silent: a path left out without a word is how a change of the main tree's goes missing while the refresh succeeds.
+        IReadOnlyList<string> leftLines = left.Count == 0
+            ? []
+            : [$"{left.Count} path(s) it changed, named with {RefreshRequest.ExceptOption}, {(apply ? "left" : "to leave")} as it changed them:", .. left.Select(relative => $"  {relative}")];
+
         if (all.Count == 0)
         {
             return CommandOutcome.Ok(
-                $"{Lower(Agent(record))} holds the main tree's copy of every changed path under {string.Join(", ", prefixes)}",
-                [.. NotHanded(handable), .. behind]);
+                $"{Lower(Agent(record))} holds the main tree's copy of every {(left.Count > 0 ? "other " : string.Empty)}changed path{under}",
+                [.. leftLines, .. NotHanded(handable), .. behind]);
         }
 
         if (!apply)
         {
             return CommandOutcome.Ok(
                 $"dry run: {all.Count} path(s) would be refreshed into {Lower(Agent(record))}; pass --apply to hand them over",
-                [.. all.Select(relative => $"  {relative}"), .. NotHanded(handable), .. behind]);
+                [.. all.Select(relative => $"  {relative}"), .. leftLines, .. NotHanded(handable), .. behind]);
         }
 
         // The agent's worktree is held too: a leg building in it would be building what is being replaced.
@@ -704,7 +738,7 @@ public sealed class AgentService(
                     [seedLine])
                 : CommandOutcome.Ok(
                     $"refreshed {all.Count} path(s) into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out",
-                    [.. all.Select(relative => $"  {relative}"), .. NotHanded(handable), .. behind, seedLine]);
+                    [.. all.Select(relative => $"  {relative}"), .. leftLines, .. NotHanded(handable), .. behind, seedLine]);
         }
 
         // The paths whose main-tree copy the agent does not hold already.
