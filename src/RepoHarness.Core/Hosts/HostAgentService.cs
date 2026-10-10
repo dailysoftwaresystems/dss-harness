@@ -125,13 +125,13 @@ public sealed class HostAgentService(
         using var abandoned = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using var served = new CancellationTokenSource();
         var gone = new Gone(abandoned, request.Kind == HostAgentRequestKind.Run ? error : null);
-        var heard = new StrongBox<long>(Stopwatch.GetTimestamp());
+        var heard = new StrongBox<long>(_patience.Clock.GetTimestamp());
 
-        _ = WatchInputAsync(input, heard, gone);
+        _ = WatchInputAsync(input, heard, gone, _patience.Clock);
 
         if (request is { Kind: HostAgentRequestKind.Run, BeatSeconds: > 0 })
         {
-            _ = WatchBeatAsync(_patience.BeatUnit * ((long)request.BeatSeconds * HostAgentProtocol.BeatsMissed), heard, gone, served.Token);
+            _ = WatchBeatAsync(_patience.BeatUnit * ((long)request.BeatSeconds * HostAgentProtocol.BeatsMissed), heard, gone, _patience, served.Token);
         }
 
         try
@@ -604,7 +604,7 @@ public sealed class HostAgentService(
     /// whatever follows the request is a beat, read as nothing else - and says the machine that asked has gone once the
     /// input ends, or cannot be read.
     /// </summary>
-    private static async Task WatchInputAsync(TextReader input, StrongBox<long> heard, Gone gone)
+    private static async Task WatchInputAsync(TextReader input, StrongBox<long> heard, Gone gone, TimeProvider clock)
     {
         var buffer = new char[256];
         string why;
@@ -613,7 +613,7 @@ public sealed class HostAgentService(
         {
             while (await input.ReadAsync(buffer.AsMemory(), CancellationToken.None).ConfigureAwait(false) > 0)
             {
-                Volatile.Write(ref heard.Value, Stopwatch.GetTimestamp());
+                Volatile.Write(ref heard.Value, clock.GetTimestamp());
             }
 
             why = "the input it holds open here ended";
@@ -631,15 +631,15 @@ public sealed class HostAgentService(
 
     /// <summary>
     /// Says the machine that asked has gone once nothing has been read on its input for <paramref name="silence"/>:
-    /// looked at four times in that long, until <paramref name="served"/>.
+    /// looked at four times in that long, by <paramref name="patience"/>'s clock, until <paramref name="served"/>.
     /// </summary>
-    private static async Task WatchBeatAsync(TimeSpan silence, StrongBox<long> heard, Gone gone, CancellationToken served)
+    private static async Task WatchBeatAsync(TimeSpan silence, StrongBox<long> heard, Gone gone, HostAgentPatience patience, CancellationToken served)
     {
         try
         {
-            while (Stopwatch.GetElapsedTime(Volatile.Read(ref heard.Value)) < silence)
+            while (patience.Clock.GetElapsedTime(Volatile.Read(ref heard.Value)) < silence)
             {
-                await Task.Delay(silence / 4, served).ConfigureAwait(false);
+                await patience.Pause(silence / 4, served).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)

@@ -411,15 +411,24 @@ public sealed class HostAgentServiceTests
         using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 1, "verify-git"));
         using var error = new StringWriter();
         var lastResort = new RecordingLastResort();
+        var stepped = new SteppedPatience();
         var cancellationToken = TestContext.Current.CancellationToken;
+        var cancelledEarly = false;
 
-        // A beat every 20 ms as this host counts it, so eight unheard are 160 ms.
-        var exitCode = await Service(lastResort: lastResort, patience: new HostAgentPatience { BeatUnit = TimeSpan.FromMilliseconds(20) }).ServeAsync(
+        // A beat a second, so eight unheard are 8 s by the host's clock, which it looks at four times in that long.
+        var exitCode = await Service(lastResort: lastResort, patience: stepped.Patience).ServeAsync(
             input,
             new StringWriter(),
             error,
             async (_, _, _, token) =>
             {
+                for (var look = 0; look < 4; look++)
+                {
+                    // Not before the eighth: at 6 s, as at none, the run goes on.
+                    cancelledEarly |= token.IsCancellationRequested;
+                    await stepped.StepAsync(meanwhile: null, cancellationToken);
+                }
+
                 try
                 {
                     await Task.Delay(Timeout.InfiniteTimeSpan, token);
@@ -433,8 +442,10 @@ public sealed class HostAgentServiceTests
             cancellationToken).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
 
         Assert.Equal(HarnessExit.Cancelled, exitCode);
+        Assert.False(cancelledEarly, "The run was cancelled before eight beats had gone unheard.");
+        Assert.Equal(TimeSpan.FromSeconds(8), stepped.Clock.Moved);
         Assert.Contains(
-            "host-agent: FAIL - the machine that asked has gone - it wrote nothing on the input it holds open here for 1 s, where it writes a beat "
+            "host-agent: FAIL - the machine that asked has gone - it wrote nothing on the input it holds open here for 8 s, where it writes a beat "
             + "while it is there - so what it started here is stopped",
             error.ToString(),
             StringComparison.Ordinal);
@@ -443,44 +454,70 @@ public sealed class HostAgentServiceTests
     }
 
     /// <summary>
-    /// A run whose asker goes on writing its beat is left running, however long it takes; and one whose request says it
-    /// writes no beat is never cancelled for its silence.
+    /// A run whose asker goes on writing its beat is left running, however long it takes: eight times as long, by the
+    /// host's clock, as the silence that would have cancelled it, a beat heard between every two looks at it.
     /// </summary>
-    [Theory]
-    [InlineData(1, true)]
-    [InlineData(0, false)]
-    public async Task Run_LeavesTheCommandRunning_WhileTheBeatGoesOn_OrWhereTheRequestWritesNone(int beatSeconds, bool beating)
+    [Fact]
+    public async Task Run_LeavesTheCommandRunning_WhileTheBeatGoesOn_HoweverLongItTakes()
     {
         using var copy = new TempDirectory();
-        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds, "verify-git"));
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 1, "verify-git"));
         using var error = new StringWriter();
+        var stepped = new SteppedPatience();
         var cancellationToken = TestContext.Current.CancellationToken;
         bool? cancelled = null;
 
-        var exitCode = await Service(patience: new HostAgentPatience { BeatUnit = TimeSpan.FromMilliseconds(20) }).ServeAsync(
+        var exitCode = await Service(patience: stepped.Patience).ServeAsync(
             input,
             new StringWriter(),
             error,
             async (_, _, _, token) =>
             {
-                // Four times as long as eight beats unheard.
-                for (var waited = 0; waited < 32; waited++)
+                for (var look = 0; look < 32; look++)
                 {
-                    await Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken);
-
-                    if (beating)
-                    {
-                        input.Beat();
-                    }
+                    await stepped.StepAsync(() => input.BeatHeardAsync(cancellationToken), cancellationToken);
                 }
 
                 cancelled = token.IsCancellationRequested;
                 return HarnessExit.Success;
             },
+            cancellationToken).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, exitCode);
+        Assert.Equal(TimeSpan.FromSeconds(64), stepped.Clock.Moved);
+        Assert.False(cancelled);
+        Assert.DoesNotContain("has gone", error.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A run whose request says its asker writes no beat is never cancelled for its silence: the host does not watch for
+    /// one, however long nothing is read on its input.
+    /// </summary>
+    [Fact]
+    public async Task Run_IsNeverCancelledForItsSilence_WhereTheRequestSaysItsAskerWritesNoBeat()
+    {
+        using var copy = new TempDirectory();
+        using var input = new BeatingReader(RunRequest(copy.Path, beatSeconds: 0, "verify-git"));
+        using var error = new StringWriter();
+        var stepped = new SteppedPatience();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        (bool Watching, bool Cancelled)? found = null;
+
+        var exitCode = await Service(patience: stepped.Patience).ServeAsync(
+            input,
+            new StringWriter(),
+            error,
+            (_, _, _, token) =>
+            {
+                stepped.Clock.Advance(TimeSpan.FromDays(1));
+                found = (stepped.Watching, token.IsCancellationRequested);
+
+                return Task.FromResult(HarnessExit.Success);
+            },
             cancellationToken);
 
         Assert.Equal(HarnessExit.Success, exitCode);
-        Assert.False(cancelled);
+        Assert.Equal((false, false), found);
         Assert.DoesNotContain("has gone", error.ToString(), StringComparison.Ordinal);
     }
 

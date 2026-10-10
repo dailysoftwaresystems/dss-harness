@@ -479,8 +479,9 @@ public sealed class ProcessRunnerTests
 
         if (hold)
         {
-            // Fifteen intervals passed; a loaded machine writes fewer, and never none.
-            Assert.InRange(lines.Count, 4, 16);
+            // One to an interval for as long as the child ran, however long a busy machine took to start it: never
+            // none, and never more than the intervals that passed.
+            Assert.InRange(lines.Count - 1, 1, (int)(result.Duration / TimeSpan.FromMilliseconds(100)) + 1);
             Assert.All(lines.Skip(1), line => Assert.Equal("[still here]", line));
         }
         else

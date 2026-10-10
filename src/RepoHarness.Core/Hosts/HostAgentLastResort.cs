@@ -7,8 +7,21 @@ namespace RepoHarness.Core.Hosts;
 /// <summary>How long a host's agent waits on the machine that asked, and on what it started for that machine.</summary>
 public sealed record HostAgentPatience
 {
-    /// <summary>What a request's beat seconds are counted in: a second, and less only where a test says so.</summary>
+    /// <summary>What a request's beat seconds are counted in: a second.</summary>
     public TimeSpan BeatUnit { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// The clock the silence on a request's input is measured by: the machine's own, and another only where a test moves
+    /// one by hand - measured by the machine's, a test of a beat that goes on is a race between two timers, lost
+    /// whenever the machine is busy for longer than the silence it counts.
+    /// </summary>
+    public TimeProvider Clock { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// How the time between two looks at that silence passes: a delay, and otherwise only where a test steps
+    /// <see cref="Clock"/> itself.
+    /// </summary>
+    public Func<TimeSpan, CancellationToken, Task> Pause { get; init; } = Task.Delay;
 
     /// <summary>
     /// How long what a request started is given to stop once it is cancelled, before the agent ends it and itself: long

@@ -417,8 +417,25 @@ internal sealed class BeatingReader(string line) : TextReader
     private readonly System.Threading.Channels.Channel<object> _events = System.Threading.Channels.Channel.CreateUnbounded<object>();
     private bool _lineRead;
 
+    /// <summary>Released each time the reader comes to read: once more than it has been answered, while it waits.</summary>
+    private readonly SemaphoreSlim _asked = new(0);
+
     /// <summary>Writes a beat, as the machine that asked does while it is there.</summary>
     public void Beat() => _events.Writer.TryWrite("beat");
+
+    /// <summary>
+    /// Writes a beat and waits until it has been read and the reader has come back for more: whatever read it has
+    /// noted it by then, so nothing a test does next can come before that.
+    /// </summary>
+    public async Task BeatHeardAsync(CancellationToken cancellationToken)
+    {
+        await _asked.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Beat();
+        await _asked.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        // The reader is waiting again, for the next one.
+        _asked.Release();
+    }
 
     /// <summary>Makes the next read fail with <paramref name="failure"/>.</summary>
     public void Fail(Exception failure) => _events.Writer.TryWrite(failure);
@@ -434,12 +451,58 @@ internal sealed class BeatingReader(string line) : TextReader
 
     public override async ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
     {
+        _asked.Release();
+
         if (!await _events.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
         {
             return 0;
         }
 
         return await _events.Reader.ReadAsync(cancellationToken).ConfigureAwait(false) is Exception failure ? throw failure : 1;
+    }
+}
+
+/// <summary>
+/// A host agent's patience by a clock a test moves: each look the agent takes at the silence on its input waits to be
+/// stepped, so what a test says happened between two looks did, however busy the machine is.
+/// </summary>
+internal sealed class SteppedPatience
+{
+    private readonly System.Threading.Channels.Channel<(TimeSpan Span, TaskCompletionSource Looks)> _pauses =
+        System.Threading.Channels.Channel.CreateUnbounded<(TimeSpan, TaskCompletionSource)>();
+
+    public ManualClock Clock { get; } = new();
+
+    /// <summary>The patience an agent is given.</summary>
+    public HostAgentPatience Patience => new() { Clock = Clock, Pause = PauseAsync };
+
+    /// <summary>Whether the agent is waiting out the time between two looks: it watches the silence on its input.</summary>
+    public bool Watching => _pauses.Reader.TryPeek(out _);
+
+    /// <summary>
+    /// Lets the time the agent is waiting out pass, with <paramref name="meanwhile"/> happening within it, and has the
+    /// agent look again.
+    /// </summary>
+    public async Task StepAsync(Func<Task>? meanwhile, CancellationToken cancellationToken)
+    {
+        var (span, looks) = await _pauses.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+
+        Clock.Advance(span);
+
+        if (meanwhile is not null)
+        {
+            await meanwhile().ConfigureAwait(false);
+        }
+
+        looks.SetResult();
+    }
+
+    private async Task PauseAsync(TimeSpan span, CancellationToken cancellationToken)
+    {
+        var looks = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _pauses.Writer.TryWrite((span, looks));
+        await looks.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 }
 
