@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 
@@ -40,8 +41,9 @@ public static class SyncServe
     public const string Manifest = "manifest";
 
     /// <summary>
-    /// Reports whether the copy's root exists, whether the harness created it and whether its last sync finished, and
-    /// what configuration it holds.
+    /// Reports whether the copy's root exists, whether the harness created it and whether its last sync finished, what
+    /// configuration it holds, and - where it is a git repository of its own - where its HEAD stands and what it holds
+    /// of the history asked of it: <c>inspect &lt;root&gt;</c>, then, where a tree is synced, what <see cref="Asking"/> spells.
     /// </summary>
     public const string Inspect = "inspect";
 
@@ -51,8 +53,118 @@ public static class SyncServe
     /// </summary>
     public const string Create = "create";
 
-    /// <summary>Makes the copy a git repository, which the harness there needs to find anything.</summary>
+    /// <summary>
+    /// Makes the copy a git repository, which the harness there needs to find anything:
+    /// <c>init-repository &lt;root&gt;</c>, then how one made there names its objects, where the tree synced says.
+    /// </summary>
     public const string InitRepository = "init-repository";
+
+    /// <summary>How a repository names its objects, as an <see cref="InitRepository"/> request carries it; none where it carries none.</summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <exception cref="HarnessException">It is no such word: the two ends are different builds.</exception>
+    public static string? ObjectFormatIn(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count <= 1)
+        {
+            return null;
+        }
+
+        // A word of letters and digits, as git's own are: it becomes part of an option on git's command line.
+        return arguments[1].Length > 0 && arguments[1].All(char.IsAsciiLetterOrDigit)
+            ? arguments[1]
+            : throw new HarnessException(
+                HarnessExit.UsageError,
+                $"'{arguments[1]}' is not how a git repository names its objects. The two ends are different builds.");
+    }
+
+    /// <summary>
+    /// Keeps a piece of a pack of git objects aside in the copy's repository until the whole of it is taken:
+    /// <c>history-piece &lt;root&gt; &lt;pack&gt; &lt;bytes before it&gt; &lt;content&gt;</c>.
+    /// </summary>
+    public const string HistoryPiece = "history-piece";
+
+    /// <summary>
+    /// Takes the pack sent, where one was, and moves the copy's HEAD to the commit of the tree synced:
+    /// <c>take-history &lt;root&gt; &lt;pack&gt; &lt;commit left out&gt;</c>, each of those two <see cref="Nothing"/> where
+    /// there is none, then what <see cref="Asking"/> spells.
+    /// </summary>
+    public const string TakeHistory = "take-history";
+
+    /// <summary>What stands where an operation takes a value and there is none: no object's name, and never empty.</summary>
+    public const string Nothing = "-";
+
+    /// <summary>
+    /// What a request says of the history asked of a copy: the commit, how much behind it, how the tree's repository
+    /// names its objects, then each commit that repository's own history stops at; <see cref="Nothing"/> for the commit
+    /// where the tree has none yet, and nothing at all where what is synced is no repository's tree.
+    /// </summary>
+    /// <param name="wanted">What is asked, or <see langword="null"/> where nothing is.</param>
+    public static IReadOnlyList<string> Asking(GitHistoryWanted? wanted)
+        => wanted is null ? [] : [wanted.Commit ?? Nothing, wanted.Depth, wanted.ObjectFormat, .. wanted.Boundary];
+
+    /// <summary>The history a request asks of a copy, as <see cref="Asking"/> spelled it from <paramref name="at"/> on.</summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <param name="at">Where the commit stands among them.</param>
+    /// <returns>What is asked, or <see langword="null"/> where the request asks for none.</returns>
+    /// <exception cref="HarnessException">
+    /// It arrived in part, or names how much is asked in a word this build does not know: the two ends are different builds.
+    /// </exception>
+    /// <remarks>
+    /// Refused rather than read as less: a history taken short of what was asked would leave the copy's HEAD where
+    /// the sync then says it is not.
+    /// </remarks>
+    public static GitHistoryWanted? WantedIn(IReadOnlyList<string> arguments, int at)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count <= at)
+        {
+            return null;
+        }
+
+        if (arguments.Count < at + 3 || arguments[at + 1] is not (GitHistoryWanted.HeadOnly or GitHistoryWanted.Full))
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                "The history asked of the copy arrived in a shape this build cannot read: a commit, then "
+                + $"'{GitHistoryWanted.HeadOnly}' or '{GitHistoryWanted.Full}', then how its objects are named. The two ends are different builds.");
+        }
+
+        return new GitHistoryWanted(
+            Given(arguments, at, Inspect),
+            arguments[at + 1] == GitHistoryWanted.Full,
+            arguments[at + 2],
+            [.. arguments.Skip(at + 3)]);
+    }
+
+    /// <summary>The value at <paramref name="index"/> of a request, or <see langword="null"/> where it is <see cref="Nothing"/>.</summary>
+    /// <param name="arguments">The request's arguments, the copy's root first.</param>
+    /// <param name="index">Where the value stands.</param>
+    /// <param name="operation">The operation, for the refusal.</param>
+    /// <exception cref="HarnessException">The request is too short to hold it: the two ends are different builds.</exception>
+    public static string? Given(IReadOnlyList<string> arguments, int index, string operation)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        return index < arguments.Count
+            ? string.Equals(arguments[index], Nothing, StringComparison.Ordinal) ? null : arguments[index]
+            : throw new HarnessException(
+                HarnessExit.UsageError,
+                $"sync operation '{operation}' needs {(index + 1).ToString(CultureInfo.InvariantCulture)} argument(s); it was given "
+                + $"{arguments.Count.ToString(CultureInfo.InvariantCulture)}.");
+    }
+
+    /// <summary>How many bytes of a pack a piece starts after, as a <see cref="HistoryPiece"/> request carries it.</summary>
+    /// <param name="text">The number, in digits.</param>
+    /// <exception cref="HarnessException">It is no such number: the two ends are different builds.</exception>
+    public static long OffsetIn(string text)
+        => long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var offset)
+            ? offset
+            : throw new HarnessException(
+                HarnessExit.UsageError,
+                $"'{text}' is not how many bytes of a pack came before a piece of it. The two ends are different builds.");
 
     /// <summary>What mark a <see cref="Create"/> request asks for, spelled as the enum's own name.</summary>
     /// <param name="arguments">The request's arguments, the copy's root first.</param>
@@ -132,6 +244,20 @@ public static class SyncServe
 
     /// <summary>Reads one file out of the copy.</summary>
     public const string Read = "read";
+
+    /// <summary>Lists the files below one directory of the copy, each with its size, for a pull that names the directory.</summary>
+    public const string List = "list";
+
+    /// <summary>The most files a pull brings back from one directory it names.</summary>
+    /// <remarks>
+    /// A file read back crosses in a request of its own, and a request is a session on a host reached over ssh: a
+    /// directory named is a step's kept outputs, tens of files, never a build tree. A budget somebody chose, as
+    /// <see cref="LargestBatch"/> is, checked on the side that holds the directory, before a file of it is read.
+    /// </remarks>
+    public const int MostFilesPulledFromADirectory = 256;
+
+    /// <summary>The most bytes the files of one directory a pull names hold together, checked as their number is.</summary>
+    public const long LargestDirectoryPulled = 1024L * 1024 * 1024;
 
     /// <summary>Removes a whole copy the harness made, as deleting the worktree it holds asks.</summary>
     public const string RemoveCopy = "remove-copy";
@@ -619,7 +745,15 @@ public enum CopyOrigin
 /// What the configuration the copy holds is, by content, so a sync knows whether placing its own changes the copy;
 /// <see langword="null"/> where it holds none, or one that cannot be read.
 /// </param>
-public sealed record SyncInspectAnswer(bool Exists, CopyMark Mark, string? Configuration = null);
+public sealed record SyncInspectAnswer(bool Exists, CopyMark Mark, string? Configuration = null)
+{
+    /// <summary>
+    /// Where the HEAD of the copy's git repository stands, how that repository names its objects and what it holds of
+    /// the history asked of it; <see langword="null"/> where the root is not the top of a repository of its own - one
+    /// is then made for it, which holds nothing.
+    /// </summary>
+    public GitHistoryHeld? Repository { get; init; }
+}
 
 /// <summary>What a copy's marker says about how it came to be, and whether the last sync of it finished.</summary>
 public enum CopyMark
@@ -657,6 +791,51 @@ public enum CopyMark
 /// a hash taken here of the bytes that arrived agrees with them whatever happened on the way.
 /// </param>
 public sealed record SyncFileAnswer(long Length, string ContentHash);
+
+/// <summary>What one directory of a copy holds, as a pull that names it brings it back.</summary>
+/// <param name="Files">Every file below it, by path relative to the copy's root, in the order of their paths.</param>
+public sealed record SyncDirectoryListing(IReadOnlyList<SyncListedFile> Files)
+{
+    /// <summary>
+    /// Every link below it, which the walk neither followed nor read - a directory's with a trailing separator - by path
+    /// relative to the copy's root: named, since what a link leads to is nothing the copy holds, and never brought back.
+    /// </summary>
+    public IReadOnlyList<string> Links { get; init; } = [];
+}
+
+/// <summary>One file a directory of a copy holds.</summary>
+/// <param name="Path">Where it is, relative to the copy's root, with forward separators.</param>
+/// <param name="Length">How many bytes it holds.</param>
+public sealed record SyncListedFile(string Path, long Length);
+
+/// <summary>What a pull brought back, or would.</summary>
+/// <param name="Files">Each file, relative to the copy's root: the files named, and every file below each directory named.</param>
+/// <param name="Links">Each link below a directory named, passed over: never followed, and never brought back.</param>
+public sealed record SyncPull(IReadOnlyList<string> Files, IReadOnlyList<string> Links)
+{
+    /// <summary>
+    /// Why the pull stopped before every file had been brought, where it did; <see langword="null"/> where it brought
+    /// them all. <see cref="Files"/> is then what crossed before it, each left where it was written.
+    /// </summary>
+    public SyncPullStop? Stopped { get; init; }
+
+    /// <summary>Each file not brought back, where the pull stopped: the one it stopped at, then every one after it.</summary>
+    public IReadOnlyList<string> Left { get; init; } = [];
+
+    /// <summary>Whether <paramref name="path"/>, as a pull was given it, names a directory: it ends with a separator.</summary>
+    /// <param name="path">A path a pull names.</param>
+    public static bool NamesADirectory(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        return path.EndsWith('/') || path.EndsWith('\\');
+    }
+}
+
+/// <summary>What stopped a pull part way.</summary>
+/// <param name="ExitCode">The code the pull fails with.</param>
+/// <param name="Why">What failed, as the failure itself said it.</param>
+public sealed record SyncPullStop(int ExitCode, string Why);
 
 /// <summary>One file a write carries, as the far side reads it.</summary>
 /// <param name="Path">Where it goes, relative to the copy's root.</param>

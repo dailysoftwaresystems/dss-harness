@@ -263,6 +263,8 @@ public sealed partial class HelpTests
             "one that does not pass - a build that does not pass, a red case, no report, a failing exit, a hang - decides the leg's own verdict",
             "unattributed the run failed and nothing ties that to a case: no report, one that is no JUnit report - its line says why - a "
             + "failing exit whose report names no failing case, or a run past its bound, or silent for defaults.stallSeconds, stopped as hung",
+            $"an unknown one is refused ({HarnessExit.UsageError}) - once the registry itself can be swept: its own problems are listed "
+            + "first, every one of them, whatever --arms names.",
             "ARMS, below the table, names each arm selected that did not pass, and why;",
             "a worker a sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended, and one that "
             + "cannot be removed keeps it as a failure until that is put right - or --force deletes the worktree and leaves that worker,",
@@ -272,8 +274,18 @@ public sealed partial class HelpTests
             "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build last "
             + "recorded, else to the most any other tree of the repository on its machine recorded of it",
             "each read as its file holds it, less a UTF-8 byte order mark at its start and one line ending at its end,",
-            "seven arms, one to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
-            + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two files",
+            "eight arms, one to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
+            + "failed - with a second that passes as the other red kind, a third whose mutation is coupled across two files and a fourth "
+            + "whose mutation is two sites of one file",
+            "A mutant that is several places of one file, apart from each other, is one arm: an M row naming a file its arm already "
+            + "mutates - its own, or another M row's - adds a text to that file, as many as the mutant has, spelt as the arm's first row "
+            + "for the file spells it. Every text of a file is replaced together, as one edit of it: each must stand exactly once in the "
+            + "file as the tree holds it - never as another of them left it - and differ from what replaces it, the file is written once "
+            + "and put back whole, checked once against the tree's,",
+            "an M row naming a file its arm already mutates under another spelling, as the tree's own file system compares their names; "
+            + "two texts of one arm that overlap in one file as the tree holds it - one lying across or within the other, or the same "
+            + "text cited twice;",
+            "it has exactly one B row, no C or G row, and no M row but for its own file, which its paired control rewrites whole.",
         })
         {
             Assert.Contains(text, said, StringComparison.Ordinal);
@@ -496,8 +508,17 @@ public sealed partial class HelpTests
             "filterArg, excludeArg and labelArg, so one set of options serves every runner. For",
             "ctest, '-R' chooses tests by name, '-L' chooses them by label and '-LE' leaves a label",
             "apart - ctest leaves out only what every -LE matches - declares excludeJoin, and several",
-            "one the sync made, or one it took over - whose history is not this checkout's. Each",
+            "one the sync made, or one it took over. Each sync makes its HEAD name the commit this",
+            "tree is at, so what a step asks git about HEAD - which commit, what a file held there -",
+            "untracked as added, and one git stores converted here - line endings, a clean filter -",
+            "pack of git's own, less what the copy holds, and nothing crosses while its HEAD names",
+            "about a commit behind it that the copy lacks fails there, in git's own words.",
+            "\"sync\": { \"history\": \"full\" } gives the copy every commit behind it too, once, and",
+            "each later one as it is made; a partial clone then has git fetch what it left out. A",
+            "copy the sync took over has its HEAD moved where it names another commit - detached,",
+            "reads it as a shallow repository from then on, said too, which 'git fetch --unshallow'",
             "sync makes its index hold the files it carried, so a build there fingerprints its",
+            "                 how much git history a copy is given: 'head' (the commit HEAD names,",
             "remoteExcludes are given to every leg a host runs, beside --exclude's, and to none",
             "reads there unless the args or a preset choose tests by name too - or beside a test",
             "preset that takes a union or cannot be read. So is a selection ctest could only find",
@@ -1037,6 +1058,83 @@ public sealed partial class HelpTests
 
         Assert.Contains($"{LegsExit.Unavailable,3}  legs, sync:", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains($"{HarnessExit.HostUnavailable,3}  host-exec:", result.StandardOutput, StringComparison.Ordinal);
+
+        // What ends a run on its hosts, from the numbers both ends count by.
+        var prose = Words(result.StandardOutput);
+
+        Assert.Contains(
+            "No leg, host-exec or sync's operation a host runs for this machine outlives the command that asked for it, whatever carries it there; "
+            + "only what holds a host awake between commands (holdAwakeSeconds) is started to outlast one.",
+            prose,
+            StringComparison.Ordinal);
+
+        // The silence a host lets pass, how often it looks for it, and so the longest a leg runs on unheard: 15, 8 and 4.
+        Assert.Equal((15, 8, 4), (HostAgentProtocol.BeatSeconds, HostAgentProtocol.BeatsMissed, HostAgentProtocol.SilenceLooks));
+        Assert.Contains(
+            "when the beat this machine writes on it every 15 seconds has gone unheard for 120, which the host looks for every 30: a dispatcher "
+            + "killed where nothing closes its end of the connection leaves a leg that is cancelled within 150 seconds of its last beat, on an ssh "
+            + "host as in a WSL distribution",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains("On Linux and macOS a session hung up cancels it the same way.", prose, StringComparison.Ordinal);
+
+        // What a cancelled command is given to stop in, from the patience a host is built with: one that finishes what
+        // it began as long as the command line gives it where it is typed.
+        Assert.Equal(
+            (TimeSpan.FromSeconds(60), RepoHarness.Core.Worktrees.WorktreeService.DefaultInterruptionGrace),
+            (new HostAgentPatience().Unwind, new HostAgentPatience().Finishing));
+        Assert.Contains(
+            "What the host started that has not stopped 60 seconds after it was cancelled - a command reading the output of something its child "
+            + "left running - is ended with its processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a "
+            + "command that finishes what it began - a deletion, a fold, a hand-over - is given 120, as it is where it is typed and interrupted. "
+            + "Where this machine can no longer write to the connection while a host works, it says so here, with why: the host hears no more of "
+            + "it, and stops what it was asked. To end a run on its hosts, stop the command that dispatched it.",
+            prose,
+            StringComparison.Ordinal);
+
+        // The one door this machine's own tool is updated through, from the names and the codes the command uses.
+        Assert.Contains(
+            "This machine's own DssHarness is updated through 'dssharness update-tool', never by a 'dotnet tool update' typed beside running "
+            + "commands:",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"only while no other DssHarness process runs on the machine: with one running it changes nothing and names each by its process and "
+            + $"command ({HarnessExit.Refused}), and with --wait it waits for them to end, saying who it waits for as it starts and every "
+            + $"{ToolUpdateService.SaidAgainEvery.TotalMinutes} minutes - but for a wait asked from inside a running DssHarness, which would never "
+            + "end and is refused, as is one where the process table names no process's parent.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: it says the update done only once "
+            + $"the tool is listed as that release, and a failure with what dotnet said and what is listed since, or why that is not known "
+            + $"({HarnessExit.CommandFailed}).",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Where nuget.org does not say which release is the newest it says why - no route to it, no answer in time, an answer it cannot read - "
+            + "and changes nothing, unless the copy asking is itself a release newer than the installed one, which it then moves to, saying so.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Windows replaces no program while it runs, and 'dssharness update-tool' is itself a DssHarness running: there it changes nothing and "
+            + "says the command that does, with the options it was typed with - the door on every system, which is the newest release run beside "
+            + "the installed one, without installing it, its exit code the update's. With --wait:",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "  dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool --wait",
+            result.StandardOutput,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>The overview lists update-tool among the commands a machine is set up with.</summary>
+    [Fact]
+    public async Task TheOverview_ListsUpdateTool()
+    {
+        var result = await CliRunner.RunAsync(["help"], TestContext.Current.CancellationToken);
+
+        Assert.Contains("  dssharness update-tool             Update this machine's DssHarness, while none runs here", result.StandardOutput, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1050,6 +1148,18 @@ public sealed partial class HelpTests
 
         Assert.Contains("names each file its steps kept as keptOutputs, relative to the tree", text, StringComparison.Ordinal);
         Assert.Contains("sync --pull' takes to bring it back", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A path given to --pull that ends with '/' names a directory: every file below it is brought back, each checked as a file named is and "
+            + "each named in the report, as the path a later command takes. The host that holds it lists it first, and a directory that is not "
+            + "there, holds no file, holds more than 256 files or more than 1024 MiB together fails the pull before any file crosses",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("A link below it is never followed: it is named, and nothing is brought back for it.", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A pull that stops part way - a file gone, a host that stopped answering - fails naming each file it had brought back, which stays "
+            + "where it was written, and each it had not.",
+            text,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1402,6 +1512,15 @@ public sealed partial class HelpTests
         Assert.Contains("agents/<agent>/seed.json", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
         Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
+        Assert.Contains($"  {ToolPackage.Command} refresh-agent <o> <a> [<path>... | --all] [--except <path>]... [--apply]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("the anchor registries' directory where none are, and anywhere in the tree with --all, which takes no path beside it", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A refresh refused over the agent's changes names every path it changed, and the arguments that leave them: --except <path>, once for "
+            + "each, hands it every other path and leaves that one as the agent changed it, its own work for its fold to weigh against what the main "
+            + "tree holds - said in the report, never silently; it is not a --force, nothing is left out that nobody named, and one naming a path "
+            + "the refresh would not have refused is refused, nothing copied.",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("refuses the move, nothing changed, unless --settled <path> names it", text, StringComparison.Ordinal);
         Assert.Contains(
             $"a move that stopped part way, exit {HarnessExit.Incomplete}, is finished where it was going by running it again, what it wrote held as "
@@ -1428,7 +1547,12 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "or anything of its own where the main tree committed a file, ignored, staged or holding the same bytes included - refuses the move",
+            "or anything of its own where the main tree committed a file, ignored or staged included - refuses the move",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A file it made that is the very file the main tree committed there - the same content as git compares it, and the same mode where git "
+            + "trusts one - is no such change: it is listed as held as the new base holds it already, and nothing is written.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(

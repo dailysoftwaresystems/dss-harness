@@ -148,6 +148,20 @@ public interface IGitClient
     Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Which of <paramref name="paths"/> the work tree at <paramref name="directory"/> holds as <paramref name="commit"/>
+    /// holds them, each a file there: compared as git status would compare them were the commit's entry the index's - the
+    /// content through the clean filters and the line-ending rules, and the mode where the repository trusts modes -
+    /// whatever the work tree's own index says of the path, nothing included. A path the commit holds no file at is in no
+    /// answer. Nothing in the repository is written.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="paths">Paths relative to the root, with forward separators, as git names them.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not list the commit or compare the files.</exception>
+    Task<IReadOnlySet<string>> ListHeldAsAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Moves the HEAD of the work tree at <paramref name="directory"/> - the branch it is on, where it is on one - and its
     /// index to <paramref name="commit"/>, and leaves every file in the work tree as it is: <c>git reset --mixed</c>.
     /// </summary>
@@ -346,6 +360,84 @@ public interface IGitClient
         string directory,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What a copy of the tree at <paramref name="directory"/> is asked to hold so that git answers about HEAD there as
+    /// it does here: the commit HEAD names - none, where it names none yet - how this repository names its objects, and
+    /// where its own history stops.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="whole">Whether every commit behind HEAD is asked for, or that commit alone.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not answer.</exception>
+    Task<GitHistoryWanted> DescribeHistoryAsync(string directory, bool whole, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes, into the directory <paramref name="into"/>, a pack of what <paramref name="wanted"/> asks for: the commit
+    /// and all its tree names, and every commit behind it where they are all asked for - less what
+    /// <paramref name="leftOut"/>, a commit the other repository holds, already gives it.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository that holds the commit.</param>
+    /// <param name="wanted">What is asked for.</param>
+    /// <param name="leftOut">
+    /// A commit the pack is for a repository that holds - with every commit behind it where they are all asked for, and
+    /// with all its tree names otherwise - or <see langword="null"/> to leave nothing out.
+    /// </param>
+    /// <param name="into">A directory of the caller's own, made where it is not there.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not write it.</exception>
+    Task<GitHistoryPack> PackHistoryAsync(
+        string directory,
+        GitHistoryWanted wanted,
+        string? leftOut,
+        string into,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Where the HEAD of the repository whose top is <paramref name="directory"/> stands and, where
+    /// <paramref name="wanted"/> names a commit, what of it the repository holds. Nothing is written.
+    /// </summary>
+    /// <param name="directory">The top of the repository's own work tree.</param>
+    /// <param name="wanted">What is asked of it, or <see langword="null"/> to ask only where its HEAD stands.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not answer.</exception>
+    Task<GitHistoryHeld> ReadHistoryAsync(string directory, GitHistoryWanted? wanted, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Keeps <paramref name="piece"/>, the bytes of the pack named <paramref name="pack"/> from <paramref name="offset"/>
+    /// on, aside in the repository whose top is <paramref name="directory"/>, until <see cref="TakeHistoryAsync"/> takes
+    /// the pack whole. A piece at the start begins the pack again, and clears what an earlier one left unfinished.
+    /// </summary>
+    /// <param name="directory">The top of the repository's own work tree.</param>
+    /// <param name="pack">The name git gave the pack, as <see cref="GitHistoryPack.Name"/> has it.</param>
+    /// <param name="offset">How many bytes of the pack came before this piece.</param>
+    /// <param name="piece">The bytes.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">
+    /// The piece does not follow what was kept before it, or could not be written. No object of the repository is touched.
+    /// </exception>
+    Task ReceiveHistoryAsync(string directory, string pack, long offset, byte[] piece, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes the HEAD of the repository whose top is <paramref name="directory"/> name the commit
+    /// <paramref name="taken"/> asks for: takes the pack kept aside for it, records where the repository's history now stops,
+    /// walks everything the commit names, and only then moves HEAD - itself, detached, never the branch it was on - where
+    /// it names another commit. No branch, tag or commit of the repository is changed, and neither its index nor a file
+    /// of its work tree: it gains the objects of the pack, and its record of where its history stops is made true of them.
+    /// </summary>
+    /// <param name="directory">The top of the repository's own work tree.</param>
+    /// <param name="taken">The commit, how much behind it, and the pack kept aside for it.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <returns>Where HEAD was before, and whether it was moved.</returns>
+    /// <exception cref="HarnessException">
+    /// The pack could not be taken, or the repository does not then hold all the commit names: HEAD is left where it was,
+    /// and what the repository took stays, recorded as what it is.
+    /// </exception>
+    /// <remarks>
+    /// What was kept aside is removed either way; where it could not be, a take that succeeded says so
+    /// (<see cref="GitHeadMoved.LeftAside"/>), and the next pack sent clears it or says why it cannot.
+    /// </remarks>
+    Task<GitHeadMoved> TakeHistoryAsync(string directory, GitHistoryTaken taken, CancellationToken cancellationToken = default);
 
     /// <summary>Runs an arbitrary git subcommand, returning its exit code and output.</summary>
     Task<GitCommandResult> RunAsync(

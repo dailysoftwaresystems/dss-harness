@@ -104,7 +104,6 @@ public sealed class MutationRegistryParserTests
     [InlineData("C | charge | Fixture.TheChargeMatchesTheCount | again", "line 3: arm 'charge' declares case 'Fixture.TheChargeMatchesTheCount' red twice")]
     [InlineData("G | charge | Fixture.TheChargeMatchesTheCount | why", "line 3: arm 'charge' declares case 'Fixture.TheChargeMatchesTheCount' both red and green")]
     [InlineData("B | charge | texts/b.before | texts/b.after | why", "line 3: arm 'charge' is TEST-RED and carries a B row: a paired positive control belongs to a BUILD-RED arm")]
-    [InlineData("M | charge | src/charge.cpp | texts/m.before | texts/m.after | why", "line 3: arm 'charge' already mutates 'src/charge.cpp'")]
     [InlineData("M | charge | /etc/passwd | texts/m.before | texts/m.after | why", "line 3: site '/etc/passwd' is absolute")]
     [InlineData("S | charge | , , | why", "line 3: the S row of arm 'charge' names no leg or leg set")]
     public void ARowThatCannotBeRead_IsRefusedWithItsLine(string row, string expected)
@@ -153,7 +152,10 @@ public sealed class MutationRegistryParserTests
     [Theory]
     [InlineData("C | private-ctor | Fixture.A | why", "line 3: arm 'private-ctor' is BUILD-RED and carries a C row: nothing runs, so no case can redden")]
     [InlineData("G | private-ctor | Fixture.A | why", "line 3: arm 'private-ctor' is BUILD-RED and carries a G row: nothing runs, so no case can stay green")]
-    [InlineData("M | private-ctor | src/other.hpp | t/m.before | t/m.after | why", "line 3: arm 'private-ctor' is BUILD-RED and carries an M row")]
+    [InlineData(
+        "M | private-ctor | src/other.hpp | t/m.before | t/m.after | why",
+        "line 3: arm 'private-ctor' is BUILD-RED and carries an M row for a file that is not its own: its paired control is its own site with "
+        + "one text replaced, so an edit of another file, which the control does not undo, would make the control's build prove nothing")]
     [InlineData("B | private-ctor | t/c2.before | t/c2.after | why", "line 3: arm 'private-ctor' has a second B row, the first at line 2")]
     public void WhatABuildRedArmCannotCarry_IsRefusedAtTheRow(string row, string expected)
     {
@@ -163,8 +165,44 @@ public sealed class MutationRegistryParserTests
     }
 
     /// <summary>
+    /// An M row naming a file its arm already mutates - its own, or another M row's - is a further text of that file, kept
+    /// under the row that first names it in the order declared, and no site of its own: a mutant that is several places
+    /// of one file is one edit of it. A BUILD-RED arm carries one for its own file, which its paired control rewrites whole.
+    /// </summary>
+    [Fact]
+    public void AnMRowNamingAFileItsArmAlreadyMutates_IsAFurtherTextOfThatFile()
+    {
+        var reading = Parse(
+            TestRedArm,
+            "C | charge | Fixture.A | why",
+            "M | charge | src/charge.cpp | t/second.before | t/second.after | the second site of the same file",
+            "M | charge | src/other.cpp | t/other.before | t/other.after | another file",
+            "M | charge | src/charge.cpp | t/third.before | t/third.after | the third site of the arm's own file",
+            "M | charge | src/other.cpp | t/other2.before | t/other2.after | the second site of the other file",
+            BuildRedArm,
+            "B | private-ctor | t/c.before | t/c.after | why",
+            "M | private-ctor | src/cost.hpp | t/ctor2.before | t/ctor2.after | the second site of its own file");
+
+        Assert.Empty(reading.Problems);
+
+        var charge = reading.Registry.Arms[0];
+
+        Assert.Equal(["src/charge.cpp", "src/other.cpp"], charge.Sites.Select(site => site.Site));
+        Assert.Equal(
+            [new SiteText("texts/charge.before", "texts/charge.after", 1), new SiteText("t/second.before", "t/second.after", 3), new SiteText("t/third.before", "t/third.after", 5)],
+            charge.Own.Texts);
+        Assert.Equal(
+            [new SiteText("t/other.before", "t/other.after", 4), new SiteText("t/other2.before", "t/other2.after", 6)],
+            Assert.Single(charge.Coupled).Texts);
+        Assert.Equal(
+            [new SiteText("texts/ctor.before", "texts/ctor.after", 7), new SiteText("t/ctor2.before", "t/ctor2.after", 9)],
+            reading.Registry.Arms[1].Own.Texts);
+        Assert.Empty(reading.Registry.Arms[1].Coupled);
+    }
+
+    /// <summary>
     /// An id is unique ignoring case, since an arm's records are kept under it and two ids one file system reads as one
-    /// would write each other's; a second S row, a second M row on one file, and a row above its arm's are refused too.
+    /// would write each other's; a second S row and a row above its arm's are refused too.
     /// </summary>
     [Fact]
     public void AnIdDeclaredTwice_IgnoringCase_AndRowsThatRepeatOrPrecede_AreRefused()
@@ -175,24 +213,22 @@ public sealed class MutationRegistryParserTests
             "C | charge | Fixture.A | why",
             "S | charge | linux-gcc | why",
             "S | charge | win-msvc | why",
-            "M | charge | src/other.cpp | t/m.before | t/m.after | why",
-            "M | charge | src/other.cpp | t/m2.before | t/m2.after | why",
             TestRedArm.Replace("A | charge", "A | CHARGE", StringComparison.Ordinal));
 
         Assert.Equal(
             [
                 "line 1: a C row names arm 'charge', which no A row above it declares: a row for an arm nobody declared is refused, never passed over",
                 "line 5: arm 'charge' has a second S row, the first at line 4: one row names every leg it runs on",
-                "line 7: arm 'charge' already mutates 'src/other.cpp': two edits to one file would be taken and put back over each other, so a coupled site is another file",
-                "line 8: arm 'CHARGE' is declared twice, first at line 2 as 'charge'",
+                "line 6: arm 'CHARGE' is declared twice, first at line 2 as 'charge'",
             ],
             reading.Problems);
     }
 
     /// <summary>
-    /// An M row's site is compared with the sites its arm already mutates as the tree's own file system compares names: one
-    /// differing only in the case of its letters is the same file where that folds case - refused, naming the spelling the
-    /// arm already mutates it under and its line - and another file where it does not.
+    /// An M row's site is compared with the files its arm already mutates as the tree's own file system compares names: one
+    /// differing only in the case of its letters is the same file where that folds case - and refused, naming the spelling
+    /// the arm already mutates it under and its line, since a further site of a file is spelt as its first row spells it,
+    /// the one spelling held to the tree's - and another file where it does not.
     /// </summary>
     [Fact]
     public void AnMRowsSite_IsComparedAsTheTreesFileSystemComparesNames()
@@ -211,8 +247,8 @@ public sealed class MutationRegistryParserTests
 
         Assert.Equal(
             [
-                "line 3: arm 'charge' already mutates 'SRC/Charge.cpp', as 'src/charge.cpp' at line 1: two edits to one file would be taken and put back over each other, so a coupled site is another file",
-                "line 5: arm 'charge' already mutates 'src/Other.cpp', as 'src/other.cpp' at line 4: two edits to one file would be taken and put back over each other, so a coupled site is another file",
+                "line 3: arm 'charge' names 'SRC/Charge.cpp', the file it already mutates as 'src/charge.cpp' at line 1: a further site of a file is spelt as the arm's first row for it spells it",
+                "line 5: arm 'charge' names 'src/Other.cpp', the file it already mutates as 'src/other.cpp' at line 4: a further site of a file is spelt as the arm's first row for it spells it",
             ],
             folding.Problems);
         Assert.Equal(["src/charge.cpp", "src/other.cpp"], folding.Registry.Arms[0].Sites.Select(site => site.Site));

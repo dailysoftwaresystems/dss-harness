@@ -14,7 +14,8 @@ namespace RepoHarness.Core.Mutations;
 /// <item><c>C | arm | case | why</c> - a case its mutation must redden;</item>
 /// <item><c>G | arm | case | why</c> - a neighbour that must run and stay green;</item>
 /// <item><c>B | arm | control before | control after | why</c> - a BUILD-RED arm's paired positive control;</item>
-/// <item><c>M | arm | site | before | after | why</c> - another site, mutated together with the arm's own;</item>
+/// <item><c>M | arm | site | before | after | why</c> - another site, mutated together with the arm's own: another file,
+/// or a further text of a file the arm already mutates;</item>
 /// <item><c>S | arm | legs | why</c> - the legs the arm runs on, in the <c>--legs</c> syntax.</item>
 /// </list>
 /// before, after, diag and a control's texts name files holding the text, relative to the repository root, so a
@@ -419,7 +420,7 @@ public static partial class MutationRegistryParser
                     break;
             }
 
-            var arm = new ArmDraft(id, line, new MutationSite(fields[2], fields[3], fields[4], line), kind, fields[6], runner, cases ?? 0, diagnostic, fields[10]);
+            var arm = new ArmDraft(id, line, new SiteDraft(new MutationSite(fields[2], fields[3], fields[4], line)), kind, fields[6], runner, cases ?? 0, diagnostic, fields[10]);
 
             _byId.Add(id, arm);
             Arms.Add(arm);
@@ -508,26 +509,36 @@ public static partial class MutationRegistryParser
             RequirePath(line, "before", fields[3]);
             RequirePath(line, "after", fields[4]);
 
-            if (arm.Kind == RedKind.BuildRed)
-            {
-                Problems.Add(
-                    $"line {line}: arm '{arm.Id}' is {BuildRed} and carries an M row: its paired control substitutes at its own "
-                    + "site alone, so a coupled edit the control does not undo would make the control's build prove nothing");
-                return;
-            }
-
             // As the tree's own file system compares names: where it folds case, a site differing only in the case of its
             // letters is the file the arm already mutates, however differently the two rows spell it.
-            if (arm.Coupled.Prepend(arm.Own).FirstOrDefault(site => _sites.Equals(site.Site, fields[2])) is { } mutated)
+            var mutated = arm.Coupled.Prepend(arm.Own).FirstOrDefault(site => _sites.Equals(site.First.Site, fields[2]));
+
+            if (arm.Kind == RedKind.BuildRed && mutated != arm.Own)
             {
                 Problems.Add(
-                    $"line {line}: arm '{arm.Id}' already mutates '{fields[2]}'"
-                    + (mutated.Site == fields[2] ? string.Empty : $", as '{mutated.Site}' at line {mutated.Line}")
-                    + ": two edits to one file would be taken and put back over each other, so a coupled site is another file");
+                    $"line {line}: arm '{arm.Id}' is {BuildRed} and carries an M row for a file that is not its own: its paired control "
+                    + "is its own site with one text replaced, so an edit of another file, which the control does not undo, would make the "
+                    + "control's build prove nothing");
                 return;
             }
 
-            arm.Coupled.Add(new MutationSite(fields[2], fields[3], fields[4], line));
+            if (mutated is null)
+            {
+                arm.Coupled.Add(new SiteDraft(new MutationSite(fields[2], fields[3], fields[4], line)));
+                return;
+            }
+
+            // A further text of a file the arm already mutates, replaced with the first as one edit of it - and spelt as
+            // the first row spells the file, which is the one spelling held to the tree's.
+            if (mutated.First.Site != fields[2])
+            {
+                Problems.Add(
+                    $"line {line}: arm '{arm.Id}' names '{fields[2]}', the file it already mutates as '{mutated.First.Site}' at line "
+                    + $"{mutated.First.Line}: a further site of a file is spelt as the arm's first row for it spells it");
+                return;
+            }
+
+            mutated.Further.Add(new SiteText(fields[3], fields[4], line));
         }
 
         private void ReadScope(int line, string[] fields)
@@ -589,14 +600,24 @@ public static partial class MutationRegistryParser
         }
     }
 
+    /// <summary>A file an arm mutates while its rows are read: the row that first names it, and each that names it again.</summary>
+    private sealed class SiteDraft(MutationSite first)
+    {
+        public MutationSite First { get; } = first;
+
+        public List<SiteText> Further { get; } = [];
+
+        public MutationSite Build() => First with { Further = [.. Further] };
+    }
+
     /// <summary>An arm while its rows are read: what its A row said, and what its other rows have added since.</summary>
-    private sealed class ArmDraft(string id, int line, MutationSite own, RedKind? kind, string target, string runner, int cases, string diagnostic, string why)
+    private sealed class ArmDraft(string id, int line, SiteDraft own, RedKind? kind, string target, string runner, int cases, string diagnostic, string why)
     {
         public string Id { get; } = id;
 
         public int Line { get; } = line;
 
-        public MutationSite Own { get; } = own;
+        public SiteDraft Own { get; } = own;
 
         /// <summary>Its kind, or <see langword="null"/> where its A row's could not be read, and nothing that depends on it is checked.</summary>
         public RedKind? Kind { get; } = kind;
@@ -605,7 +626,7 @@ public static partial class MutationRegistryParser
 
         public List<string> Greens { get; } = [];
 
-        public List<MutationSite> Coupled { get; } = [];
+        public List<SiteDraft> Coupled { get; } = [];
 
         public PairedControl? Control { get; set; }
 
@@ -615,7 +636,7 @@ public static partial class MutationRegistryParser
         {
             Id = Id,
             Line = Line,
-            Own = Own,
+            Own = Own.Build(),
             Kind = Kind ?? RedKind.TestRed,
             Target = target,
             Runner = runner,
@@ -625,7 +646,7 @@ public static partial class MutationRegistryParser
             Reds = [.. Reds],
             Greens = [.. Greens],
             Control = Control,
-            Coupled = [.. Coupled],
+            Coupled = [.. Coupled.Select(site => site.Build())],
             Scope = Scope,
         };
     }

@@ -17,6 +17,13 @@ public sealed record ProcessResult(
     TimeSpan Duration,
     bool TimedOut)
 {
+    /// <summary>
+    /// Why the beat written on the child's held-open input stopped while the child was still running, in the system's
+    /// words, or <see langword="null"/> where it did not: the child stopped taking its input and went on. Nothing
+    /// more was written to it, and whatever counts on the beat at the child's far end hears no more of this process.
+    /// </summary>
+    public string? BeatLost { get; init; }
+
     /// <summary>True only when the process ran to completion and reported success.</summary>
     public bool Succeeded => !TimedOut && ExitCode == 0;
 

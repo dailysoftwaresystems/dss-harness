@@ -799,8 +799,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <summary>
     /// Measures moving the agent's base from <paramref name="from"/> to <paramref name="to"/>; writes nothing. Each path the
     /// two commits hold differently, as git compares them, is one of: shared with the main tree, which stays as its seed
-    /// records it; held as <paramref name="to"/> holds it already; held as <paramref name="from"/> holds it, which comes in
-    /// as <paramref name="to"/> holds it; or changed by the agent - an edit, a deletion, or anything of its own where its
+    /// records it; held as <paramref name="to"/> holds it already, a file the agent made that is the very file
+    /// <paramref name="to"/> holds there among them; held as <paramref name="from"/> holds it, which comes in as
+    /// <paramref name="to"/> holds it; or changed by the agent - an edit, a deletion, or anything else of its own where its
     /// base held nothing - which is refused, unless declared settled by hand, when its copy stays as its change on the new
     /// base. What comes in never goes over anything of the agent's: a file or a link where the new base needs a directory,
     /// and anything in a directory where it holds a file, refuse the move too - its own, settled, or shared alike.
@@ -811,8 +812,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="seed">What it shares with the main tree.</param>
     /// <param name="settled">The paths declared settled by hand.</param>
     /// <param name="finishing">
-    /// Whether this finishes a move its record says stopped part way: what that move wrote is held as <paramref name="to"/>
-    /// holds it, a file its base did not hold among it, where otherwise such a file is the agent's own.
+    /// Whether this finishes a move its record says stopped part way: a file its base did not hold that git lists as
+    /// unchanged since <paramref name="to"/> is then what that move wrote, and is held as <paramref name="to"/> holds it.
+    /// Otherwise such a file is the agent's own - unless it is the very file <paramref name="to"/> holds there, read and
+    /// compared, which is held as <paramref name="to"/> holds it whether a move is being finished or not.
     /// </param>
     /// <param name="cancellationToken">Stops the measuring.</param>
     /// <exception cref="HarnessException">git could not answer, or names a path that is not UTF-8.</exception>
@@ -858,13 +861,22 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         PathKind KindOf(string path) => _fileSystem.KindOf(Path.Combine(worktree, path));
 
+        // A file the agent made where its base held nothing that is the very file the new base holds there, as git would
+        // compare them once its index is the new base's - untracked, staged, or one git ignores: nothing to reconcile.
+        var madeAsTo = await _gitClient.ListHeldAsAtAsync(
+            worktree,
+            to,
+            [.. committed.Where(path => atFrom[path].IsNothing && atTo[path].Blob is not null && !InRepository(path) && KindOf(path) is PathKind.File or PathKind.Link)],
+            cancellationToken).ConfigureAwait(false);
+
         // Anything the agent holds where its base held nothing is its own, whatever git makes of it - untracked, staged, or
         // one git ignores, which no status lists - and no diff against a commit says so.
         bool Own(string path) => InRepository(path) || (atFrom[path].IsNothing && KindOf(path) != PathKind.None);
 
-        // Held as the new base holds it, as git compares them. Where its base held nothing, only as a move that stopped part
-        // way wrote it: any other is two makings of one path, the agent's and the main tree's, however alike.
-        bool AsTo(string path) => !InRepository(path) && !sinceTo.Contains(path) && (finishing || !atFrom[path].IsNothing);
+        // Held as the new base holds it, as git compares them. Where its base held nothing, the very file the new base
+        // holds, or what a move that stopped part way wrote: any other is two makings of one path, the agent's and the main
+        // tree's.
+        bool AsTo(string path) => !InRepository(path) && (madeAsTo.Contains(path) || (!sinceTo.Contains(path) && (finishing || !atFrom[path].IsNothing)));
 
         // Held as its base holds it: nothing where it held nothing; a directory where it held one, whose files are weighed
         // path by path, and anything else of the agent's in it below; and otherwise as git compares them.

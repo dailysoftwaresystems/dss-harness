@@ -8,6 +8,20 @@ dotnet tool install --global dssharness
 dssharness --help
 ```
 
+To update it later, on a machine anything else may be running it on:
+
+```bash
+dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool --wait
+```
+
+That runs the newest release beside the installed one and updates it only once no `dssharness`
+process is running on the machine, naming each it waits for. A bare `dotnet tool update` typed
+beside a running command takes the tool away from every command typed meanwhile, and on Windows
+fails. `dssharness update-tool` is the same door typed short, where the system lets a running
+program be replaced; on Windows it changes nothing and says the line above, with the options it
+was typed with. Once the update has begun the command does not stop it, and says it done only once
+the tool is listed as the new release.
+
 ## Why
 
 A repository's build and test work usually accumulates as a pile of paired
@@ -57,7 +71,7 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `create-orchestrator <o> --model <id> [--parallel N]` | Create an orchestrator under `.orchestrators`; `--parallel` (4 unless given) is the most agents with a worktree at once |
 | `create-agent <o> <a> --model <id> [--empty]` | Create an agent: its record, its worktree at `<worktrees.root>/<o>/<a>`, and its seed, the main tree's uncommitted state handed to it |
 | `seed-agent <o> <a> [--empty] [--force]` | Seed a live agent again, with every path the main tree holds otherwise than the agent shares it, committed or not; refused over changes of its own without `--force` |
-| `refresh-agent <o> <a> [<path>...] [--apply]` | Copy into a live agent every path under the paths - the anchor registries' directory by default - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it |
+| `refresh-agent <o> <a> [<path>... \| --all] [--except <path>]... [--apply]` | Copy into a live agent every path under the paths - the anchor registries' directory by default, anywhere in the tree with `--all` - that the main tree holds otherwise than the agent shares it, committed or not, recorded as handed to it; refused over a path the agent changed, naming each, unless `--except` leaves it as the agent changed it |
 | `rebase-agent <o> <a> [--apply] [--settled <path>]` | Move a live agent's base to the main tree's HEAD: what the main tree committed since comes in as git holds it, its own changes and what it was handed stay; refused over a path both changed unless `--settled`, and over anything of its own what comes in would go over; run again after one that stopped part way, it finishes it |
 | `fold-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>]` | Fold an agent's own work into the main tree and apply the rows it filed, every refusal named before anything is written and the rows all or nothing; a row is made only where `--new` names it, and a cell that does not keep its stored text written only where `--accept-lost` names it; its worktree is kept |
 | `delete-agent <o> <a> [--apply] [--settled <path>] [--new <ID>] [--accept-lost <ID>:<cell>] [--discard-uncommitted]` | Fold what is left and apply its rows, keep its evidence and transcripts, then remove its worktree and its copies on hosts |
@@ -74,7 +88,8 @@ detected it seeds no legs, and `legs` fails until some are declared.
 | `check-ci-legs` | Report each CI leg, separating a real failure from a budget overrun, by the job and step names `ci` declares (`help ci`) |
 | `legs [--legs a,b]` | Measure the hosts and show where each leg can run, or why it cannot |
 | `install-missing-tools [--legs a,b] [--dry-run]` | Install or update what each configured leg's host is missing; `--dry-run` names each command and runs none |
-| `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own |
+| `update-tool [--wait] [--tool-path <directory>]` | Update this machine's installed DssHarness to the newest release, only while no other `dssharness` process runs here: refused naming each (13), or waited for with `--wait`; on Windows run it from beside the installed tool, as above (`help legs`) |
+| `sync` | Put a host's copy of this tree in step with it, deletions included: each worktree has a copy of its own; `--pull <path>` instead brings a file back from it, or every file below a directory named with a `/` at its end |
 | `build [--legs a,b] [--time]` | Build every selected leg, in its own variant-keyed build directory |
 | `test [--legs a,b] [--time]` | Build and test every selected leg, with a witness for each verdict |
 | `run <runner> [--legs a,b] [--time] [--input name=value]` | Run a predefined runner across the legs it declares, giving its action's inputs values for this run. A run line names what only the tool knows of a leg - its build directory, the file its build makes, and the compiler its build identified, `{compiler_C}` or `{compiler_CXX}`, which is gcc on one leg and cl on another - and a step naming one of those has its leg built first (`help runners`) |
@@ -233,6 +248,13 @@ dssharness legs --legs linux-release,mac-x64-release
 dssharness host-exec --ssh mac-mini -- verify-git
 ```
 
+No leg, `host-exec` or sync a host runs for this machine outlives the command that asked for it.
+Stopping that command ends its legs on every host at once; and a command killed where nothing
+closes its end of the connection leaves legs that are cancelled within two and a half minutes, on
+an ssh host as in a WSL distribution, because the host stops hearing the beat this machine writes
+while it is there (`help legs`). Only what holds a host awake between commands
+(`holdAwakeSeconds`) is started to outlast the command that asked, and ends on its own seconds.
+
 A host's section can also give its own `buildCores` and `testCores`, and an `env` that every
 process a leg starts there sees - each build phase, the test runner, each step of a runner - as
 the lowest layer, beneath the variant's, the test invocation's and the runner's own. A `PATH`
@@ -297,6 +319,12 @@ sets one up only on the machine it runs on, and nothing is installed for it. `--
 every host and installs nothing, naming each command that would run. `sync` creates the host's copy
 of the tree it runs in and keeps it in step, deletions included: the main checkout's at the host's
 `repositoryPath`, and each worktree's beside it, so worktrees do not wait for each other on a host.
+The copy's git HEAD names the commit this tree is at, so a step that asks git about HEAD is answered
+on a host as it is here: the commit alone by default, and every commit behind it with
+`"sync": { "history": "full" }`. A clone the sync took over has its HEAD moved, detached, where it
+names another commit, and no branch, tag or commit of it changed; given a commit without the one
+before it, git reads it as a shallow repository from then on, which the sync says, with what undoes
+it.
 Deleting a worktree removes its copies from the hosts that hold one, and fails, naming it, while one
 stays. A file crosses whole, either way, so one larger than 804,519,909 bytes is refused by name
 before anything is sent. An

@@ -24,5 +24,6 @@ public static class PointOfNoReturn
         AgentService.DeleteCommand,
         OrchestratorService.DeleteCommand,
         HostAgentProtocol.CommandName,
+        ToolUpdateService.CommandName,
     };
 }

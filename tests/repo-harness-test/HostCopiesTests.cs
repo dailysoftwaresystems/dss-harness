@@ -2303,6 +2303,7 @@ public sealed class HostCopiesTests
             harness.GitClient,
             harness.FileSystem,
             harness.Platform,
+            harness.Identity,
             harness.Output);
 
     private static RemoteSyncTransport Remote(IHostCommandRunner commands)

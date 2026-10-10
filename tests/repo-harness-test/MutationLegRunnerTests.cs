@@ -1797,6 +1797,48 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// A worker yet to be made needs, with its copy of the tree's files, what git keeps there of the tree's history - the
+    /// commit, and every commit behind it where they are asked for, which is the size of the repository. It is asked
+    /// once for the sweep, since it is packed to be counted, and not at all where every worker's copy is there already.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerYetToBeMade_NeedsWhatGitKeepsOfTheTreesHistory_AskedOnceAndOnlyWhereOneIsToBeMade()
+    {
+        var copy = TreeFiles.Values.Sum(text => (long)text.Length);
+
+        using var full = new Sweep { ExpectedBuildBytes = 1L << 30 };
+        full.Copies.History = 3L << 30;
+        full.Files = new ScriptedRoom(full.Harness.FileSystem, 10);
+
+        var turned = await full.RunAsync([DepthType]);
+
+        Assert.StartsWith(
+            $"its first worker needs ~{DiskSpace.Size(copy + (3L << 30) + (1L << 30))}, each worker's build as declared; ",
+            turned.Detail,
+            StringComparison.Ordinal);
+        Assert.Equal(1, full.Copies.HistoryAsked);
+
+        using var one = new Sweep();
+        Directory.CreateDirectory(one.Worker(1));
+
+        await one.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(1, one.Copies.HistoryAsked);
+
+        using var none = new Sweep();
+        Directory.CreateDirectory(none.Worker(1));
+        Directory.CreateDirectory(none.Worker(2));
+
+        var swept = await none.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(LegVerdict.Passed, swept.Verdict);
+        Assert.Equal(0, none.Copies.HistoryAsked);
+
+        // And the sweep's reading is let go with the sweep, with whatever was packed of it.
+        Assert.True(none.Reading!.Disposed);
+    }
+
+    /// <summary>
     /// No room for even one worker turns the leg away, as a leg whose build does not fit is turned away, each arm with it,
     /// and nothing is copied; room for fewer than it wanted runs fewer, saying so.
     /// </summary>
@@ -2302,6 +2344,86 @@ public sealed class MutationLegRunnerTests
             (Assert.Single(poisoned.Arms).Verdict, poisoned.Arms[0].Detail));
         Assert.Equal(TreeFiles["src/fixture.cpp"], File.ReadAllText(Path.Combine(lost.Worker(1), "src", "fixture.cpp")));
         Assert.Equal("constexpr int depth = 4;\n", File.ReadAllText(Path.Combine(lost.Worker(1), "src", "budget.hpp")));
+    }
+
+    /// <summary>
+    /// An arm with a further site in a file it already mutates makes every replacement as one edit of that file before
+    /// its build - each text found in the file as the tree holds it, either alone another mutation - writes the file
+    /// once, asks what depends on it once, and puts it back whole, as the tree held it.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWithAFurtherSiteInOneFile_MakesEveryReplacementAsOneEdit_AndPutsTheFileBackWhole()
+    {
+        var twofold = ChargeBound with
+        {
+            Id = "charge-twofold",
+            Line = 9,
+            Own = ChargeBound.Own with { Line = 9, Further = [new SiteText("texts/floor.before", "texts/floor.after", 10)] },
+
+            // What the two replacements redden between them: the run reads the source as the build found it.
+            Reds = ["Fixture.Charge", "Fixture.Floor"],
+        };
+
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(sweep.Harness.FileSystem);
+        sweep.SiteFiles = writes;
+        string? built = null;
+
+        sweep.Builder.Before = (request, _) =>
+        {
+            if (request.Leg == "native/arms/charge-twofold")
+            {
+                built = File.ReadAllText(Path.Combine(request.TreeRoot, "src", "fixture.cpp"));
+            }
+
+            return Task.CompletedTask;
+        };
+
+        var entry = await sweep.RunAsync([twofold]);
+
+        Assert.Equal(
+            (LegVerdict.Passed, "ran 3 case(s), 2 red as declared, and said its diagnostic"),
+            (Assert.Single(entry.Arms).Verdict, entry.Arms[0].Detail));
+        Assert.Equal("bool within(int c, int b) { return c < b; }\nbool positive(int c) { return c >= 0; }\n", built);
+
+        // Once mutated and once put back: one file, however many of its texts the arm replaces.
+        Assert.Equal(["fixture.cpp", "fixture.cpp"], writes.Written.Select(Path.GetFileName));
+        Assert.Contains(sweep.Builder.Graph.AskedOfSites, sites => sites.Select(Path.GetFileName).SequenceEqual(["fixture.cpp"]));
+        Assert.Empty(sweep.Builder.DatedAhead);
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+    }
+
+    /// <summary>
+    /// A further text of a file is held as the arm's first is, before anything of the arm is built or written: one not in
+    /// the file exactly once says how often it occurs; one replaced by itself says so; and two that overlap in the
+    /// worker's copy - one within the other - say which, since replaced together they share no byte.
+    /// </summary>
+    [Fact]
+    public async Task AFurtherTextOfAFile_IsHeldAsTheFirstIs_AndTwoThatOverlapAreViolated()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(sweep.Harness.FileSystem);
+        sweep.SiteFiles = writes;
+
+        MutationArm With(string id, int line, string before, string after)
+            => ChargeBound with { Id = id, Line = line, Own = ChargeBound.Own with { Line = line, Further = [new SiteText(before, after, line + 1)] } };
+
+        var entry = await sweep.RunAsync(
+        [
+            With("further-twice", 1, "texts/twice.before", "texts/floor.after"),
+            With("further-same", 4, "texts/floor.before", "texts/floor.before"),
+            With("further-within", 7, "texts/charge.same", "texts/floor.after"),
+        ]);
+
+        Assert.Equal(
+            [
+                (LegVerdict.Violated, "the text in 'texts/twice.before' occurs 2 time(s) in 'src/fixture.cpp', where it must occur exactly once"),
+                (LegVerdict.Violated, "the text in 'texts/floor.before' is the text in 'texts/floor.before', so replacing one with the other changes nothing in 'src/fixture.cpp'"),
+                (LegVerdict.Violated, "the text in 'texts/charge.same' overlaps the text in 'texts/charge.before' in 'src/fixture.cpp', where the texts of one file are replaced together and no two share a byte of it"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
+        Assert.Empty(writes.Written);
     }
 
     /// <summary>
@@ -2900,7 +3022,7 @@ public sealed class MutationLegRunnerTests
                 entries[path] = new SyncEntry(path, bytes.Length, FileContentHash.Of(bytes));
             }
 
-            return new SyncSource(context, new SyncExclusions(new SyncConfig(), ".worktrees"), new SyncManifest(Tree, entries), []);
+            return new SyncSource(context, new SyncExclusions(new SyncConfig(), ".worktrees"), new SyncManifest(Tree, entries), [], history: null);
         }
     }
 
@@ -2985,6 +3107,17 @@ public sealed class MutationLegRunnerTests
         public void Release(string worker, RunId runId) => Released.Enqueue(worker);
 
         public string? HeldBy(string worker) => Held.GetValueOrDefault(worker);
+
+        /// <summary>What git keeps of the tree's history in a worker made new, and how many times it was asked.</summary>
+        public long History { get; set; }
+
+        public int HistoryAsked;
+
+        public Task<long> HistoryBytesAsync(SyncSource source, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref HistoryAsked);
+            return Task.FromResult(History);
+        }
 
         public Task SyncAsync(SyncSource source, string worker, CancellationToken cancellationToken)
         {

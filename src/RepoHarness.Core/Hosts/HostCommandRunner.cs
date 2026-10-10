@@ -147,6 +147,13 @@ public sealed record HostCommand
     /// </summary>
     public bool HoldStandardInputOpen { get; init; }
 
+    /// <summary>
+    /// What is written to the program's standard input again and again while it is held open, so that a program that
+    /// counts on it learns this process has gone where the input's end never says so; see
+    /// <see cref="ProcessRequest.StandardInputBeat"/>.
+    /// </summary>
+    public InputBeat? StandardInputBeat { get; init; }
+
     /// <summary>Wall clock budget, or <see langword="null"/> for none.</summary>
     public TimeSpan? Timeout { get; init; }
 
@@ -461,6 +468,7 @@ public sealed class HostCommandRunner(IProcessRunner processRunner) : IHostComma
         {
             StandardInput = command.StandardInput,
             HoldStandardInputOpen = command.HoldStandardInputOpen,
+            StandardInputBeat = command.StandardInputBeat,
             Timeout = command.Timeout,
             OnOutputLine = command.OnOutputLine,
             OnErrorLine = command.OnErrorLine,
