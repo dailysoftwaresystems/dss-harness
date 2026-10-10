@@ -1533,6 +1533,47 @@ public sealed class SyncServiceTests
         Assert.Empty(asked.Links);
     }
 
+    /// <summary>
+    /// A file below a directory a pull names that is a link is passed over and named, as a directory that is one is:
+    /// what it leads to is not the copy's, and is never listed as a file to bring back - on a machine that lets this
+    /// user make no link, as on any other.
+    /// </summary>
+    [Fact]
+    public async Task AFileBelowAPulledDirectoryThatIsALink_IsPassedOverAndNamed_NeverListedAsAFile()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        Directory.CreateDirectory(temp.Combine("out"));
+        await File.WriteAllTextAsync(temp.Combine("out", "report.txt"), "measured\n", cancellationToken);
+        await File.WriteAllTextAsync(temp.Combine("out", "elsewhere.txt"), "not the copy's\n", cancellationToken);
+
+        var listing = await SyncKit.Transport(harness, new LinkedFile(harness.FileSystem, temp.Combine("out", "elsewhere.txt")))
+            .ListFilesAsync(temp.Path, "out", cancellationToken);
+
+        Assert.Equal([new SyncListedFile("out/report.txt", 9)], listing.Files);
+        Assert.Equal(["out/elsewhere.txt"], listing.Links);
+    }
+
+    /// <summary>
+    /// A pull names a directory by the separator at its end, either one: a shell on Windows completes a directory's name
+    /// with a backslash, and one read as a file would be refused for being a directory.
+    /// </summary>
+    [Theory]
+    [InlineData("out/", true)]
+    [InlineData("out\\", true)]
+    [InlineData("out/deep/", true)]
+    [InlineData("out", false)]
+    [InlineData("out/report.txt", false)]
+    public void APullNamesADirectory_ByTheSeparatorAtItsEnd_EitherOne(string path, bool directory)
+        => Assert.Equal(directory, SyncPull.NamesADirectory(path));
+
+    /// <summary>The real file system, except that <paramref name="file"/> is a link.</summary>
+    private sealed class LinkedFile(IFileSystem inner, string file) : PassThroughFileSystem(inner)
+    {
+        public override bool IsLink(string path) => string.Equals(path, file, StringComparison.OrdinalIgnoreCase) || base.IsLink(path);
+    }
+
     /// <summary>The real file system, except that <paramref name="file"/> - every file, where null - is listed as holding <paramref name="length"/> bytes.</summary>
     private sealed class SizedFiles(IFileSystem inner, string? file, long length) : PassThroughFileSystem(inner)
     {
