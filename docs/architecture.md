@@ -2720,8 +2720,18 @@ and the last field taking the rest of the line. An A row declares an arm - its s
 holding its before- and after-text, its red kind, its target and runner, its case count and its
 diagnostic - and C, G, B, M and S rows, each following the A row of its arm, add a case that must
 redden, a neighbour that must run and stay green, a BUILD-RED arm's paired control, another site
-mutated with it - another file, as the tree's own file system compares names - and the legs it
-runs on. A
+mutated with it, and the legs it runs on. An M row's site is another file, or - naming a file the
+arm already mutates, as the tree's own file system compares names - a further text of that file
+(`MutationSite.Further`): a consumer's mutants were several places of one file, thousands of lines
+apart, either edit alone another program or no change at all, and one text spanning them would
+break at any edit of a line between. Every text of a file is replaced together
+(`SiteEdit.ApplyAll`): each is looked for in the file as the tree holds it, never as another of
+them left it, must stand there exactly once and differ from what replaces it; two that share a
+byte of the file are the registry's problem at the later row's line, exit 12, before any host is
+touched, and an arm's violation where only a worker's copy shows it. The file is written once,
+put back whole and checked once against the tree's, and what depends on it is witnessed rebuilt as
+for one text, so its verdicts are judged as any arm's. A BUILD-RED arm carries such a row for its
+own file alone, which its paired control rewrites whole. A
 text is a file in `mutations.textDirectory`, read as it is held, less a UTF-8 byte order mark at
 its start and one line ending at its end, and given the site's line endings where the site ends its
 lines otherwise, so one registry serves a checkout with either. Every file directly in that
@@ -2946,10 +2956,11 @@ records staying on that host and its home written as `~`, as a leg's are (see "A
 `check-mutations --self-test` sweeps the fixture this tool carries, in place of the repository's
 registry, which it does not need. The fixture is `tests/mutation-fixture/`, embedded whole into the
 tool so every build carries the very fixture its own tests swept: a CMake library, a test binary
-that writes its own JUnit report - nothing is fetched to build it - and a registry of seven arms,
+that writes its own JUnit report - nothing is fetched to build it - and a registry of eight arms,
 one to each verdict an arm's design can reach on any machine: passed, as a TEST-RED arm, as a
-BUILD-RED arm, and as an arm whose mutation is coupled across two files, neither edit building
-without the other; violated; survived; unattributed; and failed. It is built as each selected leg builds - its
+BUILD-RED arm, as an arm whose mutation is coupled across two files, and as one whose mutation is
+two sites of one file, neither edit building without the other; violated; survived; unattributed;
+and failed. It is built as each selected leg builds - its
 toolchain, configuration and sanitizer, its developer environment - and each arm is held to the
 verdict it is designed to reach: one that reaches it passed, saying so; one that reaches another
 verdict an arm's design decides is `violated`, naming both, which is this tool's defect with that

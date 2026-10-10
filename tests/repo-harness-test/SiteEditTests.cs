@@ -130,5 +130,78 @@ public sealed class SiteEditTests
         Assert.Equal(Bytes("constexpr int depth = 4;\n"), header);
     }
 
+    /// <summary>
+    /// Several texts of one site are replaced together, as one edit of it: each found exactly once in the site as it
+    /// stands - never as another replacement left it, so one that another would bring into being, or take away, is
+    /// neither found twice nor lost - wherever they lie and in whatever order they are given, every other byte as it was.
+    /// </summary>
+    [Fact]
+    public void SeveralTextsOfOneSite_AreReplacedTogether_EachFoundInTheSiteAsItStands()
+    {
+        var site = Bytes("int a = 1;\nint b = 2;\nint c = a + b;\n");
+
+        var edits = SiteEdit.ApplyAll(site, [(Bytes("a + b"), Bytes("a - b")), (Bytes("int a = 1"), Bytes("int a = 10"))]);
+
+        Assert.Equal("int a = 10;\nint b = 2;\nint c = a - b;\n", Encoding.UTF8.GetString(edits.Edited!));
+        Assert.Equal([new TextEdit(1, false), new TextEdit(1, false)], edits.Texts);
+        Assert.Empty(edits.Overlapping);
+        Assert.Equal(Bytes("int a = 1;\nint b = 2;\nint c = a + b;\n"), site);
+
+        var chained = SiteEdit.ApplyAll(Bytes("x = 1; y = 2;"), [(Bytes("x = 1"), Bytes("y = 2")), (Bytes("y = 2"), Bytes("y = 3"))]);
+
+        Assert.Equal("y = 2; y = 3;", Encoding.UTF8.GetString(chained.Edited!));
+        Assert.Equal([1, 1], chained.Texts.Select(text => text.Occurrences));
+    }
+
+    /// <summary>
+    /// One text of several not in the site exactly once edits nothing of it, and each says how often it occurs; one that
+    /// is replaced by itself says so, and the rest are still made.
+    /// </summary>
+    [Fact]
+    public void OneTextOfSeveralNotThereExactlyOnce_EditsNothing_AndEachSaysHowOftenItOccurs()
+    {
+        var edits = SiteEdit.ApplyAll(Bytes("a a b"), [(Bytes("a"), Bytes("x")), (Bytes("b"), Bytes("y")), (Bytes("c"), Bytes("z"))]);
+
+        Assert.Null(edits.Edited);
+        Assert.Equal([2, 1, 0], edits.Texts.Select(text => text.Occurrences));
+        Assert.Empty(edits.Overlapping);
+
+        var idle = SiteEdit.ApplyAll(Bytes("a b"), [(Bytes("a"), Bytes("a")), (Bytes("b"), Bytes("y"))]);
+
+        Assert.Equal([new TextEdit(1, true), new TextEdit(1, false)], idle.Texts);
+        Assert.Equal("a y", Encoding.UTF8.GetString(idle.Edited!));
+    }
+
+    /// <summary>
+    /// Two texts of one site that share a byte of it overlap, and nothing is edited: one lying across the other's end,
+    /// one within the other, the same text given twice. Two that only touch share none, and both are made.
+    /// </summary>
+    [Theory]
+    [InlineData("abcd", "cdef", null)]
+    [InlineData("cdef", "abcd", null)]
+    [InlineData("abcdef", "cd", null)]
+    [InlineData("abc", "abc", null)]
+    [InlineData("abc", "def", "XY")]
+    [InlineData("def", "abc", "YX")]
+    public void TextsOfOneSiteThatShareAByte_Overlap_AndNothingIsEdited(string first, string second, string? edited)
+    {
+        var edits = SiteEdit.ApplyAll(Bytes("abcdef"), [(Bytes(first), Bytes("X")), (Bytes(second), Bytes("Y"))]);
+
+        Assert.Equal([1, 1], edits.Texts.Select(text => text.Occurrences));
+        Assert.Equal(edited is null ? [(0, 1)] : [], edits.Overlapping);
+        Assert.Equal(edited, edits.Edited is null ? null : Encoding.UTF8.GetString(edits.Edited));
+    }
+
+    /// <summary>Each of several texts is given the site's line endings, as one alone is.</summary>
+    [Fact]
+    public void SeveralTexts_TakeTheSitesLineEndings()
+    {
+        var edits = SiteEdit.ApplyAll(
+            Bytes("one\r\ntwo\r\nthree\r\nfour\r\n"),
+            [(Bytes("one\ntwo"), Bytes("1\n2")), (Bytes("three\nfour"), Bytes("3\n4"))]);
+
+        Assert.Equal("1\r\n2\r\n3\r\n4\r\n", Encoding.UTF8.GetString(edits.Edited!));
+    }
+
     private static byte[] Bytes(string text) => Encoding.UTF8.GetBytes(text);
 }

@@ -274,8 +274,18 @@ public sealed partial class HelpTests
             "a build of the variant coming to the leg's buildSpaceGiB where it declares one, else to what the leg's own build last "
             + "recorded, else to the most any other tree of the repository on its machine recorded of it",
             "each read as its file holds it, less a UTF-8 byte order mark at its start and one line ending at its end,",
-            "seven arms, one to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
-            + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two files",
+            "eight arms, one to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
+            + "failed - with a second that passes as the other red kind, a third whose mutation is coupled across two files and a fourth "
+            + "whose mutation is two sites of one file",
+            "A mutant that is several places of one file, apart from each other, is one arm: an M row naming a file its arm already "
+            + "mutates - its own, or another M row's - adds a text to that file, as many as the mutant has, spelt as the arm's first row "
+            + "for the file spells it. Every text of a file is replaced together, as one edit of it: each must stand exactly once in the "
+            + "file as the tree holds it - never as another of them left it - and differ from what replaces it, the file is written once "
+            + "and put back whole, checked once against the tree's,",
+            "an M row naming a file its arm already mutates under another spelling, as the tree's own file system compares their names; "
+            + "two texts of one arm that overlap in one file as the tree holds it - one lying across or within the other, or the same "
+            + "text cited twice;",
+            "it has exactly one B row, no C or G row, and no M row but for its own file, which its paired control rewrites whole.",
         })
         {
             Assert.Contains(text, said, StringComparison.Ordinal);

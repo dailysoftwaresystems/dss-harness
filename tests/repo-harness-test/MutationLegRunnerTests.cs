@@ -2305,6 +2305,86 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// An arm with a further site in a file it already mutates makes every replacement as one edit of that file before
+    /// its build - each text found in the file as the tree holds it, either alone another mutation - writes the file
+    /// once, asks what depends on it once, and puts it back whole, as the tree held it.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWithAFurtherSiteInOneFile_MakesEveryReplacementAsOneEdit_AndPutsTheFileBackWhole()
+    {
+        var twofold = ChargeBound with
+        {
+            Id = "charge-twofold",
+            Line = 9,
+            Own = ChargeBound.Own with { Line = 9, Further = [new SiteText("texts/floor.before", "texts/floor.after", 10)] },
+
+            // What the two replacements redden between them: the run reads the source as the build found it.
+            Reds = ["Fixture.Charge", "Fixture.Floor"],
+        };
+
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(sweep.Harness.FileSystem);
+        sweep.SiteFiles = writes;
+        string? built = null;
+
+        sweep.Builder.Before = (request, _) =>
+        {
+            if (request.Leg == "native/arms/charge-twofold")
+            {
+                built = File.ReadAllText(Path.Combine(request.TreeRoot, "src", "fixture.cpp"));
+            }
+
+            return Task.CompletedTask;
+        };
+
+        var entry = await sweep.RunAsync([twofold]);
+
+        Assert.Equal(
+            (LegVerdict.Passed, "ran 3 case(s), 2 red as declared, and said its diagnostic"),
+            (Assert.Single(entry.Arms).Verdict, entry.Arms[0].Detail));
+        Assert.Equal("bool within(int c, int b) { return c < b; }\nbool positive(int c) { return c >= 0; }\n", built);
+
+        // Once mutated and once put back: one file, however many of its texts the arm replaces.
+        Assert.Equal(["fixture.cpp", "fixture.cpp"], writes.Written.Select(Path.GetFileName));
+        Assert.Contains(sweep.Builder.Graph.AskedOfSites, sites => sites.Select(Path.GetFileName).SequenceEqual(["fixture.cpp"]));
+        Assert.Empty(sweep.Builder.DatedAhead);
+        sweep.AssertEverySiteAsTheTreeHoldsIt();
+    }
+
+    /// <summary>
+    /// A further text of a file is held as the arm's first is, before anything of the arm is built or written: one not in
+    /// the file exactly once says how often it occurs; one replaced by itself says so; and two that overlap in the
+    /// worker's copy - one within the other - say which, since replaced together they share no byte.
+    /// </summary>
+    [Fact]
+    public async Task AFurtherTextOfAFile_IsHeldAsTheFirstIs_AndTwoThatOverlapAreViolated()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var writes = new RecordingWrites(sweep.Harness.FileSystem);
+        sweep.SiteFiles = writes;
+
+        MutationArm With(string id, int line, string before, string after)
+            => ChargeBound with { Id = id, Line = line, Own = ChargeBound.Own with { Line = line, Further = [new SiteText(before, after, line + 1)] } };
+
+        var entry = await sweep.RunAsync(
+        [
+            With("further-twice", 1, "texts/twice.before", "texts/floor.after"),
+            With("further-same", 4, "texts/floor.before", "texts/floor.before"),
+            With("further-within", 7, "texts/charge.same", "texts/floor.after"),
+        ]);
+
+        Assert.Equal(
+            [
+                (LegVerdict.Violated, "the text in 'texts/twice.before' occurs 2 time(s) in 'src/fixture.cpp', where it must occur exactly once"),
+                (LegVerdict.Violated, "the text in 'texts/floor.before' is the text in 'texts/floor.before', so replacing one with the other changes nothing in 'src/fixture.cpp'"),
+                (LegVerdict.Violated, "the text in 'texts/charge.same' overlaps the text in 'texts/charge.before' in 'src/fixture.cpp', where the texts of one file are replaced together and no two share a byte of it"),
+            ],
+            entry.Arms.Select(arm => (arm.Verdict, arm.Detail)));
+        Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
+        Assert.Empty(writes.Written);
+    }
+
+    /// <summary>
     /// Each unit the sweep asks its machine to take is given back: a worker's once the worker is made, with the room its
     /// making claimed, so nothing it then drives is counted beside it; and an arm's once its site is back as it was,
     /// never before. With as many slots as workers, a unit kept would leave an arm waiting on its own sweep.

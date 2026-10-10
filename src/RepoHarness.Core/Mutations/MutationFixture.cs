@@ -11,8 +11,9 @@ namespace RepoHarness.Core.Mutations;
 
 /// <summary>
 /// The fixture <c>check-mutations --self-test</c> sweeps: a CMake library, a test binary that writes its own JUnit report,
-/// and a registry of an arm to each verdict an arm's design can reach on any machine - and one whose mutation is coupled
-/// across two files - each held to that verdict. Embedded, so every DssHarness carries the very fixture its own tests swept.
+/// and a registry of an arm to each verdict an arm's design can reach on any machine - one whose mutation is coupled
+/// across two files, and one whose mutation is two sites of one file - each held to that verdict. Embedded, so every
+/// DssHarness carries the very fixture its own tests swept.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -62,6 +63,7 @@ public static class MutationFixture
         ["charge-bound"] = LegVerdict.Passed,
         ["depth-type"] = LegVerdict.Passed,
         ["depth-coupled"] = LegVerdict.Passed,
+        ["slack-twofold"] = LegVerdict.Passed,
         ["floor-misdeclared"] = LegVerdict.Violated,
         ["spare-unseen"] = LegVerdict.Survived,
         ["sanity-lost"] = LegVerdict.Unattributed,

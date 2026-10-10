@@ -13,8 +13,26 @@ public sealed record SiteEditResult(int Occurrences, byte[]? Edited)
     public bool ChangesNothing { get; init; }
 }
 
+/// <summary>One text of several replaced together in a site.</summary>
+/// <param name="Occurrences">How many times it occurs in the site as it stands, overlapping occurrences counted.</param>
+/// <param name="ChangesNothing">
+/// Whether it occurs exactly once and what replaces it is that text again, once both have the site's line endings.
+/// </param>
+public sealed record TextEdit(int Occurrences, bool ChangesNothing);
+
+/// <summary>Several texts of one site replaced together, as one edit of it.</summary>
+/// <param name="Texts">Each text, in the order given.</param>
+/// <param name="Overlapping">
+/// Each two texts, by their places in the order given, that each occur exactly once and share a byte of the site: which
+/// of them the shared bytes become is something neither says.
+/// </param>
+/// <param name="Edited">
+/// The site with every text replaced, where each occurs exactly once and no two overlap; otherwise <see langword="null"/>.
+/// </param>
+public sealed record SiteEdits(IReadOnlyList<TextEdit> Texts, IReadOnlyList<(int Earlier, int Later)> Overlapping, byte[]? Edited);
+
 /// <summary>
-/// A byte-exact replacement of one text in a site: the text must occur exactly once, and every other byte of the file
+/// A byte-exact replacement of texts in a site: each text must occur exactly once, and every other byte of the file
 /// stays as it was - never a file read whole as text and written back, which rewrites what the edit did not touch.
 /// </summary>
 /// <remarks>
@@ -116,23 +134,71 @@ public static class SiteEdit
     /// <param name="after">What replaces it, as <see cref="Text"/> reads it.</param>
     public static SiteEditResult Apply(byte[] site, byte[] before, byte[] after)
     {
+        var edits = ApplyAll(site, [(before, after)]);
+
+        return new SiteEditResult(edits.Texts[0].Occurrences, edits.Edited) { ChangesNothing = edits.Texts[0].ChangesNothing };
+    }
+
+    /// <summary>
+    /// <paramref name="site"/> with each of <paramref name="texts"/> replaced, all given the site's line endings, as one
+    /// edit: each before-text is looked for in the site as it stands - never as another of them left it, so the order
+    /// they are given in changes nothing - and the site is edited only where each occurs exactly once and no two share
+    /// a byte of it. Otherwise how often each occurs, and which overlap.
+    /// </summary>
+    /// <param name="site">The site's bytes.</param>
+    /// <param name="texts">Each text replaced and what replaces it, as <see cref="Text"/> reads them.</param>
+    public static SiteEdits ApplyAll(byte[] site, IReadOnlyList<(byte[] Before, byte[] After)> texts)
+    {
         ArgumentNullException.ThrowIfNull(site);
+        ArgumentNullException.ThrowIfNull(texts);
 
-        var needle = Adapted(before, site);
-        var count = Occurrences(site, needle);
+        var found = texts
+            .Select(text =>
+            {
+                var needle = Adapted(text.Before, site);
+                var count = Occurrences(site, needle);
 
-        if (count != 1)
+                return (At: count == 1 ? site.AsSpan().IndexOf(needle) : -1, needle.Length, Replacement: Adapted(text.After, site), Count: count, Needle: needle);
+            })
+            .ToList();
+
+        var overlapping = new List<(int Earlier, int Later)>();
+
+        for (var later = 1; later < found.Count; later++)
         {
-            return new SiteEditResult(count, null);
+            for (var earlier = 0; earlier < later; earlier++)
+            {
+                var (a, b) = (found[earlier], found[later]);
+
+                if (a.At >= 0 && b.At >= 0 && a.At < b.At + b.Length && b.At < a.At + a.Length)
+                {
+                    overlapping.Add((earlier, later));
+                }
+            }
         }
 
-        var at = site.AsSpan().IndexOf(needle);
-        var replacement = Adapted(after, site);
+        byte[]? edited = null;
 
-        return new SiteEditResult(1, [.. site.AsSpan(0, at), .. replacement, .. site.AsSpan(at + needle.Length)])
+        if (found.All(text => text.Count == 1) && overlapping.Count == 0)
         {
-            ChangesNothing = needle.AsSpan().SequenceEqual(replacement),
-        };
+            var bytes = new List<byte>(site.Length);
+            var from = 0;
+
+            foreach (var text in found.OrderBy(text => text.At))
+            {
+                bytes.AddRange(site.AsSpan(from, text.At - from));
+                bytes.AddRange(text.Replacement);
+                from = text.At + text.Length;
+            }
+
+            bytes.AddRange(site.AsSpan(from));
+            edited = [.. bytes];
+        }
+
+        return new SiteEdits(
+            [.. found.Select(text => new TextEdit(text.Count, text.Count == 1 && text.Needle.AsSpan().SequenceEqual(text.Replacement)))],
+            overlapping,
+            edited);
     }
 
     /// <summary><paramref name="text"/> with every CRLF made LF.</summary>

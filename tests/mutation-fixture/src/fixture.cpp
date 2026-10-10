@@ -3,11 +3,18 @@
 
 #include "budget.hpp"
 
+namespace
+{
+// How far past its budget a charge may run: nothing. The two-site arm renames and raises it here, and renames it where
+// within() reads it: two places of this one file with lines between them, either edit alone building nothing.
+constexpr int slack = 0;
+}
+
 namespace fixture
 {
 bool within(int charge, int budget)
 {
-    return charge <= budget;
+    return charge <= budget + slack;
 }
 
 bool positive(int value)

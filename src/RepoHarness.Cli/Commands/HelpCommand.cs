@@ -840,7 +840,9 @@ internal static class HelpCommand
         builder.AppendLine("  B | arm | control before | control after | why");
         builder.AppendLine("                                                a BUILD-RED arm's paired control");
         builder.AppendLine("  M | arm | site | before | after | why         another site, mutated, put back and");
-        builder.AppendLine("                                                checked with the arm's own");
+        builder.AppendLine("                                                checked with the arm's own: another");
+        builder.AppendLine("                                                file, or a further text of a file");
+        builder.AppendLine("                                                the arm already mutates");
         builder.AppendLine("  S | arm | legs | why                          the legs it runs on, named as --legs");
         builder.AppendLine("                                                names them; without one, every leg");
         builder.AppendLine();
@@ -855,7 +857,18 @@ internal static class HelpCommand
             + "own manifest; cases is how many cases it runs, skipped ones included. A case is named as its report names it, "
             + "classname.name: Suite.Case for GoogleTest. A BUILD-RED arm runs nothing: its runner is "
             + $"'{MutationRegistryParser.NoRunner}', its cases 0 and its diag {MutationRegistryParser.PairedControlToken}, and "
-            + "it has exactly one B row and no C, G or M row. A TEST-RED arm has at least one C row and no B row.");
+            + "it has exactly one B row, no C or G row, and no M row but for its own file, which its paired control rewrites "
+            + "whole. A TEST-RED arm has at least one C row and no B row.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A mutant that is several places of one file, apart from each other, is one arm: an M row naming a file its arm "
+            + "already mutates - its own, or another M row's - adds a text to that file, as many as the mutant has, spelt as "
+            + "the arm's first row for the file spells it. Every text of a file is replaced together, as one edit of it: each "
+            + "must stand exactly once in the file as the tree holds it - never as another of them left it - and differ from "
+            + "what replaces it, the file is written once and put back whole, checked once against the tree's, and what "
+            + "depends on it is witnessed rebuilt as for one text. Declared as one text spanning every site, such a mutant "
+            + "would break at any edit of a line between them. A further site in another file stays an M row naming that file.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -863,8 +876,9 @@ internal static class HelpCommand
             + "a row of no kind it reads; an arm id outside [A-Za-z0-9_-], or one another reads as ignoring case; a path outside "
             + "[A-Za-z0-9_./-], absolute, climbing out with '..', ending in '/', or with an empty or '.' segment; a target or "
             + "runner outside [A-Za-z0-9_.+-]; a row naming an arm no A row above it declares; a case both red and green, or "
-            + "declared twice; an M row mutating a file its arm already mutates, as the tree's own file system compares their "
-            + "names; an S row naming neither a leg nor a leg set; "
+            + "declared twice; an M row naming a file its arm already mutates under another spelling, as the tree's own file "
+            + "system compares their names; two texts of one arm that overlap in one file as the tree holds it - one "
+            + "lying across or within the other, or the same text cited twice; an S row naming neither a leg nor a leg set; "
             + "a text no row cites in textDirectory, a mutation nobody drives - but for a file there a sync withholds, which "
             + "no copy of the tree holds; a cited text that is not there, or that a "
             + "sync withholds from every copy of the tree - one sync.neverTransfer, sync.exclude or worktrees.root "
@@ -994,10 +1008,10 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "check-mutations --self-test sweeps the fixture this tool carries, in place of the repository's registry, "
-            + "which it does not need: a CMake library, a test binary that writes its own JUnit report, and seven arms, one "
+            + "which it does not need: a CMake library, a test binary that writes its own JUnit report, and eight arms, one "
             + "to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
-            + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two "
-            + "files. It is built as each selected leg builds, with the leg's toolchain, "
+            + "failed - with a second that passes as the other red kind, a third whose mutation is coupled across two "
+            + "files and a fourth whose mutation is two sites of one file. It is built as each selected leg builds, with the leg's toolchain, "
             + "configuration and sanitizer, and each arm is held to the verdict it is designed to reach: one that reaches "
             + "it passed, saying so, and one that reaches another is violated, naming both - a defect of this tool's with "
             + "that compiler, never the fixture's. --arms names the fixture's arms.");

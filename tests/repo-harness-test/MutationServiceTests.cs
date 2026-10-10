@@ -184,8 +184,9 @@ public sealed class MutationServiceTests
 
     /// <summary>
     /// An M row's site is compared with its arm's other sites as the tree's own file system compares names: one naming
-    /// the arm's own file in another case is that file again where the file system folds case - two edits taken and put
-    /// back over each other - and is refused, naming how the arm spells it; where it does not fold, it is another file.
+    /// the arm's own file in another case is that file again where the file system folds case - a further site of it,
+    /// spelt otherwise than the row the tree's spelling is held to - and is refused, naming how the arm spells it; where
+    /// it does not fold, it is another file.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -211,9 +212,79 @@ public sealed class MutationServiceTests
 
         Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
         Assert.Contains(
-            "  - line 5: arm 'charge' already mutates 'src/Fixture.cpp', as 'src/fixture.cpp' at line 1: two edits to one file would be taken and put back over each other, so a coupled site is another file",
+            "  - line 5: arm 'charge' names 'src/Fixture.cpp', the file it already mutates as 'src/fixture.cpp' at line 1: a further site of a file is spelt as the arm's first row for it spells it",
             refusal.Message,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two texts of one arm that overlap in one file, as the tree holds it, are the registry's problem, listed at the
+    /// later row's line with its others before any host is touched: one within the other, or the same text cited twice.
+    /// Texts apart from each other in the file are read, and one that is not in the file exactly once is left to its
+    /// arm's pre-flight, which counts it.
+    /// </summary>
+    [Fact]
+    public async Task TwoTextsOfOneArmThatOverlapInOneFile_AreRefusedWithTheRegistrysOtherProblems()
+    {
+        using var temp = new TempDirectory();
+        var (service, context) = Prepare(
+            temp,
+            Sweepable(),
+            [
+                .. Arms,
+                "M | charge | src/fixture.cpp | mutations/texts/within.before | mutations/texts/within.after | lies across the arm's own text",
+                "M | charge | src/fixture.cpp | mutations/texts/floor.before | mutations/texts/floor.after | apart from both",
+                "M | charge | src/fixture.cpp | mutations/texts/floor.before | mutations/texts/floor.after | the same text again",
+                "M | charge | src/fixture.cpp | mutations/texts/absent.before | mutations/texts/floor.after | not in the file at all",
+            ]);
+
+        temp.WriteFile("src/fixture.cpp", "bool within(int c, int b) { return c <= b; }\nbool positive(int c) { return c > 0; }\n");
+        temp.WriteFile("mutations/texts/within.before", "return c <= b;\n");
+        temp.WriteFile("mutations/texts/within.after", "return true;\n");
+        temp.WriteFile("mutations/texts/floor.before", "c > 0\n");
+        temp.WriteFile("mutations/texts/floor.after", "c >= 0\n");
+        temp.WriteFile("mutations/texts/absent.before", "nowhere\n");
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            (HarnessExit.ConfigInvalid, string.Join(
+                Environment.NewLine,
+                $"The arms registry '{Registry}' cannot be swept: 2 problem(s), each to fix:",
+                "  - line 5: the text in 'mutations/texts/within.before' overlaps the text in 'mutations/texts/charge.before', line 1, in "
+                + "'src/fixture.cpp': the texts of one arm in one file are replaced together, each as the tree holds the file, so no two share a byte of it",
+                "  - line 7: the text in 'mutations/texts/floor.before' overlaps the text in 'mutations/texts/floor.before', line 6, in "
+                + "'src/fixture.cpp': the texts of one arm in one file are replaced together, each as the tree holds the file, so no two share a byte of it")),
+            (refusal.ExitCode, refusal.Message));
+    }
+
+    /// <summary>
+    /// Texts of one arm apart from each other in one file are read as one site with each of them, whatever --arms names;
+    /// and each is held to what any cited text is: one that is not there is its own row's problem.
+    /// </summary>
+    [Fact]
+    public async Task TextsOfOneArmApartInOneFile_AreReadAsOneSite_AndEachIsHeldAsAnyCitedTextIs()
+    {
+        using var temp = new TempDirectory();
+        var (service, context) = Prepare(
+            temp,
+            Sweepable(),
+            [.. Arms, "M | charge | src/fixture.cpp | mutations/texts/floor.before | mutations/texts/floor.after | the second site of the same file"]);
+
+        temp.WriteFile("src/fixture.cpp", "bool within(int c, int b) { return c <= b; }\nbool positive(int c) { return c > 0; }\n");
+        temp.WriteFile("mutations/texts/floor.before", "c > 0\n");
+        temp.WriteFile("mutations/texts/floor.after", "c >= 0\n");
+
+        var charge = (await service.ReadAsync(context, null, TestContext.Current.CancellationToken)).Selected[0];
+
+        Assert.Equal(["src/fixture.cpp"], charge.Sites.Select(site => site.Site));
+        Assert.Equal(["mutations/texts/charge.before", "mutations/texts/floor.before"], charge.Own.Texts.Select(text => text.Before));
+
+        File.Delete(temp.Combine("mutations", "texts", "floor.after"));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
+
+        Assert.Contains("  - line 5: text 'mutations/texts/floor.after' is not a file in the tree", refusal.Message, StringComparison.Ordinal);
     }
 
     /// <summary>An arm --arms names that the registry does not declare is a usage error, naming it.</summary>
