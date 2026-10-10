@@ -375,7 +375,9 @@ public sealed class ToolUpdateServiceTests
     public async Task ATableReadByNamesAlone_StillRefusesAnUpdateBesideARunningDssHarness_AndNeverWaits(bool wait)
     {
         var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
-        kit.Table = new ScriptedTable([[new SampledProcess(4242, null, "dssharness", null, null)]]) { Degraded = "the query was refused." };
+
+        // Gone by a second look, so a wait that was let through would end, and update.
+        kit.Table = new ScriptedTable([[new SampledProcess(4242, null, "dssharness", null, null)], []]) { Degraded = "the query was refused." };
 
         var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(wait), Token);
 
@@ -413,12 +415,12 @@ public sealed class ToolUpdateServiceTests
     }
 
     /// <summary>
-    /// Once the update has begun nothing stops it, nor the reading of what it left: interrupted as it starts, it still
-    /// runs to its end and says what is listed since. Cut off part way it left a machine with no tool, or half of one,
-    /// and a command that said nothing of which.
+    /// Once the update has begun the command stops neither it nor the reading of what it left: interrupted as the update
+    /// starts, it lets it run to its end and says what is listed since. Cut off part way it left a machine with no tool,
+    /// or half of one, and a command that said nothing of which.
     /// </summary>
     [Fact]
-    public async Task OnceTheUpdateHasBegun_NothingStopsIt_NorTheReadingOfWhatItLeft()
+    public async Task OnceTheUpdateHasBegun_TheCommandStopsNeitherIt_NorTheReadingOfWhatItLeft()
     {
         var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
         using var interrupted = CancellationTokenSource.CreateLinkedTokenSource(Token);

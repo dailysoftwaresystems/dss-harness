@@ -19,8 +19,8 @@ process is running on the machine, naming each it waits for. A bare `dotnet tool
 beside a running command takes the tool away from every command typed meanwhile, and on Windows
 fails. `dssharness update-tool` is the same door typed short, where the system lets a running
 program be replaced; on Windows it changes nothing and says the line above, with the options it
-was typed with. Once the update has begun nothing interrupts it, and it is said done only once the
-tool is listed as the new release.
+was typed with. Once the update has begun the command does not stop it, and says it done only once
+the tool is listed as the new release.
 
 ## Why
 

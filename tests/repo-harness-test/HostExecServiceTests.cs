@@ -107,8 +107,8 @@ public sealed class HostExecServiceTests
 
         Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
         Assert.Contains(
-            "ssh vps: this machine could no longer write to the connection it holds open to the host (The pipe is being closed), so the host was "
-            + "told this machine had gone, and stops what it was asked",
+            "ssh vps: this machine could no longer write to the connection it holds open to the host (The pipe is being closed), and a host that "
+            + "hears nothing more from the machine that asked stops what it was asked",
             fixture.Error.ToString() + fixture.Output,
             StringComparison.Ordinal);
         Assert.Null(HostProbes.BeatLost(HostResults.Ok(string.Empty)));

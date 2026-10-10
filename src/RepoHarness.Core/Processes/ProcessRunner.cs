@@ -534,8 +534,8 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </remarks>
     /// <returns>
     /// Why the beat stopped while the child was still running, or <see langword="null"/> where it did not. The input is
-    /// closed then: a beat that fails without a word leaves the child counting a silence, and whoever started it with
-    /// nothing to say why the child gave up on it.
+    /// closed then, nothing more being written to it; and the reason is handed back, because a beat that fails without a
+    /// word leaves whoever started the child with nothing to say why its far end gave this process up.
     /// </returns>
     private static async Task<string?> WriteInputAsync(StreamWriter writer, ChildInput? input, bool close, InputBeat? beat, CancellationToken exited)
     {

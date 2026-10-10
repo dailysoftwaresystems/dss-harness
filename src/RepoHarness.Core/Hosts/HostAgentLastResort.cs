@@ -167,8 +167,8 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
     /// it got to them first. One started for what the agent started is that process's child, and goes with it.
     /// </para>
     /// <para>
-    /// A child that had already ended is passed over, not counted: the program the table is read through is one, on
-    /// Windows, in every reading.
+    /// A child that has ended since the table listed it is passed over, not counted: the program the table is read
+    /// through is one, on Windows, in every reading.
     /// </para>
     /// </remarks>
     internal static async Task<LastResortOutcome> EndStartedByAsync(IProcessTable processes, IHostPlatform platform, int parent, CancellationToken cancellationToken)
@@ -196,11 +196,6 @@ public sealed class HostAgentLastResort(IProcessTable processes, IHostPlatform p
             try
             {
                 using var process = Process.GetProcessById(child.Id);
-
-                if (process.HasExited)
-                {
-                    continue;
-                }
 
                 process.Kill(entireProcessTree: true);
                 ended.Add(child.Id);

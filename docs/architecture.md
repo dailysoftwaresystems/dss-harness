@@ -1131,12 +1131,12 @@ the command that dispatched it is that verb, on every carriage.
 
 The beat can fail at this end too: the process that carries the request - ssh, wsl.exe - stops
 taking what is written to it and goes on. The process runner then waits two seconds for it to be
-seen exiting, which says the rest itself, and otherwise closes the input and records why
-(`ProcessResult.BeatLost`): the host is told by the end of its input, at once, and not left to
-count a silence. Each sender of a run request - a leg, `host-exec`, a sync's operation - warns
-with it (`HostProbes.BeatLost`), since the host then stops what it was asked for a machine that
-has gone, and that machine is here, reading how its command ended. Passed over, as a child ceasing
-to read its input always was, the run ended two minutes later with nothing at this end to say why.
+seen exiting, which says the rest itself, and otherwise writes nothing more and records why
+(`ProcessResult.BeatLost`). Each sender of a run request - a leg, `host-exec`, a sync's operation -
+warns with it (`HostProbes.BeatLost`), since the host hears no more of this machine and stops what
+it was asked for a machine that has gone, and that machine is here, reading how its command ended.
+Passed over, as a child ceasing to read its input always was, the run ended with nothing at this
+end to say why.
 
 This machine's own DssHarness has one door too (`update-tool`, `ToolUpdateService`). Measured on a
 consumer's Windows host: a `dotnet tool update` typed by one session while another's commands ran
@@ -1152,11 +1152,13 @@ an input's value (exit 13); with `--wait` it looks again every five seconds, say
 for as it starts and every five minutes; and a wait asked from inside a running DssHarness, which
 would never end, is refused - as is any wait where the table was read by names alone (a degraded
 reading names no process's parent, so such a wait could not be told from one that ends), the
-refusal then saying why the table was. Once the update has begun nothing stops it, nor the reading
-of what it left: both run under no cancellation, and `update-tool` is among the commands past a
-point of no return (`PointOfNoReturn`), which the command line waits two minutes for after Ctrl+C,
-because an update cut off part way leaves a machine with no tool and a command that says nothing
-of it. It says the update done only once `dotnet tool list` shows that release, and a failure with
+refusal then saying why the table was. Once the update has begun the command stops neither it nor
+the reading of what it left: both run under no cancellation, and `update-tool` is among the
+commands past a point of no return (`PointOfNoReturn`), which the command line waits two minutes
+for after an interruption, because an update cut off part way leaves a machine with no tool and a
+command that says nothing of it. A Ctrl+C typed at a terminal on Linux or macOS reaches dotnet
+itself, as it reaches every process of the terminal's: what that leaves is read back and said
+like any other failure of the update. It says the update done only once `dotnet tool list` shows that release, and a failure with
 what dotnet said, each DssHarness that started while it ran, and what is listed since - or, where
 that listing failed too, why in dotnet's words (exit 20). Which release is the newest is asked of
 nuget.org (`IPublishedToolVersions`), and an answer that does not come is said with its cause

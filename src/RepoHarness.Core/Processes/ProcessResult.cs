@@ -19,9 +19,8 @@ public sealed record ProcessResult(
 {
     /// <summary>
     /// Why the beat written on the child's held-open input stopped while the child was still running, in the system's
-    /// words, or <see langword="null"/> where it did not: the child stopped reading its input and went on. The input
-    /// was closed then, so a child that takes the end of its input for this process having gone is told at once, by the
-    /// sign that is no guess, rather than by a silence it has to wait out.
+    /// words, or <see langword="null"/> where it did not: the child stopped taking its input and went on. Nothing
+    /// more was written to it, and whatever counts on the beat at the child's far end hears no more of this process.
     /// </summary>
     public string? BeatLost { get; init; }
 

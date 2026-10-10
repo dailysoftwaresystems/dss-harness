@@ -1078,8 +1078,8 @@ public sealed partial class HelpTests
             "What the host started that has not stopped 60 seconds after it was cancelled - a command reading the output of something its child "
             + "left running - is ended with its processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a "
             + "command that finishes what it began - a deletion, a fold, a hand-over - is given 120, as it is where it is typed and interrupted. "
-            + "Where this machine can no longer write to the connection while a host works, it closes it, so the host stops at once and not after "
-            + "a silence, and says so here with why. To end a run on its hosts, stop the command that dispatched it.",
+            + "Where this machine can no longer write to the connection while a host works, it says so here, with why: the host hears no more of "
+            + "it, and stops what it was asked. To end a run on its hosts, stop the command that dispatched it.",
             prose,
             StringComparison.Ordinal);
 
@@ -1097,7 +1097,7 @@ public sealed partial class HelpTests
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Once the update has begun nothing interrupts it, Ctrl+C included, and what it left is read back: it says the update done only once "
+            "Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: it says the update done only once "
             + $"the tool is listed as that release, and a failure with what dotnet said and what is listed since, or why that is not known "
             + $"({HarnessExit.CommandFailed}).",
             prose,

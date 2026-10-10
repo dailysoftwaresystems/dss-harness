@@ -1563,7 +1563,7 @@ internal static class HelpCommand
             + $"{ToolUpdateService.WaitOption} it waits for them to end, saying who it waits for as it starts and every "
             + $"{ToolUpdateService.SaidAgainEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - but for a wait asked from inside "
             + $"a running {ToolPackage.Id}, which would never end and is refused, as is one where the process table names no "
-            + "process's parent. Once the update has begun nothing interrupts it, Ctrl+C included, and what it left is read back: "
+            + "process's parent. Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: "
             + "it says the update done only once the tool is listed as that release, and a failure with what dotnet said and what "
             + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}). Where nuget.org does not say which release "
             + "is the newest it says why - no route to it, no answer in time, an answer it cannot read - and changes nothing, "
@@ -1609,8 +1609,8 @@ internal static class HelpCommand
             + "processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a command that "
             + $"finishes what it began - a deletion, a fold, a hand-over - is given {Seconds(patience.Finishing)}, as it is "
             + "where it is typed and interrupted. Where this machine can no longer write to the connection while a host works, "
-            + "it closes it, so the host stops at once and not after a silence, and says so here with why. To end a run on its "
-            + "hosts, stop the command that dispatched it.");
+            + "it says so here, with why: the host hears no more of it, and stops what it was asked. To end a run on its hosts, "
+            + "stop the command that dispatched it.");
         builder.AppendLine();
         builder.AppendLine("A host answering this machine writes its home as ~: in every line of DssHarness's");
         builder.AppendLine("own - a leg's reason, a lock or free-space message, a failure quoting git or the");

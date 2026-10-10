@@ -162,7 +162,7 @@ public sealed class ToolUpdateService(
 
     /// <summary>Updates the installed tool, or says why it was not.</summary>
     /// <param name="request">What the command was asked to do.</param>
-    /// <param name="cancellationToken">Stops a wait, or the update.</param>
+    /// <param name="cancellationToken">Stops what comes before the update - the readings, a wait - and never the update once it has begun.</param>
     public async Task<CommandOutcome> RunAsync(ToolUpdateRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -291,8 +291,9 @@ public sealed class ToolUpdateService(
 
     /// <summary>Installs the tool, or updates it, and says so once it is listed as the release it was moved to.</summary>
     /// <remarks>
-    /// Never stopped once it has begun, nor is the reading of what it left: an update cut off part way leaves a machine
-    /// with no tool, or half of one, and a command that then says nothing of which. dotnet has its own bound
+    /// Never stopped by this command once it has begun, nor is the reading of what it left: an update cut off part way
+    /// leaves a machine with no tool, or half of one, and a command that then says nothing of which. An interruption
+    /// that reaches dotnet itself, as one typed at a terminal can, is read back as any failure is. dotnet has its own bound
     /// (<see cref="ToolPackage.ChangeBudget"/>), and the command line waits for this as for any command past its point
     /// of no return (<see cref="PointOfNoReturn"/>).
     /// </remarks>

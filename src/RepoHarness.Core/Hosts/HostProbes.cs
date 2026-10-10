@@ -327,8 +327,8 @@ public static partial class HostProbes
         ArgumentNullException.ThrowIfNull(result);
 
         return result.BeatLost is { } why
-            ? $"this machine could no longer write to the connection it holds open to the host ({why.TrimEnd('.')}), so the host was told this "
-                + "machine had gone, and stops what it was asked"
+            ? $"this machine could no longer write to the connection it holds open to the host ({why.TrimEnd('.')}), and a host that hears "
+                + "nothing more from the machine that asked stops what it was asked"
             : null;
     }
 
