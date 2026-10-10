@@ -693,6 +693,15 @@ public sealed record SyncListedFile(string Path, long Length);
 /// <param name="Links">Each link below a directory named, passed over: never followed, and never brought back.</param>
 public sealed record SyncPull(IReadOnlyList<string> Files, IReadOnlyList<string> Links)
 {
+    /// <summary>
+    /// Why the pull stopped before every file had been brought, where it did; <see langword="null"/> where it brought
+    /// them all. <see cref="Files"/> is then what crossed before it, each left where it was written.
+    /// </summary>
+    public SyncPullStop? Stopped { get; init; }
+
+    /// <summary>Each file not brought back, where the pull stopped: the one it stopped at, then every one after it.</summary>
+    public IReadOnlyList<string> Left { get; init; } = [];
+
     /// <summary>Whether <paramref name="path"/>, as a pull was given it, names a directory: it ends with a separator.</summary>
     /// <param name="path">A path a pull names.</param>
     public static bool NamesADirectory(string path)
@@ -702,6 +711,11 @@ public sealed record SyncPull(IReadOnlyList<string> Files, IReadOnlyList<string>
         return path.EndsWith('/') || path.EndsWith('\\');
     }
 }
+
+/// <summary>What stopped a pull part way.</summary>
+/// <param name="ExitCode">The code the pull fails with.</param>
+/// <param name="Why">What failed, as the failure itself said it.</param>
+public sealed record SyncPullStop(int ExitCode, string Why);
 
 /// <summary>One file a write carries, as the far side reads it.</summary>
 /// <param name="Path">Where it goes, relative to the copy's root.</param>

@@ -552,8 +552,32 @@ public sealed class GitClient(
         }
         finally
         {
-            Remove(index);
-            Remove(index + ".lock");
+            Discard(index);
+            Discard(index + ".lock");
+        }
+    }
+
+    /// <summary>
+    /// Removes <paramref name="path"/>, a file of one question's own in the system's temporary directory, where it is
+    /// there and can be: one that cannot is left for the system to clear, and nothing is raised for it.
+    /// </summary>
+    /// <remarks>
+    /// Never <see cref="Remove"/>, which raises: raised from a <see langword="finally"/> it took the place of whatever the
+    /// question itself had failed with - git's own words for why a comparison could not be made - and failed a
+    /// comparison that had been made, in the words of a staging that stopped part way, which this is not.
+    /// </remarks>
+    internal static void Discard(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Nothing reads it again: its name is this question's alone.
         }
     }
 

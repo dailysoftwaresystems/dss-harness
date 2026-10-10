@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Reflection;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
@@ -130,7 +131,7 @@ public sealed class ToolUpdateService(
             ' ',
             [
                 HostInspector.DotnetProgram, "tool", "exec", ToolPackage.Id, "--yes", "--source", ToolPackage.Source, "--", CommandName,
-                .. request.ToolPath is { } path ? new[] { ToolPathOption, path } : [],
+                .. request.ToolPath is { } path ? new[] { ToolPathOption, OrchestrationReports.Argument(path) } : [],
                 .. request.Wait ? new[] { WaitOption } : [],
             ]);
     }
@@ -174,12 +175,11 @@ public sealed class ToolUpdateService(
             return new CommandOutcome(HarnessExit.CommandFailed, HostProbes.Failure($"the .NET tools in {kept} could not be listed, so nothing was changed", listing));
         }
 
-        if (await TargetAsync(installed, cancellationToken).ConfigureAwait(false) is not { } target)
+        var (aim, untold) = await TargetAsync(installed, kept, cancellationToken).ConfigureAwait(false);
+
+        if (aim is not { } target)
         {
-            return new CommandOutcome(
-                HarnessExit.CommandFailed,
-                $"nuget.org did not say which release of {ToolPackage.Id} is the newest - no route to it, or no answer in time - so nothing was "
-                + $"changed: {(installed is null ? $"{ToolPackage.Id} is not installed in {kept}" : $"{ToolPackage.Id} {installed} is installed in {kept}")}");
+            return new CommandOutcome(HarnessExit.CommandFailed, untold!);
         }
 
         if (installed is not null && SemanticVersion.TryParse(installed, out var held) && SemanticVersion.Compare(held, target) >= 0)
@@ -200,6 +200,7 @@ public sealed class ToolUpdateService(
                     "Run the update from a copy of the newest release beside the installed one, which this does without installing it:",
                     "  " + FromBeside(request),
                     .. Named($"{Count(running)} on this machine, which that command waits for with {WaitOption}, and is refused by without it:", running),
+                    .. running.Count == 0 ? [] : Unread(table),
                 ]);
         }
 
@@ -209,11 +210,22 @@ public sealed class ToolUpdateService(
                 HarnessExit.Refused,
                 $"{move}: {Count(running)} on this machine, and an update beside one fails where a running program cannot be replaced, "
                 + "takes its files from under it where one can, and leaves no tool to find for whatever is typed meanwhile. Nothing was changed.",
-                [.. running.Select(one => "  " + Describe(one)), RunAgain]);
+                [.. running.Select(one => "  " + Describe(one)), .. Unread(table), RunAgain]);
         }
 
         if (running.Count > 0)
         {
+            // A table read by names alone names no process's parent: a wait asked from inside one of these could not be
+            // told from one that ends, and would be waited on for good without a word.
+            if (table.Degraded is { } unread)
+            {
+                return new CommandOutcome(
+                    HarnessExit.Refused,
+                    $"{move}: {Count(running)} on this machine, and which process started which could not be read - {unread.TrimEnd('.')} - so "
+                    + "a wait asked from inside one of them could not be told from one that ends. Nothing was changed.",
+                    [.. running.Select(one => "  " + Describe(one)), "Run again once each has ended."]);
+            }
+
             if (StartedThis(table, running) is { } parent)
             {
                 return new CommandOutcome(
@@ -227,36 +239,64 @@ public sealed class ToolUpdateService(
             await WaitAsync(moving, running, cancellationToken).ConfigureAwait(false);
         }
 
-        return await ChangeAsync(request, kept, installed, target.ToString(), cancellationToken).ConfigureAwait(false);
+        return await ChangeAsync(request, kept, installed, target.ToString()).ConfigureAwait(false);
     }
 
     /// <summary>What a refusal over running processes ends with.</summary>
     private const string RunAgain = $"Run again once each has ended, or with {WaitOption} to wait for them.";
 
     /// <summary>
-    /// The release the tool is moved to: the newest nuget.org lists; or, where the feed does not answer, the copy running
-    /// where that is newer than what is installed - a release itself, run from its package; or <see langword="null"/>.
+    /// The release the tool is moved to, or why there is none to move it to. It is the newest nuget.org lists; or, where
+    /// the feed does not say, the copy running where that is a release newer than what is installed - run from its
+    /// package, as <c>dotnet tool exec</c> runs one - which is then said, with why the feed did not: the tool is moved to
+    /// a release nobody named.
     /// </summary>
-    private async Task<SemanticVersion?> TargetAsync(string? installed, CancellationToken cancellationToken)
+    private async Task<(SemanticVersion? Target, string? Untold)> TargetAsync(string? installed, string kept, CancellationToken cancellationToken)
     {
         var copy = SemanticVersion.TryParse(_identity.Current.Version, out var running) ? running : null;
         var held = SemanticVersion.TryParse(installed, out var listed) ? listed : null;
+        var holds = installed is null ? $"{ToolPackage.Id} is not installed in {kept}" : $"{ToolPackage.Id} {installed} is installed in {kept}";
 
         if ((held ?? copy) is not { } from)
         {
-            return null;
+            // No fault of the feed's, which was never asked: said as what it is.
+            var own = $"this copy's own version, '{_identity.Current.Version}',";
+
+            return (
+                null,
+                $"which release of {ToolPackage.Id} is the newest was not asked of nuget.org, so nothing was changed: {holds}, and "
+                + $"{(installed is null ? $"{own} is not" : $"neither '{installed}' nor {own} is")} one a release can be told newer than");
         }
 
-        if (await _published.NewestAsync(from, cancellationToken).ConfigureAwait(false) is { } newest)
+        var answer = await _published.NewestAsync(from, cancellationToken).ConfigureAwait(false);
+
+        if (answer.Newest is { } newest)
         {
-            return newest;
+            return (newest, null);
         }
 
-        return copy is not null && (held is null || SemanticVersion.Compare(copy, held) > 0) ? copy : null;
+        var unanswered = $"nuget.org did not say which release of {ToolPackage.Id} is the newest - {answer.Untold} -";
+
+        if (copy is { IsPrerelease: false } && (held is null || SemanticVersion.Compare(copy, held) > 0))
+        {
+            _output.Info(
+                CommandName,
+                $"{unanswered} so the release this copy is, {copy}, is the one {(held is null ? "installed" : $"the {held} installed is moved to")}");
+
+            return (copy, null);
+        }
+
+        return (null, $"{unanswered} so nothing was changed: {holds}");
     }
 
     /// <summary>Installs the tool, or updates it, and says so once it is listed as the release it was moved to.</summary>
-    private async Task<CommandOutcome> ChangeAsync(ToolUpdateRequest request, string kept, string? installed, string target, CancellationToken cancellationToken)
+    /// <remarks>
+    /// Never stopped once it has begun, nor is the reading of what it left: an update cut off part way leaves a machine
+    /// with no tool, or half of one, and a command that then says nothing of which. dotnet has its own bound
+    /// (<see cref="ToolPackage.ChangeBudget"/>), and the command line waits for this as for any command past its point
+    /// of no return (<see cref="PointOfNoReturn"/>).
+    /// </remarks>
+    private async Task<CommandOutcome> ChangeAsync(ToolUpdateRequest request, string kept, string? installed, string target)
     {
         var (verb, doing, did) = installed is null
             ? ("install", $"installing {ToolPackage.Id} {target} in {kept}", $"installed {ToolPackage.Id} {target} in {kept}")
@@ -278,31 +318,35 @@ public sealed class ToolUpdateService(
                     Arguments = ToolPackage.ChangeArguments(verb, target, request.ToolPath),
                     Timeout = ToolPackage.ChangeBudget,
                 },
-                cancellationToken)
+                CancellationToken.None)
             .ConfigureAwait(false);
 
-        var listing = await ListAsync(request, cancellationToken).ConfigureAwait(false);
-        var listed = listing.Succeeded && HostProbes.TryReadToolVersion(listing.StandardOutput, ToolPackage.Id, out var now)
-            ? now is null ? "not listed there" : $"listed there as {now}"
-            : "not known to be listed there, since its tools could not be listed";
+        // What the machine now runs, in dotnet's own listing - or why that is not known, in dotnet's own words.
+        var listing = await ListAsync(request, CancellationToken.None).ConfigureAwait(false);
+        string? now = null;
+        var unknown = !listing.Succeeded
+            ? HostProbes.Failure("its tools could not be listed", listing)
+            : HostProbes.TryReadToolVersion(listing.StandardOutput, ToolPackage.Id, out now) ? null : "what dotnet listed is not something this build reads";
+        var listed = now is null ? "not listed there" : $"listed there as {now}";
+        var since = unknown is null ? $"it is {listed} since" : $"what is listed there since is not known: {unknown}";
 
         if (!change.Succeeded)
         {
-            var started = Running(await _processes.ReadAsync(cancellationToken).ConfigureAwait(false));
+            var started = Running(await _processes.ReadAsync(CancellationToken.None).ConfigureAwait(false));
 
             return new CommandOutcome(
                 HarnessExit.CommandFailed,
                 HostProbes.Failure($"{doing} failed", change),
                 [
                     .. Named($"{Count(started, "started")} on this machine while it ran, which is what stops an update:", started),
-                    $"{ToolPackage.Id} is {listed} since.",
+                    unknown is null ? $"{ToolPackage.Id} is {listed} since." : $"What is listed there since is not known: {unknown.TrimEnd('.')}.",
                     .. started.Count == 0 ? [] : new[] { RunAgain },
                 ]);
         }
 
-        return listed == $"listed there as {target}"
-            ? CommandOutcome.Ok($"{did}, and it is {listed} since")
-            : new CommandOutcome(HarnessExit.CommandFailed, $"dotnet said it {did}, and it is {listed} since");
+        return now == target
+            ? CommandOutcome.Ok($"{did}, and {since}")
+            : new CommandOutcome(HarnessExit.CommandFailed, $"dotnet said it {did}, and {since}");
     }
 
     /// <summary>Waits until no DssHarness runs on this machine, saying who it waits for as it starts and every so often.</summary>
@@ -363,6 +407,13 @@ public sealed class ToolUpdateService(
     /// <summary>Whether <paramref name="program"/>, a path or a bare name, is the tool's own command, as a host's process listing is read.</summary>
     private static bool IsTheTool(string? program)
         => program is not null && HostProbes.ListsProcess(program, ToolPackage.Command);
+
+    /// <summary>
+    /// That <paramref name="table"/> was read by names alone, and why, where it was: what each process was asked is then
+    /// missing from its line, and said to be rather than left to look like a process that was asked nothing.
+    /// </summary>
+    private static IEnumerable<string> Unread(ProcessTableReading table)
+        => table.Degraded is { } why ? [$"What each was asked could not be read: {why.TrimEnd('.')}."] : [];
 
     /// <summary>Each of <paramref name="running"/> on a line of its own, under <paramref name="heading"/>; nothing where there is none.</summary>
     private static IEnumerable<string> Named(string heading, IReadOnlyList<SampledProcess> running)

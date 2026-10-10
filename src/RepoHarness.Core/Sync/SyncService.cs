@@ -341,11 +341,17 @@ public interface ISyncService
     /// <param name="destinationRoot">Where the files land here.</param>
     /// <param name="paths">The paths to bring back, relative to the copy's root.</param>
     /// <param name="cancellationToken">Stops the transfer.</param>
-    /// <returns>Each file brought back, and each link below a directory named, which was not.</returns>
+    /// <returns>
+    /// Each file brought back, and each link below a directory named, which was not. Where a file could not be brought -
+    /// it is not there, did not land intact, the host stopped answering, the pull was interrupted - the pull stops there
+    /// and says so (<see cref="SyncPull.Stopped"/>), with what had crossed by then and what had not: files already
+    /// written stay written, and a failure that named only the file it stopped at left the rest for whoever read it to
+    /// work out from the tree.
+    /// </returns>
     /// <exception cref="HarnessException">
-    /// A path names the whole copy (<see cref="HarnessExit.UsageError"/>); or a file named is not there, a directory named
-    /// is not one, holds no file, or holds more than a pull brings back (<see cref="HarnessExit.CommandFailed"/>) -
-    /// every directory before any file has crossed.
+    /// A path names the whole copy (<see cref="HarnessExit.UsageError"/>); or a directory named is not one, holds no file,
+    /// or holds more than a pull brings back (<see cref="HarnessExit.CommandFailed"/>) - every directory before any file
+    /// has crossed.
     /// </exception>
     Task<SyncPull> PullAsync(
         ISyncTransport transport,
@@ -519,6 +525,29 @@ public sealed class SyncService(
                     : await PullAsync(transport, destination, context.Layout.RepositoryRoot, pull, cancellationToken).ConfigureAwait(false);
 
                 pulled += brought.Files.Count;
+
+                if (brought.Stopped is { } stopped)
+                {
+                    var asked = brought.Files.Count + brought.Left.Count;
+
+                    // Each by name, on both sides of where it stopped: what crossed stays where it was written, and a
+                    // directory here holding part of what was kept there reads as one that kept less.
+                    if (asked > 1)
+                    {
+                        details.Add(
+                            $"{host.Host}: brought back {brought.Files.Count} of {asked} file(s) before the pull stopped"
+                            + (brought.Files.Count > 0 ? ", each left where it was written:" : string.Empty));
+                        details.AddRange(brought.Files.Select(file => $"  {file}"));
+                        details.Add($"{host.Host}: not brought back:");
+                        details.AddRange(brought.Left.Select(file => $"  {file}"));
+                    }
+
+                    return CommandOutcome.Failed(
+                        stopped.ExitCode,
+                        brought.Files.Count > 0 ? $"the pull from {host.Host} stopped part way: {stopped.Why}" : stopped.Why,
+                        details);
+                }
+
                 details.Add(options.DryRun
                     ? $"{host.Host}: would bring back {brought.Files.Count} file(s) from '{destination}'"
                     : $"{host.Host}: brought back {brought.Files.Count} file(s)");
@@ -1073,16 +1102,40 @@ public sealed class SyncService(
 
         foreach (var path in listed.Files)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
 
-            // Checked against the hash the far side took before sending, inside ReadFileAsync, and again once it is
-            // written here.
-            await CopyVerifiedAsync(transport, sourceRoot, _localTransport, destinationRoot, path, written: null, cancellationToken).ConfigureAwait(false);
+                // Checked against the hash the far side took before sending, inside ReadFileAsync, and again once it
+                // is written here.
+                await CopyVerifiedAsync(transport, sourceRoot, _localTransport, destinationRoot, path, written: null, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (StopOf(ex, path, destinationRoot, brought.Count, cancellationToken) is { } stop)
+            {
+                return new SyncPull(brought, listed.Links) { Stopped = stop, Left = [.. listed.Files.Skip(brought.Count)] };
+            }
+
             brought.Add(path);
         }
 
         return new SyncPull(brought, listed.Links);
     }
+
+    /// <summary>
+    /// How a pull that stopped at <paramref name="path"/> for <paramref name="failure"/> says so, or
+    /// <see langword="null"/> for a failure that is not a file's: an interruption before anything crossed, which leaves
+    /// nothing to account for, and a defect of this tool.
+    /// </summary>
+    private static SyncPullStop? StopOf(Exception failure, string path, string destinationRoot, int brought, CancellationToken cancellationToken)
+        => failure switch
+        {
+            HarnessException refused => new SyncPullStop(refused.ExitCode, refused.Message),
+            IOException or UnauthorizedAccessException
+                => new SyncPullStop(HarnessExit.CommandFailed, $"'{path}' could not be written under '{destinationRoot}': {failure.Message}"),
+            OperationCanceledException when cancellationToken.IsCancellationRequested && brought > 0
+                => new SyncPullStop(HarnessExit.Cancelled, "it was interrupted."),
+            _ => null,
+        };
 
     /// <summary>
     /// What a pull of <paramref name="paths"/> brings back, nothing brought yet: each file named, as named, and every file
@@ -1110,7 +1163,9 @@ public sealed class SyncService(
                 continue;
             }
 
-            var directory = path.TrimEnd('/', '\\');
+            // Either separator, the whole way along: a shell on Windows completes every part of a path with a backslash,
+            // and a host that is not Windows read 'out\deep' as one name, of a directory that is not there.
+            var directory = path.Replace('\\', '/').TrimEnd('/');
 
             if (directory is "" or ".")
             {
@@ -1129,7 +1184,7 @@ public sealed class SyncService(
             {
                 throw new HarnessException(
                     HarnessExit.CommandFailed,
-                    $"'{directory.Replace('\\', '/')}/' holds no file in '{sourceRoot}' on {transport.Host}"
+                    $"'{directory}/' holds no file in '{sourceRoot}' on {transport.Host}"
                     + (listing.Links.Count > 0 ? $", only {listing.Links.Count.ToString(CultureInfo.InvariantCulture)} link(s), which are never followed" : string.Empty)
                     + ": nothing to bring back from it.");
             }

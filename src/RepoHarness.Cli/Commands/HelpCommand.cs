@@ -567,7 +567,9 @@ internal static class HelpCommand
             + $"{(SyncServe.LargestDirectoryPulled / (1024 * 1024)).ToString(CultureInfo.InvariantCulture)} MiB together fails the pull before "
             + "any file crosses: each file comes in a request of its own, so a directory named is a step's kept outputs, never "
             + "a build tree - keep that as one archive. A link below it is never followed: it is named, and nothing is brought "
-            + "back for it. With --dry-run the host is asked what the directory holds, and nothing is brought.");
+            + "back for it. With --dry-run the host is asked what the directory holds, and nothing is brought. A pull that "
+            + "stops part way - a file gone, a host that stopped answering - fails naming each file it had brought back, which "
+            + "stays where it was written, and each it had not.");
         builder.AppendLine();
         builder.AppendLine("Outputs are kept as soon as the step that made them passes, not at the end of the");
         builder.AppendLine("run, because a later step reads them. A step that FAILED keeps nothing, although it");
@@ -1560,15 +1562,20 @@ internal static class HelpCommand
             + $"with one running it changes nothing and names each by its process and command ({HarnessExit.Refused}), and with "
             + $"{ToolUpdateService.WaitOption} it waits for them to end, saying who it waits for as it starts and every "
             + $"{ToolUpdateService.SaidAgainEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - but for a wait asked from inside "
-            + $"a running {ToolPackage.Id}, which would never end and is refused. It says the update done only once the tool is listed "
-            + $"as that release, and a failure with what dotnet said and what is listed since ({HarnessExit.CommandFailed}). A tool "
+            + $"a running {ToolPackage.Id}, which would never end and is refused, as is one where the process table names no "
+            + "process's parent. Once the update has begun nothing interrupts it, Ctrl+C included, and what it left is read back: "
+            + "it says the update done only once the tool is listed as that release, and a failure with what dotnet said and what "
+            + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}). Where nuget.org does not say which release "
+            + "is the newest it says why - no route to it, no answer in time, an answer it cannot read - and changes nothing, "
+            + "unless the copy asking is itself a release newer than the installed one, which it then moves to, saying so. A tool "
             + $"installed with dotnet's --tool-path is named with {ToolUpdateService.ToolPathOption}.");
         builder.AppendLine();
         AppendWrapped(
             builder,
             $"Windows replaces no program while it runs, and '{ToolPackage.Command} {ToolUpdateService.CommandName}' is itself a "
-            + $"{ToolPackage.Id} running: there it changes nothing and says the one command that does, which is the door on every system - "
-            + "the newest release run beside the installed one, without installing it, its exit code the update's:");
+            + $"{ToolPackage.Id} running: there it changes nothing and says the command that does, with the options it was typed "
+            + "with - the door on every system, which is the newest release run beside the installed one, without installing it, "
+            + $"its exit code the update's. With {ToolUpdateService.WaitOption}:");
         builder.AppendLine();
         builder.AppendLine($"  {ToolUpdateService.FromBeside(new ToolUpdateRequest(Wait: true))}");
         builder.AppendLine();

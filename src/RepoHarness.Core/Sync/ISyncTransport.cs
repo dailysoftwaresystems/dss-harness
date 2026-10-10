@@ -218,8 +218,9 @@ public interface ISyncTransport
     /// <param name="relativeDirectory">The directory, relative to the root.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
     /// <exception cref="HarnessException">
-    /// No directory is at the path - nothing, or a file - or it holds more than a pull brings back, said by name as a
-    /// transfer that failed, <see cref="HarnessExit.CommandFailed"/>; or the path leaves the copy, refused.
+    /// No directory is at the path - nothing, or a file - or it holds more than a pull brings back, or it could not be
+    /// read, said by name as a transfer that failed, <see cref="HarnessExit.CommandFailed"/>; or the path leaves the
+    /// copy, refused.
     /// </exception>
     Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default);
 }

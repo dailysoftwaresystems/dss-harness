@@ -1139,19 +1139,36 @@ process named `dssharness` runs on the machine: with one running it changes noth
 each by its process id and the command it was asked, never the rest of its line, which may hold
 an input's value (exit 13); with `--wait` it looks again every five seconds, saying who it waits
 for as it starts and every five minutes; and a wait asked from inside a running DssHarness, which
-would never end, is refused. It says the update done only once `dotnet tool list` shows that
-release, and a failure with what dotnet said, each DssHarness that started while it ran, and
-what is listed since (exit 20). The command asking is a DssHarness too: typed by its name on
-Windows it is itself what stops the update, so there it changes nothing and says the one command
-that does, on every system - `dotnet tool exec DssHarness --yes --source <nuget.org> --
-update-tool`, the newest release run as the program `dotnet` from the package cache, holding none
-of the installed files (measured: an update beside such a copy went through in a second), with
-the update's own outcome as its exit code. Elsewhere the installed tool replaces its own files
-while it runs, having first loaded every assembly beside it (`IOwnProgram.LoadWhole`), so nothing
-it has left to do asks for a file that is gone. A DssHarness is told by the name of its program,
-as a host's is, so a build from source running beside the installed tool is counted: wrongly, and
-safely. What is left open is the moment between the last look and the update, in which a command
-just started can still stop it: the failure then names that command.
+would never end, is refused - as is any wait where the table was read by names alone (a degraded
+reading names no process's parent, so such a wait could not be told from one that ends), the
+refusal then saying why the table was. Once the update has begun nothing stops it, nor the reading
+of what it left: both run under no cancellation, and `update-tool` is among the commands past a
+point of no return (`PointOfNoReturn`), which the command line waits two minutes for after Ctrl+C,
+because an update cut off part way leaves a machine with no tool and a command that says nothing
+of it. It says the update done only once `dotnet tool list` shows that release, and a failure with
+what dotnet said, each DssHarness that started while it ran, and what is listed since - or, where
+that listing failed too, why in dotnet's words (exit 20). Which release is the newest is asked of
+nuget.org (`IPublishedToolVersions`), and an answer that does not come is said with its cause
+(`PublishedAnswer.Untold`): the feed not reached, no answer in three seconds, a status that is no
+success, a list or a leaf this build cannot read - put right in different places, and once said as
+one. Nothing is changed then, unless the copy asking is itself a release newer than the installed
+one, which the tool is moved to with a line saying so; a copy that is no release is never that, as
+nuget.org holds none. Versions neither of which a release can be told newer than are said as that,
+the feed never asked. The command asking is a DssHarness too: typed by its name on Windows it is
+itself what stops the update, so there it changes nothing and says the command that does, with the
+options it was typed with (a path holding a space in quotes), on every system - `dotnet tool exec
+DssHarness --yes --source <nuget.org> -- update-tool`, the newest release run as the program
+`dotnet` from the package cache, holding none of the installed files (measured: an update beside
+such a copy went through in a second), with the update's own outcome as its exit code. Elsewhere
+the installed tool replaces its own files while it runs, having first loaded every assembly beside
+it (`IOwnProgram.LoadWhole`), so nothing it has left to do asks for a file that is gone. A
+DssHarness is told by the name of its program, as a host's is, so a build from source running
+beside the installed tool is counted: wrongly, and safely. On macOS that name is read from a
+listing of its own (`ps -o comm=`), since the path of a program may hold a space and the listing
+that carries the command line does not say where the program ends: named by the first word of its
+line, a tool kept under a volume called `My Disk` was a process called `My`, and not counted. What
+is left open is the moment between the last look and the update, in which a command just started
+can still stop it: the failure then names that command.
 
 Both ends must be the same build, so before anything runs on a host:
 
@@ -2446,8 +2463,16 @@ directory here cannot drift apart.
   request of its own. The side that holds the directory bounds it before a file of it is read - 256
   files, 1 GiB together, no file past what one request carries - and one that is not there, is a
   file, or holds no file fails the pull by name (`SyncService.ListedForPullAsync`), every directory
-  before any file has crossed. Each file brought back is named in the report, and each link passed
-  over; a dry run asks the host and names the same files.
+  before any file has crossed. A directory that cannot be read where it is fails the pull by name
+  too, never as a defect of the tool. It is asked of the host with forward separators the whole way
+  along, however it was typed: a shell on Windows completes each part with a backslash, which a
+  host that is not Windows read as one name. Each file brought back is named in the report, and
+  each link passed over; a dry run asks the host and names the same files. A pull that stops part
+  way - a file gone since it was listed, one that did not land intact, a host that stopped
+  answering, an interruption - ends there (`SyncPull.Stopped`) and fails as what stopped it does,
+  naming each file it had brought back, which stays where it was written, and each it had not:
+  raised as the one failure it stopped at, a directory here held part of what the host kept, and
+  nothing said which part.
 
 ## Predefined runners
 

@@ -18,7 +18,9 @@ That runs the newest release beside the installed one and updates it only once n
 process is running on the machine, naming each it waits for. A bare `dotnet tool update` typed
 beside a running command takes the tool away from every command typed meanwhile, and on Windows
 fails. `dssharness update-tool` is the same door typed short, where the system lets a running
-program be replaced; on Windows it changes nothing and says the line above.
+program be replaced; on Windows it changes nothing and says the line above, with the options it
+was typed with. Once the update has begun nothing interrupts it, and it is said done only once the
+tool is listed as the new release.
 
 ## Why
 

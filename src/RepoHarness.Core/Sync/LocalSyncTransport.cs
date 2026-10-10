@@ -763,9 +763,24 @@ public sealed class LocalSyncTransport(
     /// </remarks>
     public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
     {
+        var named = relativeDirectory.Replace('\\', '/').TrimEnd('/') + "/";
+
+        try
+        {
+            return Task.FromResult(ListFiles(root, relativeDirectory, named, cancellationToken));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A directory this user may not read, or one that changed under the walk: the pull's failure, by name. Left
+            // to the runtime it ended the host's command as a defect of this tool, the path inside the system's words.
+            throw new HarnessException(HarnessExit.CommandFailed, $"'{named}' could not be listed in '{root}': {ex.Message}", ex);
+        }
+    }
+
+    private SyncDirectoryListing ListFiles(string root, string relativeDirectory, string named, CancellationToken cancellationToken)
+    {
         var expanded = Home(root);
         var directory = Resolve(root, relativeDirectory);
-        var named = relativeDirectory.Replace('\\', '/').TrimEnd('/') + "/";
 
         if (!_fileSystem.DirectoryExists(directory))
         {
@@ -825,10 +840,10 @@ public sealed class LocalSyncTransport(
                 + "that holds less, or the files, or keep the smaller thing a later step actually reads.");
         }
 
-        return Task.FromResult(new SyncDirectoryListing([.. files.OrderBy(file => file.Path, StringComparer.Ordinal)])
+        return new SyncDirectoryListing([.. files.OrderBy(file => file.Path, StringComparer.Ordinal)])
         {
             Links = [.. links.Order(StringComparer.Ordinal)],
-        });
+        };
     }
 
     /// <summary>

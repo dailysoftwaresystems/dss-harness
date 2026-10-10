@@ -184,11 +184,27 @@ internal sealed class RecordingTransport(
         CancellationToken cancellationToken = default)
         => inner.RemoveEmptyDirectoriesAsync(root, directories, cancellationToken);
 
+    /// <summary>
+    /// Which read to fail, counting from one, or zero to fail none: what a link that dropped part way through a pull
+    /// looks like from here.
+    /// </summary>
+    public int FailsRead { get; init; }
+
+    private int _reads;
+
     public Task<byte[]> ReadFileAsync(string root, string relativePath, CancellationToken cancellationToken = default)
-        => inner.ReadFileAsync(root, relativePath, cancellationToken);
+        => ++_reads == FailsRead
+            ? throw new HarnessException(HarnessExit.HostUnavailable, $"the link dropped reading '{relativePath}'")
+            : inner.ReadFileAsync(root, relativePath, cancellationToken);
+
+    /// <summary>Every directory the copy was asked to list, as it was asked.</summary>
+    public List<string> Listed { get; } = [];
 
     public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
-        => inner.ListFilesAsync(root, relativeDirectory, cancellationToken);
+    {
+        Listed.Add(relativeDirectory);
+        return inner.ListFilesAsync(root, relativeDirectory, cancellationToken);
+    }
 
     public Task<CopyRemoval> RemoveCopyAsync(string root, CancellationToken cancellationToken = default)
         => inner.RemoveCopyAsync(root, cancellationToken);

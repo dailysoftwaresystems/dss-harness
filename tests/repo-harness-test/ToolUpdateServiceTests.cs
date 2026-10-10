@@ -202,6 +202,7 @@ public sealed class ToolUpdateServiceTests
     [InlineData(false, null, "dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool")]
     [InlineData(true, null, "dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool --wait")]
     [InlineData(true, @"C:\tools", @"dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool --tool-path C:\tools --wait")]
+    [InlineData(false, @"C:\My Tools", @"dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool --tool-path ""C:\My Tools""")]
     public async Task OnWindows_TheInstalledToolChangesNothing_AndSaysTheCommandThatUpdatesItFromBesideIt(bool wait, string? toolPath, string command)
     {
         var kit = new Kit(installed: "0.6.12", newest: "0.6.13", PlatformId.Windows, program: @"C:\Users\dev\.dotnet\tools\dssharness.exe");
@@ -307,14 +308,17 @@ public sealed class ToolUpdateServiceTests
     }
 
     /// <summary>
-    /// A feed that does not answer leaves nothing to move the tool to, and nothing is changed - unless the copy running
-    /// is itself a newer release than the installed one, which is then the release it is moved to.
+    /// A feed that does not say which release is newest leaves nothing to move the tool to, and nothing is changed, with
+    /// why it did not - unless the copy running is itself a release newer than the installed one, which is then the
+    /// release it is moved to, and said to be, with why the feed named none: the tool is moved to a release nobody
+    /// named. A copy that is no release is never that: nuget.org, the one place the tool is installed from, holds none.
     /// </summary>
     [Theory]
     [InlineData("0.6.12", null)]
     [InlineData("0.6.11", null)]
+    [InlineData("0.6.14-beta.1", null)]
     [InlineData("0.6.13", "0.6.13")]
-    public async Task AFeedThatDoesNotAnswer_ChangesNothing_UnlessTheCopyRunningIsNewerThanTheInstalledOne(string running, string? movedTo)
+    public async Task AFeedThatDoesNotAnswer_ChangesNothing_UnlessTheCopyRunningIsAReleaseNewerThanTheInstalledOne(string running, string? movedTo)
     {
         var kit = new Kit(installed: "0.6.12", newest: null, running: running);
 
@@ -324,15 +328,153 @@ public sealed class ToolUpdateServiceTests
         {
             Assert.Equal(HarnessExit.Success, outcome.ExitCode);
             Assert.Contains($"dotnet tool update --global DssHarness --version {movedTo} --source {Source}", kit.Dotnet.Ran);
+            Assert.Equal(
+                "update-tool: nuget.org did not say which release of DssHarness is the newest - it could not be reached: no such host is known - "
+                + $"so the release this copy is, {movedTo}, is the one the 0.6.12 installed is moved to",
+                kit.Said()[0]);
             return;
         }
 
         Assert.Equal(
             (HarnessExit.CommandFailed,
-                "nuget.org did not say which release of DssHarness is the newest - no route to it, or no answer in time - so nothing was "
-                + $"changed: DssHarness 0.6.12 is installed in {Global}"),
+                "nuget.org did not say which release of DssHarness is the newest - it could not be reached: no such host is known - so nothing "
+                + $"was changed: DssHarness 0.6.12 is installed in {Global}"),
             (outcome.ExitCode, outcome.Message));
         Assert.Equal(["dotnet tool list --global --format json"], kit.Dotnet.Ran);
+    }
+
+    /// <summary>
+    /// Where neither what is installed nor the copy asking has a version a release can be told newer than, the feed is
+    /// never asked, and that is what is said: not that nuget.org did not answer, which it was never given the chance to.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "DssHarness is not installed in this user's global tools, and this copy's own version, 'dev', is not one a release can be told newer than")]
+    [InlineData("odd", "DssHarness odd is installed in this user's global tools, and neither 'odd' nor this copy's own version, 'dev', is one a release can be told newer than")]
+    public async Task VersionsNoReleaseCanBeToldNewerThan_AreSaidAsThat_AndTheFeedIsNeverAsked(string? installed, string why)
+    {
+        var kit = new Kit(installed, newest: "0.6.13", running: "dev");
+
+        var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(), Token);
+
+        Assert.Equal(
+            (HarnessExit.CommandFailed, $"which release of DssHarness is the newest was not asked of nuget.org, so nothing was changed: {why}"),
+            (outcome.ExitCode, outcome.Message));
+        Assert.Equal(0, kit.Feed.Asked);
+        Assert.Equal(["dotnet tool list --global --format json"], kit.Dotnet.Ran);
+    }
+
+    /// <summary>
+    /// A process table read by names alone still tells which processes are a DssHarness, so an update beside one is
+    /// refused as ever - saying that what each was asked could not be read, and why, where its line would otherwise
+    /// look like a process asked nothing. It names no process's parent, so a wait is refused too: one asked from inside
+    /// a running DssHarness could not be told from one that ends, and would be waited on for good without a word.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ATableReadByNamesAlone_StillRefusesAnUpdateBesideARunningDssHarness_AndNeverWaits(bool wait)
+    {
+        var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
+        kit.Table = new ScriptedTable([[new SampledProcess(4242, null, "dssharness", null, null)]]) { Degraded = "the query was refused." };
+
+        var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(wait), Token);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Equal(TimeSpan.Zero, kit.Waited);
+        Assert.Equal(["dotnet tool list --global --format json"], kit.Dotnet.Ran);
+
+        if (wait)
+        {
+            Assert.Equal(
+                $"DssHarness in {Global} was not updated from 0.6.12 to 0.6.13: 1 DssHarness process is running on this machine, and which "
+                + "process started which could not be read - the query was refused - so a wait asked from inside one of them could not be told "
+                + "from one that ends. Nothing was changed.",
+                outcome.Message);
+            Assert.Equal(["  pid 4242", "Run again once each has ended."], outcome.Details);
+        }
+        else
+        {
+            Assert.Equal(
+                ["  pid 4242", "What each was asked could not be read: the query was refused.", "Run again once each has ended, or with --wait to wait for them."],
+                outcome.Details);
+        }
+    }
+
+    /// <summary>A table read by names alone that names no DssHarness holds nothing up: the names are what an update turns on.</summary>
+    [Fact]
+    public async Task ATableReadByNamesAlone_ThatNamesNoDssHarness_HoldsNothingUp()
+    {
+        var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
+        kit.Table = new ScriptedTable([[new SampledProcess(4242, null, "dotnet", null, null)]]) { Degraded = "the query was refused." };
+
+        var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(Wait: true), Token);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+    }
+
+    /// <summary>
+    /// Once the update has begun nothing stops it, nor the reading of what it left: interrupted as it starts, it still
+    /// runs to its end and says what is listed since. Cut off part way it left a machine with no tool, or half of one,
+    /// and a command that said nothing of which.
+    /// </summary>
+    [Fact]
+    public async Task OnceTheUpdateHasBegun_NothingStopsIt_NorTheReadingOfWhatItLeft()
+    {
+        var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
+        using var interrupted = CancellationTokenSource.CreateLinkedTokenSource(Token);
+
+        kit.Dotnet.Running = ran =>
+        {
+            if (ran.Contains(" update ", StringComparison.Ordinal))
+            {
+                interrupted.Cancel();
+            }
+        };
+
+        var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(), interrupted.Token);
+
+        Assert.Equal(
+            (HarnessExit.Success, $"updated DssHarness in {Global} from 0.6.12 to 0.6.13, and it is listed there as 0.6.13 since"),
+            (outcome.ExitCode, outcome.Message));
+
+        // The first listing may be stopped, since nothing has been changed by then; nothing after it may.
+        Assert.Equal([true, false, false], kit.Dotnet.Stoppable);
+    }
+
+    /// <summary>
+    /// An update whose reading back fails says so in dotnet's own words, whether dotnet called the update done or not:
+    /// what the machine now runs is then not known, and "could not be listed" alone sent nobody anywhere.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnUpdateThatCannotBeReadBack_SaysWhyInDotnetsOwnWords(bool changed)
+    {
+        var kit = new Kit(installed: "0.6.12", newest: "0.6.13");
+        var unlisted = new ProcessResult(1, string.Empty, "The tools manifest is locked.\n", TimeSpan.Zero, TimedOut: false);
+
+        kit.Dotnet.Running = ran => kit.Dotnet.List = ran.Contains(" update ", StringComparison.Ordinal) ? unlisted : kit.Dotnet.List;
+
+        if (!changed)
+        {
+            kit.Dotnet.Change = new ProcessResult(1, string.Empty, "Access is denied.\n", TimeSpan.Zero, TimedOut: false);
+        }
+
+        var outcome = await kit.Service().RunAsync(new ToolUpdateRequest(), Token);
+
+        const string Unknown = "hat is listed there since is not known: its tools could not be listed (exit 1): The tools manifest is locked";
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+
+        if (changed)
+        {
+            Assert.Equal($"dotnet said it updated DssHarness in {Global} from 0.6.12 to 0.6.13, and w{Unknown}.", outcome.Message);
+        }
+        else
+        {
+            Assert.Equal($"updating DssHarness in {Global} from 0.6.12 to 0.6.13 failed (exit 1): Access is denied.", outcome.Message);
+            Assert.Equal([$"W{Unknown}."], outcome.Details);
+        }
     }
 
     /// <summary>Tools that cannot be listed are a failure saying what dotnet said, with nothing changed.</summary>
@@ -375,6 +517,8 @@ public sealed class ToolUpdateServiceTests
 
         public ScriptedDotnet Dotnet { get; } = new(installed, newest);
 
+        public PublishedVersionsDouble Feed { get; } = new(newest);
+
         public ScriptedTable Table { get; set; } = new([[]]);
 
         public OwnProgramDouble Program { get; } = new(program);
@@ -388,7 +532,7 @@ public sealed class ToolUpdateServiceTests
             => new(
                 Table,
                 Dotnet,
-                new PublishedVersionsDouble(newest),
+                Feed,
                 new RunningToolDouble(running),
                 _harness.Identity,
                 Program,
@@ -411,11 +555,14 @@ public sealed class ToolUpdateServiceTests
     {
         private int _read;
 
+        /// <summary>Why every reading is less than it should be, where a test says it is.</summary>
+        public string? Degraded { get; init; }
+
         public Task<ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
         {
             var reading = readings[Math.Min(_read++, readings.Length - 1)];
 
-            return Task.FromResult(new ProcessTableReading(reading, null));
+            return Task.FromResult(new ProcessTableReading(reading, Degraded));
         }
     }
 
@@ -428,6 +575,9 @@ public sealed class ToolUpdateServiceTests
         private int _listed;
 
         public List<string> Ran { get; } = [];
+
+        /// <summary>Whether each command, in turn, was given a token that can stop it.</summary>
+        public List<bool> Stoppable { get; } = [];
 
         /// <summary>What each listing says is installed, in turn; the last from then on.</summary>
         public string?[] Listed { get; set; } = [installed, newest ?? "0.6.13"];
@@ -448,6 +598,7 @@ public sealed class ToolUpdateServiceTests
             var ran = string.Join(' ', [request.FileName, .. request.Arguments]);
 
             Ran.Add(ran);
+            Stoppable.Add(cancellationToken.CanBeCanceled);
             Running?.Invoke(ran);
 
             if (!ran.Contains(" list ", StringComparison.Ordinal))

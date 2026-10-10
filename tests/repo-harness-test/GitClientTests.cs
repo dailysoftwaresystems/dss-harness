@@ -375,6 +375,82 @@ public sealed class GitClientTests
         Assert.Empty(await harness.GitClient.ListHeldAsAtAsync(temp.Path, second, [], cancellationToken));
     }
 
+    /// <summary>
+    /// A path holding letters outside ASCII, or a space, is compared like any other: it is written into the question's
+    /// index and read back from git's answer byte for byte, so a file held as the commit holds it is listed, and one a
+    /// byte off is not, whatever its name.
+    /// </summary>
+    [Fact]
+    public async Task ListHeldAsAtAsync_ComparesAPathHoldingLettersOutsideAscii_AsAnyOther()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        const string Same = "relat\u00f3rios/medi\u00e7\u00e3o final.txt";
+        const string Changed = "relat\u00f3rios/\u65e5\u672c\u8a9e.txt";
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("keep.txt", "kept\n");
+        await harness.CommitAllAsync(temp.Path, "first", cancellationToken);
+        var first = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+        temp.WriteFile(Same, "one\n");
+        temp.WriteFile(Changed, "one\n");
+        await harness.CommitAllAsync(temp.Path, "second", cancellationToken);
+        var second = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+
+        await harness.GitClient.ResetToAsync(temp.Path, first, cancellationToken);
+        temp.WriteFile(Changed, "one\n.");
+
+        var held = await harness.GitClient.ListHeldAsAtAsync(temp.Path, second, [Same, Changed], cancellationToken);
+
+        Assert.Equal([Same], held);
+    }
+
+    /// <summary>
+    /// The index a comparison writes for itself is removed where it can be, and where it cannot nothing is raised for
+    /// it: raised as the comparison ended, it took the place of whatever the comparison had failed with, and failed one
+    /// that had been made.
+    /// </summary>
+    [Fact]
+    public void AQuestionsOwnTemporaryFile_ThatCannotBeRemoved_RaisesNothing()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.Combine("held", "dssharness-index-test");
+        temp.WriteFile(Path.Combine("held", "dssharness-index-test"), "index");
+
+        if (OperatingSystem.IsWindows())
+        {
+            // Open with no sharing: Windows deletes no file another handle holds so.
+            using (new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                GitClient.Discard(file);
+                Assert.True(File.Exists(file));
+            }
+        }
+        else
+        {
+            Assert.SkipWhen(Environment.UserName == "root", "No directory refuses root.");
+
+            // A directory that may not be written loses no entry.
+            File.SetUnixFileMode(temp.Combine("held"), UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+            try
+            {
+                GitClient.Discard(file);
+                Assert.True(File.Exists(file));
+            }
+            finally
+            {
+                File.SetUnixFileMode(temp.Combine("held"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+        }
+
+        GitClient.Discard(file);
+        GitClient.Discard(file);
+
+        Assert.False(File.Exists(file));
+    }
+
     /// <summary>Resetting to a commit moves HEAD and the index there, and leaves every file in the work tree as it was.</summary>
     [Fact]
     public async Task ResetToAsync_MovesHeadAndTheIndex_AndNoFile()

@@ -10,8 +10,9 @@ public sealed class PointOfNoReturnTests
 {
     /// <summary>
     /// Every command that finishes what it began once it has written - a removal, a hand-over, a move of an agent's base, a
-    /// fold, and a host agent, which may be running one of them for another machine - is waited for after Ctrl+C as long as
-    /// a deletion expects; a command that leaves nothing half written when it stops is not.
+    /// fold, a host agent, which may be running one of them for another machine, and an update of the installed tool,
+    /// which is read back once it has begun - is waited for after Ctrl+C as long as a deletion expects; a command that
+    /// leaves nothing half written when it stops is not.
     /// </summary>
     [Theory]
     [InlineData(WorktreeService.DeleteCommand, true)]
@@ -23,6 +24,7 @@ public sealed class PointOfNoReturnTests
     [InlineData(AgentService.DeleteCommand, true)]
     [InlineData(OrchestratorService.DeleteCommand, true)]
     [InlineData(HostAgentProtocol.CommandName, true)]
+    [InlineData(ToolUpdateService.CommandName, true)]
     [InlineData(WorktreeService.ListCommand, false)]
     [InlineData(OrchestratorService.ListCommand, false)]
     [InlineData("build", false)]

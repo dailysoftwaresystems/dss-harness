@@ -1092,12 +1092,24 @@ public sealed partial class HelpTests
             $"only while no other DssHarness process runs on the machine: with one running it changes nothing and names each by its process and "
             + $"command ({HarnessExit.Refused}), and with --wait it waits for them to end, saying who it waits for as it starts and every "
             + $"{ToolUpdateService.SaidAgainEvery.TotalMinutes} minutes - but for a wait asked from inside a running DssHarness, which would never "
-            + "end and is refused.",
+            + "end and is refused, as is one where the process table names no process's parent.",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Once the update has begun nothing interrupts it, Ctrl+C included, and what it left is read back: it says the update done only once "
+            + $"the tool is listed as that release, and a failure with what dotnet said and what is listed since, or why that is not known "
+            + $"({HarnessExit.CommandFailed}).",
+            prose,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Where nuget.org does not say which release is the newest it says why - no route to it, no answer in time, an answer it cannot read - "
+            + "and changes nothing, unless the copy asking is itself a release newer than the installed one, which it then moves to, saying so.",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
             "Windows replaces no program while it runs, and 'dssharness update-tool' is itself a DssHarness running: there it changes nothing and "
-            + "says the one command that does, which is the door on every system",
+            + "says the command that does, with the options it was typed with - the door on every system, which is the newest release run beside "
+            + "the installed one, without installing it, its exit code the update's. With --wait:",
             prose,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1133,6 +1145,11 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains("A link below it is never followed: it is named, and nothing is brought back for it.", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A pull that stops part way - a file gone, a host that stopped answering - fails naming each file it had brought back, which stays "
+            + "where it was written, and each it had not.",
+            text,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
