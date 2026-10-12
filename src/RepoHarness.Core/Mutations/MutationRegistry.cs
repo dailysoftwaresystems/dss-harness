@@ -20,12 +20,39 @@ public enum RedKind
     BuildRed,
 }
 
-/// <summary>One replacement an arm makes: a file, the text in it replaced, and what replaces it.</summary>
-/// <param name="Site">The file mutated, relative to the repository root.</param>
+/// <summary>One text of a site replaced: the file holding it, and the file holding what replaces it.</summary>
 /// <param name="Before">The file holding the text replaced, relative to the repository root.</param>
 /// <param name="After">The file holding what replaces it, relative to the repository root.</param>
 /// <param name="Line">The registry line declaring it: the arm's own A row, or an M row.</param>
-public sealed record MutationSite(string Site, string Before, string After, int Line);
+public sealed record SiteText(string Before, string After, int Line);
+
+/// <summary>
+/// One file an arm mutates: the text in it replaced, what replaces it, and each further text of the same file replaced
+/// with it.
+/// </summary>
+/// <param name="Site">The file mutated, relative to the repository root.</param>
+/// <param name="Before">The file holding the text replaced, relative to the repository root.</param>
+/// <param name="After">The file holding what replaces it, relative to the repository root.</param>
+/// <param name="Line">The registry line that first names the file: the arm's own A row, or an M row.</param>
+public sealed record MutationSite(string Site, string Before, string After, int Line)
+{
+    /// <summary>
+    /// The file's other replacements, each an M row naming the file again, in the order they are declared: a mutant that
+    /// is several places of one file, apart from each other, is made as one edit of it - each text found in the file as
+    /// the tree holds it, never as an earlier replacement left it - and the file put back whole.
+    /// </summary>
+    public IReadOnlyList<SiteText> Further { get; init; } = [];
+
+    /// <summary>Every replacement made in the file, the row that first names it first.</summary>
+    public IReadOnlyList<SiteText> Texts => [new SiteText(Before, After, Line), .. Further];
+
+    /// <summary>Whether <paramref name="other"/> is the same file with the same replacements, in the same order.</summary>
+    public bool Equals(MutationSite? other)
+        => other is not null && Site == other.Site && Before == other.Before && After == other.After && Line == other.Line && Further.SequenceEqual(other.Further);
+
+    /// <inheritdoc/>
+    public override int GetHashCode() => HashCode.Combine(Site, Before, After, Line, Further.Count);
+}
 
 /// <summary>
 /// A BUILD-RED arm's paired positive control: a substitution at the arm's own site, of the pristine site, that must
@@ -87,15 +114,17 @@ public sealed record MutationArm
     public PairedControl? Control { get; init; }
 
     /// <summary>
-    /// Its M rows: other sites, mutated, restored and verified together with its own, for a mechanism that lives in
-    /// more than one file and is switched off only when every one of them is.
+    /// The other files its M rows name, mutated, restored and verified together with its own, for a mechanism that lives
+    /// in more than one file and is switched off only when every one of them is. An M row naming a file the arm already
+    /// mutates - its own, or one of these - is no other site: it is a further text of that one
+    /// (<see cref="MutationSite.Further"/>).
     /// </summary>
     public IReadOnlyList<MutationSite> Coupled { get; init; } = [];
 
     /// <summary>Its S row, or <see langword="null"/> where it runs on every selected leg.</summary>
     public ArmScope? Scope { get; init; }
 
-    /// <summary>Every site it mutates, its own first.</summary>
+    /// <summary>Every file it mutates, its own first, each once however many of its texts are replaced.</summary>
     public IReadOnlyList<MutationSite> Sites => [Own, .. Coupled];
 }
 

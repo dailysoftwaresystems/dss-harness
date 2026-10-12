@@ -155,6 +155,7 @@ public sealed class HostExecService(
                 // input on the host, which cancels the command there instead of leaving it running.
                 StandardInput = HostAgentProtocol.Input(request),
                 HoldStandardInputOpen = true,
+                StandardInputBeat = HostAgentProtocol.BeatOf(request),
 
                 // Both streams are shown line by line as they arrive, and are as long as what the command prints:
                 // the end of each is all the result keeps, for the message that says how the command ended.
@@ -181,6 +182,11 @@ public sealed class HostExecService(
                 },
             },
             cancellationToken).ConfigureAwait(false);
+
+        if (HostProbes.BeatLost(result) is { } unheard)
+        {
+            _output.Warn(CommandName, $"{host}: {unheard}");
+        }
 
         var shown = string.Join(' ', arguments);
 

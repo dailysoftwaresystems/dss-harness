@@ -2,7 +2,9 @@ namespace RepoHarness.Core.FileSystem;
 
 /// <summary>
 /// A directory of one use's own under the temporary directory, for files written only to hand to a
-/// program and read back, and removed once that use is done.
+/// program and read back, and removed once that use is done. Under a directory its user names
+/// instead, where what it holds is large enough to belong on that directory's volume: a system may
+/// keep its temporary directory in memory.
 /// </summary>
 /// <remarks>
 /// Made and written by whoever uses it, which says what failing to - a temporary directory this user
@@ -19,7 +21,8 @@ public sealed class ScratchDirectory : IDisposable
     /// <param name="fileSystem">What it is removed through.</param>
     /// <param name="purpose">A word for what it holds, in its name: <c>vcvars</c>, <c>ignore</c>.</param>
     /// <param name="warn">Says, for the command using it, that it could not be removed, and why.</param>
-    public ScratchDirectory(IFileSystem fileSystem, string purpose, Action<string> warn)
+    /// <param name="under">The directory it is made in, or <see langword="null"/> for the temporary directory.</param>
+    public ScratchDirectory(IFileSystem fileSystem, string purpose, Action<string> warn, string? under = null)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentException.ThrowIfNullOrWhiteSpace(purpose);
@@ -27,10 +30,13 @@ public sealed class ScratchDirectory : IDisposable
 
         _fileSystem = fileSystem;
         _warn = warn;
-        Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"dssharness-{purpose}-{Guid.NewGuid():N}");
+        Path = System.IO.Path.Combine(under ?? System.IO.Path.GetTempPath(), $"{Prefix}{purpose}-{Guid.NewGuid():N}");
     }
 
-    /// <summary>Where it is: a name no other use shares, under the temporary directory.</summary>
+    /// <summary>What every one's name starts with, before its purpose.</summary>
+    public const string Prefix = "dssharness-";
+
+    /// <summary>Where it is: a name no other use shares, under the temporary directory or the one its user named.</summary>
     public string Path { get; }
 
     public void Dispose()

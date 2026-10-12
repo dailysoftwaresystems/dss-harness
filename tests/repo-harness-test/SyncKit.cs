@@ -1,4 +1,5 @@
 using NSubstitute;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
@@ -26,12 +27,25 @@ internal static class SyncKit
         string destinationRoot,
         SyncOptions options,
         CancellationToken cancellationToken = default)
-        => await service.SyncAsync(
-            await service.ReadSourceAsync(sourceRoot, cancellationToken),
-            transport,
-            destinationRoot,
-            options,
-            cancellationToken);
+    {
+        using var reading = await service.ReadSourceAsync(sourceRoot, cancellationToken);
+
+        return await service.SyncAsync(reading, transport, destinationRoot, options, cancellationToken);
+    }
+
+    /// <summary>
+    /// A sync service that reads any tree as a reading that packs nothing - a reading, as the service's own contract
+    /// has it answer, where a bare double answers none - and does nothing else until a test says what.
+    /// </summary>
+    public static ISyncService ServiceDouble()
+    {
+        var sync = Substitute.For<ISyncService>();
+
+        sync.ReadSourceAsync(default!, TestContext.Current.CancellationToken)
+            .ReturnsForAnyArgs(call => Task.FromResult(MutationFixture.Reading(call.ArgAt<string>(0))));
+
+        return sync;
+    }
 
     /// <summary>
     /// A path beside <paramref name="temp"/>'s tree, never in it, for a copy a test syncs into: a copy inside the tree
@@ -105,7 +119,8 @@ internal static class SyncKit
         ISyncTransportFactory? transports = null,
         ISyncTransport? local = null,
         IFileSystem? fileSystem = null,
-        IGitClient? git = null)
+        IGitClient? git = null,
+        IProcessIdentity? identity = null)
     {
         var files = fileSystem ?? harness.FileSystem;
         var contexts = loader ?? harness.ContextLoader;
@@ -119,6 +134,7 @@ internal static class SyncKit
             git ?? harness.GitClient,
             files,
             harness.Platform,
+            identity ?? harness.Identity,
             harness.Output);
     }
 }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
@@ -50,19 +51,47 @@ public sealed class RemoteSyncTransport(
 
     /// <inheritdoc/>
     public async Task<bool> RootExistsAsync(string root, CancellationToken cancellationToken = default)
-        => (await InspectAsync(root, cancellationToken).ConfigureAwait(false)).Exists;
+        => (await InspectAsync(root, cancellationToken: cancellationToken).ConfigureAwait(false)).Exists;
 
     /// <inheritdoc/>
     public async Task<CopyMark> ReadMarkAsync(string root, CancellationToken cancellationToken = default)
-        => (await InspectAsync(root, cancellationToken).ConfigureAwait(false)).Mark;
+        => (await InspectAsync(root, cancellationToken: cancellationToken).ConfigureAwait(false)).Mark;
 
     /// <inheritdoc/>
     public Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default)
         => AskAsync<object>(SyncServe.Create, root, [mark.ToString()], cancellationToken);
 
     /// <inheritdoc/>
-    public Task InitialiseRepositoryAsync(string root, CancellationToken cancellationToken = default)
-        => AskAsync<object>(SyncServe.InitRepository, root, [], cancellationToken);
+    public Task InitialiseRepositoryAsync(string root, string? objectFormat = null, CancellationToken cancellationToken = default)
+        => AskAsync<object>(SyncServe.InitRepository, root, objectFormat is null ? [] : [objectFormat], cancellationToken);
+
+    /// <inheritdoc/>
+    public Task SendHistoryAsync(string root, string pack, long offset, byte[] piece, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(piece);
+
+        return AskAsync<object>(
+            SyncServe.HistoryPiece,
+            root,
+            [pack, offset.ToString(CultureInfo.InvariantCulture), HostArgument.Carrying(piece)],
+            cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<GitHeadMoved> TakeHistoryAsync(string root, GitHistoryTaken taken, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(taken);
+
+        return await AskAsync<GitHeadMoved>(
+                    SyncServe.TakeHistory,
+                    root,
+                    [taken.Pack ?? SyncServe.Nothing, taken.LeftOut ?? SyncServe.Nothing, .. SyncServe.Asking(taken.Wanted).Select(HostArgument.Of)],
+                    cancellationToken)
+                .ConfigureAwait(false)
+            ?? throw new HarnessException(
+                HarnessExit.HostUnavailable,
+                $"{Host} did not answer whether the HEAD of '{root}' was moved to {taken.Wanted.Commit}.");
+    }
 
     /// <inheritdoc/>
     public Task IndexAsync(string root, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
@@ -293,6 +322,13 @@ public sealed class RemoteSyncTransport(
                 + $"and arrived as {arrived}.");
     }
 
+    /// <inheritdoc/>
+    public async Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
+        => await AskAsync<SyncDirectoryListing>(SyncServe.List, root, [relativeDirectory], cancellationToken).ConfigureAwait(false)
+            ?? throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"{Host} did not answer with what '{relativeDirectory}' holds.");
+
     /// <summary>How many bytes <paramref name="answer"/> says its file holds, refused where no file it can carry holds that many.</summary>
     /// <exception cref="HarnessException">The length is below nothing or past <see cref="SyncServe.LargestFile"/>.</exception>
     private int Told(SyncFileAnswer answer, string relativePath)
@@ -303,8 +339,8 @@ public sealed class RemoteSyncTransport(
                 $"{Host} said '{relativePath}' holds {answer.Length.ToString(CultureInfo.InvariantCulture)} bytes, which no file it can send does.");
 
     /// <inheritdoc/>
-    public async Task<SyncInspectAnswer> InspectAsync(string root, CancellationToken cancellationToken = default)
-        => await AskAsync<SyncInspectAnswer>(SyncServe.Inspect, root, [], cancellationToken).ConfigureAwait(false)
+    public async Task<SyncInspectAnswer> InspectAsync(string root, GitHistoryWanted? wanted = null, CancellationToken cancellationToken = default)
+        => await AskAsync<SyncInspectAnswer>(SyncServe.Inspect, root, [.. SyncServe.Asking(wanted).Select(HostArgument.Of)], cancellationToken).ConfigureAwait(false)
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
                 $"{Host} did not answer whether '{root}' exists.");
@@ -362,6 +398,7 @@ public sealed class RemoteSyncTransport(
                     Arguments = [HostAgentProtocol.CommandName],
                     StandardInput = HostAgentProtocol.Input(request),
                     HoldStandardInputOpen = true,
+                    StandardInputBeat = HostAgentProtocol.BeatOf(request),
 
                     // The answer arrives on standard output as one line, read whole, and a file's content
                     // after it a line at a time, each taken as it comes and kept nowhere else; standard error
@@ -398,6 +435,11 @@ public sealed class RemoteSyncTransport(
                 },
                 cancellationToken)
             .ConfigureAwait(false);
+
+        if (HostProbes.BeatLost(result) is { } unheard)
+        {
+            _output.Warn(SyncService.CommandName, $"{Host}: {unheard}");
+        }
 
         if (lines.Finished is not { } exitCode)
         {

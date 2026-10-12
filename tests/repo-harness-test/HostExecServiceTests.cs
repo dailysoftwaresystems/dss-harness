@@ -93,6 +93,27 @@ public sealed class HostExecServiceTests
         Assert.Empty(fixture.Commands.Calls);
     }
 
+    /// <summary>
+    /// Where this machine could no longer write to the connection while the host worked, it says so, from this end: the
+    /// host stops what it was asked for a machine that has gone, and that machine is here, reading how its command
+    /// ended with nothing else to say why.
+    /// </summary>
+    [Fact]
+    public async Task ABeatThatCouldNoLongerBeWritten_IsSaidFromThisEnd_WithWhy()
+    {
+        var fixture = Create(respond: (_, command) => HostResults.Finished(command, HarnessExit.Cancelled) with { BeatLost = "The pipe is being closed." });
+
+        var outcome = await fixture.Service.RunAsync(Root, "vps", null, ["verify-git"], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Cancelled, outcome.ExitCode);
+        Assert.Contains(
+            "ssh vps: this machine could no longer write to the connection it holds open to the host (The pipe is being closed), and a host that "
+            + "hears nothing more from the machine that asked stops what it was asked",
+            fixture.Error.ToString() + fixture.Output,
+            StringComparison.Ordinal);
+        Assert.Null(HostProbes.BeatLost(HostResults.Ok(string.Empty)));
+    }
+
     [Fact]
     public async Task TheCommand_TravelsAsOneLineHeldOpen_AndItsExitCodeComesFromItsCompletionLine()
     {
@@ -111,6 +132,11 @@ public sealed class HostExecServiceTests
 
         // One line, with the input held open: stopping this process ends it on the host, which cancels the command.
         Assert.True(command.HoldStandardInputOpen);
+
+        // And a beat written on it for as long as it is held, which the request says: its silence cancels the command
+        // where the end of the input never reaches the host.
+        Assert.Equal(new InputBeat(TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds), HostAgentProtocol.BeatLine), command.StandardInputBeat);
+        Assert.Equal(HostAgentProtocol.BeatSeconds, JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!.BeatSeconds);
         Assert.Single(command.StandardInput.Read(), character => character == '\n');
         Assert.EndsWith("\n", command.StandardInput.Read(), StringComparison.Ordinal);
 

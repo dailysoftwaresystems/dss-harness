@@ -1,19 +1,36 @@
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 
 namespace RepoHarness.Core.Hosts;
+
+/// <summary>What a feed said of the newest release: which it is, or why that could not be told.</summary>
+/// <param name="Newest">The newest release, or <see langword="null"/> where the feed did not say.</param>
+/// <param name="Untold">
+/// Why it did not, as a clause about the feed - <c>it did not answer within 3 s</c> - or <see langword="null"/> where it
+/// did. Kept, because the causes are not one: a machine with no route out, a feed that is down, and an answer this build
+/// cannot read are put right in three different places.
+/// </param>
+public sealed record PublishedAnswer(SemanticVersion? Newest, string? Untold)
+{
+    /// <summary>The feed said <paramref name="newest"/>.</summary>
+    public static PublishedAnswer Of(SemanticVersion newest) => new(newest, null);
+
+    /// <summary>The feed did not say, <paramref name="why"/> being how.</summary>
+    public static PublishedAnswer NotTold(string why) => new(null, why);
+}
 
 /// <summary>Which versions of this tool are published where a host installs it from.</summary>
 public interface IPublishedToolVersions
 {
     /// <summary>
     /// The newest release published and listed that is newer than <paramref name="running"/>;
-    /// <paramref name="running"/> itself where none is; or <see langword="null"/> where that cannot be told:
-    /// no network, a feed that did not answer in time, or an answer that is not what it should be.
+    /// <paramref name="running"/> itself where none is; or why that cannot be told: no network, a feed that did not
+    /// answer in time, or an answer that is not what it should be.
     /// </summary>
     /// <param name="running">The build running here, which a release must be newer than to be named.</param>
     /// <param name="cancellationToken">Stops the asking; cancelling it is reported, not read as no answer.</param>
-    Task<SemanticVersion?> NewestAsync(SemanticVersion running, CancellationToken cancellationToken = default);
+    Task<PublishedAnswer> NewestAsync(SemanticVersion running, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IPublishedToolVersions"/>
@@ -67,7 +84,7 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
         });
     }
 
-    public async Task<SemanticVersion?> NewestAsync(SemanticVersion running, CancellationToken cancellationToken = default)
+    public async Task<PublishedAnswer> NewestAsync(SemanticVersion running, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(running);
 
@@ -76,37 +93,48 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
 
         try
         {
-            if (Releases(await ReadAsync(VersionsAddress, budget.Token).ConfigureAwait(false)) is not { } releases)
+            var (versions, refused) = await ReadAsync(VersionsAddress, budget.Token).ConfigureAwait(false);
+
+            if (versions is null)
             {
-                return null;
+                return PublishedAnswer.NotTold($"it answered {refused} for its list of versions");
+            }
+
+            if (Releases(versions) is not { } releases)
+            {
+                return PublishedAnswer.NotTold("its list of versions is not one this build reads");
             }
 
             foreach (var release in releases.Where(release => SemanticVersion.Compare(release, running) > 0))
             {
-                switch (IsListed(await ReadAsync(LeafAddress(release), budget.Token).ConfigureAwait(false)))
+                var (leaf, withheld) = await ReadAsync(LeafAddress(release), budget.Token).ConfigureAwait(false);
+
+                switch (IsListed(leaf))
                 {
                     case true:
-                        return release;
+                        return PublishedAnswer.Of(release);
 
                     case false:
                         continue;
 
                     default:
                         // Whether it is listed could not be told, and so neither can which release is newest.
-                        return null;
+                        return PublishedAnswer.NotTold(leaf is null
+                            ? $"it answered {withheld} for whether {release} is listed"
+                            : $"what it says of whether {release} is listed is not something this build reads");
                 }
             }
 
-            return running;
+            return PublishedAnswer.Of(running);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             // The budget ran out, which HttpClient reports as a cancellation of its own.
-            return null;
+            return PublishedAnswer.NotTold($"it did not answer within {Budget.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s");
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException ex)
         {
-            return null;
+            return PublishedAnswer.NotTold($"it could not be reached: {ex.Message.TrimEnd('.')}");
         }
     }
 
@@ -228,13 +256,13 @@ public sealed class NuGetPublishedToolVersions : IPublishedToolVersions, IDispos
         }
     }
 
-    /// <summary>The body of what <paramref name="address"/> answers, or <see langword="null"/> where it answers with no success.</summary>
-    private async Task<string?> ReadAsync(Uri address, CancellationToken cancellationToken)
+    /// <summary>The body of what <paramref name="address"/> answers; or, where it answers with no success, the status it answers with.</summary>
+    private async Task<(string? Body, string? Status)> ReadAsync(Uri address, CancellationToken cancellationToken)
     {
         using var response = await _client.Value.GetAsync(address, cancellationToken).ConfigureAwait(false);
 
         return response.IsSuccessStatusCode
-            ? await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false)
-            : null;
+            ? (await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false), null)
+            : (null, ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture));
     }
 }

@@ -204,15 +204,58 @@ public sealed record SyncResult(
 /// files it carries, each checked against it as it is read. The files are held by size and hash, not by their
 /// bytes, so a file still edited when its turn comes cannot be carried as it was read, and the sync stops instead.
 /// </remarks>
-public sealed class SyncSource
+public sealed class SyncSource : IDisposable
 {
-    internal SyncSource(HarnessContext context, SyncExclusions exclusions, SyncManifest files, byte[] configuration)
+    internal SyncSource(
+        HarnessContext context,
+        SyncExclusions exclusions,
+        SyncManifest files,
+        byte[] configuration,
+        Git.GitHistoryWanted? history,
+        HistoryPacks? packs = null)
     {
+        if (history?.Commit is not null && packs is null)
+        {
+            throw new ArgumentException("A reading that names a commit says where the packs of it are made.", nameof(packs));
+        }
+
         Context = context;
         Exclusions = exclusions;
         Files = files;
         Configuration = configuration;
+        History = history;
+        Packs = packs;
     }
+
+    /// <summary>
+    /// The packs of that history made for the copies synced from this reading, each once; <see langword="null"/> where
+    /// it names no commit.
+    /// </summary>
+    internal HistoryPacks? Packs { get; }
+
+    /// <summary>
+    /// How many bytes of git's a copy made new from this reading is sent, and keeps in its repository: the pack of the
+    /// commit, and of every commit behind it where they are asked for. Nothing where the reading names no commit.
+    /// </summary>
+    /// <param name="cancellationToken">Stops the packing it is counted by.</param>
+    internal async Task<long> NewCopyHistoryBytesAsync(CancellationToken cancellationToken)
+        => Packs is { } packs ? (await packs.ForAsync(leftOut: null, cancellationToken).ConfigureAwait(false)).Bytes : 0;
+
+    /// <summary>Whether the reading was let go, and what was packed for its copies with it.</summary>
+    internal bool Disposed { get; private set; }
+
+    /// <summary>Removes what was packed for the copies synced from this reading.</summary>
+    public void Dispose()
+    {
+        Disposed = true;
+        Packs?.Dispose();
+    }
+
+    /// <summary>
+    /// The commit the tree's HEAD named when it was read - none, where it named none yet - and how much behind it a copy
+    /// is given; <see langword="null"/> where what was read is no repository's tree.
+    /// </summary>
+    internal Git.GitHistoryWanted? History { get; }
 
     /// <summary>Every file a sync carries, by size and hash.</summary>
     internal SyncManifest Files { get; }
@@ -331,13 +374,29 @@ public interface ISyncService
     /// </remarks>
     Task SyncDirectoryAsync(SyncManifest source, ISyncTransport transport, string destinationRoot, CancellationToken cancellationToken = default);
 
-    /// <summary>Brings named files back from a copy into this tree, verified against a manifest.</summary>
+    /// <summary>
+    /// Brings files back from a copy into this tree, each checked against the hash the far side took of it and again
+    /// where it lands: each file named, and every file below each directory named - a path ending with a separator -
+    /// which the side holding it lists, and bounds, before any file crosses.
+    /// </summary>
     /// <param name="transport">How the copy is reached.</param>
     /// <param name="sourceRoot">The copy's root on the far side.</param>
     /// <param name="destinationRoot">Where the files land here.</param>
     /// <param name="paths">The paths to bring back, relative to the copy's root.</param>
     /// <param name="cancellationToken">Stops the transfer.</param>
-    Task<IReadOnlyList<string>> PullAsync(
+    /// <returns>
+    /// Each file brought back, and each link below a directory named, which was not. Where a file could not be brought -
+    /// it is not there, did not land intact, the host stopped answering, the pull was interrupted - the pull stops there
+    /// and says so (<see cref="SyncPull.Stopped"/>), with what had crossed by then and what had not: files already
+    /// written stay written, and a failure that named only the file it stopped at left the rest for whoever read it to
+    /// work out from the tree.
+    /// </returns>
+    /// <exception cref="HarnessException">
+    /// A path names the whole copy (<see cref="HarnessExit.UsageError"/>); or a directory named is not one, holds no file,
+    /// or holds more than a pull brings back (<see cref="HarnessExit.CommandFailed"/>) - every directory before any file
+    /// has crossed.
+    /// </exception>
+    Task<SyncPull> PullAsync(
         ISyncTransport transport,
         string sourceRoot,
         string destinationRoot,
@@ -355,6 +414,7 @@ public sealed class SyncService(
     Git.IGitClient gitClient,
     IFileSystem fileSystem,
     Platform.IHostPlatform platform,
+    Execution.IProcessIdentity identity,
     IHarnessOutput output) : ISyncService
 {
     /// <summary>The command this service reports under.</summary>
@@ -368,7 +428,16 @@ public sealed class SyncService(
     private readonly Legs.LegsService _legsService = legsService;
     private readonly Git.IGitClient _gitClient = gitClient;
     private readonly Platform.IHostPlatform _platform = platform;
+    private readonly Execution.IProcessIdentity _identity = identity;
     private readonly IHarnessOutput _output = output;
+
+    /// <summary>The one reading a command's hosts are synced from: made by the first that needs it, and let go with the command.</summary>
+    private sealed class OneReading : IDisposable
+    {
+        public SyncSource? Source { get; set; }
+
+        public void Dispose() => Source?.Dispose();
+    }
 
     /// <inheritdoc/>
     public async Task<CommandOutcome> SyncHostsAsync(
@@ -464,7 +533,8 @@ public sealed class SyncService(
                 unreachable);
         }
 
-        SyncSource? source = null;
+        using var reading = new OneReading();
+        var pulled = 0;
 
         foreach (var host in hosts)
         {
@@ -493,17 +563,55 @@ public sealed class SyncService(
 
             if (pull.Count > 0)
             {
-                if (options.DryRun)
+                // A directory named is listed by the host that holds it, on a dry run too: what it would bring back is
+                // what the host holds there now.
+                var expands = pull.Any(SyncPull.NamesADirectory);
+
+                if (options.DryRun && !expands)
                 {
                     details.Add($"{host.Host}: would bring back {pull.Count} named file(s) from '{destination}'");
                     continue;
                 }
 
-                var brought = await PullAsync(
-                        transport, destination, context.Layout.RepositoryRoot, pull, cancellationToken)
-                    .ConfigureAwait(false);
+                var brought = options.DryRun
+                    ? await ListedForPullAsync(transport, destination, pull, cancellationToken).ConfigureAwait(false)
+                    : await PullAsync(transport, destination, context.Layout.RepositoryRoot, pull, cancellationToken).ConfigureAwait(false);
 
-                details.Add($"{host.Host}: brought back {brought.Count} file(s)");
+                pulled += brought.Files.Count;
+
+                if (brought.Stopped is { } stopped)
+                {
+                    var asked = brought.Files.Count + brought.Left.Count;
+
+                    // Each by name, on both sides of where it stopped: what crossed stays where it was written, and a
+                    // directory here holding part of what was kept there reads as one that kept less.
+                    if (asked > 1)
+                    {
+                        details.Add(
+                            $"{host.Host}: brought back {brought.Files.Count} of {asked} file(s) before the pull stopped"
+                            + (brought.Files.Count > 0 ? ", each left where it was written:" : string.Empty));
+                        details.AddRange(brought.Files.Select(file => $"  {file}"));
+                        details.Add($"{host.Host}: not brought back:");
+                        details.AddRange(brought.Left.Select(file => $"  {file}"));
+                    }
+
+                    return CommandOutcome.Failed(
+                        stopped.ExitCode,
+                        brought.Files.Count > 0 ? $"the pull from {host.Host} stopped part way: {stopped.Why}" : stopped.Why,
+                        details);
+                }
+
+                details.Add(options.DryRun
+                    ? $"{host.Host}: would bring back {brought.Files.Count} file(s) from '{destination}'"
+                    : $"{host.Host}: brought back {brought.Files.Count} file(s)");
+
+                if (expands)
+                {
+                    // Each by name: what a directory held is what nobody named, and the path a later command takes.
+                    details.AddRange(brought.Files.Select(file => $"  {file}"));
+                    details.AddRange(brought.Links.Select(link => $"{host.Host}: '{link}' is a link, never followed, so nothing was brought back for it"));
+                }
+
                 continue;
             }
 
@@ -513,9 +621,9 @@ public sealed class SyncService(
             {
                 // Read once, for every host: each read as its own sync came round, two hosts' copies could be two
                 // moments of a tree that moved in between.
-                source ??= await ReadSourceAsync(context.Layout.RepositoryRoot, cancellationToken).ConfigureAwait(false);
+                reading.Source ??= await ReadSourceAsync(context.Layout.RepositoryRoot, cancellationToken).ConfigureAwait(false);
 
-                result = await SyncAsync(source, transport, destination, options, cancellationToken).ConfigureAwait(false);
+                result = await SyncAsync(reading.Source, transport, destination, options, cancellationToken).ConfigureAwait(false);
             }
             catch (HarnessException ex) when (ex.ExitCode == LegExit.InputsMoved)
             {
@@ -556,8 +664,8 @@ public sealed class SyncService(
         // only the tree sync makes good on. A carry writes one run's artifacts and a pull reads a
         // handful of named files; either reported as "in step" tells somebody their host matches
         // this tree, which is the one thing neither of them did.
-        return FailedCheck(report, Summary(options, hosts.Count, pull.Count), context, details)
-            ?? CommandOutcome.Ok(Summary(options, hosts.Count, pull.Count), details);
+        return FailedCheck(report, Summary(options, hosts.Count, pull, pulled), context, details)
+            ?? CommandOutcome.Ok(Summary(options, hosts.Count, pull, pulled), details);
     }
 
     /// <summary>
@@ -599,8 +707,9 @@ public sealed class SyncService(
     /// <summary>What this run did, in one line, as the direction it ran in.</summary>
     /// <param name="options">What was asked for.</param>
     /// <param name="hosts">How many hosts were reached.</param>
-    /// <param name="pulled">How many files <c>--pull</c> named.</param>
-    private static string Summary(SyncOptions options, int hosts, int pulled)
+    /// <param name="pull">The paths <c>--pull</c> named.</param>
+    /// <param name="pulled">How many files were brought back, over every host.</param>
+    private static string Summary(SyncOptions options, int hosts, IReadOnlyList<string> pull, int pulled)
     {
         var count = hosts.ToString(CultureInfo.InvariantCulture);
 
@@ -614,9 +723,15 @@ public sealed class SyncService(
             return $"run '{runId}' carried to {count} host(s)";
         }
 
-        return pulled > 0
-            ? $"{pulled.ToString(CultureInfo.InvariantCulture)} named file(s) brought back from {count} host(s)"
-            : $"{count} host(s) in step";
+        if (pull.Count == 0)
+        {
+            return $"{count} host(s) in step";
+        }
+
+        // A directory named brings back what it held, which nobody counted beforehand.
+        return pull.Any(SyncPull.NamesADirectory)
+            ? $"{pulled.ToString(CultureInfo.InvariantCulture)} file(s) brought back from {count} host(s)"
+            : $"{pull.Count.ToString(CultureInfo.InvariantCulture)} named file(s) brought back from {count} host(s)";
     }
 
     /// <summary>Where <paramref name="host"/> keeps the copy of the tree the command runs in: see <see cref="HostCopies"/>.</summary>
@@ -668,8 +783,11 @@ public sealed class SyncService(
             }
         }
 
-        var (state, placedConfiguration) = await PrepareCopyAsync(transport, destinationRoot, options.DryRun, cancellationToken)
+        var (state, placedConfiguration, repository) = await PrepareCopyAsync(transport, destinationRoot, source.History, options.DryRun, cancellationToken)
             .ConfigureAwait(false);
+
+        // What the copy's git repository is to be given, weighed before anything is written.
+        var history = HistoryToCarry.Of(source.History, repository);
 
         var created = state == CopyState.Created;
 
@@ -689,7 +807,29 @@ public sealed class SyncService(
 
         if (!mine && !adopting && !options.DryRun)
         {
-            throw new HarnessException(HarnessExit.Refused, Unclaimed(transport, destinationRoot, plan, state, destination.Links));
+            throw new HarnessException(HarnessExit.Refused, Unclaimed(transport, destinationRoot, plan, state, destination.Links, source.History));
+        }
+
+        // Before a file is written or deleted there: a repository naming its objects another way can hold no commit of
+        // this tree's, so git there would go on answering about HEAD for another tree whatever this sync carried.
+        if (history.Mismatch is { } mismatch)
+        {
+            throw new HarnessException(
+                HarnessExit.Refused,
+                $"{transport.Host}: the git repository at '{destinationRoot}' names its objects by {mismatch.Theirs}, and this "
+                + $"tree's by {mismatch.Mine}, so it can hold no commit of this tree's, and git there would answer about HEAD "
+                + "for another tree. Nothing was changed. In a copy this tool made, the '.git' directory holds nothing a sync "
+                + "does not make again: remove it there and sync again. A clone somebody made holds their commits in it: "
+                + "move it aside, or give the host another repositoryPath.");
+        }
+
+        // Nothing to give the copy; said where the two then differ, since nothing else would say it.
+        if (history.OnlyTheirs is { } only)
+        {
+            _output.Warn(
+                CommandName,
+                $"{transport.Host}: this tree's HEAD names no commit yet, and the HEAD of '{destinationRoot}' names "
+                + $"{ReportText.Commit(only)}: what a step asks git about HEAD there is answered for that commit.");
         }
 
         // Said on every sync, not only on a takeover. A copy this tool made can gain a link
@@ -728,7 +868,20 @@ public sealed class SyncService(
             {
                 _output.Info(
                     CommandName,
-                    Unclaimed(transport, destinationRoot, plan, state, destination.Links));
+                    Unclaimed(transport, destinationRoot, plan, state, destination.Links, source.History));
+            }
+
+            // What it would do to the copy's repository, as its plan says what it would do to the files.
+            if (history.Asked is { } wouldCarry)
+            {
+                _output.Info(
+                    CommandName,
+                    $"{transport.Host}: would make the HEAD of '{destinationRoot}' name this tree's commit, "
+                    + ReportText.Commit(wouldCarry.Commit!)
+                    + (history.Held.Head is { } now && !string.Equals(now, wouldCarry.Commit, StringComparison.Ordinal)
+                        ? $", where it names {ReportText.Commit(now)}{(history.Held.Branch is { } on ? $" on the branch '{on}'" : string.Empty)}"
+                        : string.Empty)
+                    + (history.Held.Holds ? string.Empty : ", sending what it lacks of it"));
             }
 
             return new SyncResult(
@@ -755,6 +908,14 @@ public sealed class SyncService(
             _output.Warn(CommandName, $"{transport.Host}:   replace  {HarnessLayout.ConfigFileRelative}, with this tree's");
             _output.Warn(CommandName, $"{transport.Host}:   mirror   {HarnessLayout.RunnerActionsDirectoryRelative}, to this tree's actions");
 
+            if (history.Moves is { } moving)
+            {
+                _output.Warn(
+                    CommandName,
+                    $"{transport.Host}:   move     its git HEAD, detached, to this tree's commit {ReportText.Commit(moving)}; its branches, tags and commits stay"
+                    + (history.MayCutShort ? CutsShort : string.Empty));
+            }
+
             // Marked as begun before anything is deleted, and marked as finished only once the copy
             // is one. A takeover that stops part way is neither the checkout somebody had nor a copy
             // of this tree, and both of the obvious markings are wrong about it: unmarked, the next
@@ -773,9 +934,10 @@ public sealed class SyncService(
         // is marked as one.
         var unfinished = state is CopyState.Created or CopyState.Unfinished;
 
-        // Changed by anything this sync writes into it: a file the plan carries or deletes, or a configuration other than
-        // the one it holds, which is placed beside the files and is as much the tree.
-        var changes = !plan.IsUpToDate || placedConfiguration != FileContent.Of(source.Configuration).Content;
+        // Changed by anything this sync writes into it: a file the plan carries or deletes, a configuration other than
+        // the one it holds, which is placed beside the files and is as much the tree, or a HEAD to move or a history to
+        // send - a copy whose HEAD names another commit than its files' is no tree a run began with either.
+        var changes = !plan.IsUpToDate || placedConfiguration != FileContent.Of(source.Configuration).Content || history.Asked is not null;
 
         if (!adopting && !unfinished && changes)
         {
@@ -788,10 +950,15 @@ public sealed class SyncService(
         // from what the copy holds, puts it right - an adoption still asking for --adopt.
         await ApplyAsync(source.Files.Root, transport, destinationRoot, plan, Carrying.Tree, cancellationToken).ConfigureAwait(false);
 
-        // The copy is a git repository because the harness there finds everything through git. Done
-        // after the transfer, so a copy that failed part way is not left looking complete - and no copy
-        // is marked complete before it is verified, below.
-        await transport.InitialiseRepositoryAsync(destinationRoot, cancellationToken).ConfigureAwait(false);
+        // The copy is a git repository because the harness there finds everything through git, and its HEAD names the
+        // commit this tree's did, so git answers there as it does here. Done after the transfer, so a copy that failed
+        // part way is not left looking complete - and no copy is marked complete before it is verified, below.
+        await transport.InitialiseRepositoryAsync(destinationRoot, source.History?.ObjectFormat, cancellationToken).ConfigureAwait(false);
+
+        if (history.Asked is { } asked)
+        {
+            await CarryHistoryAsync(source, asked, history.Held, transport, destinationRoot, cancellationToken).ConfigureAwait(false);
+        }
 
         await PlaceConfigurationAsync(source, transport, destinationRoot, cancellationToken).ConfigureAwait(false);
 
@@ -834,6 +1001,152 @@ public sealed class SyncService(
         }
 
         return new SyncResult(transport.Host.ToString(), destinationRoot, plan, Verified: true, created);
+    }
+
+    /// <summary>
+    /// What a sync is to do for the git repository of a copy, weighed from what the tree asks and what the copy's
+    /// repository answered, before anything is written there.
+    /// </summary>
+    /// <param name="Asked">
+    /// The history to give the copy - its HEAD to move, objects to send, or both - or <see langword="null"/> where there
+    /// is nothing to do: the tree has no commit, or the copy's HEAD names it and holds what is asked.
+    /// </param>
+    /// <param name="Held">What the copy's repository holds: nothing, where one is yet to be made for it.</param>
+    /// <param name="Mismatch">How each repository names its objects, where the two differ and a commit was to be given.</param>
+    /// <param name="OnlyTheirs">The commit the copy's HEAD names, where the tree's names none.</param>
+    private sealed record HistoryToCarry(
+        Git.GitHistoryWanted? Asked,
+        Git.GitHistoryHeld Held,
+        (string Mine, string Theirs)? Mismatch,
+        string? OnlyTheirs)
+    {
+        /// <summary>The commit the copy's HEAD will be moved to, where it names another or none; nothing where it stays.</summary>
+        public string? Moves => Asked is { Commit: { } commit } && !string.Equals(Held.Head, commit, StringComparison.Ordinal) ? commit : null;
+
+        /// <summary>Whether the copy is given a commit it lacks without those behind it, which can leave a whole repository a shallow one.</summary>
+        public bool MayCutShort => Asked is { Whole: false } && !Held.Holds;
+
+        public static HistoryToCarry Of(Git.GitHistoryWanted? wanted, Git.GitHistoryHeld? repository)
+        {
+            var held = repository ?? Git.GitHistoryHeld.Nothing(wanted?.ObjectFormat ?? Git.GitHistoryWanted.DefaultObjectFormat);
+
+            if (wanted?.Commit is not { } commit)
+            {
+                return new(null, held, null, wanted is null ? null : held.Head);
+            }
+
+            if (!string.Equals(held.ObjectFormat, wanted.ObjectFormat, StringComparison.Ordinal))
+            {
+                return new(null, held, (wanted.ObjectFormat, held.ObjectFormat), null);
+            }
+
+            return new(held.Holds && string.Equals(held.Head, commit, StringComparison.Ordinal) ? null : wanted, held, null, null);
+        }
+    }
+
+    /// <summary>
+    /// Makes the HEAD of the copy's repository name the commit the tree's did: sends what the copy lacks of that
+    /// commit - and of every commit behind it, where the tree's configuration asks for them - as one pack of git's own,
+    /// a piece to a request, and has the copy take it and move its HEAD.
+    /// </summary>
+    /// <remarks>
+    /// A copy's files were always the tree's, and its HEAD never was: one this tool made named no commit, and a clone it
+    /// took over named whichever its owner left it at. A step that asked git about HEAD - which commit, what a file held
+    /// there - was answered on a host leg for a tree other than the one it was handed, and nothing said so: a consumer's
+    /// two legs of one run disagreed over files that were byte for byte the same.
+    /// </remarks>
+    private async Task CarryHistoryAsync(
+        SyncSource source,
+        Git.GitHistoryWanted wanted,
+        Git.GitHistoryHeld held,
+        ISyncTransport transport,
+        string destinationRoot,
+        CancellationToken cancellationToken)
+    {
+        Git.GitHistoryPack? pack = null;
+        string? leftOut = null;
+
+        if (!held.Holds)
+        {
+            // What the copy's own HEAD gives it is left out, where this repository holds that commit too and so can
+            // tell what it gives.
+            leftOut = held.HeadHeld
+                && held.Head is { } theirs
+                && await _gitClient.ResolveCommitAsync(source.Context.Layout.RepositoryRoot, theirs, cancellationToken).ConfigureAwait(false) is not null
+                    ? theirs
+                    : null;
+
+            // The reading's own, made once for every copy that lacks the same of it, and removed with the reading.
+            pack = await source.Packs!.ForAsync(leftOut, cancellationToken).ConfigureAwait(false);
+
+            await SendHistoryAsync(transport, destinationRoot, pack, cancellationToken).ConfigureAwait(false);
+        }
+
+        var moved = await transport
+            .TakeHistoryAsync(destinationRoot, new Git.GitHistoryTaken(wanted, pack?.Name, leftOut), cancellationToken)
+            .ConfigureAwait(false);
+
+        var commit = ReportText.Commit(wanted.Commit!);
+        var sent = pack is null ? string.Empty : $" ({pack.Bytes.ToString(CultureInfo.InvariantCulture)} byte(s) of history sent)";
+
+        _output.Info(
+            CommandName,
+            moved.Moved
+                ? $"{transport.Host}: the HEAD of '{destinationRoot}' is this tree's, {commit}{sent}"
+                : $"{transport.Host}: the HEAD of '{destinationRoot}' was this tree's already, {commit}, and it now holds what is asked behind it{sent}");
+
+        // Said the once it happens: from then on its HEAD is detached, and moving it moves nothing of anybody's.
+        if (moved is { Moved: true, From: { } from, Branch: { } branch })
+        {
+            _output.Warn(
+                CommandName,
+                $"{transport.Host}: the HEAD of '{destinationRoot}' was on the branch '{branch}', at {ReportText.Commit(from)}, "
+                + $"and is now detached at {commit}. The branch, and every commit and tag of that repository, are as they "
+                + $"were: 'git checkout {branch}' there goes back to it, and the next sync moves HEAD again.");
+        }
+
+        // And the once that happens: a repository that held every commit behind its own is a shallow one from here on.
+        if (moved.CutShort is { } cut)
+        {
+            _output.Warn(CommandName, $"{transport.Host}: {cut}");
+        }
+
+        if (moved.LeftAside is { } aside)
+        {
+            _output.Warn(CommandName, $"{transport.Host}: {aside}");
+        }
+    }
+
+    /// <summary>What a takeover says of a repository given a commit without those behind it, after what it leaves alone.</summary>
+    private const string CutsShort =
+        ", and where it lacks the commit before that one, git reads it as a shallow repository from then on, which "
+        + "'git fetch --unshallow' there undoes";
+
+    /// <summary>Sends <paramref name="pack"/> to the copy, a piece to a request, each no larger than a batch of files is.</summary>
+    private async Task SendHistoryAsync(ISyncTransport transport, string destinationRoot, Git.GitHistoryPack pack, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var reading = new FileStream(pack.File, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+            // The first piece is what clears whatever an earlier pack left aside; a pack is never empty, holding its
+            // header and its checksum where it holds nothing else.
+            for (long sent = 0; sent < pack.Bytes;)
+            {
+                var piece = new byte[(int)Math.Min(SyncServe.LargestBatch, pack.Bytes - sent)];
+
+                await reading.ReadExactlyAsync(piece, cancellationToken).ConfigureAwait(false);
+                await transport.SendHistoryAsync(destinationRoot, pack.Name, sent, piece, cancellationToken).ConfigureAwait(false);
+
+                sent += piece.Length;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"{transport.Host}: the history packed for '{destinationRoot}' could not be read back from '{pack.File}': {ex.Message.TrimEnd('.')}.");
+        }
     }
 
     /// <inheritdoc/>
@@ -889,9 +1202,18 @@ public sealed class SyncService(
                 $"sync.neverTransfer entries could not all be checked against this tree: {unread}");
         }
 
+        // With the files, so each copy's HEAD is the commit these files were read at, whatever is committed while the
+        // copies are made.
+        var history = await _gitClient.DescribeHistoryAsync(root, context.Config.Sync.WholeHistory, cancellationToken).ConfigureAwait(false);
+
         var files = await ReadFilesAsync(root, exclusions.IsWithheldFromTransfer, cancellationToken).ConfigureAwait(false);
 
-        return new SyncSource(context, exclusions, files, configuration);
+        // Nothing is packed for a tree with no commit; and for one with, only once a copy lacks something of it.
+        var packs = history.Commit is null
+            ? null
+            : new HistoryPacks(_gitClient, _fileSystem, _identity, root, history, why => _output.Warn(CommandName, why));
+
+        return new SyncSource(context, exclusions, files, configuration, history, packs);
     }
 
     /// <summary>Every file under <paramref name="root"/> that <paramref name="isWithheld"/> does not withhold, by size and hash.</summary>
@@ -1024,7 +1346,7 @@ public sealed class SyncService(
         => transport.WriteFileAsync(destinationRoot, HarnessLayout.ConfigFileRelative, source.Configuration, cancellationToken);
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<string>> PullAsync(
+    public async Task<SyncPull> PullAsync(
         ISyncTransport transport,
         string sourceRoot,
         string destinationRoot,
@@ -1034,19 +1356,104 @@ public sealed class SyncService(
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(paths);
 
+        // Every directory is listed, and refused where it is not one a pull brings back, before any file crosses.
+        var listed = await ListedForPullAsync(transport, sourceRoot, paths, cancellationToken).ConfigureAwait(false);
         var brought = new List<string>();
 
-        foreach (var path in paths)
+        foreach (var path in listed.Files)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
 
-            // Checked against the hash the far side took before sending, inside ReadFileAsync, and again once it is
-            // written here.
-            await CopyVerifiedAsync(transport, sourceRoot, _localTransport, destinationRoot, path, written: null, cancellationToken).ConfigureAwait(false);
+                // Checked against the hash the far side took before sending, inside ReadFileAsync, and again once it
+                // is written here.
+                await CopyVerifiedAsync(transport, sourceRoot, _localTransport, destinationRoot, path, written: null, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (StopOf(ex, path, destinationRoot, brought.Count, cancellationToken) is { } stop)
+            {
+                return new SyncPull(brought, listed.Links) { Stopped = stop, Left = [.. listed.Files.Skip(brought.Count)] };
+            }
+
             brought.Add(path);
         }
 
-        return brought;
+        return new SyncPull(brought, listed.Links);
+    }
+
+    /// <summary>
+    /// How a pull that stopped at <paramref name="path"/> for <paramref name="failure"/> says so, or
+    /// <see langword="null"/> for a failure that is not a file's: an interruption before anything crossed, which leaves
+    /// nothing to account for, and a defect of this tool.
+    /// </summary>
+    private static SyncPullStop? StopOf(Exception failure, string path, string destinationRoot, int brought, CancellationToken cancellationToken)
+        => failure switch
+        {
+            HarnessException refused => new SyncPullStop(refused.ExitCode, refused.Message),
+            IOException or UnauthorizedAccessException
+                => new SyncPullStop(HarnessExit.CommandFailed, $"'{path}' could not be written under '{destinationRoot}': {failure.Message}"),
+            OperationCanceledException when cancellationToken.IsCancellationRequested && brought > 0
+                => new SyncPullStop(HarnessExit.Cancelled, "it was interrupted."),
+            _ => null,
+        };
+
+    /// <summary>
+    /// What a pull of <paramref name="paths"/> brings back, nothing brought yet: each file named, as named, and every file
+    /// below each directory named, as the side that holds it lists them - each once, in the order asked for.
+    /// </summary>
+    /// <param name="transport">How the copy is reached.</param>
+    /// <param name="sourceRoot">The copy's root on the far side.</param>
+    /// <param name="paths">The paths a pull names, relative to the copy's root.</param>
+    /// <param name="cancellationToken">Stops the listing.</param>
+    /// <exception cref="HarnessException">A directory named is the whole copy, is not a directory, or holds no file or too much.</exception>
+    private static async Task<SyncPull> ListedForPullAsync(
+        ISyncTransport transport,
+        string sourceRoot,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken)
+    {
+        var files = new List<string>();
+        var links = new List<string>();
+
+        foreach (var path in paths)
+        {
+            if (!SyncPull.NamesADirectory(path))
+            {
+                files.Add(path);
+                continue;
+            }
+
+            // Either separator, the whole way along: a shell on Windows completes every part of a path with a backslash,
+            // and a host that is not Windows read 'out\deep' as one name, of a directory that is not there.
+            var directory = path.Replace('\\', '/').TrimEnd('/');
+
+            if (directory is "" or ".")
+            {
+                throw new HarnessException(
+                    HarnessExit.UsageError,
+                    $"--pull '{path}' names the whole copy, which a pull never brings back: name a directory in it, or the files.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var listing = await transport.ListFilesAsync(sourceRoot, directory, cancellationToken).ConfigureAwait(false);
+
+            // Said, and failed: a directory of kept outputs that holds none is not what whoever named it expects, and a pull
+            // that brought nothing and passed would say it had.
+            if (listing.Files.Count == 0)
+            {
+                throw new HarnessException(
+                    HarnessExit.CommandFailed,
+                    $"'{directory}/' holds no file in '{sourceRoot}' on {transport.Host}"
+                    + (listing.Links.Count > 0 ? $", only {listing.Links.Count.ToString(CultureInfo.InvariantCulture)} link(s), which are never followed" : string.Empty)
+                    + ": nothing to bring back from it.");
+            }
+
+            files.AddRange(listing.Files.Select(file => file.Path));
+            links.AddRange(listing.Links);
+        }
+
+        return new SyncPull([.. files.Distinct(StringComparer.Ordinal)], [.. links.Distinct(StringComparer.Ordinal)]);
     }
 
     /// <summary>
@@ -1285,7 +1692,7 @@ public sealed class SyncService(
             var destination = CopyOf(context, host);
 
             var found = await _transportFactory.For(host)
-                .InspectAsync(destination, cancellationToken)
+                .InspectAsync(destination, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             var why = !found.Exists
@@ -1307,9 +1714,10 @@ public sealed class SyncService(
     /// Makes sure there is a copy to write into, and that it is one the harness made.
     /// </summary>
     /// <returns>What was found there.</returns>
-    private async Task<(CopyState State, string? Configuration)> PrepareCopyAsync(
+    private async Task<(CopyState State, string? Configuration, Git.GitHistoryHeld? Repository)> PrepareCopyAsync(
         ISyncTransport transport,
         string destinationRoot,
+        Git.GitHistoryWanted? wanted,
         bool dryRun,
         CancellationToken cancellationToken)
     {
@@ -1317,14 +1725,14 @@ public sealed class SyncService(
         // something the far side answers in one, and the directory can change between them — so the
         // mark that decides whether this may delete could be describing a directory other than the
         // one that was found to exist.
-        var found = await transport.InspectAsync(destinationRoot, cancellationToken).ConfigureAwait(false);
+        var found = await transport.InspectAsync(destinationRoot, wanted, cancellationToken).ConfigureAwait(false);
 
         if (!found.Exists)
         {
             if (dryRun)
             {
                 _output.Info(CommandName, $"{transport.Host}: would create '{destinationRoot}'");
-                return (CopyState.Created, null);
+                return (CopyState.Created, null, null);
             }
 
             // Marked as a sync that has begun, and as finished once the copy is verified: a first sync that stops part way
@@ -1332,10 +1740,10 @@ public sealed class SyncService(
             _output.Info(CommandName, $"{transport.Host}: creating '{destinationRoot}'");
             await transport.CreateRootAsync(destinationRoot, CopyMark.Unfinished, cancellationToken).ConfigureAwait(false);
 
-            return (CopyState.Created, null);
+            return (CopyState.Created, null, null);
         }
 
-        return (StateOf(found.Mark), found.Configuration);
+        return (StateOf(found.Mark), found.Configuration, found.Repository);
     }
 
     /// <summary>
@@ -1368,7 +1776,8 @@ public sealed class SyncService(
     /// <remarks>
     /// A sync deletes whatever the source does not have, so a checkout somebody made by hand may hold
     /// work nothing here knows about. What survives is named exactly, and it is narrower than it
-    /// looks: <c>.git</c> and so every commit there, this tool's own state in its directory — though
+    /// looks: <c>.git</c> and so every commit, branch and tag there - though its HEAD is moved to this tree's commit,
+    /// which is said with what else is replaced - this tool's own state in its directory — though
     /// the <c>config.json</c> there is replaced with this tree's and its actions are made to match
     /// this tree's, keeping each action's own build and artifacts — the worktrees root, and
     /// whatever <c>sync.neverTransfer</c> names. What git ignores is read from <em>this</em>
@@ -1381,7 +1790,8 @@ public sealed class SyncService(
         string destinationRoot,
         SyncPlan plan,
         CopyState state,
-        IReadOnlyList<string> links)
+        IReadOnlyList<string> links,
+        Git.GitHistoryWanted? history)
     {
         // An interrupted takeover is worse than an untouched directory, and the difference has to be
         // said: the list below is built from what is there now, and what an earlier run already
@@ -1396,9 +1806,14 @@ public sealed class SyncService(
         var take = $"'--adopt \"{transport.Host}\"'";
 
         var configuration = $"Taking it over also replaces {HarnessLayout.ConfigFileRelative} "
-            + $"there with this tree's, and makes {HarnessLayout.RunnerActionsDirectoryRelative} there match this tree's, action by action.";
+            + $"there with this tree's, and makes {HarnessLayout.RunnerActionsDirectoryRelative} there match this tree's, action by action."
+            + (history is { Commit: { } mine }
+                ? $" Where it is a git repository, its HEAD is moved, detached, to this tree's commit, {ReportText.Commit(mine)}, "
+                    + "so that git answers about HEAD there as it does here; no branch, tag or commit of it is changed"
+                    + (history.Whole ? "." : CutsShort + ".")
+                : string.Empty);
 
-        var survives = $"Its .git and every commit in it, the harness's own state in {HarnessLayout.DirectoryName} "
+        var survives = $"Its .git and every commit, branch and tag in it, the harness's own state in {HarnessLayout.DirectoryName} "
             + "- connection data, secrets, runner values, locks, runs, and each action's own build and "
             + "artifacts - the worktrees root and whatever sync.neverTransfer names are left alone. Nothing else "
             + "is: a directory that only that host has, a build tree among them, is ignored by nothing "

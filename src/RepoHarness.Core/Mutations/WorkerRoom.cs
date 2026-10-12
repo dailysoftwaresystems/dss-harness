@@ -94,7 +94,10 @@ public static class WorkerRoom
     /// where that build recorded what it came to, and nothing more where no build of this version recorded it, which
     /// holds an amount nothing measured.
     /// </summary>
-    /// <param name="sourceBytes">What the tree's copy comes to, as the sweep's one reading of the tree counts it.</param>
+    /// <param name="sourceBytes">
+    /// What the tree's copy comes to, as the sweep's one reading of the tree counts it: its files, and what git keeps
+    /// there of its history.
+    /// </param>
     /// <param name="copyPresent">Whether the worker's copy of the tree is there already.</param>
     /// <param name="expectedBuildBytes">What a build of the leg is expected to come to, or <see langword="null"/> where nothing says.</param>
     /// <param name="buildPresent">Whether the worker's build directory is there already.</param>

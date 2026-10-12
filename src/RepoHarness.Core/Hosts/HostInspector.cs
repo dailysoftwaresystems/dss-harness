@@ -195,9 +195,6 @@ public sealed class HostInspector(
     /// <summary>Longest a probe of a connected host may take.</summary>
     private static readonly TimeSpan ProbeBudget = TimeSpan.FromMinutes(2);
 
-    /// <summary>Longest installing or updating DssHarness may take, which includes downloading it.</summary>
-    private static readonly TimeSpan InstallBudget = TimeSpan.FromMinutes(10);
-
     private readonly IHostCommandRunner _hostCommands = hostCommands;
     private readonly IHostConnector _connector = connector;
     private readonly IToolIdentityProvider _identity = identity;
@@ -385,7 +382,7 @@ public sealed class HostInspector(
         var tools = await RunAsync(
             connection,
             connection.Spell(DotnetProgram),
-            ["tool", "list", "--global", "--format", "json"],
+            ToolPackage.ListArguments(),
             ProbeBudget,
             cancellationToken).ConfigureAwait(false);
 
@@ -415,7 +412,7 @@ public sealed class HostInspector(
             throw new HarnessException(
                 HarnessExit.Refused,
                 $"{host} has {ToolPackage.Id} {installed}, newer than this machine's {root.Version}. Versions only move up, "
-                + $"so update this machine first: dotnet tool update --global {ToolPackage.Id} --version {installed}");
+                + $"so update this machine first, once no {ToolPackage.Id} runs on it: {ToolUpdateService.FromBeside(new ToolUpdateRequest())}");
         }
 
         if (order == 0)
@@ -441,8 +438,8 @@ public sealed class HostInspector(
         => RunAsync(
             connection,
             connection.Spell(DotnetProgram),
-            ["tool", verb, "--global", ToolPackage.Id, "--version", version, "--source", ToolPackage.Source],
-            InstallBudget,
+            ToolPackage.ChangeArguments(verb, version),
+            ToolPackage.ChangeBudget,
             cancellationToken);
 
     /// <summary>Asks DssHarness on the host which build it is and what the host is, and checks the build is this machine's.</summary>

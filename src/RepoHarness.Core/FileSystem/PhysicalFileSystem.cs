@@ -93,7 +93,16 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         // Each junction first, as a link: the runtime's recursive delete removes one and then reports it refused,
         // leaving every directory above it, and only the retry below used to finish the job.
         RemoveJunctions(path);
+        DeleteMarked(path);
+    }
 
+    /// <summary>
+    /// Removes the directory at <paramref name="path"/> and all in it, the files marked read-only among them. It holds
+    /// no junction, or each was removed first.
+    /// </summary>
+    /// <param name="path">The directory, which is there.</param>
+    internal static void DeleteMarked(string path)
+    {
         try
         {
             Directory.Delete(path, recursive: true);

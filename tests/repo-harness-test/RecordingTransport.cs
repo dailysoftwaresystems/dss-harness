@@ -1,3 +1,4 @@
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
@@ -6,9 +7,9 @@ namespace RepoHarness.Tests;
 
 /// <summary>
 /// Everything the transport it wraps does, counting what it was asked and holding what it was
-/// given. A real <see cref="LocalSyncTransport"/> does the work against a directory here, so what
-/// a test asserts about a host's copy is what a copy actually became rather than what a stand-in
-/// was told to say.
+/// given. A real transport does the work - a <see cref="LocalSyncTransport"/> against a directory
+/// here, or one reaching this build's own agent - so what a test asserts about a host's copy is what
+/// a copy actually became rather than what a stand-in was told to say.
 /// </summary>
 /// <param name="inner">The transport that does the work.</param>
 /// <param name="losesAFileWhenVerifying">
@@ -20,7 +21,7 @@ namespace RepoHarness.Tests;
 /// <c>--adopt</c> decides is which host a directory belongs to.
 /// </param>
 internal sealed class RecordingTransport(
-    LocalSyncTransport inner,
+    ISyncTransport inner,
     bool losesAFileWhenVerifying = false,
     HostId? reports = null) : ISyncTransport
 {
@@ -69,10 +70,10 @@ internal sealed class RecordingTransport(
         return Answers is { } answer ? Task.FromResult(answer.Exists) : inner.RootExistsAsync(root, cancellationToken);
     }
 
-    public Task<SyncInspectAnswer> InspectAsync(string root, CancellationToken cancellationToken = default)
+    public Task<SyncInspectAnswer> InspectAsync(string root, GitHistoryWanted? wanted = null, CancellationToken cancellationToken = default)
     {
         Inspections++;
-        return Answers is { } answer ? Task.FromResult(answer) : inner.InspectAsync(root, cancellationToken);
+        return Answers is { } answer ? Task.FromResult(answer) : inner.InspectAsync(root, wanted, cancellationToken);
     }
 
     public Task<CopyMark> ReadMarkAsync(string root, CancellationToken cancellationToken = default)
@@ -90,8 +91,35 @@ internal sealed class RecordingTransport(
         return inner.CreateRootAsync(root, mark, cancellationToken);
     }
 
-    public Task InitialiseRepositoryAsync(string root, CancellationToken cancellationToken = default)
-        => inner.InitialiseRepositoryAsync(root, cancellationToken);
+    public Task InitialiseRepositoryAsync(string root, string? objectFormat = null, CancellationToken cancellationToken = default)
+        => inner.InitialiseRepositoryAsync(root, objectFormat, cancellationToken);
+
+    /// <summary>Every piece of a pack the copy was sent: the pack's name, where the piece starts, and how many bytes it is.</summary>
+    public List<(string Pack, long Offset, int Bytes)> HistorySent { get; } = [];
+
+    /// <summary>
+    /// Which piece of a pack to fail, counting from one over every pack sent, or zero to fail none: what a link that
+    /// dropped part way through a pack looks like from here.
+    /// </summary>
+    public int FailsPiece { get; set; }
+
+    public Task SendHistoryAsync(string root, string pack, long offset, byte[] piece, CancellationToken cancellationToken = default)
+    {
+        HistorySent.Add((pack, offset, piece.Length));
+
+        return HistorySent.Count == FailsPiece
+            ? throw new HarnessException(HarnessExit.HostUnavailable, $"the link dropped sending the piece at {offset}")
+            : inner.SendHistoryAsync(root, pack, offset, piece, cancellationToken);
+    }
+
+    /// <summary>Every history the copy was asked to take, in order.</summary>
+    public List<GitHistoryTaken> HistoryTaken { get; } = [];
+
+    public Task<GitHeadMoved> TakeHistoryAsync(string root, GitHistoryTaken taken, CancellationToken cancellationToken = default)
+    {
+        HistoryTaken.Add(taken);
+        return inner.TakeHistoryAsync(root, taken, cancellationToken);
+    }
 
     /// <summary>Every set of paths the copy's index was made to hold, in the order asked.</summary>
     public List<IReadOnlyList<string>> Indexed { get; } = [];
@@ -184,8 +212,27 @@ internal sealed class RecordingTransport(
         CancellationToken cancellationToken = default)
         => inner.RemoveEmptyDirectoriesAsync(root, directories, cancellationToken);
 
+    /// <summary>
+    /// Which read to fail, counting from one, or zero to fail none: what a link that dropped part way through a pull
+    /// looks like from here.
+    /// </summary>
+    public int FailsRead { get; init; }
+
+    private int _reads;
+
     public Task<byte[]> ReadFileAsync(string root, string relativePath, CancellationToken cancellationToken = default)
-        => inner.ReadFileAsync(root, relativePath, cancellationToken);
+        => ++_reads == FailsRead
+            ? throw new HarnessException(HarnessExit.HostUnavailable, $"the link dropped reading '{relativePath}'")
+            : inner.ReadFileAsync(root, relativePath, cancellationToken);
+
+    /// <summary>Every directory the copy was asked to list, as it was asked.</summary>
+    public List<string> Listed { get; } = [];
+
+    public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
+    {
+        Listed.Add(relativeDirectory);
+        return inner.ListFilesAsync(root, relativeDirectory, cancellationToken);
+    }
 
     public Task<CopyRemoval> RemoveCopyAsync(string root, CancellationToken cancellationToken = default)
         => inner.RemoveCopyAsync(root, cancellationToken);

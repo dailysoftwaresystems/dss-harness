@@ -137,7 +137,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         try
         {
-            process.Start();
+            await StartAsync(process, cancellationToken).ConfigureAwait(false);
 
             // Before the readers below, so nothing the child says can arrive ahead of the fact that
             // it started.
@@ -155,10 +155,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // Written while both output streams are being read, so a child that answers as it reads
         // can never block this on a full output pipe, nor this block it on a full input pipe.
+        using var exited = new CancellationTokenSource();
         var standardInput = WriteInputAsync(
             process.StandardInput,
             request.StandardInput,
-            close: !request.HoldStandardInputOpen);
+            close: !request.HoldStandardInputOpen,
+            request.HoldStandardInputOpen ? request.StandardInputBeat : null,
+            exited.Token);
 
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (request.Timeout is { } budget)
@@ -181,11 +184,14 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
         }
 
+        // No beat is written to a child that has gone.
+        await exited.CancelAsync().ConfigureAwait(false);
+
         // The process has exited, but what it wrote just before exiting can still be in the
         // pipes. Reading both streams to their end is what guarantees none of it is lost.
         var capturedOutput = await standardOutput.ConfigureAwait(false);
         var capturedError = await standardError.ConfigureAwait(false);
-        await standardInput.ConfigureAwait(false);
+        var beatLost = await standardInput.ConfigureAwait(false);
 
         if (request.HoldStandardInputOpen)
         {
@@ -209,8 +215,67 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             StandardOutput: capturedOutput.Text,
             StandardError: capturedError.Text,
             Duration: stopwatch.Elapsed,
-            TimedOut: stopped);
+            TimedOut: stopped)
+        {
+            BeatLost = beatLost,
+        };
     }
+
+    /// <summary>
+    /// How long a program that will not start for being written is started again before that is its failure.
+    /// </summary>
+    /// <remarks>
+    /// Linux starts no program a descriptor still holds open for writing, and a process forked while the program was
+    /// being written - by any thread of the process writing it, for a child of its own - holds that descriptor until it
+    /// becomes the program it was forked for: a moment, in which a program written and closed a line earlier is "busy".
+    /// Seen in this tool's own suite, which writes a script and starts it beside tests starting children of their own:
+    /// one start failed so in a run of some five thousand tests.
+    /// </remarks>
+    private static readonly TimeSpan BusyGrace = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long between two tries of a program that is busy.</summary>
+    private static readonly TimeSpan BusyPause = TimeSpan.FromMilliseconds(20);
+
+    /// <summary>"Text file busy", as Linux and macOS number it.</summary>
+    internal const int TextFileBusy = 26;
+
+    /// <summary>Starts <paramref name="process"/>, again for as long as <see cref="BusyGrace"/> where it is being written.</summary>
+    private static Task StartAsync(Process process, CancellationToken cancellationToken)
+        => StartAsync(() => process.Start(), !OperatingSystem.IsWindows(), BusyGrace, cancellationToken);
+
+    /// <summary>
+    /// Runs <paramref name="start"/>, and again every <see cref="BusyPause"/> for as long as <paramref name="grace"/>
+    /// where it fails as a program being written does and <paramref name="busyPasses"/> says that passes on this system.
+    /// Any other failure, and that one once the grace is spent, is the start's own.
+    /// </summary>
+    /// <param name="start">Starts the program, raising as <see cref="Process.Start()"/> does where it cannot.</param>
+    /// <param name="busyPasses">Whether a program held open for writing is refused here, and so worth trying again: not on Windows, where the number means something else.</param>
+    /// <param name="grace">How long it is tried again.</param>
+    /// <param name="cancellationToken">Stops the waiting between two tries.</param>
+    internal static async Task StartAsync(Action start, bool busyPasses, TimeSpan grace, CancellationToken cancellationToken)
+    {
+        var tried = Stopwatch.StartNew();
+
+        while (true)
+        {
+            try
+            {
+                start();
+                return;
+            }
+            catch (Win32Exception ex) when (busyPasses && ex.NativeErrorCode == TextFileBusy && tried.Elapsed < grace)
+            {
+                await Task.Delay(BusyPause, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// How long a child whose input can no longer be written is given to be found exiting, before the beat is said to
+    /// have been lost to a child still running: a child that exits takes its input with it a moment before it is seen
+    /// to have gone.
+    /// </summary>
+    private static readonly TimeSpan GoingGrace = TimeSpan.FromSeconds(2);
 
     public string? FindExecutable(string command)
     {
@@ -513,11 +578,18 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// Written on a thread of its own: a writer writes as it makes what it writes, for as long as the child takes to read
     /// it. An input that could not be written whole is closed whatever <paramref name="close"/> says - a child holding its
     /// input open waits for the rest of it, which would never come - and what stopped it, where that was not the child
-    /// ceasing to read, is raised once the child has gone.
+    /// ceasing to read, is raised once the child has gone. An input held open is then written <paramref name="beat"/>,
+    /// where one is given, until <paramref name="exited"/> says the child has gone.
     /// </remarks>
-    private static async Task WriteInputAsync(StreamWriter writer, ChildInput? input, bool close)
+    /// <returns>
+    /// Why the beat stopped while the child was still running, or <see langword="null"/> where it did not. The input is
+    /// closed then, nothing more being written to it; and the reason is handed back, because a beat that fails without a
+    /// word leaves whoever started the child with nothing to say why its far end gave this process up.
+    /// </returns>
+    private static async Task<string?> WriteInputAsync(StreamWriter writer, ChildInput? input, bool close, InputBeat? beat, CancellationToken exited)
     {
         var whole = false;
+        string? beatLost = null;
 
         try
         {
@@ -528,6 +600,11 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
             await writer.BaseStream.FlushAsync().ConfigureAwait(false);
             whole = true;
+
+            if (!close && beat is not null)
+            {
+                beatLost = await BeatAsync(writer.BaseStream, beat, exited).ConfigureAwait(false);
+            }
         }
         catch (IOException)
         {
@@ -536,10 +613,46 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         }
         finally
         {
-            if (close || !whole)
+            if (close || !whole || beatLost is not null)
             {
                 CloseQuietly(writer);
             }
+        }
+
+        return beatLost;
+    }
+
+    /// <summary>Writes <paramref name="beat"/> to <paramref name="input"/>, a line each time its interval passes, until <paramref name="exited"/>.</summary>
+    /// <returns>Why a beat could not be written to a child that was still running, or <see langword="null"/> where every one was.</returns>
+    private static async Task<string?> BeatAsync(Stream input, InputBeat beat, CancellationToken exited)
+    {
+        var line = Utf8NoBom.GetBytes(beat.Line + "\n");
+
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(beat.Every, exited).ConfigureAwait(false);
+
+                try
+                {
+                    await input.WriteAsync(line, exited).ConfigureAwait(false);
+                    await input.FlushAsync(exited).ConfigureAwait(false);
+                }
+                catch (IOException ex)
+                {
+                    // Its input no longer takes anything. A child that is exiting says the rest itself, and is seen
+                    // to have gone within a moment; one that goes on has stopped hearing this process.
+                    await Task.Delay(GoingGrace, exited).ConfigureAwait(false);
+
+                    return ex.Message;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+        {
+            // The child has gone, and its input with it.
+            return null;
         }
     }
 

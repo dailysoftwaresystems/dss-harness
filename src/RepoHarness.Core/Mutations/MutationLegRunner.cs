@@ -223,6 +223,19 @@ internal sealed class MutationLegRunner(
 
         public async Task<LegEntry> RunAsync(CancellationToken cancellationToken)
         {
+            try
+            {
+                return await SweepAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                // What was packed of the tree's history for the workers goes with the sweep's reading of it.
+                _reading?.Dispose();
+            }
+        }
+
+        private async Task<LegEntry> SweepAsync(CancellationToken cancellationToken)
+        {
             var unselected = _subject.Arms.Unselected
                 .Select(arm => (arm.Arm, Entry: Undriven(arm.Arm, ReachedVerdict.Of(LegVerdict.SkippedNotSelected, arm.Reason))))
                 .ToList();
@@ -393,8 +406,14 @@ internal sealed class MutationLegRunner(
                 return (WorkerRoom.Plan([], wanted, tooLong, room: null, unmeasured: null, source: null), []);
             }
 
-            // A worker's copy is the tree and the dependency sources it is given, as the sweep's readings count them.
-            var copy = _reading.Files.Entries.Values.Sum(entry => entry.Size) + _fetched.Sum(read => read.Bytes);
+            // A worker's copy is the tree and the dependency sources it is given, as the sweep's readings count them, and
+            // what git keeps there of the tree's history: asked only where a worker is yet to be made, since it is packed
+            // to be counted - once, for every worker this reading makes, and before the room is measured, so the pack
+            // itself is within what is measured.
+            var history = Enumerable.Range(1, fit).All(number => _runner._fileSystem.DirectoryExists(Worker(number)))
+                ? 0
+                : await _runner._copies.HistoryBytesAsync(_reading, cancellationToken).ConfigureAwait(false);
+            var copy = _reading.Files.Entries.Values.Sum(entry => entry.Size) + _fetched.Sum(read => read.Bytes) + history;
             var needs = Enumerable.Range(1, fit)
                 .Select(number =>
                 {
@@ -966,23 +985,33 @@ internal sealed class MutationLegRunner(
 
             foreach (var state in sites)
             {
-                var before = Text(state.Declared.Before, before: true);
-                var after = Text(state.Declared.After, before: false);
+                // Every text of the site, replaced together as one edit of it: each read, and looked for in the site as
+                // the worker's copy holds it, whichever of them another would move.
+                var declared = state.Declared.Texts;
+                var texts = declared.Select(text => (Before: Text(text.Before, before: true), After: Text(text.After, before: false))).ToList();
 
-                if (state.Pristine is not { } pristine || before is null || after is null)
+                if (state.Pristine is not { } pristine || texts.Any(text => text.Before is null || text.After is null))
                 {
                     continue;
                 }
 
-                var edit = SiteEdit.Apply(pristine, before, after);
+                var edits = SiteEdit.ApplyAll(pristine, [.. texts.Select(text => (text.Before!, text.After!))]);
 
-                state.Mutated = edit.Edited;
-                counts.Add(new TextCount(state.Declared.Before, state.Declared.Site, edit.Occurrences));
+                state.Mutated = edits.Edited;
 
-                if (edit.ChangesNothing)
+                for (var index = 0; index < declared.Count; index++)
                 {
-                    unchanged.Add(new UnchangedSite(state.Declared.Before, state.Declared.After, state.Declared.Site));
+                    counts.Add(new TextCount(declared[index].Before, state.Declared.Site, edits.Texts[index].Occurrences));
+
+                    if (edits.Texts[index].ChangesNothing)
+                    {
+                        unchanged.Add(new UnchangedSite(declared[index].Before, declared[index].After, state.Declared.Site));
+                    }
                 }
+
+                problems.AddRange(edits.Overlapping.Select(pair =>
+                    $"the text in '{declared[pair.Later].Before}' overlaps the text in '{declared[pair.Earlier].Before}' in '{state.Declared.Site}', "
+                    + "where the texts of one file are replaced together and no two share a byte of it"));
             }
 
             byte[]? control = null;

@@ -18,7 +18,7 @@ Implemented today: `init`, `verify-git`, `create-worktree`, `delete-worktree`,
 `fold-agent`, `delete-agent`), `check-root-litter`, the anchor commands (`write-anchor`, `set-anchor`,
 `read-anchor`, `read-anchors`, `check-anchor-balance`, `check-anchor-citations`),
 `fix-line-endings`, `check-ci-legs`, `legs`, `host-exec`, `install-missing-tools`,
-`sync`, `build`, `test`, `run`, `check-mutations`, `clean` and `help`.
+`update-tool`, `sync`, `build`, `test`, `run`, `check-mutations`, `clean` and `help`.
 
 Every section of this document now describes code that exists. Where a rule is stated in
 the present tense it is enforced, and a gap between the two is a defect in the tool rather
@@ -573,8 +573,15 @@ weighed against what the agent shares (`AgentFold.MovedAsync`), never against gi
 the main tree commits or puts back as its HEAD holds it: a path the agent was handed or folded is stale once the main
 tree's copy is not the one its seed records, and any other once the main tree's copy - committed since or not - is not
 what the agent's base holds, asked of git as a fold asks it. refresh-agent hands over every such path under the paths
-it is given, refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
-comparison asked of the agent's worktree), and seed-agent hands them besides the main tree's uncommitted state. A
+it is given - or anywhere in the tree, off the floor, with `--all` (`RefreshRequest`), which names no prefix and takes
+no path beside it - refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
+comparison asked of the agent's worktree). The refusal names each such path and the arguments that leave them:
+`--except <path>`, once for each, takes that path out of what is handed, so the rest goes over and it stays the agent's
+change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed, would be,
+or needed no handing, and one naming a path the refresh would not have refused is refused as a stray `--settled` is. A
+refresh that stops part way says the line that asks for it again with everything it was asked (`RefreshRequest.Arguments`):
+its paths or `--all`, and each `--except`. What is left out is still weighed as in the way of
+what is handed. seed-agent hands the same paths besides the main tree's uncommitted state. A
 symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
 commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,
 one `cat-file --batch-check` process, and the commit's listing for what that does not answer as a file or a directory:
@@ -596,8 +603,12 @@ hold differently (`git diff --name-only`, commit to commit) is shared - kept as 
 not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
 base holds it, and comes in as git holds it (`git checkout --no-overlay <commit>`, the paths on standard input and read
 literally), or changed by the agent - asked of git against both commits, with anything where the old base holds
-nothing its own, untracked, ignored or staged, and one holding the new base's bytes included - which refuses the move
-unless `--settled` names it. What each commit holds at a path is told apart (`HeldAtAsync`): a directory the old base
+nothing its own, untracked, ignored or staged - which refuses the move unless `--settled` names it. One thing the agent
+made is not its change: a file that is the very file the new base holds there, which is held as the new base holds it
+already (`IGitClient.ListHeldAsAtAsync`: the new base's entry for each such file put in an index of the question's own,
+and `git diff` asked against it, so the content is compared through the clean filters and the line-ending rules and the
+mode where the repository trusts one, as status will compare them once the index has moved - whatever the worktree's
+own index says of the path, nothing for an untracked file). What each commit holds at a path is told apart (`HeldAtAsync`): a directory the old base
 held, now a file or a submodule's entry, is held as the old base holds it while the agent's worktree holds a directory
 or nothing there, and a submodule's entry as git compares it, so neither is taken for something the agent made.
 Nothing of the agent's is written over or hidden: git removes a file or a link where a path it writes needs a
@@ -1078,6 +1089,100 @@ the machine that sends it - which it holds open until the host has finished: whi
 it is, what the host is, and whether each emulator works there; or to run one of its own
 commands in the host's copy of the repository, which is what `host-exec` does.
 
+Nothing a run request starts outlives the machine that asked for it (`HostAgentService`). That
+machine has gone when the input it holds open ends, or can no longer be read, whatever the failure;
+and, since the end of an input is only as good as whatever carries it - a consumer's leg ran on to
+its end on a host reached over ssh, with nobody reading it, after its dispatcher was killed, where
+the same leg in a WSL distribution was cancelled at once - when the beat it writes on that input
+has stopped. Every request says how often its asker writes one (`HostAgentRequest.BeatSeconds`, 15,
+since protocol 8; protocol 9 is the copy's history, below); the process runner writes it for as long as the input is held open
+(`ProcessRequest.StandardInputBeat`, set from the request by `HostAgentProtocol.BeatOf` wherever a
+run request is sent: a leg, `host-exec`, each of a sync's operations), and the host takes anything
+read on its input as one. Eight in a row unheard (`BeatsMissed`), two minutes, and the host cancels
+what the request started: it looks at that silence four times in the two minutes (`SilenceLooks`),
+so the cancellation comes between two minutes and two and a half after the last beat heard, never
+sooner. It first says why on its error stream - the one sign that can be wrong, so a machine still
+there, whose beats were held up, reads why its run stopped - from another thread and for two
+seconds at most (`HostAgentPatience.Saying`): the console's writer writes where it is called, and
+one whose reader had stopped reading held the cancellation it came before for as long as the
+connection stood, which is the very machine the beat is there to notice. A request saying a beat
+no machine writes - less than none, or more than an hour (`LongestBeatSeconds`) - is refused
+before anything runs. On Linux and macOS a hang-up of the agent's session cancels it the same way
+(`HangUp`), rather than ending the agent where it stands with its children left running; Windows
+ends a process whose console closes whatever it answers, so nothing is promised of it there.
+
+What was cancelled is given a minute to stop (`HostAgentPatience.Unwind`), and a command past its
+point of no return (`PointOfNoReturn`) two (`Finishing`), which is what the command line gives one
+interrupted where it was typed: a deletion goes on once cancelled and stops git shortly before
+that time is up to say what is left, and cut off at a minute it was ended part way with nothing
+said. A command that has not stopped by then - one reading to its end the output of something its
+child left running, which never ends - is ended by the agent's last resort
+(`HostAgentLastResort`): every process the agent started, each with its tree, as the process table
+lists them, then the agent itself, exit 130, whatever the ending of them came to. Which processes
+those are is read from one table: the parent's start and each child's by the same clock - on Linux
+one that counts from the machine's start, so that held against the agent's own start as the
+runtime tells it every child read as older than its parent and none was ended - and never the
+console the agent runs in, which Windows lists as its child (`conhost`) and ends everything in the
+console with. The agent's last line says what that came to: each process ended, by its id, each it
+could not end, or why none could be listed. The one thing started on a host to outlast the request
+that asked for it is the process holding the host awake between commands (`holdAwakeSeconds`),
+which ends on its own seconds. There is no verb that stops a run on its hosts, because stopping
+the command that dispatched it is that verb, on every carriage.
+
+The beat can fail at this end too: the process that carries the request - ssh, wsl.exe - stops
+taking what is written to it and goes on. The process runner then waits two seconds for it to be
+seen exiting, which says the rest itself, and otherwise writes nothing more and records why
+(`ProcessResult.BeatLost`). Each sender of a run request - a leg, `host-exec`, a sync's operation -
+warns with it (`HostProbes.BeatLost`), since the host hears no more of this machine and stops what
+it was asked for a machine that has gone, and that machine is here, reading how its command ended.
+Passed over, as a child ceasing to read its input always was, the run ended with nothing at this
+end to say why.
+
+This machine's own DssHarness has one door too (`update-tool`, `ToolUpdateService`). Measured on a
+consumer's Windows host: a `dotnet tool update` typed by one session while another's commands ran
+took the tool's shim away for ten seconds, failed and put it back, twice, and every command
+anybody typed meanwhile found no tool (127). The update moves the installed version's directory
+aside before it writes the new one, and Windows moves no directory a running program has loaded
+files from; elsewhere the move succeeds and takes the files from under what is running. So
+`update-tool` reads the process table and moves the installation - this user's global tools, or
+the directory `--tool-path` names - up to the newest release nuget.org lists only while no other
+process named `dssharness` runs on the machine: with one running it changes nothing and names
+each by its process id and the command it was asked, never the rest of its line, which may hold
+an input's value (exit 13); with `--wait` it looks again every five seconds, saying who it waits
+for as it starts and every five minutes; and a wait asked from inside a running DssHarness, which
+would never end, is refused - as is any wait where the table was read by names alone (a degraded
+reading names no process's parent, so such a wait could not be told from one that ends), the
+refusal then saying why the table was. Once the update has begun the command stops neither it nor
+the reading of what it left: both run under no cancellation, and `update-tool` is among the
+commands past a point of no return (`PointOfNoReturn`), which the command line waits two minutes
+for after an interruption, because an update cut off part way leaves a machine with no tool and a
+command that says nothing of it. A Ctrl+C typed at a terminal on Linux or macOS reaches dotnet
+itself, as it reaches every process of the terminal's: what that leaves is read back and said
+like any other failure of the update. It says the update done only once `dotnet tool list` shows that release, and a failure with
+what dotnet said, each DssHarness that started while it ran, and what is listed since - or, where
+that listing failed too, why in dotnet's words (exit 20). Which release is the newest is asked of
+nuget.org (`IPublishedToolVersions`), and an answer that does not come is said with its cause
+(`PublishedAnswer.Untold`): the feed not reached, no answer in three seconds, a status that is no
+success, a list or a leaf this build cannot read - put right in different places, and once said as
+one. Nothing is changed then, unless the copy asking is itself a release newer than the installed
+one, which the tool is moved to with a line saying so; a copy that is no release is never that, as
+nuget.org holds none. Versions neither of which a release can be told newer than are said as that,
+the feed never asked. The command asking is a DssHarness too: typed by its name on Windows it is
+itself what stops the update, so there it changes nothing and says the command that does, with the
+options it was typed with (a path holding a space in quotes), on every system - `dotnet tool exec
+DssHarness --yes --source <nuget.org> -- update-tool`, the newest release run as the program
+`dotnet` from the package cache, holding none of the installed files (measured: an update beside
+such a copy went through in a second), with the update's own outcome as its exit code. Elsewhere
+the installed tool replaces its own files while it runs, having first loaded every assembly beside
+it (`IOwnProgram.LoadWhole`), so nothing it has left to do asks for a file that is gone. A
+DssHarness is told by the name of its program, as a host's is, so a build from source running
+beside the installed tool is counted: wrongly, and safely. On macOS that name is read from a
+listing of its own (`ps -o comm=`), since the path of a program may hold a space and the listing
+that carries the command line does not say where the program ends: named by the first word of its
+line, a tool kept under a volume called `My Disk` was a process called `My`, and not counted. What
+is left open is the moment between the last look and the update, in which a command just started
+can still stop it: the failure then names that command.
+
 Both ends must be the same build, so before anything runs on a host:
 
 - A host without DssHarness has this machine's version installed.
@@ -1085,7 +1190,8 @@ Both ends must be the same build, so before anything runs on a host:
   not updated while DssHarness is running there: an update replaces a running tool's
   files underneath it on Linux and macOS, and fails part way on Windows.
 - A host that is ahead stops everything (exit 13) until this machine is updated, with the
-  command that updates it. Moving the host down would undo somebody else's update.
+  command that updates it - `update-tool`, run from beside the installed tool. Moving the host
+  down would undo somebody else's update.
 - The version and the SHA-256 of the tool's assembly are both compared. A build from source
   reports the same version as the published package, while the assembly installed from one
   package is the same bytes on every operating system.
@@ -1475,7 +1581,7 @@ whoever holds the slots: that leg takes the next slot given back, for as long as
 it. Measured: a command's WSL leg, asked for at once with its two Windows legs by the process that
 dispatched them all, waited out its hour behind them and was `not-admitted`. A host serving a leg for
 another machine records the leg's slot under that machine's run, which the run request carries beside
-the command (`HostAgentRequest.RunId`, protocol 7), so the legs one command sends there wait for each
+the command (`HostAgentRequest.RunId`, since protocol 7), so the legs one command sends there wait for each
 other the same way; a request naming its run by what is no run id, or naming a blank drive where WSL
 keeps the disk, is refused, and nothing it asks for runs. A slot is held by the process that asked
 for it, never by a timeout: given back when the work ends, and, where that process ended
@@ -1958,6 +2064,12 @@ while a gate ran turned a green suite red, with four test processes live at once
 - Commands run as argument lists, never through a shell, so no shell's process
   emulation sits between the harness and a runner. MSYS's emulation was measured losing
   tests from a parallel test run with no failure reported.
+- A program the process runner starts that will not start because something holds it open for
+  writing is started again, every 20 ms for up to two seconds (`ProcessRunner.StartAsync`), before
+  that is its failure. Linux starts no program so held, and a process forked while the program was
+  being written - by any thread, for a child of its own - holds it until it becomes the program it
+  was forked for. Met in this tool's own suite, on a hosted Linux runner: a script written, closed
+  and started at once failed with "Text file busy".
 
 ## Cross-leg contamination
 
@@ -2237,10 +2349,10 @@ directory here cannot drift apart.
 - **The marker records which it was.** Afterwards a copy taken over and one the tool made are the
   same directory, and only one of them deleted somebody's files; the marker is the only thing left
   that can say so.
-- **What survives an adoption is narrower than it looks.** Its `.git` and so every commit in it,
-  the rest of `.harness-config`, the worktrees root and whatever `sync.neverTransfer` names are
-  protected from the deletion — though `config.json` there is replaced with this tree's, which the
-  refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
+- **What survives an adoption is narrower than it looks.** Its `.git` and so every commit, branch
+  and tag in it, the rest of `.harness-config`, the worktrees root and whatever `sync.neverTransfer`
+  names are protected from the deletion — though `config.json` there is replaced with this tree's,
+  and its git HEAD is moved, detached, to this tree's commit where it names another, both of which the refusal says. The ignore list is *not* read from that host: it is this tree's, listed by asking
   git which ignored files exist **here**. A directory only the host has — a build tree under a name
   `sync.neverTransfer` does not carry, a `node_modules`, a virtual environment — is ignored by
   nothing this side can see and is deleted like any other file. It appears in the list the refusal
@@ -2282,8 +2394,82 @@ directory here cannot drift apart.
   every build there after the first started from clean and every such guard watched nothing,
   without a word. A file written through a link in the copy is outside it and is not staged; the
   write is warned of, and the verification refuses the copy. A tree git tracks nothing in is now
-  said, by a build and by a step that asked for its inputs held still. The copy's history stays its
-  own.
+  said, by a build and by a step that asked for its inputs held still.
+- **The copy's HEAD names the commit the tree was at** when it was read (`SyncService.CarryHistoryAsync`),
+  so what a step asks git about HEAD - which commit, what a file held there - is answered in the
+  copy as it is in the tree. It never was: a copy this tool made named no commit, and a clone it
+  took over named whichever its owner left it at, so a consumer's runner, whose program reads
+  `git rev-parse HEAD` and `git show HEAD:<path>`, passed its local leg and failed its host leg
+  over files that were byte for byte the same, and nothing said why. The commit is read with the
+  tree (`SyncSource.History`), so every copy of one reading names one commit, whatever is committed
+  meanwhile. The question rides on the request a sync opens with (`inspect` answers, with whose
+  the directory is, where its repository's HEAD stands and what it holds of the commit asked for),
+  so it is weighed before anything is written there, and a sync that finds the copy's HEAD naming
+  the commit, and holding what is asked, costs no request more and sends nothing. Otherwise this
+  machine packs what the copy lacks (`git pack-objects --revs`), sends it a piece to a request,
+  none larger than a batch of files (`history-piece`, kept in the copy's git directory under
+  `dssharness-incoming`), and the copy takes it (`take-history`, `GitClient.TakeHistoryAsync`):
+  `git index-pack` reads the pack whole where it was kept, checking each object, and only then is it
+  moved among the repository's own, its index first - git's own taking of a fetch writes the pack
+  a second time, into a temporary file among the repository's packs, which a take stopped part way
+  would leave there, the size of the pack, for nothing to clear. Then every object the commit
+  names is walked (`git rev-list --objects`), and only then is HEAD moved - itself, detached
+  (`git update-ref --no-deref`), never the branch it was on, and not at all where it names the
+  commit already. A pack that is none, or one the copy is then found short of, leaves HEAD where
+  it was, and the sync fails with what git said of it. A sync with only a HEAD to move marks the
+  copy unfinished until it has, as one with files to write does, and a dry run says what it would
+  do to HEAD and does none of it.
+  - *How much.* `sync.history` is `head` by default: the commit and what its tree names, packed as git
+    packs a clone of depth one (`--shallow <commit>`), less what the tree of the copy's own HEAD already
+    gives it (`^<its HEAD>^{tree}`). A question about a commit behind it that the copy does not
+    hold fails in the copy, in git's own words. `full` packs every commit behind it too, less those
+    behind the copy's own HEAD (`^<its HEAD>`), where the copy holds them all: a copy given the
+    commit alone before is sent all of it, the commit included, once. A tree whose own repository is
+    a shallow clone gives a copy all it holds and no more - the commits its history stops at go
+    with the question, so the copy is not read as still short of them, and sent the whole again
+    with every sync. A partial clone asked for `full` has git fetch, from its remote, what it left
+    out, or fail where it cannot. In the walk of a `full` take, what the copy's own HEAD, branches
+    and tags reach is trusted to be whole, as git trusts it in a fetch.
+  - *One pack to a reading.* Every copy made from one reading that lacks the same of its history is
+    sent the same pack, made once (`HistoryPacks`, the `SyncSource`'s own, removed with it) - a
+    sweep's workers were otherwise each packed the same commit. It is kept in the tree's own git
+    directory, under `dssharness-history-<id>`: on the volume that already holds the repository,
+    never a temporary directory a system may keep in memory, and there before the room a sweep's
+    workers need is measured. Each such directory is recorded as its process's own in
+    `<directory>.owner.json` beside it, written first, and the next reading that packs removes one
+    whose process no longer runs - what a sync that was killed left, which nothing else would
+    clear. One recorded by another machine cannot be asked, and stands.
+  - *Where history stops.* git reads a commit listed in the repository's `shallow` file as one with no
+    parent, and one not listed with a parent missing as damage. After each take the list is made
+    exactly true of the commits it could have changed for - those listed before, the commit taken,
+    and those the tree's own history stops at: each the copy holds, a parent of which it does not, is
+    listed, and no other. So a commit whose parents arrived stops being a boundary, and history that
+    arrived a commit at a time reads as far back as it goes. Where the commit alone was asked for
+    and the history behind it cannot be walked - a commit an earlier take that stopped left without
+    its parents, recorded nowhere - the commit taken is listed too. Written under the lock git
+    takes, never past one that is there, and left as written where the walk then fails: it is true
+    of what the repository holds, whether or not that is all the commit names.
+  - *A copy taken over.* Its HEAD is moved like any copy's, where it names another commit, and no
+    branch, tag or commit of its repository changes: the branch it was on names the commit it
+    named. What does change is said. The repository gains the objects sent; its index is the
+    sync's, as any copy's is; and one that held every commit behind its own, given a commit
+    without the one before it, is a shallow repository to git from then on - a fetch there brings
+    nothing from behind that commit until `git fetch --unshallow` is run there. The takeover's list
+    says HEAD will move, and that this can follow, before either happens; the sync says, the once
+    it happens, which branch HEAD left and where it was, and that the repository is now a shallow
+    one; `git reflog` there has the move too. After that its HEAD is on no branch, and moving it
+    moves nothing of anybody's.
+  - *What is still the copy's own.* Its branches, remotes, tags and stash, and a submodule's
+    history, which is not carried. What changed since HEAD is answered for the files the copy
+    holds, each by its bytes: a file this tree tracks and the sync withholds reads there as
+    deleted, one it carries untracked as added, and one git stores converted on this machine - line
+    endings (`core.autocrlf`), a clean filter - as changed. A tree whose HEAD names no commit yet
+    gives a copy none, and the sync says so where the copy's HEAD names one. A copy whose
+    repository names its objects another way than the tree's (`sha1`, `sha256`) can hold no commit
+    of the tree's: the sync is refused before anything is written there, naming both, and a copy
+    made for a tree names them as the tree does. An object's name is taken from another machine
+    only whole - 40 or 64 lowercase hexadecimal digits (`GitObjectId.Require`) - before it reaches
+    a command line or a file's name.
 - **Content, never timestamps.** A file is written only when its content differs. An unchanged
   file is not touched, so its modification time does not move and an incremental build on that
   host stays correct; a changed file is rewritten now, so its time advances. Nothing compares two
@@ -2364,7 +2550,22 @@ directory here cannot drift apart.
   arrival. Evidence that a binary built here runs there is not evidence if nobody checked it
   survived the journey. A leg's line in `run --json` names each file its steps kept as
   `keptOutputs`, relative to the tree, so a caller passes those paths to `--pull` without walking
-  the host's tree for them.
+  the host's tree for them. A path ending with `/` names a directory instead: the host that holds it
+  lists every file below it with its size (`ISyncTransport.ListFilesAsync`, served as `sync-serve
+  list`), never following a link below it, and each file then crosses as a file named does, in a
+  request of its own. The side that holds the directory bounds it before a file of it is read - 256
+  files, 1 GiB together, no file past what one request carries - and one that is not there, is a
+  file, or holds no file fails the pull by name (`SyncService.ListedForPullAsync`), every directory
+  before any file has crossed. A directory that cannot be read where it is fails the pull by name
+  too, never as a defect of the tool. It is asked of the host with forward separators the whole way
+  along, however it was typed: a shell on Windows completes each part with a backslash, which a
+  host that is not Windows read as one name. Each file brought back is named in the report, and
+  each link passed over; a dry run asks the host and names the same files. A pull that stops part
+  way - a file gone since it was listed, one that did not land intact, a host that stopped
+  answering, an interruption - ends there (`SyncPull.Stopped`) and fails as what stopped it does,
+  naming each file it had brought back, which stays where it was written, and each it had not:
+  raised as the one failure it stopped at, a directory here held part of what the host kept, and
+  nothing said which part.
 
 ## Predefined runners
 
@@ -2657,8 +2858,20 @@ and the last field taking the rest of the line. An A row declares an arm - its s
 holding its before- and after-text, its red kind, its target and runner, its case count and its
 diagnostic - and C, G, B, M and S rows, each following the A row of its arm, add a case that must
 redden, a neighbour that must run and stay green, a BUILD-RED arm's paired control, another site
-mutated with it - another file, as the tree's own file system compares names - and the legs it
-runs on. A
+mutated with it, and the legs it runs on. An M row's site is another file, or - naming a file the
+arm already mutates, as the tree's own file system compares names - a further text of that file
+(`MutationSite.Further`), which it must spell as the arm's first row for that file spells it: the
+one spelling held to the tree's, so a row that names the file otherwise is the registry's problem
+at its line. A consumer's mutants were several places of one file, thousands of lines
+apart, either edit alone another program or no change at all, and one text spanning them would
+break at any edit of a line between. Every text of a file is replaced together
+(`SiteEdit.ApplyAll`): each is looked for in the file as the tree holds it, never as another of
+them left it, must stand there exactly once and differ from what replaces it; two that share a
+byte of the file are the registry's problem at the later row's line, exit 12, before any host is
+touched, and an arm's violation where only a worker's copy shows it. The file is written once,
+put back whole and checked once against the tree's, and what depends on it is witnessed rebuilt as
+for one text, so its verdicts are judged as any arm's. A BUILD-RED arm carries such a row for its
+own file alone, which its paired control rewrites whole. A
 text is a file in `mutations.textDirectory`, read as it is held, less a UTF-8 byte order mark at
 its start and one line ending at its end, and given the site's line endings where the site ends its
 lines otherwise, so one registry serves a checkout with either. Every file directly in that
@@ -2681,7 +2894,11 @@ leg's own tree, project and variant; sync's exclusions; the variant's configure;
 sources the leg's own build fetched; and ninja's records. A leg built by anything but CMake with the
 Ninja generator is refused too, naming the fix: only ninja's records say, for one configuration
 alone, which objects a mutation rebuilt. `--arms` selects arms as `--legs` selects legs, and an arm
-it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg. An arm
+it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg. It is
+weighed against the registry only once the registry can be swept (`MutationService.ReadAsync`): the
+S rows' legs are resolved with the rest of the registry's problems, so a scope naming neither a leg
+nor a leg set is listed beside them in one refusal, exit 12, whatever `--arms` names - an arm the
+registry does not declare, exit 10, hid it, in the one command that reads a registry and stops. An arm
 selected whose S row names no selected leg is warned of before the sweep starts; and a selection
 whose every arm is such a one is refused, exit 10, naming each and where it runs, before any host
 is touched: every leg would be skipped, and the run would pass having swept nothing. A host sweeping
@@ -2718,7 +2935,9 @@ which never makes the copy it claims: the sync that makes a copy refuses a direc
 make. A claim whose sweep died is released and said; the copy it held is synced again, as every
 worker is before it drives an arm.
 
-A worker needs its copy of the tree and what a build of the variant comes to - the leg's
+A worker needs its copy of the tree - its files, and what git keeps there of its history: the commit
+the tree was at, and every commit behind it under `sync.history: full` - and what a build of the
+variant comes to - the leg's
 `buildSpaceGiB` where it declares one, else what the leg's own build directory last recorded, else
 the most any other tree of the repository on its machine recorded of it - less what it already
 holds. The
@@ -2879,10 +3098,11 @@ records staying on that host and its home written as `~`, as a leg's are (see "A
 `check-mutations --self-test` sweeps the fixture this tool carries, in place of the repository's
 registry, which it does not need. The fixture is `tests/mutation-fixture/`, embedded whole into the
 tool so every build carries the very fixture its own tests swept: a CMake library, a test binary
-that writes its own JUnit report - nothing is fetched to build it - and a registry of seven arms,
+that writes its own JUnit report - nothing is fetched to build it - and a registry of eight arms,
 one to each verdict an arm's design can reach on any machine: passed, as a TEST-RED arm, as a
-BUILD-RED arm, and as an arm whose mutation is coupled across two files, neither edit building
-without the other; violated; survived; unattributed; and failed. It is built as each selected leg builds - its
+BUILD-RED arm, as an arm whose mutation is coupled across two files, and as one whose mutation is
+two sites of one file, neither edit building without the other; violated; survived; unattributed;
+and failed. It is built as each selected leg builds - its
 toolchain, configuration and sanitizer, its developer environment - and each arm is held to the
 verdict it is designed to reach: one that reaches it passed, saying so; one that reaches another
 verdict an arm's design decides is `violated`, naming both, which is this tool's defect with that

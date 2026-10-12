@@ -39,6 +39,7 @@ root.Subcommands.Add(FixLineEndingsCommand.Create());
 root.Subcommands.Add(CheckCiLegsCommand.Create());
 root.Subcommands.Add(LegsCommand.Create());
 root.Subcommands.Add(InstallMissingToolsCommand.Create());
+root.Subcommands.Add(UpdateToolCommand.Create());
 root.Subcommands.Add(SyncCommand.Create());
 root.Subcommands.Add(BuildCommand.Create());
 root.Subcommands.Add(TestCommand.Create());

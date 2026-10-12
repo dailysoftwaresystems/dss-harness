@@ -1,7 +1,7 @@
 # The project check-mutations sweeps for its self-test and its end-to-end tests: a library, and a test binary that
 # writes its own JUnit report, so nothing is fetched to build it. Embedded into DssHarness, so every copy of the tool
 # carries the very fixture its tests swept; arms.txt declares an arm to each verdict an arm's design can reach on any
-# machine, and one whose mutation is coupled across two files.
+# machine, one whose mutation is coupled across two files, and one whose mutation is two sites of one file.
 #
 # C is enabled beside C++ though no source is C: a toolchain may hold both compilers to an id, and a language the
 # project never enables is one CMake identifies no compiler for.

@@ -43,7 +43,7 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var sync = Substitute.For<ISyncService>();
+        var sync = SyncKit.ServiceDouble();
         var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
 
         await using var held = await runLock.AcquireAsync(
@@ -77,7 +77,7 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var sync = Substitute.For<ISyncService>();
+        var sync = SyncKit.ServiceDouble();
 
         // The copy starts ssh through the runner every host command goes through, so what reaches the
         // run is what that runner makes of ssh not starting - never a refusal written for the test.
@@ -132,6 +132,26 @@ public sealed class LegRunServiceTests
         Assert.Equal("failed", verdicts["arm"].Verdict);
         Assert.Contains("'/usr/bin/git' could not be started", verdicts["arm"].Detail, StringComparison.Ordinal);
         await sync.DidNotReceiveWithAnyArgs().SyncAsync(default!, default!, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// The reading a run's copies on other machines are made from is let go with the run, and with it what was packed
+    /// of the tree's history for them: a pack is the size of what it carries, and nothing else removes it.
+    /// </summary>
+    [Fact]
+    public async Task TheReadingARunsCopiesAreMadeFrom_IsLetGoWithTheRun()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var sync = Substitute.For<ISyncService>();
+        var reading = MutationFixture.Reading(temp.Path);
+
+        sync.ReadSourceAsync(default!, TestContext.Current.CancellationToken).ReturnsForAnyArgs(reading);
+
+        await RunAsync(temp, harness, TwoLegs(harness), SshAndLocal(harness), new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy }, sync: sync);
+
+        await sync.ReceivedWithAnyArgs(1).ReadSourceAsync(default!, TestContext.Current.CancellationToken);
+        Assert.True(reading.Disposed);
     }
 
     /// <summary>
@@ -238,7 +258,7 @@ public sealed class LegRunServiceTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var sync = Substitute.For<ISyncService>();
+        var sync = SyncKit.ServiceDouble();
 
         var hosts = new ScriptedHostCommands((_, command) =>
         {
@@ -2407,7 +2427,7 @@ public sealed class LegRunServiceTests
             new LegExecutor(harness.Platform, harness.Output),
             runLock ?? new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             logs ?? new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
-            sync ?? Substitute.For<ISyncService>(),
+            sync ?? SyncKit.ServiceDouble(),
             transports ?? Substitute.For<ISyncTransportFactory>(),
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
 

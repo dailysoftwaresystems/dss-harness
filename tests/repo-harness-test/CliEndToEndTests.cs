@@ -35,13 +35,29 @@ public sealed partial class CliEndToEndTests
             "create-orchestrator", "delete-orchestrator", "list-orchestrator",
             "create-agent", "seed-agent", "refresh-agent", "rebase-agent", "fold-agent", "delete-agent",
             "check-root-litter", "check-anchor-citations", "fix-line-endings", "check-ci-legs",
-            "legs", "install-missing-tools", "sync", "build", "test", "run", "host-exec", "help",
+            "legs", "install-missing-tools", "update-tool", "sync", "build", "test", "run", "host-exec", "help",
         ];
 
         foreach (var command in commands)
         {
             Assert.Contains(command, result.StandardOutput, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// update-tool's own help names its two options and the one line that updates the installed tool from beside it -
+    /// the only form of the command a test ever starts: started for real, it would update the machine's own tool.
+    /// </summary>
+    [Fact]
+    public async Task UpdateTool_OffersItsWaitAndItsToolPath_AndSaysTheLineThatUpdatesFromBeside()
+    {
+        var result = await CliRunner.RunAsync(["update-tool", "--help"], TestContext.Current.CancellationToken);
+        var said = string.Join(' ', result.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("--wait", said, StringComparison.Ordinal);
+        Assert.Contains("--tool-path <directory>", said, StringComparison.Ordinal);
+        Assert.Contains("dotnet tool exec DssHarness --yes --source https://api.nuget.org/v3/index.json -- update-tool", said, StringComparison.Ordinal);
     }
 
     /// <summary>

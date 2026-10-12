@@ -19,6 +19,26 @@ public sealed class WorkerCopiesTests
     private static readonly VariantKey Variant = new("x86_64", "gcc", "debug", null);
 
     /// <summary>
+    /// What git keeps of the tree's history in a worker made new is counted from the pack that worker is then sent, so
+    /// the room a sweep's workers are counted against holds it, where it held the tree's files alone.
+    /// </summary>
+    [Fact]
+    public async Task WhatGitKeepsOfTheTreesHistoryInANewWorker_IsCountedFromThePackItIsSent()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        using var reading = await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken);
+
+        var counted = await Copies(harness).HistoryBytesAsync(reading, cancellationToken);
+        var kept = Assert.Single(Directory.GetDirectories(Path.Combine(tree, ".git"), "dssharness-history-*"));
+        var pack = Assert.Single(Directory.GetFiles(kept, "*.pack"));
+
+        Assert.True(counted > 0);
+        Assert.Equal(new FileInfo(pack).Length, counted);
+    }
+
+    /// <summary>
     /// A worker is made the tree as the sweep read it, a repository of its own; synced again from a later reading, it puts
     /// back a site a sweep killed part way left mutated, and keeps its build directory warm.
     /// </summary>
@@ -36,6 +56,11 @@ public sealed class WorkerCopiesTests
 
         Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(worker, "src", "a.c"), cancellationToken));
         Assert.True(Directory.Exists(Path.Combine(worker, ".git")), "The worker is not a repository of its own.");
+
+        // And its HEAD the tree's, as any copy's is: a test that asks git about HEAD is answered in a worker as in the tree.
+        Assert.Equal(
+            await harness.GitClient.ResolveCommitAsync(tree, "HEAD", cancellationToken),
+            await harness.GitClient.ResolveCommitAsync(worker, "HEAD", cancellationToken));
 
         var built = Path.Combine(Variant.DirectoryUnder(worker), "a.o");
 

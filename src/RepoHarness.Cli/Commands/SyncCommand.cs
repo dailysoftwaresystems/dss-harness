@@ -28,7 +28,7 @@ internal static class SyncCommand
 
     private static readonly Option<string[]> PullOption = new("--pull")
     {
-        Description = "Bring these paths back from each host's copy instead of syncing to it, verified on arrival.",
+        Description = "Bring these paths back from each host's copy instead of syncing to it, verified on arrival: each a file, or with a '/' at its end a directory, whose every file comes back, each named.",
         AllowMultipleArgumentsPerToken = true,
     };
 

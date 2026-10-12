@@ -31,6 +31,8 @@ internal static class TestChild
             "echo-stdin" => EchoStandardInput(standardOutput),
             "stdin-to-file" => StandardInputToFile(arguments),
             "read-line-then-watch" => ReadLineThenWatch(standardOutput, arguments),
+            "read-lines-for" => ReadLinesFor(standardOutput, arguments),
+            "close-input-then-sleep" => CloseInputThenSleep(arguments),
             "sleep" => Sleep(arguments),
             "stream" => Stream(standardOutput, standardError, arguments),
             "flood" => Flood(standardOutput, arguments),
@@ -38,6 +40,7 @@ internal static class TestChild
             "flood-both" => Flood(standardOutput, arguments) + Flood(standardError, arguments),
             "print-file" => PrintFile(standardOutput, arguments),
             "spawn-grandchild" => SpawnGrandchild(arguments),
+            "last-resort" => LastResort(standardOutput, arguments),
             "print-env" => PrintEnvironment(standardOutput, arguments),
             "write-file" => WriteFile(arguments),
             "watch-process" => WatchProcess(arguments),
@@ -151,6 +154,70 @@ internal static class TestChild
         var ended = reading.Wait(int.Parse(arguments[0], CultureInfo.InvariantCulture)) && reading.Result < 0;
 
         output.Write(ended ? "ended\n" : "held\n");
+        return 0;
+    }
+
+    /// <summary>
+    /// Takes a line of its input, closes its own end of it, then goes on for the given milliseconds: what a carrier
+    /// that stops taking what it is written, and does not exit, looks like to whoever writes to it. The line first,
+    /// because whoever writes to it writes a request before any beat. On Windows only: elsewhere the runtime
+    /// holds a second descriptor of its input, so closing the first leaves the pipe whole, and a shell that closes its
+    /// own is what stands in.
+    /// </summary>
+    private static int CloseInputThenSleep(string[] arguments)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return 98;
+        }
+
+        const int StandardInputHandle = -10;
+
+        using (var input = Console.OpenStandardInput())
+        {
+            while (input.ReadByte() is not (-1 or '\n'))
+            {
+            }
+        }
+
+        CloseHandle(GetStdHandle(StandardInputHandle));
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+        return 0;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    private static extern nint GetStdHandle(int handle);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CloseHandle(nint handle);
+
+    /// <summary>
+    /// Reads lines for the given milliseconds, then writes back each it read: what a child that listens for a beat on
+    /// its input hears. The reader is left undisposed, since a read may still be pending when this process exits.
+    /// </summary>
+    private static int ReadLinesFor(TextWriter output, string[] arguments)
+    {
+        var input = new StreamReader(Console.OpenStandardInput(), Utf8NoBom);
+        var read = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        _ = Task.Run(() =>
+        {
+            while (input.ReadLine() is { } line)
+            {
+                read.Enqueue(line);
+            }
+        });
+
+        Thread.Sleep(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+
+        foreach (var line in read)
+        {
+            output.Write("[" + line + "]\n");
+        }
+
         return 0;
     }
 
@@ -307,6 +374,45 @@ internal static class TestChild
 
         Thread.Sleep(int.Parse(sleepMilliseconds, CultureInfo.InvariantCulture));
         return 0;
+    }
+
+    /// <summary>
+    /// Starts a sleeping child, says its id, then does what a host's agent does at its last resort, on this machine's
+    /// own process table: ends what it started, says what that came to, and ends itself with the code
+    /// <c>arguments[0]</c> names.
+    /// </summary>
+    private static int LastResort(TextWriter output, string[] arguments)
+    {
+        var start = new ProcessStartInfo(TestHost.DotnetExecutable)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(TestHost.AssemblyPath);
+        start.ArgumentList.Add("120000");
+        start.Environment[TestHost.ChildModeVariable] = "sleep";
+
+        using var sleeper = Process.Start(start)
+            ?? throw new InvalidOperationException("The sleeping child did not start.");
+
+        output.Write(sleeper.Id.ToString(CultureInfo.InvariantCulture) + "\n");
+
+        var platform = new RepoHarness.Core.Platform.HostPlatform();
+        var table = RepoHarness.Core.Platform.ProcessTableFactory.Create(
+            platform,
+            new RepoHarness.Core.Processes.ProcessRunner(platform, RepoHarness.Core.Platform.FilePermissionsFactory.Create()));
+
+        // Longer than an agent gives it: a busy machine's table is read slowly, and this is no test of that budget.
+        var resort = new RepoHarness.Core.Hosts.HostAgentLastResort(table, platform, TimeSpan.FromMinutes(5));
+
+        output.Write(resort.EndStartedAsync().GetAwaiter().GetResult() + "\n");
+        output.Flush();
+        resort.End(int.Parse(arguments[0], CultureInfo.InvariantCulture));
+
+        return 99;
     }
 
     private static int PrintEnvironment(TextWriter output, string[] arguments)

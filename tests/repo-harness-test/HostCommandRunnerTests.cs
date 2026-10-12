@@ -61,6 +61,26 @@ public sealed class HostCommandRunnerTests
         }
     }
 
+    /// <summary>
+    /// The beat a request says its asker writes reaches the process that carries it, to whichever host, with the input
+    /// it is written on held open: a host counts on it on every carriage, and one that was written none would stop
+    /// every run of longer than the silence it lets pass.
+    /// </summary>
+    [Fact]
+    public void TheBeatARequestIsWritten_ReachesTheProcessOnEveryKindOfHost_WithItsInputHeldOpen()
+    {
+        var beat = new InputBeat(TimeSpan.FromSeconds(15), HostAgentProtocol.BeatLine);
+
+        foreach (var connection in new[] { new HostConnection { Host = HostId.Local }, new HostConnection { Host = HostId.Wsl("wsl-a"), Distribution = "Example-Linux" }, Ssh() })
+        {
+            var beating = HostCommandRunner.BuildRequest(connection, ListSdks with { HoldStandardInputOpen = true, StandardInputBeat = beat });
+            var asked = HostCommandRunner.BuildRequest(connection, ListSdks);
+
+            Assert.Equal((true, beat), (beating.HoldStandardInputOpen, beating.StandardInputBeat));
+            Assert.Equal((false, null), (asked.HoldStandardInputOpen, asked.StandardInputBeat));
+        }
+    }
+
     [Fact]
     public void Wsl_StartsTheProgramWithoutAShell_InTheHomeDirectory()
     {

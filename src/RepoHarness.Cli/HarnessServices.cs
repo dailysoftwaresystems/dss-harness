@@ -99,6 +99,17 @@ internal static class HarnessServices
         services.AddSingleton<IToolIdentityProvider, EntryAssemblyToolIdentityProvider>();
         services.AddSingleton<IHostCommandRunner, HostCommandRunner>();
         services.AddSingleton<EmulatorProbe>();
+        services.AddSingleton<IHostAgentLastResort>(provider => new HostAgentLastResort(provider.GetRequiredService<IProcessTable>(), provider.GetRequiredService<IHostPlatform>()));
+        services.AddSingleton<IOwnProgram, OwnProgram>();
+        services.AddSingleton(provider => new ToolUpdateService(
+            provider.GetRequiredService<IProcessTable>(),
+            provider.GetRequiredService<IProcessRunner>(),
+            provider.GetRequiredService<IPublishedToolVersions>(),
+            provider.GetRequiredService<IToolIdentityProvider>(),
+            provider.GetRequiredService<IProcessIdentity>(),
+            provider.GetRequiredService<IOwnProgram>(),
+            provider.GetRequiredService<IHostPlatform>(),
+            provider.GetRequiredService<IHarnessOutput>()));
         services.AddSingleton<HostAgentService>();
 
         // Reaching a host: its own directory under .harness-config says where it is, a name is

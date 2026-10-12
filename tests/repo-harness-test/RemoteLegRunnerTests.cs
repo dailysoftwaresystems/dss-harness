@@ -40,6 +40,12 @@ public sealed class RemoteLegRunnerTests
         Assert.Equal(HostAgentRequestKind.Run, request.Kind);
         Assert.Equal("/home/dev/repo", request.Directory);
 
+        // Its input is held open, with the beat the request says written on it: a host that hears neither its end nor
+        // its beat cancels the leg, so no leg outlives the command that dispatched it, whatever carries the input.
+        Assert.True(sent!.HoldStandardInputOpen);
+        Assert.Equal(HostAgentProtocol.BeatSeconds, request.BeatSeconds);
+        Assert.Equal(new InputBeat(TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds), HostAgentProtocol.BeatLine), sent.StandardInputBeat);
+
         // The command this machine was asked to run, for this leg only, answered as data, and with
         // the host told to run it on itself: a host free to dispatch onward would put the verdict one
         // further hop from the reader, and could not terminate by construction.

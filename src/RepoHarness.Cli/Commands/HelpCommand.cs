@@ -558,6 +558,19 @@ internal static class HelpCommand
         builder.AppendLine($"tree - the path '{ToolPackage.Command} sync --pull' takes to bring it back from the host that");
         builder.AppendLine("kept it.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A path given to --pull that ends with '/' names a directory: every file below it is brought back, each checked as "
+            + "a file named is and each named in the report, as the path a later command takes. The host that holds it lists "
+            + "it first, and a directory that is not there, holds no file, holds more than "
+            + $"{SyncServe.MostFilesPulledFromADirectory.ToString(CultureInfo.InvariantCulture)} files or more than "
+            + $"{(SyncServe.LargestDirectoryPulled / (1024 * 1024)).ToString(CultureInfo.InvariantCulture)} MiB together fails the pull before "
+            + "any file crosses: each file comes in a request of its own, so a directory named is a step's kept outputs, never "
+            + "a build tree - keep that as one archive. A link below it is never followed: it is named, and nothing is brought "
+            + "back for it. With --dry-run the host is asked what the directory holds, and nothing is brought. A pull that "
+            + "stops part way - a file gone, a host that stopped answering - fails naming each file it had brought back, which "
+            + "stays where it was written, and each it had not.");
+        builder.AppendLine();
         builder.AppendLine("Outputs are kept as soon as the step that made them passes, not at the end of the");
         builder.AppendLine("run, because a later step reads them. A step that FAILED keeps nothing, although it");
         builder.AppendLine("may have written the file: carrying evidence out of work that did not pass is what");
@@ -829,7 +842,9 @@ internal static class HelpCommand
         builder.AppendLine("  B | arm | control before | control after | why");
         builder.AppendLine("                                                a BUILD-RED arm's paired control");
         builder.AppendLine("  M | arm | site | before | after | why         another site, mutated, put back and");
-        builder.AppendLine("                                                checked with the arm's own");
+        builder.AppendLine("                                                checked with the arm's own: another");
+        builder.AppendLine("                                                file, or a further text of a file");
+        builder.AppendLine("                                                the arm already mutates");
         builder.AppendLine("  S | arm | legs | why                          the legs it runs on, named as --legs");
         builder.AppendLine("                                                names them; without one, every leg");
         builder.AppendLine();
@@ -844,7 +859,18 @@ internal static class HelpCommand
             + "own manifest; cases is how many cases it runs, skipped ones included. A case is named as its report names it, "
             + "classname.name: Suite.Case for GoogleTest. A BUILD-RED arm runs nothing: its runner is "
             + $"'{MutationRegistryParser.NoRunner}', its cases 0 and its diag {MutationRegistryParser.PairedControlToken}, and "
-            + "it has exactly one B row and no C, G or M row. A TEST-RED arm has at least one C row and no B row.");
+            + "it has exactly one B row, no C or G row, and no M row but for its own file, which its paired control rewrites "
+            + "whole. A TEST-RED arm has at least one C row and no B row.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A mutant that is several places of one file, apart from each other, is one arm: an M row naming a file its arm "
+            + "already mutates - its own, or another M row's - adds a text to that file, as many as the mutant has, spelt as "
+            + "the arm's first row for the file spells it. Every text of a file is replaced together, as one edit of it: each "
+            + "must stand exactly once in the file as the tree holds it - never as another of them left it - and differ from "
+            + "what replaces it, the file is written once and put back whole, checked once against the tree's, and what "
+            + "depends on it is witnessed rebuilt as for one text. Declared as one text spanning every site, such a mutant "
+            + "would break at any edit of a line between them. A further site in another file stays an M row naming that file.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -852,8 +878,9 @@ internal static class HelpCommand
             + "a row of no kind it reads; an arm id outside [A-Za-z0-9_-], or one another reads as ignoring case; a path outside "
             + "[A-Za-z0-9_./-], absolute, climbing out with '..', ending in '/', or with an empty or '.' segment; a target or "
             + "runner outside [A-Za-z0-9_.+-]; a row naming an arm no A row above it declares; a case both red and green, or "
-            + "declared twice; an M row mutating a file its arm already mutates, as the tree's own file system compares their "
-            + "names; an S row naming neither a leg nor a leg set; "
+            + "declared twice; an M row naming a file its arm already mutates under another spelling, as the tree's own file "
+            + "system compares their names; two texts of one arm that overlap in one file as the tree holds it - one "
+            + "lying across or within the other, or the same text cited twice; an S row naming neither a leg nor a leg set; "
             + "a text no row cites in textDirectory, a mutation nobody drives - but for a file there a sync withholds, which "
             + "no copy of the tree holds; a cited text that is not there, or that a "
             + "sync withholds from every copy of the tree - one sync.neverTransfer, sync.exclude or worktrees.root "
@@ -866,7 +893,9 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"--arms names the arms to drive, as --legs names legs, and an unknown one is refused ({HarnessExit.UsageError}). "
+            $"--arms names the arms to drive, as --legs names legs, and an unknown one is refused ({HarnessExit.UsageError}) - "
+            + "once the registry itself can be swept: its own problems are listed first, every one of them, whatever --arms "
+            + "names. "
             + "On each leg the arms its S row does not name, and those --arms does not, are skipped-not-selected; an arm "
             + "selected whose S row names no selected leg is named in a warning before the sweep starts, and a sweep whose "
             + $"every selected arm is such a one is refused ({HarnessExit.UsageError}), naming each and where it runs: it would drive "
@@ -900,7 +929,8 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "A sweep runs the workers whose copy and build fit the room left - a build of the variant coming to the leg's "
+            "A sweep runs the workers whose copy and build fit the room left - a copy being the tree's files and what git "
+            + "keeps there of its history, and a build of the variant coming to the leg's "
             + "buildSpaceGiB where it declares one, else to what the leg's own build last recorded, else to the most any "
             + "other tree of the repository on its machine recorded of it - and whose build stays within the path limit, "
             + "reckoned as a worktree's is; where not even the first does, the leg is skipped-unavailable, saying why, and "
@@ -981,10 +1011,10 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "check-mutations --self-test sweeps the fixture this tool carries, in place of the repository's registry, "
-            + "which it does not need: a CMake library, a test binary that writes its own JUnit report, and seven arms, one "
+            + "which it does not need: a CMake library, a test binary that writes its own JUnit report, and eight arms, one "
             + "to each verdict an arm's design can reach on any machine - passed, violated, survived, unattributed and "
-            + "failed - with a second that passes as the other red kind and a third whose mutation is coupled across two "
-            + "files. It is built as each selected leg builds, with the leg's toolchain, "
+            + "failed - with a second that passes as the other red kind, a third whose mutation is coupled across two "
+            + "files and a fourth whose mutation is two sites of one file. It is built as each selected leg builds, with the leg's toolchain, "
             + "configuration and sanitizer, and each arm is held to the verdict it is designed to reach: one that reaches "
             + "it passed, saying so, and one that reaches another is violated, naming both - a defect of this tool's with "
             + "that compiler, never the fixture's. --arms names the fixture's arms.");
@@ -1207,6 +1237,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {ToolPackage.Command} init                    Create .harness-config and seed config.json");
         builder.AppendLine($"  {ToolPackage.Command} legs                    Show where each leg can run, or why it cannot");
         builder.AppendLine($"  {ToolPackage.Command} install-missing-tools   Install what each leg's host is missing");
+        builder.AppendLine($"  {ToolPackage.Command} {ToolUpdateService.CommandName}             Update this machine's {ToolPackage.Id}, while none runs here");
         builder.AppendLine($"  {ToolPackage.Command} sync                    Put each host's copy in step with this tree");
         builder.AppendLine($"  {ToolPackage.Command} build                   Build every selected leg");
         builder.AppendLine($"  {ToolPackage.Command} test                    Build and test every selected leg");
@@ -1522,12 +1553,66 @@ internal static class HelpCommand
         builder.AppendLine("and it answers as B'), and what stopped it answering after one is said as coming after");
         builder.AppendLine("it ('updated DssHarness A to B, then the host could not be reached: ...').");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"This machine's own {ToolPackage.Id} is updated through '{ToolPackage.Command} {ToolUpdateService.CommandName}', never by a "
+            + $"'dotnet tool update' typed beside running commands: an update beside a running {ToolPackage.Id} fails on Windows after "
+            + "taking the tool away for ten seconds, and takes its files from under it elsewhere, and whatever anybody types "
+            + $"meanwhile finds no tool (127, from the shell). {ToolUpdateService.CommandName} moves the installation up to the "
+            + $"newest release nuget.org lists, from nuget.org alone, only while no other {ToolPackage.Id} process runs on the machine: "
+            + $"with one running it changes nothing and names each by its process and command ({HarnessExit.Refused}), and with "
+            + $"{ToolUpdateService.WaitOption} it waits for them to end, saying who it waits for as it starts and every "
+            + $"{ToolUpdateService.SaidAgainEvery.TotalMinutes.ToString(CultureInfo.InvariantCulture)} minutes - but for a wait asked from inside "
+            + $"a running {ToolPackage.Id}, which would never end and is refused, as is one where the process table names no "
+            + "process's parent. Once the update has begun this command does not stop it, interrupted or not, and reads back what it left: "
+            + "it says the update done only once the tool is listed as that release, and a failure with what dotnet said and what "
+            + $"is listed since, or why that is not known ({HarnessExit.CommandFailed}). Where nuget.org does not say which release "
+            + "is the newest it says why - no route to it, no answer in time, an answer it cannot read - and changes nothing, "
+            + "unless the copy asking is itself a release newer than the installed one, which it then moves to, saying so. A tool "
+            + $"installed with dotnet's --tool-path is named with {ToolUpdateService.ToolPathOption}.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"Windows replaces no program while it runs, and '{ToolPackage.Command} {ToolUpdateService.CommandName}' is itself a "
+            + $"{ToolPackage.Id} running: there it changes nothing and says the command that does, with the options it was typed "
+            + "with - the door on every system, which is the newest release run beside the installed one, without installing it, "
+            + $"its exit code the update's. With {ToolUpdateService.WaitOption}:");
+        builder.AppendLine();
+        builder.AppendLine($"  {ToolUpdateService.FromBeside(new ToolUpdateRequest(Wait: true))}");
+        builder.AppendLine();
         builder.AppendLine("The DssHarness on a host is reached through a hidden host-agent command, with the");
         builder.AppendLine("request on standard input, held open while the host works: interrupting host-exec");
         builder.AppendLine("ends it, and the host cancels the command. The command line ssh hands a remote");
         builder.AppendLine("shell holds only fixed words, so no argument is ever reinterpreted by sh, cmd or");
         builder.AppendLine("PowerShell. host-exec runs in the host's copy of the tree it is typed in, which");
-        builder.AppendLine($"'{ToolPackage.Command} sync' creates and keeps in step with that tree.");
+        builder.AppendLine($"'{ToolPackage.Command} sync' creates and keeps in step with that tree - its files, and the");
+        builder.AppendLine("commit its git HEAD names ('help config').");
+        builder.AppendLine();
+        // From the numbers both ends count by, so no sentence here can come to say another time than the host keeps.
+        var patience = new HostAgentPatience();
+        var beat = TimeSpan.FromSeconds(HostAgentProtocol.BeatSeconds);
+        var silence = beat * HostAgentProtocol.BeatsMissed;
+
+        static string Seconds(TimeSpan span) => span.TotalSeconds.ToString(CultureInfo.InvariantCulture);
+
+        AppendWrapped(
+            builder,
+            "No leg, host-exec or sync's operation a host runs for this machine outlives the command that asked for it, "
+            + "whatever carries it there; only what holds a host awake between commands (holdAwakeSeconds) is started to "
+            + "outlast one. The host stops it when the input held open ends, which is how a command "
+            + "interrupted or stopped here ends it at once; and, since an input that never ends says nothing, when the beat "
+            + $"this machine writes on it every {Seconds(beat)} seconds has gone unheard for {Seconds(silence)}, which the host "
+            + $"looks for every {Seconds(silence / HostAgentProtocol.SilenceLooks)}: a dispatcher killed where nothing closes "
+            + "its end of the connection leaves a leg that is cancelled within "
+            + $"{Seconds(silence + (silence / HostAgentProtocol.SilenceLooks))} seconds of its last beat, on an ssh host as in a "
+            + "WSL distribution, and the host says why where this machine would read it. On Linux and macOS a session hung up "
+            + $"cancels it the same way. What the host started that has not stopped {Seconds(patience.Unwind)} seconds after it "
+            + "was cancelled - a command reading the output of something its child left running - is ended with its "
+            + "processes, and the host's DssHarness with it, so the host is never held by a run nobody reads; a command that "
+            + $"finishes what it began - a deletion, a fold, a hand-over - is given {Seconds(patience.Finishing)}, as it is "
+            + "where it is typed and interrupted. Where this machine can no longer write to the connection while a host works, "
+            + "it says so here, with why: the host hears no more of it, and stops what it was asked. To end a run on its hosts, "
+            + "stop the command that dispatched it.");
         builder.AppendLine();
         builder.AppendLine("A host answering this machine writes its home as ~: in every line of DssHarness's");
         builder.AppendLine("own - a leg's reason, a lock or free-space message, a failure quoting git or the");
@@ -2012,7 +2097,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {OrchestratorService.CreateCommand} <o> --model <id> [--parallel <n>] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
-        builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>...] [--apply]");
+        builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]... [--apply]");
         builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] [{FoldAllowances.SettledOption} <path>]...");
         var allowances = $"[{FoldAllowances.SettledOption} <path>]... [{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
         builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {allowances}");
@@ -2039,12 +2124,18 @@ internal static class HelpCommand
             + "copy it was handed and left alone is not one - unless --force; --empty hands it nothing more, keeping what it was "
             + "handed before. Seeding again hands besides every path the main tree holds otherwise than the agent shares it, "
             + "committed or not. refresh-agent hands a live agent every such path under the paths given - the anchor registries' "
-            + "directory where none are: one whose main-tree copy is not what the agent was last handed or folded, where it was, "
+            + $"directory where none are, and anywhere in the tree with {RefreshRequest.AllOption}, which takes no path beside it: one "
+            + "whose main-tree copy is not what the agent was last handed or folded, where it was, "
             + "put back as the main tree's HEAD holds it included, and otherwise one the main tree holds otherwise than the agent's "
             + "base, committed since or not. It is a dry run until --apply, refused, copying nothing, where the agent changed or "
             + "deleted one, and records them as handed to it, so its fold leaves them out; a symbolic link the main tree committed "
             + "is named and never handed, and so is a submodule's entry. A file the main tree turned into a directory, or a "
             + "directory it turned into a file, is handed as git holds it: what goes is removed first, then what comes is copied. "
+            + "A refresh refused over the agent's changes names every path it changed, and the arguments that leave them: "
+            + $"{RefreshRequest.ExceptOption} <path>, once for each, hands it every other path and leaves that one as the agent "
+            + "changed it, its own work for its fold to weigh against what the main tree holds - said in the report, never "
+            + "silently; it is not a --force, nothing is left out that nobody named, and one naming a path the refresh would not "
+            + "have refused is refused, nothing copied. "
             + "What the agent holds of its own where what it is handed needs room - a file or a link where a directory goes, or "
             + "files of its own in a directory a file replaces - refuses the hand-over, forced or not, naming each: copied, it "
             + "would write over them, or through the link out of its worktree. Neither hands anything while a move of the agent's "
@@ -2059,10 +2150,12 @@ internal static class HelpCommand
             + "change, a new file, a deletion, a link, a submodule's entry, a file turned into a directory, or a directory into a "
             + "file or a submodule's entry - and its own changes, and what it was handed, stay: its seed still says what it shares, "
             + "and refresh-agent hands it any of those the main tree moved since. A path it changed that the main tree committed a "
-            + "change to since - an edit, a deletion, or anything of its own where the main tree committed a file, ignored, staged "
-            + "or holding the same bytes included - refuses the move, nothing changed, unless --settled <path> names it: you "
-            + "reconciled its copy by hand, and it stays as its own change on the new base. So does whatever of the agent's what "
-            + "comes in would go over: a file or a link where the new base holds a directory, and what it keeps - its own, settled "
+            + "change to since - an edit, a deletion, or anything of its own where the main tree committed a file, ignored or "
+            + "staged included - refuses the move, nothing changed, unless --settled <path> names it: you reconciled its copy by "
+            + "hand, and it stays as its own change on the new base. A file it made that is the very file the main tree "
+            + "committed there - the same content as git compares it, and the same mode where git trusts one - is no such "
+            + "change: it is listed as held as the new base holds it already, and nothing is written. Whatever of the agent's "
+            + "what comes in would go over refuses the move too: a file or a link where the new base holds a directory, and what it keeps - its own, settled "
             + "or shared - in a directory where the new base holds a file, or a submodule's entry that would hide it from git; each "
             + "is named, with what to do. Its record names where the move goes before anything is written, then the new base's "
             + "paths are written, HEAD and the index move, and its record names the new base: a move that stopped part way, exit "
@@ -2251,7 +2344,9 @@ internal static class HelpCommand
         builder.AppendLine("  predefinedRunners  multi-phase procedures such as a corpus test or a benchmark");
         builder.AppendLine($"  exec           named commands to run through '{ToolPackage.Command} exec'");
         builder.AppendLine("  commit         commit template and sign-off policy");
-        builder.AppendLine("  sync           what the tree mirror carries, and what it must never carry");
+        builder.AppendLine("  sync           what the tree mirror carries, and what it must never carry; history,");
+        builder.AppendLine("                 how much git history a copy is given: 'head' (the commit HEAD names,");
+        builder.AppendLine("                 the default) or 'full' (every commit behind it too)");
         builder.AppendLine("  contention     tools that, running against a leg's build directory, void its result");
         builder.AppendLine("  worktrees      naming, path budget and path limit");
         builder.AppendLine("  anchors        the pending and done anchor registries, and how new ids are spelled");
@@ -2374,7 +2469,23 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("A leg on a host reached through WSL or ssh runs in that host's copy of its tree:");
         builder.AppendLine("the files the sync writes there from this tree, in a git repository of the host's own -");
-        builder.AppendLine("one the sync made, or one it took over - whose history is not this checkout's. Each");
+        builder.AppendLine("one the sync made, or one it took over. Each sync makes its HEAD name the commit this");
+        builder.AppendLine("tree is at, so what a step asks git about HEAD - which commit, what a file held there -");
+        builder.AppendLine("is answered there as it is here. What changed since is answered for the files the copy");
+        builder.AppendLine("holds: one this tree tracks and the sync withholds reads as deleted, one it carries");
+        builder.AppendLine("untracked as added, and one git stores converted here - line endings, a clean filter -");
+        builder.AppendLine("as changed, since the copy's index holds each file's bytes. The commit crosses as a");
+        builder.AppendLine("pack of git's own, less what the copy holds, and nothing crosses while its HEAD names");
+        builder.AppendLine("the commit and it holds what is asked. By default the commit alone crosses: a question");
+        builder.AppendLine("about a commit behind it that the copy lacks fails there, in git's own words.");
+        builder.AppendLine("\"sync\": { \"history\": \"full\" } gives the copy every commit behind it too, once, and");
+        builder.AppendLine("each later one as it is made; a partial clone then has git fetch what it left out. A");
+        builder.AppendLine("copy the sync took over has its HEAD moved where it names another commit - detached,");
+        builder.AppendLine("and said the once it leaves a branch - and no branch, tag or commit of it changes: it");
+        builder.AppendLine("gains the objects sent, and where it lacks the commit before the one it is given, git");
+        builder.AppendLine("reads it as a shallow repository from then on, said too, which 'git fetch --unshallow'");
+        builder.AppendLine("there undoes. The copy's branches, remotes and stash are still its own, and a");
+        builder.AppendLine("submodule's history is not carried. Each");
         builder.AppendLine("sync makes its index hold the files it carried, so a build there fingerprints its");
         builder.AppendLine("inputs and keeps its directory as a build here does. A test that checks this");
         builder.AppendLine("checkout's state has nothing to say about that copy, so an invocation's");

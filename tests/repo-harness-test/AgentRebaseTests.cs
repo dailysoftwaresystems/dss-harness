@@ -150,7 +150,7 @@ public sealed class AgentRebaseTests
         Assert.Equal("x\nhanded\n", OrchestrationKit.Read(worktree, "docs/x.md"));
         Assert.Contains("1 inherited path(s) left out; 0 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
 
-        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
         Assert.Equal("x\nhanded\ncommitted\n", OrchestrationKit.Read(worktree, "docs/x.md"));
@@ -664,7 +664,7 @@ public sealed class AgentRebaseTests
         TestLinks.OrSkip(() => File.CreateSymbolicLink(Path.Combine(kit.Main, "docs", "link.md"), "x.md"));
         await kit.Harness.CommitAllAsync(kit.Main, "a link", Token);
 
-        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token);
 
         Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
         Assert.Contains(refreshed.Details!, line => line.StartsWith("not handed: docs/link.md - a symbolic link the main tree committed", StringComparison.Ordinal));
@@ -893,13 +893,13 @@ public sealed class AgentRebaseTests
     }
 
     /// <summary>
-    /// A file the agent made where the main tree has since committed one refuses the move, as the help says, whatever git
-    /// makes of it: one git ignores, which no status lists and which the move would otherwise write over; one it staged; and
-    /// one holding the very bytes the main tree committed, untracked or staged alike. Each is two makings of one path, for
-    /// the agent's owner to settle by hand.
+    /// A file the agent made where the main tree has since committed another refuses the move, as the help says, whatever
+    /// git makes of it: one git ignores, which no status lists and which the move would otherwise write over; one it staged;
+    /// and one a single byte off the file committed. Each is two makings of one path, for the agent's owner to settle by
+    /// hand.
     /// </summary>
     [Fact]
-    public async Task AFileTheAgentMadeWhereTheMainTreeCommittedOne_RefusesTheMove_IgnoredStagedOrTheSameBytes()
+    public async Task AFileTheAgentMadeWhereTheMainTreeCommittedAnother_RefusesTheMove_IgnoredStagedOrOneByteOff()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -908,12 +908,12 @@ public sealed class AgentRebaseTests
 
         // The evidence root is ignored, in both trees; the main tree commits a file there all the same.
         OrchestrationKit.Write(worktree, "evidence/local.json", "the agent's own\n");
-        OrchestrationKit.Write(worktree, "same.txt", "both made it\n");
-        OrchestrationKit.Write(worktree, "staged.txt", "both made it\n");
+        OrchestrationKit.Write(worktree, "near.txt", "both made it\n.");
+        OrchestrationKit.Write(worktree, "staged.txt", "the agent's own\n");
         await kit.GitAsync(worktree, "add", "staged.txt");
         OrchestrationKit.Write(kit.Main, "evidence/local.json", "the main tree's\n");
-        OrchestrationKit.Write(kit.Main, "same.txt", "both made it\n");
-        OrchestrationKit.Write(kit.Main, "staged.txt", "both made it\n");
+        OrchestrationKit.Write(kit.Main, "near.txt", "both made it\n");
+        OrchestrationKit.Write(kit.Main, "staged.txt", "the main tree's\n");
         await kit.GitAsync(kit.Main, "add", "--force", "evidence/local.json");
         await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
 
@@ -923,12 +923,100 @@ public sealed class AgentRebaseTests
         Assert.Equal(
             [
                 $"  'evidence/local.json': the agent made it, and the main tree committed a file there since the agent's base {from}",
-                $"  'same.txt': the agent made it, and the main tree committed a file there since the agent's base {from}",
+                $"  'near.txt': the agent made it, and the main tree committed a file there since the agent's base {from}",
                 $"  'staged.txt': the agent made it, and the main tree committed a file there since the agent's base {from}",
             ],
             refused.Details!.Take(3));
         Assert.Equal("the agent's own\n", OrchestrationKit.Read(worktree, "evidence/local.json"));
         Assert.Equal(kit.Record("ag").Base, await HeadAsync(worktree));
+    }
+
+    /// <summary>
+    /// A file the agent made that is the very file the main tree has since committed there - the same content as git
+    /// compares it, untracked, staged, or one git ignores - is nothing to reconcile: the move says the agent holds it as the
+    /// new base does already, writes nothing over it, and leaves it no change of the agent's. Naming it with --settled
+    /// settles nothing, as for any path the agent holds as the new base does.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheAgentMadeThatIsTheFileTheMainTreeCommitted_IsHeldAsTheNewBaseHoldsIt_UntrackedStagedOrIgnored()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        OrchestrationKit.Write(worktree, "evidence/same.json", "both made it\n");
+        OrchestrationKit.Write(worktree, "same.txt", "both made it\n");
+        OrchestrationKit.Write(worktree, "staged.txt", "both made it\n");
+        await kit.GitAsync(worktree, "add", "staged.txt");
+        OrchestrationKit.Write(worktree, "a.txt", "one\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "evidence/same.json", "both made it\n");
+        OrchestrationKit.Write(kit.Main, "same.txt", "both made it\n");
+        OrchestrationKit.Write(kit.Main, "staged.txt", "both made it\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.GitAsync(kit.Main, "add", "--force", "evidence/same.json");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        var to = await HeadAsync(kit.Main);
+
+        var dry = await RebaseAsync(kit, apply: false);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal(
+            [
+                "1 path(s) the main tree committed since come into its worktree as git holds them:",
+                "  b.txt",
+                "and 3 path(s) it holds as the new base does already, with nothing to write:",
+                "  evidence/same.json",
+                "  same.txt",
+                "  staged.txt",
+            ],
+            dry.Details);
+        Assert.Equal(from, await HeadAsync(worktree));
+
+        var stray = await RebaseAsync(kit, apply: true, "same.txt");
+
+        Assert.Equal(HarnessExit.Refused, stray.ExitCode);
+        Assert.Equal("  --settled 'same.txt' names no path the agent changed that the main tree committed a change to since, so it settles nothing: check its spelling", stray.Details![0]);
+        Assert.Equal(from, await HeadAsync(worktree));
+
+        var applied = await RebaseAsync(kit, apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(to, await HeadAsync(worktree));
+        Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Equal("both made it\n", OrchestrationKit.Read(worktree, "same.txt"));
+        Assert.Equal("both made it\n", OrchestrationKit.Read(worktree, "evidence/same.json"));
+        Assert.Equal("two\ncommitted\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal(["a.txt"], (await kit.Harness.GitClient.ReadStatusAsync(worktree, Token)).Select(entry => entry.Path.Text));
+        Assert.Contains("0 inherited path(s) left out; 1 path(s) are its own:", (await kit.FoldAsync("ag", apply: false)).Details!);
+    }
+
+    /// <summary>
+    /// Where the repository trusts file modes, a file the agent made with the bytes the main tree committed there and
+    /// another mode is not the file committed: the move is refused over it, as git would show it changed.
+    /// </summary>
+    [Fact]
+    public async Task AFileTheAgentMadeWithTheBytesCommittedAndAnotherMode_RefusesTheMove_WhereModesAreTrusted()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no execute bit, so git trusts no mode there.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = ReportText.Commit(kit.Record("ag").Base!);
+        OrchestrationKit.Write(worktree, "tool.sh", "#!/bin/sh\n");
+
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(Path.Combine(worktree, "tool.sh"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        OrchestrationKit.Write(kit.Main, "tool.sh", "#!/bin/sh\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal($"  'tool.sh': the agent made it, and the main tree committed a file there since the agent's base {from}", refused.Details![0]);
     }
 
     /// <summary>
@@ -1070,7 +1158,7 @@ public sealed class AgentRebaseTests
             await kit.FoldAsync("ag", apply: true),
             await kit.DeleteAsync("ag", apply: true),
             await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token),
-            await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", ["docs"], apply: true, Token),
+            await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("docs"), apply: true, Token),
         ];
 
     private static Task<CommandOutcome> RebaseAsync(OrchestrationKit kit, bool apply, params string[] settled)

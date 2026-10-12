@@ -102,11 +102,11 @@ public sealed class SyncedCopyToolCheck(
             ToolPackage.Command,
             $"this tree is a copy the harness synced to a host, so nuget.org is asked which {ToolPackage.Id} is newest");
 
-        var newest = await _published.NewestAsync(running, cancellationToken).ConfigureAwait(false);
+        var answer = await _published.NewestAsync(running, cancellationToken).ConfigureAwait(false);
 
-        if (newest is null)
+        if (answer.Newest is not { } newest)
         {
-            _output.Detail(ToolPackage.Command, $"nuget.org did not say which {ToolPackage.Id} is newest, so {running} is not compared");
+            _output.Detail(ToolPackage.Command, $"nuget.org did not say which {ToolPackage.Id} is newest - {answer.Untold} - so {running} is not compared");
             return;
         }
 

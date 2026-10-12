@@ -62,6 +62,13 @@ public sealed record ProcessRequest
     public bool HoldStandardInputOpen { get; init; }
 
     /// <summary>
+    /// What is written to the child's standard input again and again once <see cref="StandardInput"/> is written, for as
+    /// long as <see cref="HoldStandardInputOpen"/> holds it open; <see langword="null"/> to write nothing more. For a
+    /// child that takes this process to have gone when the beats stop, as well as when its input ends.
+    /// </summary>
+    public InputBeat? StandardInputBeat { get; init; }
+
+    /// <summary>
     /// Called once the child is running, before any of its output can arrive. What a caller bounding
     /// a phase by silence needs: the time spent starting a process is this tool's, not the child
     /// being quiet, and counting it as the child's is how a slow launch reads as a hung command.

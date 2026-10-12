@@ -299,6 +299,189 @@ public sealed class ArtifactCarryTests
     }
 
     /// <summary>
+    /// A pull naming a directory says, host by host, each file it brought back - the path a later command takes - and how
+    /// many in all, since nobody counted what the directory held; its dry run asks the host what the directory holds and
+    /// names the same files, bringing none.
+    /// </summary>
+    [Fact]
+    public async Task APullOfADirectory_NamesEachFileItBroughtBack_AndItsDryRunNamesThemAndBringsNone()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var carriage = await WithAHostAsync(temp, cancellationToken);
+        var over = Path.Combine(carriage.Copy, "out", "deep");
+        Directory.CreateDirectory(over);
+        await File.WriteAllTextAsync(Path.Combine(carriage.Copy, "out", "report.txt"), "measured", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(over, "b.txt"), "b", cancellationToken);
+
+        var dry = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(DryRun: true), ["out/"], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, dry.ExitCode);
+        Assert.Equal("1 host(s) inspected; nothing was changed", dry.Message);
+        Assert.Equal(2, dry.Details!.Count(line => line is "  out/deep/b.txt" or "  out/report.txt"));
+        Assert.Contains(dry.Details!, line => line.Contains(": would bring back 2 file(s) from '", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, "out")));
+
+        var outcome = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), ["out/"], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("2 file(s) brought back from 1 host(s)", outcome.Message);
+        Assert.Contains(outcome.Details!, line => line.EndsWith(": brought back 2 file(s)", StringComparison.Ordinal));
+        Assert.Equal(["  out/deep/b.txt", "  out/report.txt"], outcome.Details!.Where(line => line.StartsWith("  ", StringComparison.Ordinal)));
+        Assert.Equal("measured", await File.ReadAllTextAsync(Path.Combine(temp.Path, "out", "report.txt"), cancellationToken));
+        Assert.Equal("b", await File.ReadAllTextAsync(Path.Combine(temp.Path, "out", "deep", "b.txt"), cancellationToken));
+    }
+
+    /// <summary>
+    /// A pull that stops part way says so, with each file it had brought back by then - left where it was written - and
+    /// each it had not, and fails as what stopped it does. Raised as the one failure it stopped at, a directory here was
+    /// left holding part of what the host kept, and nothing said which part.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task APullThatStopsPartWay_NamesEachFileItBroughtBack_AndEachItDidNot(int failsAt)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var carriage = await WithAHostAsync(temp, cancellationToken, failsRead: failsAt);
+        string[] kept = ["out/a.txt", "out/b.txt", "out/c.txt"];
+
+        Directory.CreateDirectory(Path.Combine(carriage.Copy, "out"));
+
+        foreach (var file in kept)
+        {
+            await File.WriteAllTextAsync(Path.Combine(carriage.Copy, file), file, cancellationToken);
+        }
+
+        var outcome = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), ["out/"], cancellationToken);
+        var brought = kept[..(failsAt - 1)];
+        var stoppedAt = $"the link dropped reading '{kept[failsAt - 1]}'";
+
+        Assert.Equal(HarnessExit.HostUnavailable, outcome.ExitCode);
+        Assert.Equal(failsAt == 1 ? stoppedAt : $"the pull from ssh vps stopped part way: {stoppedAt}", outcome.Message);
+        Assert.Equal(
+            [
+                $"ssh vps: brought back {brought.Length} of 3 file(s) before the pull stopped{(failsAt == 1 ? string.Empty : ", each left where it was written:")}",
+                .. brought.Select(file => $"  {file}"),
+                "ssh vps: not brought back:",
+                .. kept[(failsAt - 1)..].Select(file => $"  {file}"),
+            ],
+            outcome.Details);
+        Assert.Equal(brought, kept.Where(file => File.Exists(Path.Combine(temp.Path, file))));
+    }
+
+    /// <summary>A file named that is not there fails the pull as it always did, in its own words alone: there is nothing else to account for.</summary>
+    [Fact]
+    public async Task APullOfOneFileThatIsNotThere_FailsInThatFilesWordsAlone()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var carriage = await WithAHostAsync(temp, cancellationToken);
+
+        var outcome = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), ["out/absent.txt"], cancellationToken);
+
+        Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
+        Assert.StartsWith("'out/absent.txt' is not in '", outcome.Message, StringComparison.Ordinal);
+        Assert.Empty(outcome.Details ?? []);
+    }
+
+    /// <summary>
+    /// A link below a directory a pull names is said in the command's own report, by name, on a dry run as on a real
+    /// one; and a directory holding nothing but links fails the pull, saying how many it passed over, where "holds no
+    /// file" alone would have sent whoever read it to look for files that are there, behind a link.
+    /// </summary>
+    [Fact]
+    public async Task ALinkBelowAPulledDirectory_IsSaidInTheReport_AndADirectoryOfNothingButLinksFailsSayingSo()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var carriage = await WithAHostAsync(temp, cancellationToken);
+
+        Directory.CreateDirectory(Path.Combine(carriage.Copy, "out"));
+        Directory.CreateDirectory(Path.Combine(carriage.Copy, "only"));
+        await File.WriteAllTextAsync(Path.Combine(carriage.Copy, "out", "report.txt"), "measured", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(elsewhere.Path, "secret.txt"), "not the copy's", cancellationToken);
+        TestLinks.DirectoryLink(Path.Combine(carriage.Copy, "out", "linked"), elsewhere.Path);
+        TestLinks.DirectoryLink(Path.Combine(carriage.Copy, "only", "linked"), elsewhere.Path);
+
+        const string Said = "ssh vps: 'out/linked/' is a link, never followed, so nothing was brought back for it";
+
+        var dry = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(DryRun: true), ["out/"], cancellationToken);
+        var outcome = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), ["out/"], cancellationToken);
+
+        Assert.Equal((HarnessExit.Success, HarnessExit.Success), (dry.ExitCode, outcome.ExitCode));
+        Assert.Contains(Said, dry.Details!);
+        Assert.Contains(Said, outcome.Details!);
+        Assert.False(Directory.Exists(Path.Combine(temp.Path, "out", "linked")), "What a link leads to was brought back.");
+
+        var failure = await Assert.ThrowsAsync<HarnessException>(
+            () => carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), ["only/"], cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, failure.ExitCode);
+        Assert.Equal(
+            $"'only/' holds no file in '{carriage.Copy}' on ssh vps, only 1 link(s), which are never followed: nothing to bring back from it.",
+            failure.Message);
+    }
+
+    /// <summary>
+    /// A directory a pull names is asked of the host with forward separators the whole way along, however it was typed: a
+    /// shell on Windows completes each part of a path with a backslash, and a host that is not Windows read 'out\deep' as
+    /// one name, of a directory that is not there.
+    /// </summary>
+    [Theory]
+    [InlineData("out\\deep\\")]
+    [InlineData("out/deep\\")]
+    [InlineData("out\\deep/")]
+    [InlineData("out/deep/")]
+    public async Task ADirectoryThePullNames_IsAskedOfTheHostWithForwardSeparators_HoweverItWasTyped(string typed)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var carriage = await WithAHostAsync(temp, cancellationToken);
+
+        Directory.CreateDirectory(Path.Combine(carriage.Copy, "out", "deep"));
+        await File.WriteAllTextAsync(Path.Combine(carriage.Copy, "out", "deep", "b.txt"), "b", cancellationToken);
+
+        var outcome = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), [typed], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(["out/deep"], carriage.Transport.Listed);
+        Assert.Contains("  out/deep/b.txt", outcome.Details!);
+        Assert.Equal("b", await File.ReadAllTextAsync(Path.Combine(temp.Path, "out", "deep", "b.txt"), cancellationToken));
+    }
+
+    /// <summary>
+    /// A directory a pull names is walked as it is spelt: a link along its path, or the directory itself being one, is
+    /// followed as it is for a file named - a build directory pointed at another volume is ordinary - and what comes
+    /// back lands at the path that was named. Only a link below the directory named is passed over.
+    /// </summary>
+    [Theory]
+    [InlineData("out/", new[] { "out/deep/b.txt", "out/report.txt" })]
+    [InlineData("out/deep/", new[] { "out/deep/b.txt" })]
+    public async Task ADirectoryThePullNames_ThatIsALink_OrLiesBelowOne_IsWalkedAsItIsSpelt(string named, string[] brought)
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var carriage = await WithAHostAsync(temp, cancellationToken);
+
+        Directory.CreateDirectory(Path.Combine(elsewhere.Path, "deep"));
+        await File.WriteAllTextAsync(Path.Combine(elsewhere.Path, "report.txt"), "measured", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(elsewhere.Path, "deep", "b.txt"), "b", cancellationToken);
+        TestLinks.DirectoryLink(Path.Combine(carriage.Copy, "out"), elsewhere.Path);
+
+        var outcome = await carriage.Service.SyncHostsAsync(temp.Path, null, new SyncOptions(), [named], cancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal(brought.Select(file => $"  {file}"), outcome.Details!.Where(line => line.StartsWith("  ", StringComparison.Ordinal)));
+        Assert.DoesNotContain(outcome.Details!, line => line.Contains("is a link", StringComparison.Ordinal));
+        Assert.All(brought, file => Assert.True(File.Exists(Path.Combine(temp.Path, file)), $"'{file}' was not brought back."));
+    }
+
+    /// <summary>
     /// A carry writes an existing copy's own files and makes no copy of its own. Left to create
     /// one it would fill in a mistyped repositoryPath rather than let anybody notice it, and the
     /// directory it made would carry no marker - so the next ordinary sync would refuse, as a
@@ -497,6 +680,7 @@ public sealed class ArtifactCarryTests
     /// <param name="count">How many files the run kept.</param>
     /// <param name="failsWrite">Which write the link drops on, counting from one, or zero for none.</param>
     /// <param name="refusesToDelete">Whether the cleanup after a dropped link can finish.</param>
+    /// <param name="failsRead">Which read the link drops on, counting from one, or zero for none.</param>
     /// <remarks>
     /// The host's side is a real transport against a directory here, so what these tests assert
     /// about a copy is what a copy actually became rather than what a stand-in was told to say.
@@ -507,7 +691,8 @@ public sealed class ArtifactCarryTests
         SyncInspectAnswer? answers = null,
         int count = 1,
         int failsWrite = 0,
-        bool refusesToDelete = false)
+        bool refusesToDelete = false,
+        int failsRead = 0)
     {
         var harness = new HarnessFactory();
 
@@ -549,6 +734,7 @@ public sealed class ArtifactCarryTests
             Answers = answers,
             FailsWrite = failsWrite,
             RefusesToDelete = refusesToDelete,
+            FailsRead = failsRead,
         };
 
         var factory = Substitute.For<ISyncTransportFactory>();

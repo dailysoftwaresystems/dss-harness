@@ -124,7 +124,10 @@ public sealed class SyncedCopyToolCheckTests
 
         var said = fixture.Output.ToString();
         Assert.Contains($"nuget.org is asked which {ToolPackage.Id} is newest", said, StringComparison.Ordinal);
-        Assert.Contains($"nuget.org did not say which {ToolPackage.Id} is newest, so 0.5.9 is not compared", said, StringComparison.Ordinal);
+        Assert.Contains(
+            $"nuget.org did not say which {ToolPackage.Id} is newest - it could not be reached: no such host is known - so 0.5.9 is not compared",
+            said,
+            StringComparison.Ordinal);
     }
 
     /// <summary>Versions are ordered as versions: read as text, 0.5.9 would be newer than 0.5.10.</summary>
@@ -165,7 +168,7 @@ public sealed class SyncedCopyToolCheckTests
 
         using var versions = new NuGetPublishedToolVersions(feed);
 
-        Assert.Equal("0.5.11", (await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken))?.ToString());
+        Assert.Equal("0.5.11", (await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken)).Newest?.ToString());
         Assert.Equal([NuGetPublishedToolVersions.VersionsAddress.ToString(), Leaf("0.5.12"), Leaf("0.5.11")], feed.Asked);
     }
 
@@ -184,8 +187,8 @@ public sealed class SyncedCopyToolCheckTests
 
         using var versions = new NuGetPublishedToolVersions(feed);
 
-        Assert.Equal("0.5.10", (await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken))?.ToString());
-        Assert.Equal("0.5.11", (await versions.NewestAsync(Version("0.5.11"), TestContext.Current.CancellationToken))?.ToString());
+        Assert.Equal("0.5.10", (await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken)).Newest?.ToString());
+        Assert.Equal("0.5.11", (await versions.NewestAsync(Version("0.5.11"), TestContext.Current.CancellationToken)).Newest?.ToString());
 
         // Asked of 0.5.11's leaf once, by the build that trails it, and never by the one that is it.
         Assert.Single(feed.Asked, Leaf("0.5.11"));
@@ -202,7 +205,52 @@ public sealed class SyncedCopyToolCheckTests
 
         using var versions = new NuGetPublishedToolVersions(feed);
 
-        Assert.Null(await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken));
+        Assert.Equal(
+            PublishedAnswer.NotTold("it answered 404 for whether 0.5.11 is listed"),
+            await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// A feed that does not say which release is newest says why, and the causes are not one: a list it refused, a list
+    /// or a leaf this build cannot read, a machine with no route to it, and an answer that did not come in time are put
+    /// right in different places, and said as one they sent whoever read it to the wrong one.
+    /// </summary>
+    [Theory]
+    [InlineData(null, null, "it answered 404 for its list of versions")]
+    [InlineData("""{"versions":"none"}""", null, "its list of versions is not one this build reads")]
+    [InlineData("not json", null, "its list of versions is not one this build reads")]
+    [InlineData("""{"versions":["0.5.10","0.5.11"]}""", """{"listed":"perhaps"}""", "what it says of whether 0.5.11 is listed is not something this build reads")]
+    public async Task AFeedThatDoesNotSayWhichReleaseIsNewest_SaysWhy(string? versionsListed, string? leaf, string why)
+    {
+        var answers = new Dictionary<string, string>();
+
+        if (versionsListed is not null)
+        {
+            answers[NuGetPublishedToolVersions.VersionsAddress.ToString()] = versionsListed;
+        }
+
+        if (leaf is not null)
+        {
+            answers[Leaf("0.5.11")] = leaf;
+        }
+
+        using var versions = new NuGetPublishedToolVersions(new FeedDouble(answers));
+
+        Assert.Equal(PublishedAnswer.NotTold(why), await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>A feed that cannot be reached, or does not answer in time, is said as that, in the system's own words where it has any.</summary>
+    [Theory]
+    [InlineData(false, "it could not be reached: No such host is known")]
+    [InlineData(true, "it did not answer within 3 s")]
+    public async Task AFeedThatCannotBeReached_OrDoesNotAnswerInTime_IsSaidAsThat(bool silent, string why)
+    {
+        using var versions = new NuGetPublishedToolVersions(new FeedDouble(new Dictionary<string, string>())
+        {
+            Fails = silent ? new TaskCanceledException("The request timed out.") : new HttpRequestException("No such host is known."),
+        });
+
+        Assert.Equal(PublishedAnswer.NotTold(why), await versions.NewestAsync(Version("0.5.10"), TestContext.Current.CancellationToken));
     }
 
     /// <summary>A leaf says whether its version is listed; one that says nothing is listed, as the feed's rule has it.</summary>
@@ -227,10 +275,18 @@ public sealed class SyncedCopyToolCheckTests
     {
         public List<string> Asked { get; } = [];
 
+        /// <summary>What every request raises instead of an answer, where a test says the feed gives none.</summary>
+        public Exception? Fails { get; init; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var address = request.RequestUri!.ToString();
             Asked.Add(address);
+
+            if (Fails is not null)
+            {
+                return Task.FromException<HttpResponseMessage>(Fails);
+            }
 
             return Task.FromResult(answers.TryGetValue(address, out var body)
                 ? new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(body) }

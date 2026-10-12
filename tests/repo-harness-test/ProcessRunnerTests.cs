@@ -453,6 +453,213 @@ public sealed class ProcessRunnerTests
         Assert.Equal(["[request]", expected], Lines(result.StandardOutput));
     }
 
+    /// <summary>
+    /// A beat is written on an input held open, a line each time its interval passes, for as long as the child runs, so
+    /// that a child counting on it knows this process is still there; an input that is not held open is written none.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_WritesABeatOnAnInputHeldOpen_UntilTheChildExits_AndNoneOnOneThatIsNot(bool hold)
+    {
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("read-lines-for", "1500") with
+            {
+                StandardInput = "request\n",
+                HoldStandardInputOpen = hold,
+                StandardInputBeat = new InputBeat(TimeSpan.FromMilliseconds(100), "still here"),
+                Timeout = TimeSpan.FromSeconds(60),
+            },
+            TestContext.Current.CancellationToken);
+
+        var lines = Lines(result.StandardOutput);
+
+        Assert.False(result.TimedOut);
+        Assert.Null(result.BeatLost);
+        Assert.Equal("[request]", lines[0]);
+
+        if (hold)
+        {
+            // One to an interval for as long as the child ran, however long a busy machine took to start it: never
+            // none, and never more than the intervals that passed.
+            Assert.InRange(lines.Count - 1, 1, (int)(result.Duration / TimeSpan.FromMilliseconds(100)) + 1);
+            Assert.All(lines.Skip(1), line => Assert.Equal("[still here]", line));
+        }
+        else
+        {
+            Assert.Single(lines);
+        }
+    }
+
+    /// <summary>
+    /// A beat stops when the child has gone, however long its interval: a run is never held for a beat still to be
+    /// written, and a child that exited took no beat that was lost.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_StopsBeating_OnceTheChildHasGone_HoweverLongTheBeatsInterval()
+    {
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("sleep", "200") with
+            {
+                StandardInput = "request\n",
+                HoldStandardInputOpen = true,
+                StandardInputBeat = new InputBeat(TimeSpan.FromMinutes(10), "still here"),
+                Timeout = TimeSpan.FromMinutes(5),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Null(result.BeatLost);
+        Assert.InRange(result.Duration, TimeSpan.Zero, TimeSpan.FromMinutes(2));
+    }
+
+    /// <summary>
+    /// A beat that can no longer be written to a child still running is said, with why, and the input is closed: the
+    /// child - a carrier to another machine - has stopped hearing this process and goes on, and whatever counts on the
+    /// beat at its far end will give this process up. Passed over, as the child ceasing to read its input always was,
+    /// that left whoever started it with a run stopped for a machine that had gone, and nothing here to say why.
+    /// A child that takes its input with it as it exits has lost no beat.
+    /// </summary>
+    [Theory]
+    [InlineData("4000", true)]
+    [InlineData("300", false)]
+    public async Task RunAsync_SaysABeatWasLost_WhereAChildStillRunningStoppedTakingIt(string runsFor, bool lost)
+    {
+        // A child that takes its request, closes its own end of its input and goes on: this build's own on Windows, and
+        // a shell elsewhere, where the runtime keeps a second descriptor of its input that closing the first does not
+        // close. It takes the request first because one it closed its input on is the child ceasing to read, not a beat.
+        var seconds = (int.Parse(runsFor, CultureInfo.InvariantCulture) / 1000.0).ToString("0.###", CultureInfo.InvariantCulture);
+        var child = OperatingSystem.IsWindows()
+            ? TestHost.ChildRequest("close-input-then-sleep", runsFor)
+            : new ProcessRequest { FileName = "sh", Arguments = ["-c", $"read request; exec <&-; sleep {seconds}"] };
+
+        var result = await CreateRunner().RunAsync(
+            child with
+            {
+                StandardInput = "request\n",
+                HoldStandardInputOpen = true,
+                StandardInputBeat = new InputBeat(TimeSpan.FromMilliseconds(100), "still here"),
+                Timeout = TimeSpan.FromMinutes(5),
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(lost, result.BeatLost is { Length: > 0 });
+    }
+
+    /// <summary>
+    /// A start that fails as a program being written does is made again until it succeeds, where the system refuses to
+    /// start one held so: a process forked while the program was written holds it for a moment, and a program written
+    /// and closed a line earlier then failed to start.
+    /// </summary>
+    [Fact]
+    public async Task AStartThatFailsAsAProgramBeingWrittenDoes_IsMadeAgain_UntilItSucceeds()
+    {
+        var tries = 0;
+
+        await ProcessRunner.StartAsync(
+            () =>
+            {
+                if (++tries < 3)
+                {
+                    throw new System.ComponentModel.Win32Exception(ProcessRunner.TextFileBusy);
+                }
+            },
+            busyPasses: true,
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, tries);
+    }
+
+    /// <summary>
+    /// A program still held once the grace is spent fails as what it is; any other failure is the start's own at once,
+    /// as is that one where the system gives the number another meaning; and the waiting between two tries stops when
+    /// the run is cancelled.
+    /// </summary>
+    [Fact]
+    public async Task AStartStillFailingOnceTheGraceIsSpent_OrFailingAnotherWay_IsItsOwnFailure()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var tries = 0;
+
+        void Busy()
+        {
+            tries++;
+            throw new System.ComponentModel.Win32Exception(ProcessRunner.TextFileBusy);
+        }
+
+        var spent = await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
+            () => ProcessRunner.StartAsync(Busy, busyPasses: true, TimeSpan.FromMilliseconds(100), token));
+
+        Assert.Equal(ProcessRunner.TextFileBusy, spent.NativeErrorCode);
+        Assert.InRange(tries, 2, 50);
+
+        tries = 0;
+        await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
+            () => ProcessRunner.StartAsync(Busy, busyPasses: false, TimeSpan.FromSeconds(30), token));
+        Assert.Equal(1, tries);
+
+        tries = 0;
+        await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(
+            () => ProcessRunner.StartAsync(
+                () =>
+                {
+                    tries++;
+                    throw new System.ComponentModel.Win32Exception(2);
+                },
+                busyPasses: true,
+                TimeSpan.FromSeconds(30),
+                token));
+        Assert.Equal(1, tries);
+
+        using var cancelled = new CancellationTokenSource();
+        tries = 0;
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => ProcessRunner.StartAsync(
+                () =>
+                {
+                    cancelled.Cancel();
+                    Busy();
+                },
+                busyPasses: true,
+                TimeSpan.FromSeconds(30),
+                cancelled.Token));
+        Assert.Equal(1, tries);
+    }
+
+    /// <summary>
+    /// On a system that starts no program held open for writing, one still held is started once it is let go, by the
+    /// runner itself: the whole of it, with a real program and a real hold.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_StartsAProgramStillHeldForWriting_OnceItIsLetGo()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            Assert.Skip("Only Linux refuses to start a program something holds open for writing.");
+        }
+
+        using var temp = new TempDirectory();
+        var program = TestHost.StartableProgram(temp.Path, "held");
+        Task<ProcessResult> running;
+
+        using (new FileStream(program, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+        {
+            running = CreateRunner().RunAsync(
+                new ProcessRequest { FileName = program, Timeout = TimeSpan.FromSeconds(30) },
+                TestContext.Current.CancellationToken);
+
+            await Task.WhenAny(running, Task.Delay(300, TestContext.Current.CancellationToken));
+        }
+
+        // Started while it was held, on a kernel that refuses none: there is then nothing here to see.
+        Assert.Equal(0, (await running).ExitCode);
+    }
+
     [Fact]
     public async Task RunAsync_ReportsAMissingExecutable_AsNotFound()
     {

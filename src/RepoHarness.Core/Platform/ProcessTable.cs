@@ -233,18 +233,42 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
     /// The table from <c>ps</c>, which is where macOS publishes another process's command line.
     /// <c>lstart</c> rather than elapsed time, because an identity must not shift between samples.
     /// </summary>
+    /// <remarks>
+    /// Asked twice, because <c>ps</c> separates its columns with spaces and the path of a program may hold one: in the
+    /// one listing nothing says where a program ends and its first argument begins, and named by the first word of its
+    /// line a tool kept under <c>/Volumes/My Disk</c> was a process called <c>My</c> - which an update of that tool
+    /// then did not count as running. The second listing holds the program alone, last on its line. A process that
+    /// started between the two is in one of them only, and is named by its line's first word, as all were.
+    /// </remarks>
     private async Task<(IReadOnlyList<SampledProcess> Table, string? Problem)> MacTableAsync(CancellationToken cancellationToken)
     {
-        var result = await _processRunner.RunAsync(
-            new ProcessRequest
-            {
-                FileName = "ps",
-                Arguments = ["-A", "-ww", "-o", "pid=,ppid=,lstart=,args="],
+        // C, so the day and month names are the ones the format below reads. A machine set to another language
+        // would otherwise leave every start time unknown.
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["LC_ALL"] = "C" };
 
-                // C, so the day and month names are the ones the format below reads. A machine set
-                // to another language would otherwise leave every start time unknown.
-                Environment = new Dictionary<string, string?>(StringComparer.Ordinal) { ["LC_ALL"] = "C" },
-            },
+        var named = await _processRunner.RunAsync(
+            new ProcessRequest { FileName = "ps", Arguments = ["-A", "-ww", "-o", "pid=,comm="], Environment = environment },
+            cancellationToken).ConfigureAwait(false);
+
+        if (!named.Succeeded)
+        {
+            return ([], HostFailure("the process table could not be read from ps", named));
+        }
+
+        var programs = new Dictionary<int, string>();
+
+        foreach (var line in Lines(named.StandardOutput))
+        {
+            var (fields, program) = SplitLeading(line, 1);
+
+            if (fields.Count == 1 && program.Length > 0 && int.TryParse(fields[0], CultureInfo.InvariantCulture, out var id))
+            {
+                programs[id] = program;
+            }
+        }
+
+        var result = await _processRunner.RunAsync(
+            new ProcessRequest { FileName = "ps", Arguments = ["-A", "-ww", "-o", "pid=,ppid=,lstart=,args="], Environment = environment },
             cancellationToken).ConfigureAwait(false);
 
         if (!result.Succeeded)
@@ -277,7 +301,7 @@ public sealed class ProcessTable(IHostPlatform platform, IProcessRunner processR
             processes.Add(new SampledProcess(
                 id,
                 int.TryParse(fields[1], CultureInfo.InvariantCulture, out var parent) ? parent : null,
-                CleanName(FirstToken(commandLine)),
+                CleanName(programs.TryGetValue(id, out var itsProgram) ? itsProgram : FirstToken(commandLine)),
                 started,
                 commandLine.Length == 0 ? null : commandLine));
         }

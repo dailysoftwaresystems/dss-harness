@@ -406,12 +406,14 @@ public sealed class MutationService(
             problems.AddRange(TextProblems(reading.Registry, root, carried.IsWithheldFromTransfer));
         }
 
-        Refuse(registry, problems);
-
-        var selected = ArmSelection.Resolve(reading.Registry, armNames);
+        // Every problem of the registry in one refusal, and before --arms is weighed against it: a scope naming no leg is
+        // the registry's whatever else is wrong with it, and whichever arms the command names - one it does not declare
+        // among them, which is a mistake of the command and is said once the registry itself can be swept.
         var scopes = ArmSelection.Scopes(context.Config, reading.Registry, problems);
 
         Refuse(registry, problems);
+
+        var selected = ArmSelection.Resolve(reading.Registry, armNames);
 
         if (selected.Any(arm => arm.Kind == RedKind.TestRed) && settings.ReportArgs is not { Count: > 0 })
         {
@@ -482,8 +484,9 @@ public sealed class MutationService(
 
     /// <summary>
     /// What is wrong with the texts <paramref name="registry"/>'s rows cite, read as the tree holds them: each that is not a
-    /// file, and each before-text, control before-text or diagnostic holding nothing - which occurs everywhere, and which
-    /// every run would say.
+    /// file; each before-text, control before-text or diagnostic holding nothing - which occurs everywhere, and which
+    /// every run would say; and each text of an arm that shares a byte of its file with another of that arm's, as the
+    /// tree holds the file, said at the later row's line.
     /// </summary>
     private IEnumerable<string> TextProblems(MutationRegistry registry, string root, Func<string, bool> withheld)
     {
@@ -491,14 +494,29 @@ public sealed class MutationService(
         {
             foreach (var site in arm.Sites)
             {
-                if (TextProblem(root, site.Before, site.Line, empty: true, withheld) is { } before)
+                var whole = true;
+
+                foreach (var text in site.Texts)
                 {
-                    yield return before;
+                    if (TextProblem(root, text.Before, text.Line, empty: true, withheld) is { } before)
+                    {
+                        whole = false;
+                        yield return before;
+                    }
+
+                    if (TextProblem(root, text.After, text.Line, empty: false, withheld) is { } after)
+                    {
+                        whole = false;
+                        yield return after;
+                    }
                 }
 
-                if (TextProblem(root, site.After, site.Line, empty: false, withheld) is { } after)
+                if (whole)
                 {
-                    yield return after;
+                    foreach (var overlap in Overlaps(root, site))
+                    {
+                        yield return overlap;
+                    }
                 }
             }
 
@@ -519,6 +537,45 @@ public sealed class MutationService(
             {
                 yield return diagnostic;
             }
+        }
+    }
+
+    /// <summary>
+    /// Each two texts of <paramref name="site"/> that overlap in the file as the tree holds it, the later row's problem:
+    /// the texts of one file are replaced together, each as the tree holds it, so two that share a byte of it say two
+    /// things of that byte. Nothing of a site with one text; of a file the tree does not hold, which its arm's pre-flight
+    /// says of the worker's copy; or of a text not there exactly once, which that pre-flight counts.
+    /// </summary>
+    private IEnumerable<string> Overlaps(string root, MutationSite site)
+    {
+        var file = InTree(root, site.Site);
+
+        if (site.Further.Count == 0 || !_fileSystem.FileExists(file))
+        {
+            return [];
+        }
+
+        var texts = site.Texts;
+
+        try
+        {
+            var edits = SiteEdit.ApplyAll(
+                _fileSystem.ReadAllBytes(file),
+                [.. texts.Select(text => (SiteEdit.Text(_fileSystem.ReadAllBytes(InTree(root, text.Before))), SiteEdit.Text(_fileSystem.ReadAllBytes(InTree(root, text.After)))))]);
+
+            return
+            [
+                .. edits.Overlapping.Select(pair =>
+                    $"line {texts[pair.Later].Line}: the text in '{texts[pair.Later].Before}' overlaps the text in '{texts[pair.Earlier].Before}', "
+                    + $"line {texts[pair.Earlier].Line}, in '{site.Site}': the texts of one arm in one file are replaced together, each as the "
+                    + "tree holds the file, so no two share a byte of it"),
+            ];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The site, there and not read: nothing can be said of its texts here, and the arm's pre-flight reads them
+            // again in each worker's copy, where an overlap is the arm's own violation.
+            return [];
         }
     }
 

@@ -139,6 +139,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                         : [HostAgentProtocol.CommandName],
                     StandardInput = HostAgentProtocol.Input(request),
                     HoldStandardInputOpen = true,
+                    StandardInputBeat = HostAgentProtocol.BeatOf(request),
 
                     // What the host's command prints is relayed line by line, under --verbose every line of
                     // every step, and the end of it is all the result keeps; its ledger arrives whole, a
@@ -211,6 +212,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         if (lines.Finished is null or HarnessExit.Success)
         {
             Show(held);
+        }
+
+        if (HostProbes.BeatLost(result) is { } unheard)
+        {
+            _output.Warn(commandName, $"{leg.Host.Host}: {unheard}");
         }
 
         if (lines.Finished is not { } finished)

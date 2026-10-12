@@ -38,6 +38,29 @@ public static class ToolPackage
     public const string Source = "https://api.nuget.org/v3/index.json";
 
     /// <summary>
+    /// What <c>dotnet</c> is given to list the tools installed for this user, or in <paramref name="toolPath"/> where one
+    /// is named, as the JSON <see cref="HostProbes.TryReadToolVersion"/> reads.
+    /// </summary>
+    /// <param name="toolPath">The directory the tool is kept in, or <see langword="null"/> for this user's global tools.</param>
+    public static IReadOnlyList<string> ListArguments(string? toolPath = null) => ["tool", "list", .. Kept(toolPath), "--format", "json"];
+
+    /// <summary>
+    /// What <c>dotnet</c> is given to install the tool, or update it, at exactly <paramref name="version"/>, from
+    /// <see cref="Source"/> alone - on a host as on this machine.
+    /// </summary>
+    /// <param name="verb"><c>install</c> or <c>update</c>.</param>
+    /// <param name="version">The release.</param>
+    /// <param name="toolPath">The directory the tool is kept in, or <see langword="null"/> for this user's global tools.</param>
+    public static IReadOnlyList<string> ChangeArguments(string verb, string version, string? toolPath = null)
+        => ["tool", verb, .. Kept(toolPath), Id, "--version", version, "--source", Source];
+
+    /// <summary>Longest installing or updating the tool may take, which includes downloading it.</summary>
+    public static readonly TimeSpan ChangeBudget = TimeSpan.FromMinutes(10);
+
+    /// <summary>How <c>dotnet tool</c> is told where the tool is kept.</summary>
+    private static string[] Kept(string? toolPath) => toolPath is null ? ["--global"] : ["--tool-path", toolPath];
+
+    /// <summary>
     /// Where a global install of the tool is, from the home directory commands start in, with the extension
     /// the host's operating system needs and the separator its shell needs.
     /// </summary>

@@ -1,4 +1,5 @@
 using RepoHarness.Core.Platform;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
@@ -113,15 +114,30 @@ public sealed class LocalSyncTransport(
     }
 
     /// <inheritdoc/>
-    public async Task<SyncInspectAnswer> InspectAsync(string root, CancellationToken cancellationToken = default)
+    public async Task<SyncInspectAnswer> InspectAsync(string root, GitHistoryWanted? wanted = null, CancellationToken cancellationToken = default)
     {
         var exists = await RootExistsAsync(root, cancellationToken).ConfigureAwait(false);
 
         return new(
             exists,
             await ReadMarkAsync(root, cancellationToken).ConfigureAwait(false),
-            exists ? await ConfigurationInAsync(root, cancellationToken).ConfigureAwait(false) : null);
+            exists ? await ConfigurationInAsync(root, cancellationToken).ConfigureAwait(false) : null)
+        {
+            // Of its own repository alone: inside another's work tree, git answers for that one, which is not the copy's.
+            Repository = exists && await IsItsOwnRepositoryAsync(root, cancellationToken).ConfigureAwait(false)
+                ? await _gitClient.ReadHistoryAsync(Home(root), wanted, cancellationToken).ConfigureAwait(false)
+                : null,
+        };
     }
+
+    /// <summary>
+    /// Whether <paramref name="root"/> is the top of a git repository of its own, as a copy a sync made or a clone it
+    /// took over is. Inside another repository's work tree is not that: git would find that repository from the copy,
+    /// and everything the harness there asks of git - the files it tracks, its index, its HEAD - would be answered by,
+    /// and written to, a repository that is not the copy's.
+    /// </summary>
+    private async Task<bool> IsItsOwnRepositoryAsync(string root, CancellationToken cancellationToken)
+        => await _gitClient.GetLocationAsync(Home(root), cancellationToken).ConfigureAwait(false) is { Prefix.Length: 0 };
 
     /// <summary>
     /// What the configuration the copy at <paramref name="root"/> holds, by content; <see langword="null"/> where it holds
@@ -157,20 +173,20 @@ public sealed class LocalSyncTransport(
         });
 
     /// <inheritdoc/>
-    public async Task InitialiseRepositoryAsync(string root, CancellationToken cancellationToken = default)
+    public async Task InitialiseRepositoryAsync(string root, string? objectFormat = null, CancellationToken cancellationToken = default)
     {
-        // The top of a repository of its own, as a copy a sync made or a clone it took over is. Inside
-        // another repository's work tree is not that: git would find that repository from the copy, and
-        // everything the harness there asks of git - the files it tracks, its index - would be answered
-        // by, and written to, a repository that is not the copy's.
-        if (await _gitClient.GetLocationAsync(Home(root), cancellationToken).ConfigureAwait(false) is { Prefix.Length: 0 })
+        if (await IsItsOwnRepositoryAsync(root, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
 
-        var result = await _gitClient
-            .RunAsync(Home(root), ["init", "--quiet", "."], cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
+        var result = await InitAsync(root, objectFormat, cancellationToken).ConfigureAwait(false);
+
+        // A git that does not know the option knows one way to name objects, and it is this one: asked again without.
+        if (!result.Succeeded && objectFormat == GitHistoryWanted.DefaultObjectFormat)
+        {
+            result = await InitAsync(root, null, cancellationToken).ConfigureAwait(false);
+        }
 
         if (!result.Succeeded)
         {
@@ -180,6 +196,25 @@ public sealed class LocalSyncTransport(
                 + $"anything: {result.FailureMessage}");
         }
     }
+
+    /// <summary>
+    /// Makes <paramref name="root"/> a git repository naming its objects by <paramref name="objectFormat"/>, where one
+    /// is given: said always, since a host's own configuration may choose another, and a repository naming them
+    /// another way than the tree's can hold no commit of that tree's.
+    /// </summary>
+    private Task<GitCommandResult> InitAsync(string root, string? objectFormat, CancellationToken cancellationToken)
+        => _gitClient.RunAsync(
+            Home(root),
+            objectFormat is null ? ["init", "--quiet", "."] : ["init", "--quiet", $"--object-format={objectFormat}", "."],
+            cancellationToken: cancellationToken);
+
+    /// <inheritdoc/>
+    public Task SendHistoryAsync(string root, string pack, long offset, byte[] piece, CancellationToken cancellationToken = default)
+        => _gitClient.ReceiveHistoryAsync(Home(root), pack, offset, piece, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<GitHeadMoved> TakeHistoryAsync(string root, GitHistoryTaken taken, CancellationToken cancellationToken = default)
+        => _gitClient.TakeHistoryAsync(Home(root), taken, cancellationToken);
 
     /// <inheritdoc/>
     public Task IndexAsync(string root, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
@@ -753,6 +788,96 @@ public sealed class LocalSyncTransport(
                 $"'{relativePath}' is not in '{root}': nothing is at that path there.",
                 ex);
         }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The directory named is walked as it is spelt, a link along its path followed as a file's is: a build directory
+    /// pointed at another volume is ordinary. Below it no link is followed, and each is named.
+    /// </remarks>
+    public Task<SyncDirectoryListing> ListFilesAsync(string root, string relativeDirectory, CancellationToken cancellationToken = default)
+    {
+        var named = relativeDirectory.Replace('\\', '/').TrimEnd('/') + "/";
+
+        try
+        {
+            return Task.FromResult(ListFiles(root, relativeDirectory, named, cancellationToken));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A directory this user may not read, or one that changed under the walk: the pull's failure, by name. Left
+            // to the runtime it ended the host's command as a defect of this tool, the path inside the system's words.
+            throw new HarnessException(HarnessExit.CommandFailed, $"'{named}' could not be listed in '{root}': {ex.Message}", ex);
+        }
+    }
+
+    private SyncDirectoryListing ListFiles(string root, string relativeDirectory, string named, CancellationToken cancellationToken)
+    {
+        var expanded = Home(root);
+        var directory = Resolve(root, relativeDirectory);
+
+        if (!_fileSystem.DirectoryExists(directory))
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                _fileSystem.FileExists(directory)
+                    ? $"'{named}' names a directory, and a file is at that path in '{root}': name it without the separator at its end."
+                    : $"'{named}' is not in '{root}': nothing is at that path there.");
+        }
+
+        var most = SyncServe.MostFilesPulledFromADirectory;
+
+        // One more than may cross, and no further: a directory holding a build tree is refused without every file of it
+        // being listed.
+        var walked = _fileSystem.EnumerateWrittenFiles(directory).Take(most + 1).ToList();
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (walked.Count > most)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{named}' holds more than {most.ToString(CultureInfo.InvariantCulture)} files in '{root}', the most a pull brings back from one "
+                + "directory, each in a request of its own: name a directory that holds fewer, or the files, or keep them as one archive.");
+        }
+
+        var files = new List<SyncListedFile>();
+        var links = new List<string>();
+
+        foreach (var file in walked)
+        {
+            var relative = ManifestBuilder.Relative(expanded, file.Path);
+
+            if (_fileSystem.IsLink(file.Path))
+            {
+                links.Add(relative);
+            }
+            else
+            {
+                files.Add(new SyncListedFile(relative, file.Length));
+            }
+        }
+
+        links.AddRange(_fileSystem.EnumerateDirectoryLinks(directory).Select(link => ManifestBuilder.Relative(expanded, link) + "/"));
+
+        if (files.FirstOrDefault(file => file.Length > SyncServe.LargestFile) is { } large)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, SyncServe.TooLargeToCarry(large.Length, large.Path, "this host"));
+        }
+
+        if (files.Sum(file => file.Length) is var bytes && bytes > SyncServe.LargestDirectoryPulled)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"'{named}' holds {bytes.ToString(CultureInfo.InvariantCulture)} bytes in '{root}', past the "
+                + $"{SyncServe.LargestDirectoryPulled.ToString(CultureInfo.InvariantCulture)} a pull brings back from one directory: name a directory "
+                + "that holds less, or the files, or keep the smaller thing a later step actually reads.");
+        }
+
+        return new SyncDirectoryListing([.. files.OrderBy(file => file.Path, StringComparer.Ordinal)])
+        {
+            Links = [.. links.Order(StringComparer.Ordinal)],
+        };
     }
 
     /// <summary>

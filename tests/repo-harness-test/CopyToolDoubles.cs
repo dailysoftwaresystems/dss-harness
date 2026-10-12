@@ -14,10 +14,13 @@ public sealed class PublishedVersionsDouble(string? newest = null) : IPublishedT
     /// <summary>How many times the feed was asked.</summary>
     public int Asked { get; private set; }
 
-    public Task<SemanticVersion?> NewestAsync(SemanticVersion running, CancellationToken cancellationToken = default)
+    /// <summary>How a feed that cannot be reached is said not to have answered.</summary>
+    public const string Unreached = "it could not be reached: no such host is known";
+
+    public Task<PublishedAnswer> NewestAsync(SemanticVersion running, CancellationToken cancellationToken = default)
     {
         Asked++;
-        return Task.FromResult(SemanticVersion.TryParse(Newest, out var version) ? version : null);
+        return Task.FromResult(SemanticVersion.TryParse(Newest, out var version) ? PublishedAnswer.Of(version) : PublishedAnswer.NotTold(Unreached));
     }
 }
 
