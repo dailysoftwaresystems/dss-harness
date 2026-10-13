@@ -1203,7 +1203,7 @@ public sealed class AgentService(
 
             return CommandOutcome.Ok(
                 $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
-                + $"{Merging(measured.Plan, "merges")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
+                + $"{Merging(measured.Plan, "merges")}{Handing(measured.Plan, "hands")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
                 [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. line]);
         }
 
@@ -1228,7 +1228,7 @@ public sealed class AgentService(
 
             return written.Failure ?? CommandOutcome.Ok(
                 $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
-                + $"{Merging(measured.Plan, "merged")}removed {measured.Plan.Deleted.Count} and applied {ReportText.Counted(written.Rows.Planned, "row")}; its worktree is kept, and what the fold wrote is "
+                + $"{Merging(measured.Plan, "merged")}{Handing(measured.Plan, "handed")}removed {measured.Plan.Deleted.Count} and applied {ReportText.Counted(written.Rows.Planned, "row")}; its worktree is kept, and what the fold wrote is "
                 + "recorded as shared, so a fold after a review weighs the agent's change of it",
                 [.. OrchestrationReports.FoldAndRowLines(measured.Plan, written.Rows, layout.RowsDirectory(record.Name), applied: true), .. written.Notes, .. Records(layout, record)]);
         }
@@ -1362,7 +1362,7 @@ public sealed class AgentService(
                 $"dry run: deleting {Lower(Agent(record))} "
                 + (discard
                     ? $"discards {ReportText.Counted(dry.Discarded.Count, "changed path")}, folding nothing"
-                    : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, {Merging(dry.Fold.Plan, "merges")}removes {dry.Fold.Plan.Deleted.Count} and applies "
+                    : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, {Merging(dry.Fold.Plan, "merges")}{Handing(dry.Fold.Plan, "hands")}removes {dry.Fold.Plan.Deleted.Count} and applies "
                         + ReportText.Counted(dry.Fold.Rows.Planned, "row"))
                 + $", keeps its transcripts and {ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, then removes its worktree and its copies on hosts; {tail}",
                 [
@@ -2028,6 +2028,9 @@ public sealed class AgentService(
     /// <param name="verb">"merges", of a fold to come; "merged", of one written.</param>
     private static string Merging(FoldPlan plan, string verb) => plan.Merged.Count == 0 ? string.Empty : $"{verb} {plan.Merged.Count}, ";
 
+    /// <summary>What a fold's summary says of the paths settled by hand it hands the agent, where there are any.</summary>
+    private static string Handing(FoldPlan plan, string verb) => plan.Handed.Count == 0 ? string.Empty : $"{verb} the agent {plan.Handed.Count} settled by hand, ";
+
     /// <summary>
     /// The agent's rows as a fold weighs them: those it declares anew - or never had applied - planned or checked as
     /// applying them would write them (<paramref name="mode"/>), making only the rows named new and losing no stored text
@@ -2137,7 +2140,8 @@ public sealed class AgentService(
         var applied = await _fold.ApplyAsync(main, path, plan).ConfigureAwait(false);
         var progress = $"after writing {applied.Written.Count} of {ReportText.Counted(plan.Written.Count, "path")}"
             + (plan.Merged.Count == 0 ? string.Empty : $", merging {applied.Merged.Count} of {plan.Merged.Count}")
-            + $" and removing {applied.Deleted.Count} of {plan.Deleted.Count}";
+            + $" and removing {applied.Deleted.Count} of {plan.Deleted.Count}"
+            + (plan.Handed.Count == 0 ? string.Empty : $", then handing the agent {applied.Handed.Count} of {plan.Handed.Count} settled by hand");
         SeedRecord folded;
         IReadOnlyList<string> notes;
 

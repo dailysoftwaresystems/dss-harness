@@ -29,7 +29,7 @@ public sealed record FoldAllowances
     /// </summary>
     public IReadOnlyList<string> Merge { get; init; } = [];
 
-    /// <summary>Paths reconciled in the main tree by hand, left out of the fold: <see cref="SettledOption"/>.</summary>
+    /// <summary>Paths reconciled in the main tree by hand, whose state there the fold hands the agent: <see cref="SettledOption"/>.</summary>
     public IReadOnlyList<string> Settled { get; init; } = [];
 
     /// <summary>The ids of rows the agent filed that its fold may make: <see cref="AnchorBatchRequest.NewOption"/>.</summary>

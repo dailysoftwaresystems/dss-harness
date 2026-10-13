@@ -750,8 +750,8 @@ its own - a submodule, or the agent's own - what the main tree holds in the way 
 needs a directory, or files the agent did not delete in a directory one replaces), a HEAD off the base and a move of
 the base stopped part way are refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
 against the registry the fold would otherwise have written over. `--settled` is the way out of any path's refusal -
-`--merge` only of a path whose merge is clean - asked before the deletion branch so a
-deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. So is a `--merge`
+`--merge` only of a path whose merge is clean - and a deletion can be settled too; a settled path the fold does not
+weigh is refused as a misspelling. So is a `--merge`
 naming no path the fold weighs, while one naming a path it weighs with nothing left to merge is let stand, so the
 command line of a fold that stopped part way runs again. A path named with both `--merge` and `--settled` is a usage
 error, exit 10, before anything is read, and a `--merge` naming an anchor registry or the arm registry is refused. A path the main
@@ -760,6 +760,21 @@ cannot look at is never read as absent, which would take the agent's file for it
 anything is written. A file of either tree that changed after it was weighed is never written over: the agent's copy is
 refused where it no longer holds the SHA-256 weighed (`VerifiedFileCopy`), and the main tree's file is weighed again
 before each write and each removal. The fold stops there, exit 21, for a run again to weigh it anew.
+
+A path named with `--settled` was reconciled in the main tree by hand, and the fold acts on it (`AgentFold.MeasureAsync`,
+in this order): one leading out of the main tree is refused, as any is; one reached through a link in either tree, or a
+directory git will not look into in either, is left out and said to be (`FoldPlan.LeftOut`), since a fold never reads
+or writes it; one both trees and the seed agree on is inherited, so the line that ran once runs again; one the two
+trees hold alike is already in, and recorded; one where the main tree holds other than what the agent last shared - or,
+for a path it shares nothing for, than its base - is handed (`FoldPlan.Handed`); and one only the agent changed is
+refused, since nothing was reconciled there and handing the main tree's copy would undo its work. What is handed is
+sorted as any hand-over sorts what the main tree holds, asked what of the agent's own it would go over or through
+(`InTheWayOfHanding`), and measured in the agent's worktree; `ApplyAsync` hands it last, after every write of the main
+tree, through the one loop every hand-over takes - deletions, then files, each asked first to be what was weighed - and
+`FoldedAsync` records it through the ledger. Both trees and the seed then agree, so the agent's next fold starts from
+the reconciliation, and delete-agent's proof that nothing is left to fold holds without being told which paths were
+settled. rebase-agent's `--settled` is another option: there the person reconciled the agent's copy, which stays as its
+change on the new base.
 
 A path both trees changed - each holds a file there, neither is what the two last agreed on, and they differ - is
 resolved in one place, whichever command meets it (`TwoChanges`, made for each command with that command's

@@ -463,7 +463,8 @@ public sealed class AgentRowsTests
         await kit.Harness.AnchorRegistryService.WriteAsync(
             kit.Main, new AnchorWriteRequest(Id, "P2", "something the agent found") { ClosingWork = "the plan we agreed", CrossRefs = "b.txt" }, dryRun: false, Token);
         var worktree = await kit.CreateAgentAsync("ag");
-        OrchestrationKit.Write(worktree, Path.Combine("notes", "a b.txt"), "reconciled by hand\n");
+        OrchestrationKit.Write(worktree, Path.Combine("notes", "a b.txt"), "the agent's\n");
+        OrchestrationKit.Write(kit.Main, Path.Combine("notes", "a b.txt"), "reconciled by hand\n");
         kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["closing"] = "another plan" });
 
         var dry = await CliRunner.RunAsync(["fold-agent", "o1", "ag", "--settled", "notes/a b.txt"], Token, workingDirectory: kit.Main);

@@ -146,18 +146,22 @@ public sealed class AgentFoldTests
     }
 
     /// <summary>
-    /// --settled leaves a path reconciled by hand out, deletions included, which are asked about after it, so the rest of
-    /// the agent's work goes in; the settled paths are named, and nothing is written for them.
+    /// --settled names a path reconciled in the main tree by hand, a deletion among them: once the rest of the agent's work
+    /// is written, the main tree's copy - a file, or its absence - is handed to the agent and recorded as shared, so its
+    /// next fold leaves the path out as inherited, and the command line that ran once runs again. (At 0.6.13 the path was
+    /// left out, nothing handed or recorded, and the agent's next fold refused it again.)
     /// </summary>
     [Fact]
-    public async Task SettledPaths_AreLeftOut_SoTheRestGoesIn_ADeletionAmongThem()
+    public async Task SettledPaths_AreHandedTheMainTreesCopy_AndRecorded_SoTheAgentsNextFoldLeavesThemOut()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\nagent edit\n");
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
         OrchestrationKit.Write(worktree, "new.txt", "new\n");
         File.Delete(Path.Combine(worktree, "docs", "x.md"));
+        File.Delete(Path.Combine(kit.Main, "a.txt"));
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nmerged by hand\n");
         OrchestrationKit.Write(kit.Main, "docs/x.md", "x\nmain edit\n");
 
@@ -168,13 +172,218 @@ public sealed class AgentFoldTests
             && line.EndsWith("so writing the agent's copy would lose that change; a three-way merge of the two conflicts in 1 place(s), shown below: reconcile it by hand, then --settled b.txt", StringComparison.Ordinal));
         Assert.Contains(refused.Details!, line => line.StartsWith("  'docs/x.md': the main tree changed it after the agent's base", StringComparison.Ordinal) && line.EndsWith("so removing it would lose that change", StringComparison.Ordinal));
 
-        var applied = await kit.FoldAsync("ag", apply: true, "b.txt", "docs/x.md");
+        string[] settled = ["a.txt", "b.txt", "docs/x.md"];
+        var dry = await kit.FoldAsync("ag", apply: false, settled);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.StartsWith("dry run: folding agent 'ag' of 'o1' writes 1 path(s) into the main tree, hands the agent 3 settled by hand, removes 0 and applies 0 row(s)", dry.Message);
+        Assert.Contains("3 path(s) declared settled by hand: the main tree's copy to hand to the agent and record as shared:", dry.Details!);
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+
+        var applied = await kit.FoldAsync("ag", apply: true, settled);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
-        Assert.Contains("2 path(s) declared settled by hand, neither compared nor written:", applied.Details!);
+        Assert.StartsWith("folded agent 'ag' of 'o1': wrote 1 path(s) into the main tree, handed the agent 3 settled by hand, removed 0 and applied 0 row(s)", applied.Message);
+        Assert.Equal(
+            [
+                "3 path(s) declared settled by hand: the main tree's copy handed to the agent and recorded as shared:",
+                "  a.txt   (removed: the main tree holds no file there)",
+                "  b.txt",
+                "  docs/x.md",
+                "the agent's session must read these again before it writes them: a write made from what it held before would fold as its change, over what the "
+                    + "main tree brought",
+            ],
+            applied.Details!.Take(5));
         Assert.Equal("two\nmerged by hand\n", OrchestrationKit.Read(kit.Main, "b.txt"));
         Assert.Equal("x\nmain edit\n", OrchestrationKit.Read(kit.Main, "docs/x.md"));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "a.txt")));
         Assert.Equal("new\n", OrchestrationKit.Read(kit.Main, "new.txt"));
+        Assert.Equal("two\nmerged by hand\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal("x\nmain edit\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+        Assert.False(File.Exists(Path.Combine(worktree, "a.txt")));
+
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.Equal(await AgentServiceTests.DigestAsync(kit.Main, "b.txt"), seed.Paths["b.txt"]);
+        Assert.Equal(await AgentServiceTests.DigestAsync(kit.Main, "docs/x.md"), seed.Paths["docs/x.md"]);
+        Assert.Contains("a.txt", seed.Absent!);
+
+        var again = await kit.FoldAsync("ag", apply: true, settled);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.Contains("4 inherited path(s) left out; 0 path(s) are its own:", again.Details!);
+
+        var next = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(next.Succeeded, OrchestrationKit.Describe(next));
+        Assert.Contains("4 inherited path(s) left out; 0 path(s) are its own:", next.Details!);
+    }
+
+    /// <summary>
+    /// A shared path only the main tree changed since the agent was handed it is not the agent's work, and a fold leaves it
+    /// as inherited; settled by hand, the main tree's copy is the reconciliation, and it is handed and recorded.
+    /// </summary>
+    [Fact]
+    public async Task ASettledSharedPathOnlyTheMainTreeChanged_IsHanded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\nreconciled\n");
+
+        var unsettled = await kit.FoldAsync("ag", apply: false);
+
+        Assert.True(unsettled.Succeeded, OrchestrationKit.Describe(unsettled));
+        Assert.Contains("1 inherited path(s) left out; 0 path(s) are its own:", unsettled.Details!);
+
+        var applied = await kit.FoldAsync("ag", apply: true, "a.txt");
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(["1 path(s) declared settled by hand: the main tree's copy handed to the agent and recorded as shared:", "  a.txt"], applied.Details!.Take(2));
+        Assert.Equal("one\nmain edit\nreconciled\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal(await AgentServiceTests.DigestAsync(kit.Main, "a.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["a.txt"]);
+    }
+
+    /// <summary>
+    /// A settled path both trees already hold alike is recorded as shared, and nothing is copied. (At 0.6.13 "settled" was
+    /// asked first, and the path was left out unrecorded.)
+    /// </summary>
+    [Fact]
+    public async Task ASettledPathBothTreesHoldAlike_IsRecorded_AndNothingCopied()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nreconciled\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nreconciled\n");
+
+        var applied = await kit.FoldAsync("ag", apply: true, "b.txt");
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.DoesNotContain(applied.Details!, line => line.Contains("declared settled by hand", StringComparison.Ordinal));
+        Assert.Equal(["and 1 path(s) the main tree already holds as it does, with nothing to write:", "  b.txt"], applied.Details!.SkipWhile(line => !line.StartsWith("and 1 path(s) the main tree", StringComparison.Ordinal)).Take(2));
+        Assert.Equal(await AgentServiceTests.DigestAsync(kit.Main, "b.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"]);
+    }
+
+    /// <summary>
+    /// A settled path only the agent changed is refused: the main tree holds it as the agent's base does, so nothing was
+    /// reconciled there, and handing the main tree's copy - or removing a file the agent made - would undo the agent's work.
+    /// Its change stays in its worktree, and nothing is written. (At 0.6.13 such a path was left out of the fold, silently.)
+    /// </summary>
+    [Fact]
+    public async Task ASettledPathOnlyTheAgentChanged_IsRefused_AndItsChangeStays()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(worktree, "made.txt", "the agent's\n");
+        OrchestrationKit.Write(worktree, "new.txt", "new\n");
+        var at = OrchestrationReports.Base(kit.Record("ag").Base!);
+
+        var refused = await kit.FoldAsync("ag", apply: true, "b.txt", "made.txt");
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            [
+                "2 problem(s), and nothing was written:",
+                $"  --settled 'b.txt': the main tree holds it as the agent's base {at} does, so nothing was reconciled there, and handing the agent the main "
+                    + "tree's copy would undo the agent's change: drop it",
+                $"  --settled 'made.txt': the main tree holds no file there, as the agent's base {at} holds none, so nothing was reconciled there, and "
+                    + "removing the agent's copy would undo the agent's change: drop it",
+            ],
+            refused.Details!.Take(3));
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal("the agent's\n", OrchestrationKit.Read(worktree, "made.txt"));
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "new.txt")));
+    }
+
+    /// <summary>
+    /// A settled path the agent shares with the main tree that only the agent changed since is refused as well, saying the
+    /// main tree holds it as when the agent last shared it.
+    /// </summary>
+    [Fact]
+    public async Task ASharedSettledPathOnlyTheAgentChanged_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nfirst pass\n");
+        Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
+        OrchestrationKit.Write(worktree, "b.txt", "two\nsecond pass\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true, "b.txt");
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            "  --settled 'b.txt': the main tree holds it as it did when the agent last shared it, so nothing was reconciled there, and handing the agent "
+                + "the main tree's copy would undo the agent's change: drop it",
+            refused.Details!);
+        Assert.Equal("two\nsecond pass\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal("two\nfirst pass\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// What the main tree hands a settled path is never written over the agent's own: a directory of its files where the
+    /// main tree holds a file refuses the fold, and nothing is written in either tree.
+    /// </summary>
+    [Fact]
+    public async Task ASettledHandOverThatWouldRemoveTheAgentsOwnFiles_IsRefused()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(worktree, "b.txt"));
+        OrchestrationKit.Write(worktree, "b.txt/inner.txt", "the agent's\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmerged by hand\n");
+
+        var refused = await kit.FoldAsync("ag", apply: true, "b.txt");
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            "  --settled 'b.txt': the agent holds a directory there with files of its own - b.txt/inner.txt - which handing it the main tree's copy would remove",
+            refused.Details!);
+        Assert.Equal("the agent's\n", OrchestrationKit.Read(worktree, "b.txt/inner.txt"));
+        Assert.Equal("two\nmerged by hand\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+    }
+
+    /// <summary>
+    /// A settled hand-over is guarded as every hand-over is: a file the agent's session writes after it was weighed is never
+    /// written over, and the fold stops there, exit 21, with what it wrote into the main tree said and recorded.
+    /// </summary>
+    [Fact]
+    public async Task ASettledHandOver_StopsWhereTheAgentsFileChangedSinceItWasWeighed()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(worktree, "new.txt", "new\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmerged by hand\n");
+        var copy = Path.Combine(worktree, "b.txt");
+
+        // Its third reading is the one that asks, before the copy, whether it is what was weighed: the session writes first.
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 3, () => File.WriteAllText(copy, "two\nthe session's edit\n")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances { Settled = ["b.txt"] }, apply: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith(
+            "Folding agent 'ag' of 'o1' stopped part way, after writing 1 of 1 path(s) and removing 0 of 0, then handing the agent 0 of 1 settled by hand: "
+                + "'b.txt' holds other content in the agent's worktree now than when it was measured, so it was not written over. What it wrote is in the "
+                + "main tree and recorded as shared",
+            stopped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("two\nthe session's edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.DoesNotContain("b.txt", seed.Paths.Keys);
+        Assert.Contains("new.txt", seed.Paths.Keys);
     }
 
     /// <summary>A settled path the fold does not weigh settles nothing, and is refused as the misspelling it most likely is.</summary>
@@ -340,7 +549,10 @@ public sealed class AgentFoldTests
         Assert.False(Directory.Exists(Path.Combine(kit.Main, HarnessLayout.LegsDirectoryName, "357e24c")));
     }
 
-    /// <summary>A path of the agent's that leads, in the main tree, through a link out of it is never written through.</summary>
+    /// <summary>
+    /// A path of the agent's that leads, in the main tree, through a link out of it is never written through, nor handed
+    /// from: --settled never reaches outside the main tree, so it is asked first.
+    /// </summary>
     [Fact]
     public async Task APathLeadingOutOfTheMainTreeThroughALink_IsRefused()
     {
@@ -352,9 +564,14 @@ public sealed class AgentFoldTests
         TestLinks.DirectoryLink(Path.Combine(kit.Main, "lib"), outside.Path);
 
         var refused = await kit.FoldAsync("ag", apply: true);
+        var settled = await kit.FoldAsync("ag", apply: true, "lib/f.txt");
 
-        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains(refused.Details!, line => line.StartsWith("  'lib/f.txt' leads out of the main tree, through a link in the main tree", StringComparison.Ordinal));
+        foreach (var outcome in new[] { refused, settled })
+        {
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.Contains(outcome.Details!, line => line.StartsWith("  'lib/f.txt' leads out of the main tree, through a link in the main tree", StringComparison.Ordinal));
+        }
+
         Assert.False(File.Exists(Path.Combine(outside.Path, "f.txt")));
     }
 
@@ -675,7 +892,10 @@ public sealed class AgentFoldTests
         Assert.False(Directory.Exists(Path.Combine(kit.Worktree("ag"), "nested")));
     }
 
-    /// <summary>A path the main tree reaches through a link that stays inside it is never written through: the fold is refused.</summary>
+    /// <summary>
+    /// A path the main tree reaches through a link that stays inside it is never written through: the fold is refused. Settled
+    /// by hand, it is left out, said not to be handed, and nothing is recorded for it.
+    /// </summary>
     [Fact]
     public async Task APathTheMainTreeReachesThroughALinkInsideIt_IsRefused()
     {
@@ -691,6 +911,17 @@ public sealed class AgentFoldTests
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains(refused.Details!, line => line.StartsWith("  'docs/x.md' is reached through a symbolic link or junction in the main tree", StringComparison.Ordinal));
         Assert.Equal("x\n", OrchestrationKit.Read(kit.Main, "docs-real/x.md"));
+
+        var settled = await kit.FoldAsync("ag", apply: true, "docs/x.md");
+
+        Assert.True(settled.Succeeded, OrchestrationKit.Describe(settled));
+        Assert.Equal(
+            "1 path(s) declared settled by hand that a fold never reads or writes, left out and not handed - the agent's next fold meets it again:",
+            settled.Details![0]);
+        Assert.StartsWith("  docs/x.md   (reached through a symbolic link or junction in the main tree, where it leads to '", settled.Details[1], StringComparison.Ordinal);
+        Assert.Equal("x\n", OrchestrationKit.Read(kit.Main, "docs-real/x.md"));
+        Assert.Equal("x\nagent edit\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+        Assert.DoesNotContain("docs/x.md", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
     }
 
     /// <summary>A rename the agent staged is folded as what it is: the new path written, and the old one removed.</summary>

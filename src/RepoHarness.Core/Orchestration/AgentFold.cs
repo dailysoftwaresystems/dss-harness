@@ -25,8 +25,18 @@ public sealed record FoldPlan
     /// <summary>The paths the main tree already holds as the agent does, absent from both included: nothing to write.</summary>
     public required IReadOnlyList<string> AlreadyIn { get; init; }
 
-    /// <summary>The paths declared settled by hand: neither compared nor written.</summary>
-    public required IReadOnlyList<string> Settled { get; init; }
+    /// <summary>
+    /// The paths declared settled by hand where the main tree holds other than what the agent last shared with it - the
+    /// reconciliation: what the main tree holds there handed to the agent once everything else is written - each deletion
+    /// made, then each file copied - and recorded as shared, so its next fold starts from it.
+    /// </summary>
+    public required Handable Handed { get; init; }
+
+    /// <summary>
+    /// The paths declared settled by hand that a fold never reads or writes - reached through a link, or a directory git
+    /// will not look into, in either tree - each with why: left out, and not handed.
+    /// </summary>
+    public required IReadOnlyList<SettledOut> LeftOut { get; init; }
 
     /// <summary>
     /// The paths both trees changed whose three-way merge is clean and was asked for: the merged bytes are written into
@@ -47,9 +57,10 @@ public sealed record FoldPlan
     public required IReadOnlySet<string> Seeded { get; init; }
 
     /// <summary>
-    /// What each written path, each merged and each already in the main tree held in the agent's worktree when it was
-    /// measured - its digest, or null where it held no file: what is written, what a merge is written over, and what both
-    /// trees are recorded as sharing once a written path is.
+    /// What each written path, each merged, each already in the main tree and each handed held in the agent's worktree when
+    /// it was measured - its digest, or null where it held no file: what is written, what a merge or a hand-over is written
+    /// over, and what both trees are recorded as sharing once a written path is. A handed path where the agent holds
+    /// anything else is not in it (<see cref="AgentFold.HoldingAsync"/>).
     /// </summary>
     public required IReadOnlyDictionary<string, string?> AgentContent { get; init; }
 
@@ -63,12 +74,23 @@ public sealed record FoldPlan
     public bool NothingLeft => Written.Count == 0 && Merged.Count == 0 && Deleted.Count == 0 && Refusals.Count == 0;
 }
 
+/// <summary>A path declared settled by hand that a fold leaves out, and why.</summary>
+/// <param name="Path">The path, as git names it.</param>
+/// <param name="Why">What it is that a fold never reads or writes, to stand in brackets.</param>
+public sealed record SettledOut(string Path, string Why);
+
+/// <summary>A path handed to an agent, and the file it was handed.</summary>
+/// <param name="Path">The path, as git names it.</param>
+/// <param name="Digest">The SHA-256 of the file copied; null for a deletion.</param>
+public sealed record HandedPath(string Path, string? Digest);
+
 /// <summary>What applying a fold did.</summary>
 /// <param name="Written">The paths it wrote into the main tree, in order.</param>
 /// <param name="Deleted">The paths it removed from it, in order.</param>
 /// <param name="Merged">The paths it merged, in order: each once both trees hold the merge.</param>
+/// <param name="Handed">The paths settled by hand it handed to the agent, in order.</param>
 /// <param name="Stopped">Why it stopped part way; null where it wrote everything.</param>
-public sealed record FoldApplied(IReadOnlyList<string> Written, IReadOnlyList<string> Deleted, IReadOnlyList<string> Merged, string? Stopped);
+public sealed record FoldApplied(IReadOnlyList<string> Written, IReadOnlyList<string> Deleted, IReadOnlyList<string> Merged, IReadOnlyList<HandedPath> Handed, string? Stopped);
 
 /// <summary>
 /// What moving an agent's base from one commit to another does to its worktree, measured; nothing written. Every path the
@@ -331,7 +353,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="worktree">The agent's worktree, which must be its own registered worktree.</param>
     /// <param name="baseCommit">The commit its worktree was made from, which its HEAD must still be.</param>
     /// <param name="seed">What it shares with the main tree.</param>
-    /// <param name="settled">The paths declared settled by hand.</param>
+    /// <param name="settled">The paths declared settled by hand: reconciled in the main tree, whose state there the agent is handed.</param>
     /// <param name="policy">How a path both trees changed is resolved, the paths named to be merged among it.</param>
     /// <param name="changes">Measures what a three-way merge of such a path gives.</param>
     /// <param name="floor">The paths never moved between trees (<see cref="TreeFloor"/>).</param>
@@ -364,7 +386,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         // Every path the agent shares nothing for is weighed against its base: the blob there, one git process for them
         // all, and whether the main tree moved from it since - asked of git once, compared as git status compares.
-        var unseeded = looks.Where(look => look.Link is null && shared.Of(look.Path) is null && !settledPaths.Contains(look.Path)).ToList();
+        var unseeded = looks.Where(look => look.Link is null && shared.Of(look.Path) is null).ToList();
         var atBase = await _gitClient.HeldAtAsync(worktree, baseCommit, [.. unseeded.Select(look => look.Path)], cancellationToken).ConfigureAwait(false);
         var baseBlobs = atBase.ToDictionary(held => held.Key, held => held.Value.Blob, StringComparer.Ordinal);
         IReadOnlySet<string> mainMoved = unseeded.Any(look => baseBlobs[look.Path] is not null)
@@ -377,7 +399,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var mainContent = new Dictionary<string, string?>(StringComparer.Ordinal);
         var inherited = new List<string>();
         var alreadyIn = new List<string>();
-        var settledHere = new List<string>();
+        var settling = new List<string>();
+        var leftOut = new List<SettledOut>();
         var refused = new List<(string Path, string Why)>();
         var drifted = new List<(Look Look, string BaseBlob, string Consequence)>();
         var twice = new List<(Look Look, string Why, TwoChangeAncestor? Ancestor)>();
@@ -386,6 +409,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         foreach (var look in looks)
         {
             var path = look.Path;
+            var isSettled = settledPaths.Contains(path);
 
             // Asked before --settled, which never reaches outside the main tree.
             if (look.Escapes)
@@ -394,11 +418,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 continue;
             }
 
-            // Asked before everything else it could be refused for, deletions included: a path settled by hand is the one
-            // way out of an all-or-nothing refusal, and a refusal asked first would refuse it again.
-            if (settledPaths.Contains(path))
+            // What a fold never reads or writes, settled by hand, is left out and not handed: --settled stays the one way out
+            // of its refusal.
+            if (isSettled && Unread(look) is { } unread)
             {
-                settledHere.Add(path);
+                leftOut.Add(new SettledOut(path, unread));
                 continue;
             }
 
@@ -416,19 +440,45 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
             var baseline = shared.Of(path);
 
-            // What it shares and still holds as both trees held it is not its work, whatever the main tree did since.
-            if (baseline is { } kept && look.Agent == kept)
+            // What it shares and still holds as both trees held it is not its work, whatever the main tree did since - but
+            // settled by hand, what the main tree did since is the reconciliation, handed below; where the main tree holds it
+            // as both did, it is let stand, so the line that ran once runs again.
+            if (baseline is { } kept && look.Agent == kept && (!isSettled || look.Main == kept))
             {
                 inherited.Add(path);
                 continue;
             }
 
             // What the main tree already holds as the agent does is neither written nor refused: writing it changes
-            // nothing, and refusing it would refuse every fold run again after one that stopped part way.
+            // nothing, and refusing it would refuse every fold run again after one that stopped part way. Settled by hand
+            // too, it is recorded, and nothing is copied.
             if (look.Main == look.Agent)
             {
                 alreadyIn.Add(path);
                 agentContent[path] = look.Agent.File?.Digest;
+                continue;
+            }
+
+            if (isSettled)
+            {
+                // The main tree's copy is handed where it is not what the agent last shared - or, for a path it shares
+                // nothing for, its base's: there is the reconciliation. Where it still is, only the agent changed the path,
+                // nothing was reconciled, and handing the main tree's would undo the agent's work.
+                var reconciled = baseline is { } ancestor
+                    ? look.Main != ancestor
+                    : baseBlobs[path] is null
+                        ? look.Main.Kind != Kind.Absent
+                        : look.Main.Kind == Kind.Absent || mainMoved.Contains(path);
+
+                if (reconciled)
+                {
+                    settling.Add(path);
+                }
+                else
+                {
+                    refused.Add((path, NothingReconciled(look, shared: baseline is not null, at)));
+                }
+
                 continue;
             }
 
@@ -608,6 +658,31 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 + $"{ReportText.Listed([.. file.Select(way => way.Own)])} - which writing it would remove"));
         }
 
+        // What is settled by hand is sorted as any hand-over sorts what the main tree holds, and is handed over nothing of
+        // the agent's own; a directory git will not look into is left out, as one reached through a link is.
+        var sorted = await ClassifyAsync(main, settling, uncommitted: null, cancellationToken).ConfigureAwait(false);
+        var handed = sorted with { Directories = [], Links = [] };
+        leftOut.AddRange(sorted.Directories.Select(directory => new SettledOut(directory, "a directory in the main tree - a submodule, or a repository of its own")));
+
+        var inTheWayOfHanding = WaysOfHanding(worktree, handed);
+
+        foreach (var way in inTheWayOfHanding.Where(way => !way.Below).DistinctBy(way => way.Written))
+        {
+            refused.Add((way.Written, $"{FoldAllowances.SettledOption} '{way.Written}': handing the agent the main tree's copy needs a directory at '{way.Own}', "
+                + "where the agent holds a file or a link of its own"));
+        }
+
+        foreach (var file in inTheWayOfHanding.Where(way => way.Below).GroupBy(way => way.Written, StringComparer.Ordinal))
+        {
+            refused.Add((file.Key, $"{FoldAllowances.SettledOption} '{file.Key}': the agent holds a directory there with files of its own - "
+                + $"{ReportText.Listed([.. file.Select(way => way.Own)])} - which handing it the main tree's copy would remove"));
+        }
+
+        foreach (var (path, held) in await HoldingAsync(worktree, [.. handed.Deletions, .. handed.Files], cancellationToken).ConfigureAwait(false))
+        {
+            agentContent[path] = held;
+        }
+
         foreach (var stray in settledPaths.Where(path => !candidates.Contains(path, StringComparer.Ordinal)).Order(StringComparer.Ordinal))
         {
             refused.Add((stray, $"--settled '{stray}' names no path this fold weighs, so it settles nothing: check its spelling"));
@@ -628,7 +703,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Deleted = deleted,
             Inherited = inherited,
             AlreadyIn = alreadyIn,
-            Settled = settledHere,
+            Handed = handed,
+            LeftOut = [.. leftOut.OrderBy(path => path.Path, StringComparer.Ordinal)],
             Merged = merged,
             Refusals = [.. refused.OrderBy(refusal => refusal.Path, StringComparer.Ordinal).Select(refusal => refusal.Why)],
             Shown = shown,
@@ -677,7 +753,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// Writes a measured fold into <paramref name="main"/>: each deleted path removed, with the directories that leaves
     /// empty up to - never including - the main tree's root, then each written path copied and proved, so a file the agent
     /// turned into a directory, or a directory it turned into a file, makes room for what replaced it; then each merged
-    /// path's bytes written into both trees, the main tree's first, once both copies are asked to be what was weighed.
+    /// path's bytes written into both trees, the main tree's first, once both copies are asked to be what was weighed;
+    /// then, last, what the main tree holds at each path settled by hand handed to the agent, as any hand-over hands it.
     /// Never cancelled part way. Only what was measured is written or removed: an agent's file that changed since, or a
     /// main-tree file that did - one about to be written over or removed - stops it there, with what it did so far said.
     /// </summary>
@@ -696,6 +773,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var written = new List<string>();
         var deleted = new List<string>();
         var merged = new List<string>();
+        var handed = new List<HandedPath>();
 
         try
         {
@@ -723,13 +801,27 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 await WriteMergeAsync(merge).ConfigureAwait(false);
                 merged.Add(merge.Path);
             }
+
+            // Last, what was settled by hand: the main tree's copy handed to the agent as any hand-over hands it, over only
+            // what was weighed in the agent's worktree.
+            await HandEachAsync(
+                main,
+                worktree,
+                plan.Handed,
+                plan.AgentContent,
+                (path, digest) =>
+                {
+                    handed.Add(new HandedPath(path, digest));
+                    return Task.CompletedTask;
+                },
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return new FoldApplied(written, deleted, merged, ex.Message);
+            return new FoldApplied(written, deleted, merged, handed, ex.Message);
         }
 
-        return new FoldApplied(written, deleted, merged, null);
+        return new FoldApplied(written, deleted, merged, handed, null);
     }
 
     /// <summary>
@@ -772,9 +864,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <summary>
     /// Records in <paramref name="ledger"/> what the agent shares once a fold is applied, as far as it went: each path it
     /// wrote, and each the main tree already held as the agent does, shared as the file both trees now hold - or as absent
-    /// from both - each it merged as the merged bytes both now hold, with the bit they were written with, and each it
-    /// removed as absent from both. A later fold weighs those paths against that, never against the agent's base: a review
-    /// that sends the agent back, and the agent putting a path back as it was, is then its change to fold like any other.
+    /// from both - each it merged as the merged bytes both now hold, with the bit they were written with, each it
+    /// removed as absent from both, and each settled path it handed as a hand-over records it. A later fold weighs those
+    /// paths against that, never against the agent's base: a review that sends the agent back, and the agent putting a path
+    /// back as it was, is then its change to fold like any other.
     /// </summary>
     /// <param name="ledger">What the agent shares with the main tree, to add them to.</param>
     /// <param name="plan">The fold measured.</param>
@@ -807,6 +900,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         foreach (var path in applied.Deleted)
         {
             ledger.Absent(path);
+        }
+
+        foreach (var handed in applied.Handed)
+        {
+            await HandedAsync(ledger, worktree, handed).ConfigureAwait(false);
         }
     }
 
@@ -1347,6 +1445,49 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var count = 0;
         string? stopped = null;
 
+        try
+        {
+            await HandEachAsync(
+                main,
+                worktree,
+                handable,
+                held,
+                async (path, digest) =>
+                {
+                    await HandedAsync(ledger, worktree, new HandedPath(path, digest)).ConfigureAwait(false);
+                    count++;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
+        {
+            stopped = ex is OperationCanceledException ? "it was interrupted" : ex.Message.TrimEnd('.');
+        }
+
+        return (count, stopped);
+    }
+
+    /// <summary>
+    /// The one way anything is handed to an agent: each deletion of <paramref name="handable"/> made in its worktree, with
+    /// the directories that leaves empty, then each file copied from the main tree there and proved, each path
+    /// <paramref name="held"/> names first asked to hold what was measured there; <paramref name="handed"/> is told of each
+    /// as it is done, so what stops part way leaves word of exactly what was handed.
+    /// </summary>
+    /// <param name="main">The main checkout's root.</param>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="handable">What to hand it.</param>
+    /// <param name="held">What the worktree held at each path when it was measured; null where nothing is asked.</param>
+    /// <param name="handed">Told of each path handed, with the digest of the file copied, or null for a deletion.</param>
+    /// <param name="cancellationToken">Stops it between one path and the next.</param>
+    /// <exception cref="IOException">A path is not what was measured, or could not be handed; what was handed before it stays.</exception>
+    private async Task HandEachAsync(
+        string main,
+        string worktree,
+        Handable handable,
+        IReadOnlyDictionary<string, string?>? held,
+        Func<string, string?, Task> handed,
+        CancellationToken cancellationToken)
+    {
         async Task RequireHeldAsync(string path, string copy, string what)
         {
             if (held is not null && held.TryGetValue(path, out var measured))
@@ -1355,46 +1496,51 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             }
         }
 
-        try
+        foreach (var path in handable.Deletions)
         {
-            foreach (var path in handable.Deletions)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var copy = Path.Combine(worktree, path);
+            await RequireHeldAsync(path, copy, "removed").ConfigureAwait(false);
+
+            switch (_fileSystem.KindOf(copy))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var copy = Path.Combine(worktree, path);
-                await RequireHeldAsync(path, copy, "removed").ConfigureAwait(false);
-
-                switch (_fileSystem.KindOf(copy))
-                {
-                    case PathKind.File or PathKind.Link:
-                        _fileSystem.DeleteFile(copy);
-                        _fileSystem.RemoveEmptiedDirectories(worktree, Path.GetDirectoryName(copy), _platform.PathComparison);
-                        break;
-                    case PathKind.Directory:
-                        throw new IOException($"'{path}' is a directory in the agent's worktree, where the main tree deleted a file");
-                }
-
-                ledger.Absent(path);
-                count++;
+                case PathKind.File or PathKind.Link:
+                    _fileSystem.DeleteFile(copy);
+                    _fileSystem.RemoveEmptiedDirectories(worktree, Path.GetDirectoryName(copy), _platform.PathComparison);
+                    break;
+                case PathKind.Directory:
+                    throw new IOException($"'{path}' is a directory in the agent's worktree, where the main tree deleted a file");
             }
 
-            foreach (var path in handable.Files)
-            {
-                var copy = Path.Combine(worktree, path);
-                await RequireHeldAsync(path, copy, "written over").ConfigureAwait(false);
-                var handed = await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(main, path), copy, cancellationToken: cancellationToken).ConfigureAwait(false);
-
-                // Kept from the copy just written and proved: what the seed records the agent as holding.
-                await ledger.FileAsync(path, handed.Content, IsExecutable(copy), copy).ConfigureAwait(false);
-                count++;
-            }
+            await handed(path, null).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
+
+        foreach (var path in handable.Files)
         {
-            stopped = ex is OperationCanceledException ? "it was interrupted" : ex.Message.TrimEnd('.');
+            var copy = Path.Combine(worktree, path);
+            await RequireHeldAsync(path, copy, "written over").ConfigureAwait(false);
+            var made = await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(main, path), copy, cancellationToken: cancellationToken).ConfigureAwait(false);
+            await handed(path, made.Content).ConfigureAwait(false);
         }
+    }
 
-        return (count, stopped);
+    /// <summary>
+    /// Records in <paramref name="ledger"/> a path handed to the agent: absent from both trees, or the file copied, its bytes
+    /// kept from the copy just written and proved - what the seed records the agent as holding.
+    /// </summary>
+    private async Task HandedAsync(SharedLedger ledger, string worktree, HandedPath handed)
+    {
+        var copy = Path.Combine(worktree, handed.Path);
+
+        if (handed.Digest is { } digest)
+        {
+            await ledger.FileAsync(handed.Path, digest, IsExecutable(copy), copy).ConfigureAwait(false);
+        }
+        else
+        {
+            ledger.Absent(handed.Path);
+        }
     }
 
     /// <summary>
@@ -1766,11 +1912,15 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     {
         ArgumentNullException.ThrowIfNull(handable);
 
-        return [.. InTheWay(worktree, [.. handable.Files.Select(path => (path, true))], handable.Deletions.ToHashSet(StringComparer.Ordinal))
-            .Select(way => way.Own)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)];
+        return [.. WaysOfHanding(worktree, handable).Select(way => way.Own).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
     }
+
+    /// <summary>What of the agent's own handing it <paramref name="handable"/> would write over or through, each with the path handed it is in the way of.</summary>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="handable">What it would be handed.</param>
+    /// <exception cref="IOException">A path could not be looked at.</exception>
+    private List<InTheWayOf> WaysOfHanding(string worktree, Handable handable)
+        => InTheWay(worktree, [.. handable.Files.Select(path => (path, true))], handable.Deletions.ToHashSet(StringComparer.Ordinal));
 
     /// <summary>
     /// What of the agent's own writing <paramref name="written"/> into its worktree would go over or through, each with the
@@ -1985,6 +2135,39 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
     /// <summary>Whether both trees hold a file at the path looked at: what a merge of two changes needs of each.</summary>
     private static bool BothHoldAFile(Look look) => look is { Main.Kind: Kind.File, Agent.Kind: Kind.File };
+
+    /// <summary>
+    /// What the path looked at is that a fold never reads or writes - reached through a link, or a directory git will not
+    /// look into, in either tree - to stand in brackets; null where it is neither.
+    /// </summary>
+    private static string? Unread(Look look)
+        => look.Link is { } link ? $"reached through a symbolic link or junction in {link}"
+            : look.Agent.Kind == Kind.Directory ? "a directory in the agent's worktree - a submodule, or a repository of its own"
+            : look.Main.Kind == Kind.Directory ? "a directory in the main tree - a submodule, or a repository of its own"
+            : null;
+
+    /// <summary>
+    /// Why a path declared settled by hand that only the agent changed is refused: the main tree holds it as the agent last
+    /// shared it - or, for a path it shares nothing for, as its base does - so nothing was reconciled there, and what
+    /// settling hands would undo the agent's change.
+    /// </summary>
+    /// <param name="look">What both trees hold at the path.</param>
+    /// <param name="shared">Whether the agent shares the path with the main tree.</param>
+    /// <param name="at">The agent's base, as a report names it.</param>
+    private static string NothingReconciled(Look look, bool shared, string at)
+    {
+        var absent = look.Main.Kind == Kind.Absent;
+        var holds = (absent, shared) switch
+        {
+            (false, true) => "the main tree holds it as it did when the agent last shared it",
+            (true, true) => "the main tree holds no file there, as when the agent last shared it",
+            (false, false) => $"the main tree holds it as the agent's base {at} does",
+            (true, false) => $"the main tree holds no file there, as the agent's base {at} holds none",
+        };
+
+        return $"{FoldAllowances.SettledOption} '{look.Path}': {holds}, so nothing was reconciled there, and "
+            + $"{(absent ? "removing the agent's copy" : "handing the agent the main tree's copy")} would undo the agent's change: drop it";
+    }
 
     /// <summary>What the two trees hold at <paramref name="path"/>, and whether a link lies along it in either.</summary>
     private async Task<Look> LookAsync(string path, Roots roots, CancellationToken cancellationToken)

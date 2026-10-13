@@ -29,11 +29,12 @@ internal static class FoldOptions
         "A path both trees changed whose three-way merge is clean, as the dry run says of it: the merged file is written into both trees and recorded as shared. "
         + "Never taken unasked, and a clean textual merge proves nothing about the program. Once for each path.");
 
-    /// <summary>A path reconciled in the main tree by hand, left out of the fold.</summary>
+    /// <summary>A path reconciled in the main tree by hand, whose state there the fold hands the agent.</summary>
     internal static Option<string[]> Settled { get; } = new(FoldAllowances.SettledOption)
     {
         HelpName = "path",
-        Description = "A path you reconciled in the main tree by hand, left out of the fold so the rest can go in: neither compared nor written. Once for each path.",
+        Description = "A path you reconciled in the main tree by hand: the fold hands the agent the main tree's copy and records it as shared, so the rest can go in "
+            + "and its next fold starts from it. Refused where only the agent changed the path. Once for each path.",
     };
 
     /// <summary>A row the agent filed that the fold may make.</summary>

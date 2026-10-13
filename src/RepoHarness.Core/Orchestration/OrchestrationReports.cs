@@ -155,14 +155,30 @@ public static class OrchestrationReports
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        if (plan.Settled.Count > 0)
+        if (plan.Handed.Count > 0)
+        {
+            var removed = plan.Handed.Deletions.ToHashSet(StringComparer.Ordinal);
+
+            yield return $"{ReportText.Counted(plan.Handed.Count, "path")} declared settled by hand: the main tree's copy "
+                + (applied ? "handed to the agent and recorded as shared:" : "to hand to the agent and record as shared:");
+
+            foreach (var path in plan.Handed.Deletions.Concat(plan.Handed.Files).Order(StringComparer.Ordinal))
+            {
+                yield return removed.Contains(path) ? $"  {path}   (removed: the main tree holds no file there)" : $"  {path}";
+            }
+
+            yield return ReadAgain;
+        }
+
+        if (plan.LeftOut.Count > 0)
         {
             // Never silent: a path left out without a word is how an agent's work goes missing while its fold succeeds.
-            yield return $"{ReportText.Counted(plan.Settled.Count, "path")} declared settled by hand, neither compared nor written:";
+            yield return $"{ReportText.Counted(plan.LeftOut.Count, "path")} declared settled by hand that a fold never reads or writes, left out and not handed - "
+                + $"the agent's next fold meets {(plan.LeftOut.Count == 1 ? "it" : "them")} again:";
 
-            foreach (var path in plan.Settled)
+            foreach (var left in plan.LeftOut)
             {
-                yield return $"  {path}";
+                yield return $"  {left.Path}   ({left.Why})";
             }
         }
 
@@ -174,7 +190,8 @@ public static class OrchestrationReports
             var merged = plan.Merged.Count == 0 ? string.Empty : $", {Of([.. plan.Merged.Select(merge => merge.Path)])} merged";
 
             yield return $"{ReportText.Counted(plan.Seeded.Count, "path")} it shares with the main tree, handed to it or folded before: {Of(plan.Written)} its own, "
-                + $"{Of(plan.Inherited)} inherited, {Of(plan.AlreadyIn)} already in the main tree, {Of(plan.Deleted)} deleted, {Of(plan.Settled)} settled{merged}";
+                + $"{Of(plan.Inherited)} inherited, {Of(plan.AlreadyIn)} already in the main tree, {Of(plan.Deleted)} deleted, "
+                + $"{Of([.. plan.Handed.Deletions, .. plan.Handed.Files, .. plan.LeftOut.Select(left => left.Path)])} settled{merged}";
         }
 
         yield return $"{ReportText.Counted(plan.Inherited.Count, "inherited path")} left out; {ReportText.Counted(plan.Written.Count, "path")} are its own:";
@@ -245,8 +262,8 @@ public static class OrchestrationReports
             + $"tree, by a commit once it was committed. Where a three-way merge of the two is clean, {FoldAllowances.MergeOption} <path> writes it "
             + "into both trees: it is never taken unasked, and a clean textual merge proves nothing about the program. Where it conflicts, or "
             + "none is offered, merge this agent's change into the main tree by hand, then run again naming the path with --settled <path>, "
-            + "which leaves just that path out so the rest can go in: nothing is written for it, and run again without it, the fold refuses "
-            + "the same way. Neither is a --force: each names one path.";
+            + "which hands the agent the main tree's copy and records it as shared, so the rest can go in and its next fold starts from what "
+            + "you reconciled. Neither is a --force: each names one path.";
 
         if (merging is not null)
         {
@@ -259,12 +276,14 @@ public static class OrchestrationReports
     /// list of merged paths, whichever command wrote them into the agent's worktree.
     /// </summary>
     /// <param name="merged">The merged paths, at least one.</param>
-    internal static IEnumerable<string> MergedLines(IReadOnlyList<MergedPath> merged)
-        => [
-            .. merged.Select(merge => $"  {merge.Path}   {merge.Listed}"),
-            "the agent's session must read these again before it writes them: a write made from what it held before would fold as its change, "
-                + "over what the main tree brought",
-        ];
+    internal static IEnumerable<string> MergedLines(IReadOnlyList<MergedPath> merged) => [.. merged.Select(merge => $"  {merge.Path}   {merge.Listed}"), ReadAgain];
+
+    /// <summary>
+    /// What the agent's session must do about paths a command wrote into its worktree from the main tree: said under every
+    /// list of them - merged, or settled by hand and handed.
+    /// </summary>
+    private const string ReadAgain = "the agent's session must read these again before it writes them: a write made from what it held before would fold as its "
+        + "change, over what the main tree brought";
 
     /// <summary>The last of a refusal's lines where paths merge clean that nobody named: the command that takes them, with every option given.</summary>
     /// <param name="count">How many paths merge clean and were not named.</param>

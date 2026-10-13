@@ -585,24 +585,20 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
-    /// What a fold does today with a path named --settled is leave it out and record nothing, so the agent's seed goes on
-    /// naming what it shared before: here what its own earlier fold wrote, where a sibling's change and its own then met and
-    /// were reconciled in the main tree by hand. Its copy brought to the main tree's bytes by hand - nothing else brings it
-    /// the reconciliation - is then the file the main tree commits, and its base moves onto it; once the main tree moves the
-    /// path again, a refresh refuses it as the agent's change, though git finds it no other than the main tree's file at its
-    /// previous base. One of the two ways the tool itself leaves a seed that no longer says what an agent holds, stated as
-    /// it stands: a fold that hands and records what --settled names replaces this test with one whose refresh hands the
-    /// path.
+    /// A path both an agent's later fold and a sibling's change met at, reconciled in the main tree by hand and named with
+    /// --settled: the fold hands the agent the reconciliation and records it, so the agent's copy is the main tree's, its
+    /// seed says so, and once the main tree is committed, its base moved onto it and the main tree moves the path again, a
+    /// refresh hands it. (At 0.6.13 the fold recorded nothing, the copy by hand that followed left the seed naming what
+    /// neither tree held, and the refresh refused the path as the agent's change.)
     /// </summary>
     [Fact]
-    public async Task APathSettledByHandAndBroughtToTheMainTreesBytes_WhichTheMainTreeThenMoves_IsRefusedAsTheAgentsChange()
+    public async Task APathSettledByHand_WhichTheMainTreeThenMoves_IsHandedByARefresh()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
         var worktree = await kit.CreateAgentAsync("ag");
         OrchestrationKit.Write(worktree, "b.txt", "two\nfirst pass\n");
         Assert.True((await kit.FoldAsync("ag", apply: true)).Succeeded);
-        var recorded = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"];
         await kit.Harness.CommitAllAsync(kit.Main, "the agent's fold", Token);
 
         // A sibling's change and the agent's own meet at the path, and the two are reconciled in the main tree by hand.
@@ -620,17 +616,15 @@ public sealed class AgentServiceTests
         var settled = await kit.FoldAsync("ag", apply: true, "b.txt");
 
         Assert.True(settled.Succeeded, OrchestrationKit.Describe(settled));
-        Assert.Contains("1 path(s) declared settled by hand, neither compared nor written:", settled.Details!);
-        Assert.Equal(recorded, kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"]);
-        Assert.Equal("two\nfirst pass\nsecond pass\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Contains("1 path(s) declared settled by hand: the main tree's copy handed to the agent and recorded as shared:", settled.Details!);
+        Assert.Equal("two\nfirst pass\nsibling edit\nsecond pass\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal(await DigestAsync(kit.Main, "b.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"]);
 
-        // The copy by hand that follows such a fold, the commit of what was folded, and the agent's base moved onto it.
-        File.Copy(Path.Combine(kit.Main, "b.txt"), Path.Combine(worktree, "b.txt"), overwrite: true);
+        // The commit of what was folded, and the agent's base moved onto it; then a sibling's change of the path, committed.
         await kit.Harness.CommitAllAsync(kit.Main, "the agent's second fold, reconciled", Token);
         var onto = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.True(onto.Succeeded, OrchestrationKit.Describe(onto));
-        var previous = kit.Record("ag").Base!;
 
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nfirst pass\nsibling edit\nsecond pass\nanother sibling\n");
         await kit.Harness.CommitAllAsync(kit.Main, "another sibling's fold", Token);
@@ -638,14 +632,12 @@ public sealed class AgentServiceTests
 
         Assert.True(moved.Succeeded, OrchestrationKit.Describe(moved));
         Assert.Contains("and 1 path(s) it shares with the main tree, handed to it or folded, stayed as its seed records them; refresh-agent hands it any the main tree moved since:", moved.Details!);
-        await kit.GitAsync(worktree, "diff", "--quiet", previous, "--", "b.txt");
 
-        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("b.txt"), apply: true, Token);
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("b.txt"), apply: true, Token);
 
-        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Equal("Agent 'ag' of 'o1' changed 1 of the path(s) to refresh - b.txt - and refreshing would undo those changes. Nothing was copied.", refused.Message);
-        Assert.Equal("two\nfirst pass\nsibling edit\nsecond pass\n", OrchestrationKit.Read(worktree, "b.txt"));
-        Assert.Equal(recorded, kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"]);
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Equal("two\nfirst pass\nsibling edit\nsecond pass\nanother sibling\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal(await DigestAsync(kit.Main, "b.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"]);
     }
 
     /// <summary>
@@ -1724,7 +1716,7 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>The digest a seed records for the file at <paramref name="relative"/> under <paramref name="root"/>.</summary>
-    private static async Task<string> DigestAsync(string root, string relative)
+    internal static async Task<string> DigestAsync(string root, string relative)
         => (await Core.FileSystem.FileContentHash.OfAsync(new HarnessFactory().FileSystem, Path.Combine(root, relative), Token)).Content;
 
     /// <summary>The real file system, except that one file cannot be copied, as while another program holds it.</summary>

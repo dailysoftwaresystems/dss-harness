@@ -1766,7 +1766,17 @@ public sealed partial class HelpTests
             + "of the bytes it shares where it keeps any, and the rows its folds applied - each that is there.",
             text,
             StringComparison.Ordinal);
-        Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "--settled <path> names a path you reconciled in the main tree by hand: once the rest is written, the main tree's copy - a file, or its "
+            + "absence - is handed to the agent, over only what was weighed there, and recorded as shared, so its next fold starts from the "
+            + "reconciliation.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "one only the agent changed is refused, since nothing was reconciled there and handing the main tree's copy would undo its change. It "
+            + "is not a --force.",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
         Assert.Contains($"  {ToolPackage.Command} refresh-agent <o> <a> [<path>... | --all] [--except <path>]...", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("      [--stale <path>]... [--apply]", result.StandardOutput, StringComparison.Ordinal);

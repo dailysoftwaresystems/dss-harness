@@ -534,7 +534,8 @@ public sealed class AgentFoldMergeTests
             OrchestrationKit.Write(kit.Main, path, Text((9, "MAIN 9")));
         }
 
-        OrchestrationKit.Write(worktree, Settled, "reconciled by hand\n");
+        OrchestrationKit.Write(worktree, Settled, "the agent's\n");
+        OrchestrationKit.Write(kit.Main, Settled, "reconciled by hand\n");
 
         var usage = await CliRunner.RunAsync(["fold-agent", "o1", Agent, "--merge", "../outside.txt"], Token, workingDirectory: kit.Main);
 
@@ -559,7 +560,8 @@ public sealed class AgentFoldMergeTests
             Assert.Equal(Text((2, "AGENT 2"), (9, "MAIN 9")), OrchestrationKit.Read(worktree, path));
         }
 
-        Assert.False(File.Exists(Path.Combine(kit.Main, Settled)));
+        Assert.Equal("reconciled by hand\n", OrchestrationKit.Read(kit.Main, Settled));
+        Assert.Equal("reconciled by hand\n", OrchestrationKit.Read(worktree, Settled));
     }
 
     /// <summary>
