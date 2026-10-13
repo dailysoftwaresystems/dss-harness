@@ -372,6 +372,7 @@ internal static class RunCommand
             Leg = leg.Name,
             Layout = work.Context.Layout,
             RunId = work.RunId.Value,
+            RunDirectory = work.RunDirectory,
 
             // A new segment each attempt, so resuming a run cannot record its work into the
             // attempt it is resuming.

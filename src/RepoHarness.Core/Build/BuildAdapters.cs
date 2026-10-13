@@ -211,7 +211,7 @@ public static class BuildAdapters
     }
 
     internal static string LogFor(BuildRequest request, string phase)
-        => Path.Combine(request.RunDirectory, request.Leg, phase + ".log");
+        => new LegRecords(request.RunDirectory, request.Leg).PhaseLog(phase);
 }
 
 /// <summary>Configures and builds a CMake project.</summary>

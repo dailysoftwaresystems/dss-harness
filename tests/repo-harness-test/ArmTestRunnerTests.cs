@@ -39,6 +39,23 @@ public sealed class ArmTestRunnerTests
         Assert.True(result.Duration > TimeSpan.Zero);
     }
 
+    /// <summary>
+    /// The run's log is named, in the arm's records, as every phase's log is named in a leg's: what lists the logs of
+    /// those records finds it, with its phase.
+    /// </summary>
+    [Fact]
+    public async Task ARunsLog_IsNamedAmongItsRecords_AsAPhasesLogIsNamedAmongALegs()
+    {
+        using var temp = new TempDirectory();
+        var records = new LegRecords(temp.Path, "native").Under(MutationRecords.ArmsDirectory, "charge-bound");
+
+        await RunAsync(Child("write-file", records, "{report}", Report));
+
+        Assert.Equal(
+            [new PhaseLogFile(ArmTestRunner.PhaseName, PhaseLogs.In(records, ArmTestRunner.PhaseName))],
+            new LegRecords(Path.GetDirectoryName(records)!, "charge-bound").Logs(new HarnessFactory().FileSystem));
+    }
+
     /// <summary>A report an earlier run left is removed before the run starts: a run that writes none is never judged by it.</summary>
     [Fact]
     public async Task AReportAnEarlierRunLeft_IsRemovedBeforeTheRun()

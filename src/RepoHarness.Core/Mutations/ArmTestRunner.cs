@@ -118,7 +118,7 @@ internal sealed class ArmTestRunner(PhaseRunner phaseRunner, IFileSystem fileSys
         ArgumentNullException.ThrowIfNull(request);
 
         var report = Path.Combine(request.RecordDirectory, ReportFileName);
-        var log = Path.Combine(request.RecordDirectory, PhaseName + ".log");
+        var log = PhaseLogs.In(request.RecordDirectory, PhaseName);
 
         _fileSystem.CreateDirectory(request.RecordDirectory);
 

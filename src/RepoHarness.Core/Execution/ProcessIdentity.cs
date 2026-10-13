@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Execution;
@@ -277,7 +278,7 @@ public static class ProcessHolders
     /// <param name="runId">Its run.</param>
     /// <param name="since">When it took what it holds, or asked for it.</param>
     public static string Describe(int processId, string runId, DateTimeOffset since)
-        => string.Create(CultureInfo.InvariantCulture, $"pid {processId}, run {runId}, since {since:u}");
+        => string.Create(CultureInfo.InvariantCulture, $"pid {processId}, {RunLine.Message(runId)}, since {since:u}");
 
     /// <summary>
     /// A holder whose record names <paramref name="machine"/>, as a line names it: as
@@ -292,7 +293,7 @@ public static class ProcessHolders
     public static string Describe(this IProcessIdentity identity, string machine, int processId, string runId, DateTimeOffset since)
         => identity.IsHere(machine)
             ? Describe(processId, runId, since)
-            : string.Create(CultureInfo.InvariantCulture, $"pid {processId} on another machine, run {runId}, since {since:u}");
+            : string.Create(CultureInfo.InvariantCulture, $"pid {processId} on another machine, {RunLine.Message(runId)}, since {since:u}");
 
     /// <summary>What is said when a dead holder's <paramref name="what"/> is taken back.</summary>
     /// <param name="what">What it held, as a line names it.</param>

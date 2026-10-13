@@ -78,6 +78,26 @@ public sealed class BuildServiceTests
     }
 
     /// <summary>
+    /// Each phase of a build writes its log among the leg's records as their one owner names a phase's log, so what
+    /// lists a leg's logs finds every one of them, with its phase.
+    /// </summary>
+    [Fact]
+    public async Task ABuildsPhaseLogs_AreFoundAmongTheLegsRecords_EachWithItsPhase()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var request = Request(temp, outputs: ["bin/app.dll"]);
+        var (service, factory) = await TrackedWithFactoryAsync(temp, token);
+
+        var result = await service.BuildAsync(Config(), request, token);
+
+        Assert.NotEmpty(result.Phases);
+        Assert.Equal(
+            [.. result.Phases.Select(phase => new PhaseLogFile(phase.Phase, phase.LogFile)).OrderBy(log => log.Phase, StringComparer.Ordinal)],
+            new LegRecords(request.RunDirectory, request.Leg).Logs(factory.FileSystem));
+    }
+
+    /// <summary>
     /// A build records what its directory came to, from the walk it already makes of it, so that the room
     /// its next build from clean needs - and a first build of its variant in another copy - is known without
     /// walking the directory again.

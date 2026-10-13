@@ -3,7 +3,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
-using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Runners;
@@ -113,7 +112,9 @@ public sealed class RunSegmentRecord
 /// The record lives beside the run's logs, under the run's own directory, so it travels with the
 /// evidence it describes: a record kept elsewhere outlives the logs that would explain it, and a
 /// resumed run then skips units whose output nobody can find. That directory is in the tree the run
-/// was started from, so a run is resumed from that same tree.
+/// was started from, so a run is resumed from that same tree. It is the directory the work was given, as its
+/// logs' is (<see cref="Execution.LegRecords"/>), and never one composed again from a layout: a leg whose work
+/// happens in another tree keeps this record with its run's all the same.
 /// </remarks>
 public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
 {
@@ -135,8 +136,7 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
     private readonly IHarnessOutput _output = output;
 
     /// <summary>Where one leg's segment record lives, inside its run's directory.</summary>
-    /// <param name="layout">Resolved paths for this repository.</param>
-    /// <param name="runId">The run's id.</param>
+    /// <param name="runDirectory">The run's own directory, as the work was given it.</param>
     /// <param name="leg">The leg the record belongs to.</param>
     /// <remarks>
     /// Per leg, not per run. One run's legs run at once and are given one run id, and every leg of
@@ -144,28 +144,29 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
     /// already recorded, skips all of them, and reports that it passed work another machine did.
     /// The logs are already named this way, for the same reason.
     /// </remarks>
-    public static string RecordPath(HarnessLayout layout, string runId, string leg)
+    public static string RecordPath(string runDirectory, string leg)
     {
-        ArgumentNullException.ThrowIfNull(layout);
-        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(leg);
 
-        return Path.Combine(layout.RunDirectory(runId), $"{RecordPrefix}{FileNames.SafeFor(leg)}{RecordSuffix}");
+        return Path.Combine(runDirectory, $"{RecordPrefix}{FileNames.SafeFor(leg)}{RecordSuffix}");
     }
 
     /// <summary>
     /// The record of <paramref name="runId"/>, or an empty one when the run has no segments yet.
     /// </summary>
-    /// <param name="layout">Resolved paths for this repository.</param>
+    /// <param name="runDirectory">The run's own directory, as the work was given it.</param>
     /// <param name="runId">The run's id.</param>
     /// <exception cref="HarnessException">
     /// The record exists and could not be read. It is never treated as empty: that would silently
     /// repeat work already measured, and hide that the evidence of the first attempt is damaged.
     /// </exception>
     /// <param name="leg">The leg the record belongs to.</param>
-    public RunSegmentRecord Load(HarnessLayout layout, string runId, string leg)
+    public RunSegmentRecord Load(string runDirectory, string runId, string leg)
     {
-        var path = RecordPath(layout, runId, leg);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+
+        var path = RecordPath(runDirectory, leg);
 
         if (!_fileSystem.FileExists(path))
         {
@@ -193,14 +194,14 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
     /// <summary>
     /// Opens a new segment of <paramref name="runId"/> and returns the record it was added to.
     /// </summary>
-    /// <param name="layout">Resolved paths for this repository.</param>
+    /// <param name="runDirectory">The run's own directory, as the work was given it.</param>
     /// <param name="runId">The run's id.</param>
     /// <param name="leg">The leg the record belongs to.</param>
     /// <param name="segmentId">This attempt's id, unique within the run.</param>
     /// <param name="startedAt">When the attempt started.</param>
     /// <param name="cancellationToken">Stops the write.</param>
     public Task<RunSegmentRecord> BeginAsync(
-        HarnessLayout layout,
+        string runDirectory,
         string runId,
         string leg,
         string segmentId,
@@ -210,7 +211,7 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
         ArgumentException.ThrowIfNullOrWhiteSpace(segmentId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var record = Load(layout, runId, leg);
+        var record = Load(runDirectory, runId, leg);
 
         if (record.Segments.Any(segment => segment.SegmentId.Equals(segmentId, StringComparison.Ordinal)))
         {
@@ -221,7 +222,7 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
         }
 
         record.Segments.Add(new RunSegment { SegmentId = segmentId, StartedAt = startedAt });
-        Save(layout, record);
+        Save(runDirectory, record);
 
         if (record.Segments.Count > 1)
         {
@@ -240,7 +241,7 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
     /// case this record exists for, and a record written only on a clean exit is never written on
     /// the run that needed it.
     /// </remarks>
-    /// <param name="layout">Resolved paths for this repository.</param>
+    /// <param name="runDirectory">The run's own directory, as the work was given it.</param>
     /// <param name="runId">The run's id.</param>
     /// <param name="leg">The leg the record belongs to.</param>
     /// <param name="segmentId">The open segment's id.</param>
@@ -249,7 +250,7 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
     /// <param name="completedAt">When it finished.</param>
     /// <param name="cancellationToken">Stops the write.</param>
     public Task RecordCompletedAsync(
-        HarnessLayout layout,
+        string runDirectory,
         string runId,
         string leg,
         string segmentId,
@@ -262,11 +263,11 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
         ArgumentNullException.ThrowIfNull(outcome);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var record = Load(layout, runId, leg);
+        var record = Load(runDirectory, runId, leg);
         var segment = Segment(record, runId, segmentId);
 
         segment.Completed.Add(new RunSegmentUnit(unit, outcome, completedAt));
-        Save(layout, record);
+        Save(runDirectory, record);
 
         return Task.CompletedTask;
     }
@@ -275,14 +276,14 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
     /// Closes this segment, so a later invocation can tell an interrupted attempt from a finished
     /// one.
     /// </summary>
-    /// <param name="layout">Resolved paths for this repository.</param>
+    /// <param name="runDirectory">The run's own directory, as the work was given it.</param>
     /// <param name="runId">The run's id.</param>
     /// <param name="leg">The leg the record belongs to.</param>
     /// <param name="segmentId">The open segment's id.</param>
     /// <param name="endedAt">When the attempt ended.</param>
     /// <param name="cancellationToken">Stops the write.</param>
     public Task EndAsync(
-        HarnessLayout layout,
+        string runDirectory,
         string runId,
         string leg,
         string segmentId,
@@ -291,9 +292,9 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var record = Load(layout, runId, leg);
+        var record = Load(runDirectory, runId, leg);
         Segment(record, runId, segmentId).EndedAt = endedAt;
-        Save(layout, record);
+        Save(runDirectory, record);
 
         return Task.CompletedTask;
     }
@@ -309,9 +310,9 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
                 $"run '{runId}' has no segment '{segmentId}'; it was never opened.");
     }
 
-    private void Save(HarnessLayout layout, RunSegmentRecord record)
+    private void Save(string runDirectory, RunSegmentRecord record)
     {
-        var path = RecordPath(layout, record.RunId, record.Leg);
+        var path = RecordPath(runDirectory, record.Leg);
 
         _fileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
         _fileSystem.WriteAllTextAtomic(path, JsonSerializer.Serialize(record, SerializerOptions));

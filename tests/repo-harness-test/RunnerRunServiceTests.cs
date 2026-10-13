@@ -2431,6 +2431,43 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
+    /// Each step writes its log among the leg's records, in the directory of the run it was given, as their one owner
+    /// names a phase's log: what lists a leg's logs finds every one, with the name its step's log goes by, and the
+    /// leg's record of what it has done lies beside them, in that same run directory.
+    /// </summary>
+    [Fact]
+    public async Task EachStepsLog_IsFoundAmongTheLegsRecords_InTheRunDirectoryItWasGiven()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var factory = new HarnessFactory();
+        var runs = elsewhere.Combine("runs", RunId);
+
+        var runner = new RunnerConfig
+        {
+            Phases = [Phase("measure", "echo-args", ["one"]), Phase("census: all", "echo-args", ["two"])],
+        };
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, runner) with { RunDirectory = runs },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+
+        var records = new LegRecords(runs, Leg);
+
+        Assert.Equal(
+            [.. result.Phases.Select(phase => new PhaseLogFile(RunnerRunService.LogNameFor(phase.Phase), phase.LogFile)).OrderBy(log => log.Phase, StringComparer.Ordinal)],
+            records.Logs(factory.FileSystem));
+        Assert.Equal(2, records.Logs(factory.FileSystem).Count);
+        Assert.True(File.Exists(RunSegments.RecordPath(runs, Leg)));
+
+        // Nothing of the run is kept under the layout's own runs directory: the run directory is the one the work was given.
+        Assert.False(Directory.Exists(temp.Combine(".harness-config", "runs")));
+    }
+
+    /// <summary>
     /// A run line naming one of the leg's compilers is filled in with the program the leg's build identified, in an
     /// argument and as the line's own program alike: a runner's phase starts it as it starts any program, and its log
     /// names the whole path that ran.
@@ -2679,6 +2716,7 @@ public sealed class RunnerRunServiceTests
         Leg = Leg,
         Layout = new HarnessLayout(temp.Path, temp.Path),
         RunId = RunId,
+        RunDirectory = new HarnessLayout(temp.Path, temp.Path).RunDirectory(RunId),
         SegmentId = "s1",
         TreeRoot = temp.Path,
         ResolvedLegs = [Leg],

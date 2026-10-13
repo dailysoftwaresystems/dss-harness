@@ -298,7 +298,7 @@ public sealed class TestService(
 
         var (settings, invocation, cores, command, counter) = Command(config, request, built: true);
 
-        var logFile = Path.Combine(request.RunDirectory, request.Leg, request.PhaseName + ".log");
+        var logFile = new LegRecords(request.RunDirectory, request.Leg).PhaseLog(request.PhaseName);
         var (inputs, unmeasurable) = await ResolveInputsAsync(settings, request, cancellationToken).ConfigureAwait(false);
 
         var elapsed = Stopwatch.StartNew();

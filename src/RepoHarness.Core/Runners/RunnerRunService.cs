@@ -54,11 +54,18 @@ public sealed record RunnerRunRequest
     /// <summary>The leg, as the configuration names it and as the ledger shows it.</summary>
     public required string Leg { get; init; }
 
-    /// <summary>Resolved paths for this repository, which the action files and the segment record live under.</summary>
+    /// <summary>Resolved paths for this repository, which the action files and the runner's values and secrets live under.</summary>
     public required HarnessLayout Layout { get; init; }
 
-    /// <summary>This run's id, which every log path and the segment record are scoped to.</summary>
+    /// <summary>This run's id, which the segment record names and each step's working space is scoped to.</summary>
     public required string RunId { get; init; }
+
+    /// <summary>
+    /// Where this run's records go, already scoped to the run id: each step's log, in the leg's own directory there,
+    /// and the leg's segment record beside it. Given, as a build's and a test's are, and never composed from
+    /// <see cref="Layout"/>: the records stay with the run whichever tree the runner acts on.
+    /// </summary>
+    public required string RunDirectory { get; init; }
 
     /// <summary>
     /// This attempt's id, unique within the run. Supplied rather than generated, so that a caller
@@ -287,7 +294,7 @@ public sealed class RunnerRunService(
         Refuse(request, steps, values, scratch);
 
         var record = await _runSegments
-            .BeginAsync(request.Layout, request.RunId, request.Leg, request.SegmentId, DateTimeOffset.UtcNow, cancellationToken)
+            .BeginAsync(request.RunDirectory, request.RunId, request.Leg, request.SegmentId, DateTimeOffset.UtcNow, cancellationToken)
             .ConfigureAwait(false);
 
         var remaining = new HashSet<string>(record.Remaining(steps.Phases.Select(phase => phase.Name)), StringComparer.OrdinalIgnoreCase);
@@ -392,7 +399,7 @@ public sealed class RunnerRunService(
 
                 await _runSegments
                     .RecordCompletedAsync(
-                        request.Layout,
+                        request.RunDirectory,
                         request.RunId,
                         request.Leg,
                         request.SegmentId,
@@ -424,7 +431,7 @@ public sealed class RunnerRunService(
             + $"{LedgerReport.FormatDuration(elapsed.Elapsed)}");
 
         await _runSegments
-            .EndAsync(request.Layout, request.RunId, request.Leg, request.SegmentId, DateTimeOffset.UtcNow, cancellationToken)
+            .EndAsync(request.RunDirectory, request.RunId, request.Leg, request.SegmentId, DateTimeOffset.UtcNow, cancellationToken)
             .ConfigureAwait(false);
 
         var seen = await guards.CloseAsync(cancellationToken).ConfigureAwait(false);
@@ -453,7 +460,7 @@ public sealed class RunnerRunService(
                 Verdict = folded,
                 Outcome = RunOutcome.Failed(Verdicts.ExitCodeFor(folded.Verdict), folded.Detail),
             };
-        var union = _runSegments.Load(request.Layout, request.RunId, request.Leg).Union;
+        var union = _runSegments.Load(request.RunDirectory, request.RunId, request.Leg).Union;
 
         decided = Carried(decided, state, union);
 
@@ -1016,10 +1023,7 @@ public sealed class RunnerRunService(
                     Phase = phase.Name,
                     FileName = program,
                     Arguments = arguments,
-                    LogFile = Path.Combine(
-                        request.Layout.RunDirectory(request.RunId),
-                        request.Leg,
-                        LogNameFor(phase.Name) + ".log"),
+                    LogFile = new LegRecords(request.RunDirectory, request.Leg).PhaseLog(LogNameFor(phase.Name)),
                     WorkingDirectory = working,
                     Environment = EnvironmentFor(request, phase, values),
                     AppendToPath = request.ProgramDirectories,

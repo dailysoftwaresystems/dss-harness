@@ -196,6 +196,9 @@ internal sealed class MutationLegRunner(
         private readonly MutationSubject _subject = subject;
         private readonly LegWork _work = work;
         private readonly PlacedLeg _leg = work.Leg;
+
+        /// <summary>Where the run keeps this leg's records: each arm's and each control's are below them.</summary>
+        private readonly LegRecords _records = new(work.RunDirectory, work.Leg.Name);
         private readonly HarnessConfig _config = work.Context.Config;
         private readonly ConcurrentDictionary<string, ArmEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Lazy<Task<PristineOutcome>>> _controls = new(StringComparer.Ordinal);
@@ -661,7 +664,7 @@ internal sealed class MutationLegRunner(
                 await _runner._copies.SyncFetchedAsync(_fetched, worker, cancellationToken).ConfigureAwait(false);
 
                 _work.Progress($"worker {number}: building it whole");
-                var request = Request(number, worker, $"{MutationRecords.WorkersDirectory}/{number}", _subject.Project);
+                var request = Request(number, worker, _records.Named(MutationRecords.WorkersDirectory, $"{number}"), _subject.Project);
                 var baseline = Noted($"worker {number}'s build of the unmutated tree", await _runner._builder.BuildAsync(_config, request, cancellationToken).ConfigureAwait(false));
 
                 if (baseline.Verdict.Verdict != LegVerdict.Passed)
@@ -749,7 +752,7 @@ internal sealed class MutationLegRunner(
         private async Task<Driven> DriveArmAsync(int number, MutationArm arm, IWorkerGraph graph, CancellationToken cancellationToken)
         {
             var started = Stopwatch.GetTimestamp();
-            var records = Path.Combine(_work.RunDirectory, _leg.Name, MutationRecords.ArmsDirectory, arm.Id);
+            var records = _records.Under(MutationRecords.ArmsDirectory, arm.Id);
 
             try
             {
@@ -805,6 +808,7 @@ internal sealed class MutationLegRunner(
         {
             var worker = Worker(number);
             var buildDirectory = _leg.Variant.DirectoryUnder(worker);
+            var named = _records.Named(MutationRecords.ArmsDirectory, arm.Id);
             List<SiteState> sites;
             (ArmPreflight Preflight, byte[]? Control, string? Diagnostic, IReadOnlyList<string> Builds, IReadOnlyList<string> Outputs) flight;
 
@@ -851,7 +855,7 @@ internal sealed class MutationLegRunner(
                 var build = Noted(
                     $"the build of arm '{arm.Id}'",
                     await _runner._builder
-                        .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ArmsDirectory}/{arm.Id}", project), cancellationToken)
+                        .BuildAsync(_config, Request(number, worker, named, project), cancellationToken)
                         .ConfigureAwait(false));
 
                 observation = observation with { Build = Observe(build, before, buildDirectory, preflight.Dependents, graph) };
@@ -866,7 +870,7 @@ internal sealed class MutationLegRunner(
                     var controlBuild = Noted(
                         $"the build of the paired control of arm '{arm.Id}'",
                         await _runner._builder
-                            .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ArmsDirectory}/{arm.Id}/{MutationRecords.PairedControlDirectory}", project), cancellationToken)
+                            .BuildAsync(_config, Request(number, worker, _records.Named(MutationRecords.ArmsDirectory, arm.Id, MutationRecords.PairedControlDirectory), project), cancellationToken)
                             .ConfigureAwait(false));
 
                     observation = observation with { Control = Observe(controlBuild, controlBefore, buildDirectory, preflight.Dependents, graph) };
@@ -883,7 +887,7 @@ internal sealed class MutationLegRunner(
                         $"the run of arm '{arm.Id}'",
                         "which its bound is held against",
                         await _runner._tests
-                            .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ArmsDirectory}/{arm.Id}", worker, buildDirectory, graph.ProgramOf(arm.Runner).Path!, records, within, diagnostic), cancellationToken)
+                            .RunAsync(RunRequest(named, worker, buildDirectory, graph.ProgramOf(arm.Runner).Path!, records, within, diagnostic), cancellationToken)
                             .ConfigureAwait(false));
 
                     report = run.Run.Report.Read;
@@ -1084,7 +1088,8 @@ internal sealed class MutationLegRunner(
         {
             var worker = Worker(number);
             var buildDirectory = _leg.Variant.DirectoryUnder(worker);
-            var records = Path.Combine(_work.RunDirectory, _leg.Name, MutationRecords.ControlsDirectory, runner);
+            var records = _records.Under(MutationRecords.ControlsDirectory, runner);
+            var named = _records.Named(MutationRecords.ControlsDirectory, runner);
             var program = graph.ProgramOf(runner);
 
             // A runner that builds no program is each of its arms' pre-flight to say, as violated: there is nothing to control.
@@ -1100,7 +1105,7 @@ internal sealed class MutationLegRunner(
                 var build = Noted(
                     $"the build of the unmutated {runner}",
                     await _runner._builder
-                        .BuildAsync(_config, Request(number, worker, $"{MutationRecords.ControlsDirectory}/{runner}", _subject.Project.Retargeted([runner], graph.OutputsOf(runner))), cancellationToken)
+                        .BuildAsync(_config, Request(number, worker, named, _subject.Project.Retargeted([runner], graph.OutputsOf(runner))), cancellationToken)
                         .ConfigureAwait(false));
                 var observed = new ArmBuild(build.Verdict, [], []);
 
@@ -1113,7 +1118,7 @@ internal sealed class MutationLegRunner(
                     $"the run of the unmutated {runner}",
                     "which bounds the run of each of its arms",
                     await _runner._tests
-                        .RunAsync(RunRequest($"{_leg.Name}/{MutationRecords.ControlsDirectory}/{runner}", worker, buildDirectory, path, records, null, null), cancellationToken)
+                        .RunAsync(RunRequest(named, worker, buildDirectory, path, records, null, null), cancellationToken)
                         .ConfigureAwait(false));
 
                 return Decided(PristineJudge.Judge(runner, observed, run.Run, run.Duration, _subject.Settings.RunTimeFactor));
@@ -1250,21 +1255,24 @@ internal sealed class MutationLegRunner(
             return problems.Count == 0 ? null : string.Join("; ", problems);
         }
 
-        /// <summary>A build in worker <paramref name="number"/>, logged under <paramref name="records"/> within the leg's records.</summary>
+        /// <summary>
+        /// A build in worker <paramref name="number"/>, which goes by <paramref name="named"/> - the leg's name and where
+        /// below the leg's records its logs are kept (<see cref="LegRecords.Named"/>).
+        /// </summary>
         /// <remarks>
         /// Configured with the dependency sources the worker has, beneath what the project sets itself: never those in the
         /// leg's own build directory, which a clean of the leg removes and a build of it may fetch again meanwhile. What an
         /// earlier sweep's configure gave the worker's build directory is removed from its cache first, so it holds
         /// nothing a sweep no longer gives.
         /// </remarks>
-        private BuildRequest Request(int number, string worker, string records, ProjectConfig project)
+        private BuildRequest Request(int number, string worker, string named, ProjectConfig project)
             => _leg.BuildRequestFor(
                 _config,
                 _work.RunDirectory,
                 project.WithCacheVarsBeneath(FetchedSources.CacheVarsFor(_given, source => Kept(worker, source))),
                 _work.Time) with
             {
-                Leg = $"{_leg.Name}/{records}",
+                Leg = named,
                 TreeRoot = worker,
                 UnsetFirst = FetchedSources.Unset,
             };

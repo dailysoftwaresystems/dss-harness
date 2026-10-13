@@ -110,7 +110,7 @@ internal static class CommandRunner
 
             if (run is not null)
             {
-                output.Info(commandName, $"run {run.Value}");
+                output.Info(commandName, RunLine.Message(run));
             }
 
             try

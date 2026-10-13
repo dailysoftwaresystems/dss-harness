@@ -791,7 +791,7 @@ public sealed class BuildService(
         foreach (var compiler in identified)
         {
             var answer = await _compilerVersions
-                .AskAsync(compiler, Path.Combine(request.RunDirectory, request.Leg), environment, request.ProgramDirectories, cancellationToken)
+                .AskAsync(compiler, new LegRecords(request.RunDirectory, request.Leg).Directory, environment, request.ProgramDirectories, cancellationToken)
                 .ConfigureAwait(false);
 
             // An id whose version this build does not know how to put together, as CMake's own formula does,

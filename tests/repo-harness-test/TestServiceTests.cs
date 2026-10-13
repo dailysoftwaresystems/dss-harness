@@ -122,6 +122,27 @@ public sealed class TestServiceTests
         Assert.Equal("arm64", witness.Groups["processor"].Value);
     }
 
+    /// <summary>
+    /// The test's log is among the leg's records as their one owner names a phase's log, so what lists a leg's logs
+    /// finds it, with its phase.
+    /// </summary>
+    [Fact]
+    public async Task TheTestsLog_IsFoundAmongTheLegsRecords_WithItsPhase()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+
+        var result = await Service(factory).RunAsync(
+            Config(),
+            Request(temp, Child("All 3 tests passed")),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            [new PhaseLogFile(TestService.DefaultPhaseName, result.LogFile)],
+            new LegRecords(RunDirectory(temp), Leg).Logs(factory.FileSystem));
+    }
+
     [Fact]
     public async Task AnInputEditedMidRun_IsCaughtEvenWhenItIsRestoredBeforeTheEnd()
     {
