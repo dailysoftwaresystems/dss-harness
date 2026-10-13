@@ -862,23 +862,25 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
-    /// A leg another host ran was run there under a run of its own: its records are in that host's
-    /// directory, which the run names beside its own, in the text and on the leg's JSON line.
+    /// A leg another host ran was run there under a run of its own: its own directory of records and the logs in it are
+    /// named beside the run's - as the host spelled them - with the run the host named as it began, in the text and on
+    /// the leg's JSON line.
     /// </summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ALegAnotherHostRan_NamesThatHostsOwnDirectory(bool json)
+    public async Task ALegAnotherHostRan_NamesItsOwnRecordsAndTheRunTheHostRanItUnder(bool json)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         const string There = HostTree + "/.harness-config/runs/20260919-101500-0a1b2c3d";
+        const string Records = There + "/arm";
 
         var hosts = new ScriptedHostCommands((_, command) =>
         {
             ScriptedHostCommands.Answer(
                 command,
-                $$"""{"runDirectory": "{{There}}", "legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+                $$"""{"runDirectory": "{{There}}", "runId": "20260919-101500-0a1b2c3d", "legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1, "records": "{{Records}}", "logs": [{"phase": "build", "file": "{{Records}}/build.log"}, {"phase": "test", "file": "{{Records}}/test.log"}]}]}""");
 
             return HostResults.Finished(command, 0);
         });
@@ -899,10 +901,15 @@ public sealed class LegRunServiceTests
             var arm = document.RootElement.GetProperty("legs").EnumerateArray().Single(leg => leg.GetProperty("leg").GetString() == "arm");
 
             Assert.Equal(There, arm.GetProperty("runDirectory").GetString());
+            Assert.Equal("20260919-101500-0a1b2c3d", arm.GetProperty("hostRunId").GetString());
+            Assert.Equal(Records, arm.GetProperty("records").GetString());
+            Assert.Equal(
+                [("build", Records + "/build.log"), ("test", Records + "/test.log")],
+                arm.GetProperty("logs").EnumerateArray().Select(log => (log.GetProperty("phase").GetString(), log.GetProperty("file").GetString())));
         }
         else
         {
-            Assert.Contains($"logs of arm on ssh {HostName}: {There}", outcome.Details ?? [], StringComparer.Ordinal);
+            Assert.Contains($"logs of arm on ssh {HostName}: {Records} (build.log, test.log)", outcome.Details ?? [], StringComparer.Ordinal);
         }
     }
 
@@ -2799,6 +2806,101 @@ public sealed class LegRunServiceTests
 
         Assert.Equal("int a;\n", await File.ReadAllTextAsync(Path.Combine(somebodys, "mine", "a.c"), token));
         Assert.Equal(["mine"], Directory.GetFileSystemEntries(somebodys).Select(Path.GetFileName));
+    }
+
+    /// <summary>
+    /// A leg this machine ran names its own directory of records and the logs in it - the line said as its verdict is and
+    /// the run's closing line the same sentence - and its JSON holds them as <c>records</c> and <c>logs</c>, with no
+    /// <c>hostRunId</c>, which a leg here has not.
+    /// </summary>
+    [Fact]
+    public async Task ALegThisMachineRan_NamesItsOwnRecords_InItsVerdictLineItsClosingLinesAndItsJson()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLeg(harness);
+        var kept = new List<string>();
+
+        async Task<CommandOutcome> RunOnceAsync(bool json)
+            => await OutcomeAsync(
+                temp,
+                harness,
+                config,
+                SshAndLocal(harness),
+                new LegRunRequest(temp.Path, null, Json: json) { Workload = LegWorkload.BuildOnly },
+                loader: LocalOnlyLoader(config, temp.Path),
+                work: work =>
+                {
+                    var records = new LegRecords(work.RunDirectory, work.Leg.Name);
+
+                    Directory.CreateDirectory(records.Directory);
+                    File.WriteAllText(records.PhaseLog("configure"), "cmake\n");
+                    File.WriteAllText(records.PhaseLog("build"), "cc\n");
+                    File.WriteAllText(records.PhaseLog("test"), "tests\n");
+                    kept.Add(records.Directory);
+
+                    return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+                });
+
+        var asJson = await RunOnceAsync(json: true);
+
+        Assert.Equal(HarnessExit.Success, asJson.ExitCode);
+
+        var leg = Assert.Single(JsonDocument.Parse(Assert.Single(asJson.Data)).RootElement.GetProperty("legs").EnumerateArray());
+
+        Assert.Equal(kept[0], leg.GetProperty("records").GetString());
+        Assert.Equal(
+            [("build", "build.log"), ("configure", "configure.log"), ("test", "test.log")],
+            leg.GetProperty("logs").EnumerateArray().Select(log => (log.GetProperty("phase").GetString(), Path.GetFileName(log.GetProperty("file").GetString()))));
+        Assert.False(leg.TryGetProperty("hostRunId", out _));
+
+        var asText = await RunOnceAsync(json: false);
+
+        Assert.Equal(HarnessExit.Success, asText.ExitCode);
+
+        // The closing block's line, and the one said as the verdict is - the same sentence, prefixed as a leg's line.
+        Assert.Equal(
+            [$"logs of native: {kept[1]} (build.log, configure.log, test.log)"],
+            (asText.Details ?? []).Where(line => line.StartsWith("logs of ", StringComparison.Ordinal)).ToList(),
+            StringComparer.Ordinal);
+
+        var lines = (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+
+        Assert.Equal(
+            [$"test: native: logs of native: {kept[0]} (build.log, configure.log, test.log)", $"test: native: logs of native: {kept[1]} (build.log, configure.log, test.log)"],
+            lines.Where(line => line.Contains("logs of native", StringComparison.Ordinal)).ToList(),
+            StringComparer.Ordinal);
+    }
+
+    /// <summary>A leg refused before its work began kept no records: no line names any, and its JSON holds none.</summary>
+    [Fact]
+    public async Task ALegRefusedBeforeItsWork_NamesNoRecords()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLeg(harness);
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+
+        await using (await new RunLock(harness.FileSystem, harness.Output, harness.Identity).AcquireAsync(
+            layout,
+            new LockRequest { Host = HostId.Local.ToString(), Tree = temp.Path, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "fold-agent" },
+            TestContext.Current.CancellationToken))
+        {
+            var outcome = await OutcomeAsync(
+                temp,
+                harness,
+                config,
+                SshAndLocal(harness),
+                new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly },
+                loader: LocalOnlyLoader(config, temp.Path));
+
+            var leg = Assert.Single(JsonDocument.Parse(Assert.Single(outcome.Data)).RootElement.GetProperty("legs").EnumerateArray());
+
+            Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
+            Assert.False(leg.TryGetProperty("records", out _));
+            Assert.False(leg.TryGetProperty("logs", out _));
+            Assert.DoesNotContain("logs of native", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

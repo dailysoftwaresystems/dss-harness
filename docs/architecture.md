@@ -1477,9 +1477,10 @@ PowerShell there, which all read a leading `~` as the home.
 - **Every line of DssHarness's own**, whatever the command: a leg's reason, a lock or
   free-space message, a refusal, a failure line quoting git or the system, and under
   `--verbose` a defect's report.
-- **The paths in its ledger**: `runDirectory`, a leg's `detail` and `space`, what a timing
-  pattern matched, and the instance a developer environment was set up from. The machine that
-  asked prints that `runDirectory` in its `logs of <leg> on <host>:` line. A survey's answer
+- **The paths in its ledger**: `runDirectory`, a leg's `detail`, `records` and `space`, what a
+  timing pattern matched, and the instance a developer environment was set up from. The machine
+  that asked prints the host's `runDirectory` beside the leg's own records in its `logs of` lines.
+  A survey's answer
   names where each program is, the mount of a filesystem, and every reason the same way. The
   directories the programs were found in stay whole, because the machine that asked hands them
   back for a hold there to look for its command in; so does each build directory it asked
@@ -2514,9 +2515,15 @@ too (see *Mutation testing*). Each names its run from its first line, `run <id>`
 `--json`, on every exit: the run is begun before anything can refuse it, so a run refused before
 it had a directory - a leg nobody declared, a selection no host could take - is named too. It
 keeps no records, and its id is all there is to cite it by. A command line the parser itself
-refuses never started, and names none. A leg another host ran was run there under a run of its own, and its
-line names that host's directory, as `logs of <leg> on <host>: <directory>` and as the leg's own
-`runDirectory`, with the host's home written as `~` (see "A host's home is `~`").
+refuses never started, and names none. Each leg that kept records has a `logs of` line of its own,
+said as its verdict is and again in the run's closing lines - the same sentence, one owner
+(`LegRecords.Said`) - naming the leg's own directory and the phase logs in it by name, in the
+order of their names; `--json` holds them as the leg's `records` and `logs`. A leg that kept none -
+refused, not admitted, skipped - has no line. A leg another host ran was run there under a run of
+its own: the dispatcher names it once, `<leg>: run <id> on <host>`, never relaying the host's own
+run line (a later one of that shape is a program's own output, and is relayed as it came), the
+leg's `--json` holds the id as `hostRunId`, and its records and logs arrive as the host spelled
+them, its home written as `~` (see "A host's home is `~`").
 
 ## Disk space
 
@@ -3760,7 +3767,11 @@ says for itself - that the legs are starting, where each starts, and each one's 
 said on both, each read twice. So the dispatcher keeps, rather than relays, the line a host's
 command ends on where it ended badly, with what follows it: it says how the leg ended itself, by
 the leg's line, or in the refusal it raises from what the host said, and a host's summary of its
-one leg would otherwise read as the run's own. Such a line is kept with at most 200 lines after
+one leg would otherwise read as the run's own. So too the first line of the host's command that
+reads as its own run line: the dispatcher says it once as the leg's, `<leg>: run <id> on <host>`,
+and never relays it - one command says one run of its own, not two - where a later line of that
+shape is a program's own output, a suite that runs this tool among them, and is relayed as it
+came. Such a line is kept with at most 200 lines after
 it: a command's failure is the last thing it says and never runs that long, so a line shaped as
 one with more after it was printed by the command's own work, and is shown, with what followed
 it, as it comes.
@@ -3805,9 +3816,10 @@ lin-gcc-release       inputs-moved      3m51s  2 inputs changed: config/c.lang.j
 vps-arm64-gcc-rel     skipped-unavailable      ssh vps: ssh could not connect
 ```
 
-Beneath it, `logs:` names where the run's records are, and each leg another host ran names
-that host's own; `--json` carries the same as `runDirectory`, at the top and on such a leg (see
-"Where a run's records live").
+Beneath it, `logs:` names where the run's records are, and each leg that kept records names its
+own directory and the logs in it; `--json` carries the run's directory as `runDirectory`, at the
+top and on such a leg, and the leg's own as `records` and `logs` (see "Where a run's records
+live").
 
 ## CI legs
 

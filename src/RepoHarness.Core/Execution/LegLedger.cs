@@ -104,6 +104,22 @@ public sealed record LegEntry
     public string? RunDirectory { get; init; }
 
     /// <summary>
+    /// The run a host ran the leg under, which the host's command named as it began: <see langword="null"/> for a leg
+    /// this machine ran, whose run is the reader's own.
+    /// </summary>
+    public RunId? HostRunId { get; init; }
+
+    /// <summary>
+    /// The directory the run kept this leg's own records in, as its machine spells it - a host's with its home as
+    /// <c>~</c> - wherever the leg ran. <see langword="null"/> for a leg that kept none: refused, not admitted,
+    /// skipped, before its work began.
+    /// </summary>
+    public string? Records { get; init; }
+
+    /// <summary>Each phase log in <see cref="Records"/>, by phase, in the order of their names.</summary>
+    public IReadOnlyList<PhaseLogFile>? Logs { get; init; }
+
+    /// <summary>
     /// The last lines the leg's last phase that did not pass printed, on either stream in the order they
     /// came, secrets masked: what a reader who cannot open its log - another host's, which stays on that
     /// host - needs first. Empty for a leg that passed, and for one whose every phase passed, whatever else
@@ -240,6 +256,12 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
     private readonly string _commandName = commandName;
     private readonly bool _dispatched = dispatched;
 
+    /// <summary>
+    /// Where each leg runs, as its starting line named the host: what names the leg's records where another machine ran
+    /// it. Said once, where the leg starts, for the machine that will say its records is the one that named its host.
+    /// </summary>
+    private readonly Dictionary<string, string> _where = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The command every line is reported under, so interleaved output stays attributable.</summary>
     public string CommandName => _commandName;
 
@@ -295,7 +317,13 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
     /// </param>
     public void Starting(string leg, string where, string worksIn = "")
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
         ArgumentException.ThrowIfNullOrWhiteSpace(where);
+
+        lock (_gate)
+        {
+            _where[leg] = where;
+        }
 
         if (!_dispatched)
         {
@@ -333,6 +361,20 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
         var said = LedgerReport.Marked(entry.Detail, entry.Tree, [], entry.Compilers, entry.DeveloperEnvironment, entry.Admission, testCountNote: null);
 
         Transition(entry.Leg, Verdicts.Display(entry.Verdict) + (said.Length > 0 ? $" ({said})" : string.Empty));
+
+        // Where the leg's own records are, said as its verdict is - and in the same words the run's closing lines say
+        // it, so the two cannot drift: a reader who follows the line finds the leg's logs, here or on a host.
+        if (entry.Records is { Length: > 0 } records)
+        {
+            string? where;
+
+            lock (_gate)
+            {
+                where = _where.GetValueOrDefault(entry.Leg) is { Length: > 0 } named && named != "local" && named != "this machine" ? named : null;
+            }
+
+            Transition(entry.Leg, LegRecords.Said(entry.Leg, where, records, [.. (entry.Logs ?? []).Select(log => Path.GetFileName(log.File))]));
+        }
     }
 
     /// <summary>

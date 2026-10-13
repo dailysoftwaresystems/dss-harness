@@ -120,6 +120,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         // The lines failure was read from, as they would be shown, held until the host has finished: see below.
         var held = new List<string>();
 
+        // The host's own run, which its command names as it begins: said once, as this leg's, and never relayed.
+        RunId? hostRun = null;
+
         // A transport that will not start leaves the host unavailable, raised as that by the runner
         // that starts it.
         var result = await _hostCommands.RunAsync(
@@ -159,6 +162,16 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                         // names the address it dialled, one the host's name resolved to, and the kept copy is
                         // the one that reaches the leg's reason, the ledger and --json.
                         line = HostProbes.AsConfigured(line, session.Connection);
+
+                        // The host's own run line, said here as this leg's - its leg before it, its host after it - and
+                        // never relayed: one command says one run of its own, not two. Any later one is a program's own
+                        // output - a suite that runs this tool prints one - and is relayed as it comes, below.
+                        if (hostRun is null && RunLine.TryRead(line, commandName, out var begun))
+                        {
+                            hostRun = begun;
+                            _output.Info(commandName, RunLine.OfLeg(leg.Name, begun, leg.Host.Host));
+                            return;
+                        }
 
                         // Kept, from the last failure line to the end: a command that refuses before any leg has a
                         // verdict leaves no entry, and its failure is then all it said about why - from its failure
@@ -339,6 +352,15 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
             // The host ran the leg under a run of its own, whose records are there: named so the
             // caller is told where, as it is for a leg this machine ran.
             RunDirectory = ledger?.RunDirectory,
+
+            // The run the host ran the leg under, as its command named it and its document says: a leg's reader cites
+            // it as this run's own id is cited.
+            HostRunId = ledger?.RunId is { } id && RunId.TryParse(id, out var under) ? under : null,
+
+            // The leg's own records in that run, and each phase log in them, as the host spelled their paths: its home
+            // as ~, for the host's ledger writes them through its own shorthand.
+            Records = entry.Records,
+            Logs = entry.Logs is null ? null : [.. entry.Logs.Select(log => new PhaseLogFile(log.Phase, log.File))],
             SkippedSteps = [.. entry.SkippedSteps ?? []],
             RanSteps = [.. entry.RanSteps ?? []],
             ManualSteps = [.. entry.ManualSteps ?? []],
@@ -386,6 +408,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <summary>The shape a host's ledger arrives in, read back by name rather than by position.</summary>
     /// <param name="Legs">Each leg's line.</param>
     /// <param name="RunDirectory">Where the host's own run keeps its records, when it got that far.</param>
+    /// <param name="RunId">The run the host's command named as it began, when it began one.</param>
     /// <param name="Verdict">
     /// The verdict of the host's run, which a run that reported on its legs names; <see langword="null"/> where
     /// something other than its legs ended it, as <see cref="LedgerReport"/> writes such a run.
@@ -393,6 +416,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     private sealed record RemoteLedger(
         [property: JsonPropertyName("legs")] IReadOnlyList<RemoteLedgerLeg>? Legs,
         [property: JsonPropertyName("runDirectory")] string? RunDirectory = null,
+        [property: JsonPropertyName("runId")] string? RunId = null,
         [property: JsonPropertyName("verdict")] string? Verdict = null);
 
     /// <summary>One leg's line of a host's ledger.</summary>
@@ -415,7 +439,9 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         BuildSpace? Space = null,
         IReadOnlyList<string>? KeptOutputs = null,
         AdmissionFact? Admission = null,
-        IReadOnlyList<RemoteLedgerArm>? Arms = null);
+        IReadOnlyList<RemoteLedgerArm>? Arms = null,
+        string? Records = null,
+        IReadOnlyList<PhaseLogFile>? Logs = null);
 
     /// <summary>One arm's line of a host's sweep, beneath its leg's.</summary>
     private sealed record RemoteLedgerArm(

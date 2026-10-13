@@ -515,20 +515,22 @@ public sealed class LegRunService(
             : CommandOutcome.Failed(exitCode, message, details);
 
     /// <summary>
-    /// Where a run's records are, as its text form says it: this run's directory, then the one each
-    /// leg another host ran keeps there, since a host runs a leg under a run of its own.
+    /// Where a run's records are, as its text form says it: this run's directory, then each leg's own directory of
+    /// records and the logs in it - a host's leg's as the host spelled it - since a host runs a leg under a run of its own.
     /// </summary>
     private static IEnumerable<string> Logs(string runDirectory, LedgerReport report, IReadOnlyList<PlacedLeg> placed)
     {
         yield return $"logs: {runDirectory}";
 
-        foreach (var line in report.Lines.Where(line => line.RunDirectory is { Length: > 0 }))
+        foreach (var line in report.Lines.Where(line => line.Records is { Length: > 0 }))
         {
-            var host = placed.FirstOrDefault(leg => leg.Name == line.Leg)?.Host.Host.ToString();
+            var host = placed.FirstOrDefault(leg => leg.Name == line.Leg)?.Host.Host;
 
-            yield return host is null
-                ? $"logs of {line.Leg}: {line.RunDirectory}"
-                : $"logs of {line.Leg} on {host}: {line.RunDirectory}";
+            yield return LegRecords.Said(
+                line.Leg,
+                host is { } named && named != HostId.Local ? named.ToString() : null,
+                line.Records!,
+                [.. (line.Logs ?? []).Select(log => Path.GetFileName(log.File))]);
         }
     }
 
@@ -920,13 +922,28 @@ public sealed class LegRunService(
         // The remedy a leg in place that ended inputs-moved is owed: where the command could have run it on a copy, one
         // name says how. Never for a leg that worked in one, nor under a command that takes no such option, whose reader
         // the remedy would send nowhere.
-        return entry.Verdict == LegVerdict.InputsMoved && !working.LocalCopy && !working.Dispatched && request.LocalTrees != LocalTrees.InPlace
-            ? entry with
+        if (entry.Verdict == LegVerdict.InputsMoved && !working.LocalCopy && !working.Dispatched && request.LocalTrees != LocalTrees.InPlace)
+        {
+            entry = entry with
             {
                 Detail = $"{entry.Detail}; the leg worked in '{working.TreeRoot}' itself - legs.{working.Name}.localCopy, "
                     + "defaults.localCopy for every leg, or --local-copy for one run, runs it on a copy a later write does not reach",
-            }
-            : entry;
+            };
+        }
+
+        // Where the leg's own records are, named on its line and in the ledger from what is there: this machine's run
+        // kept them, whatever tree the work happened in. A dispatched leg's are the host's to name, as its whole line is.
+        if (!working.Dispatched)
+        {
+            var records = new LegRecords(runDirectory, working.Name);
+            var logs = records.Logs(_fileSystem);
+
+            entry = _fileSystem.DirectoryExists(records.Directory)
+                ? entry with { Records = records.Directory, Logs = logs }
+                : entry with { Records = null, Logs = null };
+        }
+
+        return entry;
     }
 
     /// <summary>

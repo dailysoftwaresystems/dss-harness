@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Hosts;
 
 namespace RepoHarness.Core.Output;
 
@@ -28,6 +29,22 @@ public static class RunLine
     /// <summary>How a line names the run a record keeps as <paramref name="runId"/>, as <see cref="Message(RunId)"/> names one in hand.</summary>
     /// <param name="runId">The run's id, as the record wrote it.</param>
     public static string Message(string runId) => $"run {runId}";
+
+    /// <summary>
+    /// How the machine that dispatched <paramref name="leg"/> names the run the host it sent the leg to ran it under:
+    /// <c>&lt;leg&gt;: run &lt;id&gt; on &lt;host&gt;</c>.
+    /// </summary>
+    /// <param name="leg">The leg, as the configuration names it.</param>
+    /// <param name="hostRun">The run the host ran it under.</param>
+    /// <param name="host">The host that ran it.</param>
+    public static string OfLeg(string leg, RunId hostRun, HostId host)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+        ArgumentNullException.ThrowIfNull(hostRun);
+        ArgumentNullException.ThrowIfNull(host);
+
+        return $"{leg}: {Message(hostRun)} on {host}";
+    }
 
     /// <summary>
     /// Reads <paramref name="line"/> as the line <paramref name="command"/> says its own run in: the command, then

@@ -2576,10 +2576,16 @@ internal static class HelpCommand
         builder.AppendLine("run lock resolve back to the originating checkout. A run's records are the");
         builder.AppendLine("exception: they belong to the tree that ran it, so a run started inside a worktree");
         builder.AppendLine("writes them there, and build, test, run and check-mutations name the directory in");
-        builder.AppendLine("their output and as runDirectory in --json. A leg a host ran names that host's own");
-        builder.AppendLine($"directory, its home written as ~ (see '{ToolPackage.Command} help legs'). Each names its run");
+        builder.AppendLine("their output and as runDirectory in --json. Each leg that kept records has a line of");
+        builder.AppendLine("its own naming its directory and the logs in it - 'logs of <leg>[ on <host>]' - as its");
+        builder.AppendLine("verdict is said and in the run's closing lines, and as records and the phase logs as");
+        builder.AppendLine("logs in --json, a host's paths with its home written as ~ (see");
+        builder.AppendLine($"'{ToolPackage.Command} help legs'). Each names its run");
         builder.AppendLine("too, in its first line, 'run <id>', and as runId in --json, however it ended: a run");
         builder.AppendLine("refused before it had a directory keeps no records, and is cited by that id alone.");
+        builder.AppendLine("A host runs a leg under a run of its own: the dispatcher names it once, '<leg>: run");
+        builder.AppendLine("<id> on <host>', never relaying the host's own line, and the leg's --json holds it as");
+        builder.AppendLine("hostRunId.");
         builder.AppendLine("Action files are tracked, so a worktree has its own and a runner acts on the tree it");
         builder.AppendLine("was asked about.");
 

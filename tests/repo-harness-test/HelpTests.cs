@@ -874,6 +874,25 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The layout topic says how a leg's records are named - the logs of line, and records and logs in --json - and how
+    /// the run a host ran a leg under is said: once, by the dispatcher, and as hostRunId.
+    /// </summary>
+    [Fact]
+    public async Task LayoutTopic_SaysHowALegsRecordsAndAHostsRunAreNamed()
+    {
+        var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "Each leg that kept records has a line of its own naming its directory and the logs in it - 'logs of <leg>[ on <host>]' - as its verdict is said and in the run's closing lines, and as records and the phase logs as logs in --json, a host's paths with its home written as ~",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A host runs a leg under a run of its own: the dispatcher names it once, '<leg>: run <id> on <host>', never relaying the host's own line, and the leg's --json holds it as hostRunId.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
     /// <summary>build, test and run each take --local-copy and --in-place, one description for the three.</summary>
     [Theory]
     [InlineData("build")]

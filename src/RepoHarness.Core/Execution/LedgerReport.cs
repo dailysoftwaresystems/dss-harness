@@ -42,6 +42,18 @@ public sealed record LedgerLine(
     /// </summary>
     public string? RunDirectory { get; init; }
 
+    /// <summary>The run a host ran the leg under; <see langword="null"/> for a leg this machine ran.</summary>
+    public RunId? HostRunId { get; init; }
+
+    /// <summary>
+    /// The directory the run kept this leg's own records in, wherever the leg ran; <see langword="null"/> for a leg that
+    /// kept none.
+    /// </summary>
+    public string? Records { get; init; }
+
+    /// <summary>Each phase log in <see cref="Records"/>, by phase, in the order of their names; empty where none are.</summary>
+    public IReadOnlyList<PhaseLogFile> Logs { get; init; } = [];
+
     /// <summary>The steps the leg's operating system does not run, by name.</summary>
     public IReadOnlyList<string> SkippedSteps { get; init; } = [];
 
@@ -291,6 +303,9 @@ public sealed class LedgerReport
                     entry.Timings)
                 {
                     RunDirectory = entry.RunDirectory,
+                    HostRunId = entry.HostRunId,
+                    Records = entry.Records,
+                    Logs = entry.Logs ?? [],
                     SkippedSteps = entry.SkippedSteps,
                     RanSteps = entry.RanSteps,
                     ManualSteps = entry.ManualSteps,
@@ -603,6 +618,14 @@ public sealed class LedgerReport
 
                 // Only for a leg another host ran, whose records are in that host's own run.
                 RunDirectory = line.RunDirectory is null ? null : show(line.RunDirectory),
+
+                // The run a host ran the leg under, where another did.
+                HostRunId = line.HostRunId?.Value,
+
+                // Where the leg's own records are, wherever it ran, and each phase log in it by name: a host's paths as
+                // the host spelled them, its home as ~.
+                Records = line.Records is null ? null : show(line.Records),
+                Logs = line.Logs.Count > 0 ? line.Logs.Select(log => new { log.Phase, File = show(log.File) }) : null,
 
                 // Only where a step was left out for the leg's operating system.
                 SkippedSteps = line.SkippedSteps.Count > 0 ? line.SkippedSteps : null,

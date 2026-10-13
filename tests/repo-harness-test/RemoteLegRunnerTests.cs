@@ -152,6 +152,48 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// The host's own run line - which it names once, as it begins - is never relayed: the dispatcher says it as this
+    /// leg's, its leg before it and its host after it. A later line of the same shape is a program's own output - a
+    /// suite that runs this tool prints one - and is relayed as it came. The leg's entry carries the run the host named,
+    /// as its document says.
+    /// </summary>
+    [Fact]
+    public async Task TheHostsOwnRunLine_IsSaidAsTheLegs_NeverRelayed_AndLaterOnesAre()
+    {
+        const string HostRun = "20261012-150240-9f8e7d6c";
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(
+                command,
+                $$"""{"runId": "{{HostRun}}", "legs": [{"leg": "wsl-debug", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(
+                command,
+                0,
+                $"test: run {HostRun}\n"
+                + "test: step 'compile': cc -c a.c\n"
+                + "test: run 20261012-151200-deadbeef\n");
+        });
+
+        var shown = new StringWriter();
+        var relayed = new StringWriter();
+        var output = new ConsoleHarnessOutput(shown, relayed, verbose: false);
+
+        var entry = await new RemoteLegRunner(hosts, output)
+            .RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            $"test: wsl-debug: run {HostRun} on wsl Example-Linux" + Environment.NewLine,
+            shown.ToString());
+        Assert.DoesNotContain($"test: run {HostRun}", relayed.ToString(), StringComparison.Ordinal);
+        Assert.Contains("test: step 'compile': cc -c a.c", relayed.ToString(), StringComparison.Ordinal);
+        Assert.Contains("test: run 20261012-151200-deadbeef", relayed.ToString(), StringComparison.Ordinal);
+
+        Assert.Equal(HostRun, entry.HostRunId?.Value);
+    }
+
+    /// <summary>
     /// A WSL distribution's leg is sent with the drive its disk grows on, as this machine measured it - its build fills that
     /// drive, which the distribution's own room does not show - beside its command; a leg of any other host, and one whose
     /// drive this machine could not measure, is sent none.
