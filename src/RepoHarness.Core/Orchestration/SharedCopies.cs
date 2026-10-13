@@ -1,4 +1,5 @@
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Orchestration;
 
@@ -25,18 +26,13 @@ internal sealed record SharedCopy(string File, bool Holds);
 /// <param name="agent">The agent's name.</param>
 internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout layout, string agent)
 {
-    /// <summary>
-    /// The most bytes of one file that are kept: a file above it is recorded as shared and not kept, since no merge is
-    /// offered above that size either and a copy would serve nothing.
-    /// </summary>
-    public const long MostBytes = 16 * 1024 * 1024;
-
     /// <summary>The directory the copies are kept in.</summary>
     public string Directory { get; } = layout.SharedDirectory(agent);
 
     /// <summary>
     /// Keeps the bytes of the file at <paramref name="holding"/> under <paramref name="digest"/>, in place of any copy
-    /// already kept under it; a file above <see cref="MostBytes"/> is not kept.
+    /// already kept under it; a file above <see cref="TwoChanges.MostBytes"/> is recorded as shared and not kept, since no
+    /// merge is offered above that size either and a copy would serve nothing.
     /// </summary>
     /// <param name="digest">The SHA-256 the seed records, which <paramref name="holding"/> must hold.</param>
     /// <param name="holding">A file that holds those bytes: one of the two trees' copies.</param>
@@ -46,12 +42,41 @@ internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout la
     {
         try
         {
-            if (LengthOf(holding) > MostBytes)
+            if (LengthOf(fileSystem, holding) > TwoChanges.MostBytes)
             {
                 return null;
             }
 
             await VerifiedFileCopy.CopyAsync(fileSystem, holding, layout.SharedFile(agent, digest), digest, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return ex.Message.TrimEnd('.');
+        }
+    }
+
+    /// <summary>
+    /// Keeps <paramref name="contents"/>, bytes in hand that hash to <paramref name="digest"/>, under it: what a search of
+    /// the main tree's history found for a seed whose bytes no copy was kept of, so the search is made once.
+    /// </summary>
+    /// <param name="digest">The SHA-256 the seed records.</param>
+    /// <param name="contents">Bytes proved to hash to it.</param>
+    /// <param name="permissions">Writes the copy as a file that is not run.</param>
+    /// <param name="cancellationToken">Stops it before the copy is put in place.</param>
+    /// <returns>Why they could not be kept; null where they were, or where they are not those bytes or above the bound.</returns>
+    public async Task<string?> KeepAsync(string digest, byte[] contents, IFilePermissions permissions, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(contents);
+
+        if (contents.LongLength > TwoChanges.MostBytes || FileContentHash.Of(contents) != digest)
+        {
+            return null;
+        }
+
+        try
+        {
+            await VerifiedFileCopy.WriteAsync(fileSystem, permissions, contents, layout.SharedFile(agent, digest), executable: false, cancellationToken).ConfigureAwait(false);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -135,7 +160,9 @@ internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout la
     }
 
     /// <summary>How many bytes the file at <paramref name="path"/> holds, asked without reading them.</summary>
-    private long LengthOf(string path)
+    /// <param name="fileSystem">Opens the file.</param>
+    /// <param name="path">The file.</param>
+    internal static long LengthOf(IFileSystem fileSystem, string path)
     {
         using var stream = fileSystem.OpenRead(path);
         return stream.Length;

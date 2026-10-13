@@ -2109,10 +2109,12 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]... [--apply]");
         builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] [{FoldAllowances.SettledOption} <path>]...");
-        var allowances = $"[{FoldAllowances.SettledOption} <path>]... [{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
-        builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {allowances}");
-        builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] {allowances}");
-        builder.AppendLine("      [--discard-uncommitted]");
+        var paths = $"[{FoldAllowances.MergeOption} <path>]... [{FoldAllowances.SettledOption} <path>]...";
+        var rows = $"[{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
+        builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {paths}");
+        builder.AppendLine($"      {rows}");
+        builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] {paths}");
+        builder.AppendLine($"      {rows} [--discard-uncommitted]");
         builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--json]");
         builder.AppendLine($"  {command} {OrchestratorService.DeleteCommand} <o> [--delete-evidence]");
         builder.AppendLine();
@@ -2181,7 +2183,8 @@ internal static class HelpCommand
             + "worktree. Every path its status lists and every path it shares with the main tree - handed to it, or written or "
             + "removed by an earlier fold - goes in one list: its own, written; deleted, removed first, with the directories that "
             + "leaves empty, so a file it turned into a directory, or a directory into a file, makes room for what replaced it; "
-            + "inherited, shared and unchanged; already in the main tree; or settled. A shared path is compared with what "
+            + $"inherited, shared and unchanged; already in the main tree; merged, where both trees changed it and {FoldAllowances.MergeOption} "
+            + "names it; or settled. A shared path is compared with what "
             + "both trees held, any other with the blob at the agent's own base as git status compares, so a line-ending "
             + "conversion is no change, a changed mode is one, and a sibling's committed fold is never written over. What a fold "
             + "writes is recorded as shared: when a review sends the agent back, its later change of such a path - putting it back "
@@ -2191,6 +2194,20 @@ internal static class HelpCommand
             + "for a link, a repository of its own, or a path leading out of the main tree, where what the main tree holds is in "
             + "the way of what it writes - a file where a directory goes, or files the agent did not delete in a directory a file "
             + "replaces - and for an anchor registry the agent changed as a file: its rows go in through its rows directory only. "
+            + "A path both trees changed, each holding a file there that is not what both held, is still weighed in full: its "
+            + "refusal says what a three-way merge of the two gives - git's merge, of the forms git stores, from what both held, "
+            + "which for a shared path are the bytes kept beside the agent's seed, or found by their digest in the main tree's "
+            + "history where none were kept, and for any other its base's - clean, with the hunks each side brought; conflicting, "
+            + "with the conflicts shown; or none offered, with why - and names the command that takes the clean ones. "
+            + $"{FoldAllowances.MergeOption} <path>, once for each, takes a clean merge: written into both trees, the main tree's "
+            + "first, and recorded as shared once both hold it, so a fold that stopped between the two merges again to the same "
+            + "bytes. It is never taken unasked, a conflict never, and a clean textual merge proves nothing about the program: "
+            + "build and test the tree before you commit it, and have the agent's session read the file again before it writes "
+            + "it. Never merged, whatever is named: a deletion against a change, a path both trees made, a file git reads as "
+            + "binary or will not merge, one whose merge attribute asks for another merge, a file above 16 MiB, and an anchor "
+            + "registry; nor is the arm registry ever merged by line. Whether a file can be run is merged with its content: the "
+            + "merged file takes the bit of the side that "
+            + "changed it, and the bit alone never conflicts; Windows keeps no such bit, and none is read or set there. "
             + "--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force. A path this process "
             + "cannot look at is never read as absent: the fold fails, nothing written. A file of either tree that changed after "
             + $"it was weighed is never written over: the fold stops there, exit {HarnessExit.Incomplete}, and run again weighs it "

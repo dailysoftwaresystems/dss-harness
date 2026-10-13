@@ -611,7 +611,10 @@ public sealed class AgentServiceTests
         var met = await kit.FoldAsync("ag", apply: true);
 
         Assert.Equal(HarnessExit.Refused, met.ExitCode);
-        Assert.Contains("  'b.txt': the main tree changed it after it was handed to the agent, so writing the agent's copy would lose that change", met.Details!);
+        Assert.Contains(
+            "  'b.txt': the main tree changed it after it was handed to the agent, so writing the agent's copy would lose that change; a three-way merge "
+            + "of the two conflicts in 1 place(s), shown below: reconcile it by hand, then --settled b.txt",
+            met.Details!);
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nfirst pass\nsibling edit\nsecond pass\n");
 
         var settled = await kit.FoldAsync("ag", apply: true, "b.txt");

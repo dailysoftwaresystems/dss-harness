@@ -110,9 +110,9 @@ public sealed class SharedCopiesTests
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
-        var large = new byte[SharedCopies.MostBytes + 1];
+        var large = new byte[TwoChanges.MostBytes + 1];
         File.WriteAllBytes(Path.Combine(kit.Main, "large.bin"), large);
-        File.WriteAllBytes(Path.Combine(kit.Main, "at-the-bound.bin"), new byte[SharedCopies.MostBytes]);
+        File.WriteAllBytes(Path.Combine(kit.Main, "at-the-bound.bin"), new byte[TwoChanges.MostBytes]);
 
         var created = await kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "ag", "model-b", false, null, Token);
         var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;

@@ -1,4 +1,5 @@
 using RepoHarness.Core.Anchors;
+using RepoHarness.Core.Repository;
 
 namespace RepoHarness.Core.Orchestration;
 
@@ -10,8 +11,17 @@ namespace RepoHarness.Core.Orchestration;
 /// </summary>
 public sealed record FoldAllowances
 {
+    /// <summary>The option that takes a clean three-way merge of a path both trees changed.</summary>
+    public const string MergeOption = "--merge";
+
     /// <summary>The option that leaves out of the fold a path reconciled by hand.</summary>
     public const string SettledOption = "--settled";
+
+    /// <summary>
+    /// Paths both trees changed whose three-way merge, where it is clean, the fold may write into both:
+    /// <see cref="MergeOption"/>.
+    /// </summary>
+    public IReadOnlyList<string> Merge { get; init; } = [];
 
     /// <summary>Paths reconciled in the main tree by hand, left out of the fold: <see cref="SettledOption"/>.</summary>
     public IReadOnlyList<string> Settled { get; init; } = [];
@@ -27,19 +37,31 @@ public sealed record FoldAllowances
 
     /// <summary>The options given, as the command line names them, for a refusal that none of them may be given.</summary>
     public IReadOnlyList<string> Given =>
-        [.. new (string Option, int Count)[] { (SettledOption, Settled.Count), (AnchorBatchRequest.NewOption, New.Count), (AnchorBatchRequest.AcceptLostOption, AcceptLost.Count) }
+        [.. new (string Option, int Count)[]
+            {
+                (MergeOption, Merge.Count),
+                (SettledOption, Settled.Count),
+                (AnchorBatchRequest.NewOption, New.Count),
+                (AnchorBatchRequest.AcceptLostOption, AcceptLost.Count),
+            }
             .Where(option => option.Count > 0)
             .Select(option => option.Option)];
 
     /// <summary>
-    /// What is wrong with how they are spelt, before anything is read: a path that could name nothing in the tree, an id no
-    /// anchor could have, a cell that is not <see cref="AnchorRowCell.Form"/>; <see langword="null"/> where nothing is.
+    /// What is wrong with how they are spelt, before anything is read: a path that could name nothing in the tree, one
+    /// named both to be merged and as settled by hand, an id no anchor could have, a cell that is not
+    /// <see cref="AnchorRowCell.Form"/>; <see langword="null"/> where nothing is.
     /// </summary>
     public string? Problem()
     {
-        if (OrchestrationRules.PathsProblem(Settled, SettledOption) is { } path)
+        if ((OrchestrationRules.PathsProblem(Merge, MergeOption) ?? OrchestrationRules.PathsProblem(Settled, SettledOption)) is { } path)
         {
             return path;
+        }
+
+        if (MergedAndSettled(Merge, Settled) is { } both)
+        {
+            return both;
         }
 
         if (New.Select(AnchorRowCell.IdProblem).FirstOrDefault(problem => problem is not null) is { } id)
@@ -61,9 +83,28 @@ public sealed record FoldAllowances
     public IReadOnlyList<AnchorRowCell> LostCells =>
         [.. AcceptLost.Select(cell => AnchorRowCell.Parse(cell) ?? throw new InvalidOperationException($"'{cell}' is not {AnchorRowCell.Form}; its problem was not asked first.")).Distinct()];
 
+    /// <summary>
+    /// What is wrong where one path is named both with <see cref="MergeOption"/> and with <see cref="SettledOption"/>,
+    /// whichever command takes the two: they say opposite things of it. Null where none is.
+    /// </summary>
+    /// <param name="merge">The paths named to be merged.</param>
+    /// <param name="settled">The paths named as settled by hand.</param>
+    public static string? MergedAndSettled(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
+    {
+        ArgumentNullException.ThrowIfNull(merge);
+        ArgumentNullException.ThrowIfNull(settled);
+
+        var settledPaths = settled.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal);
+
+        return merge.Select(PathPatterns.Normalize).FirstOrDefault(settledPaths.Contains) is { } path
+            ? $"'{path}' is named with both {MergeOption} and {SettledOption}: a path is merged for you, or it was reconciled by hand, never both."
+            : null;
+    }
+
     /// <summary>The arguments that give them again, each as a command line takes it, for one a report names.</summary>
     public IEnumerable<string> Arguments() =>
-        Settled.SelectMany(path => new[] { SettledOption, OrchestrationReports.Argument(path) })
+        OrchestrationReports.PathArguments(MergeOption, Merge)
+            .Concat(OrchestrationReports.PathArguments(SettledOption, Settled))
             .Concat(New.Distinct(StringComparer.Ordinal).SelectMany(id => new[] { AnchorBatchRequest.NewOption, id }))
             .Concat(LostCells.SelectMany(cell => new[] { AnchorBatchRequest.AcceptLostOption, cell.ToString() }));
 }

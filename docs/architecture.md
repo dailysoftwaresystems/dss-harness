@@ -609,7 +609,7 @@ names a file - so a seed written before any copy was kept reads as it did, and h
 hashing it again, and counts only where it still hashes to its name. A command writes in one order: the trees, the
 kept copies, the seed, and then the prune of the copies to what that seed names (`AgentService.WriteSeed`, the one
 place a seed is written). Stopped anywhere, the seed never names a path the trees do not hold as recorded, and a copy
-the seed does not name goes at the next write. A file above 16 MiB (`SharedCopies.MostBytes`) is recorded and not
+the seed does not name goes at the next write. A file above 16 MiB (`TwoChanges.MostBytes`) is recorded and not
 kept. A copy that cannot be kept or pruned never fails the command that met it: the path is recorded all the same,
 and a line says why. list-orchestrator `--json` names the directory as each agent's `shared`.
 
@@ -670,7 +670,7 @@ inside the agent. Where git cannot say which a HEAD is, each fails, exit 20, say
 
 An agent's contribution is a measurement (`AgentFold`): its worktree's status, and every path it shares with the
 main tree whether its status lists it or not, less the shared paths left as they were. Each path goes in exactly one
-list - its own, deleted, inherited, already in the main tree, settled - or is refused, and one refusal refuses the whole
+list - its own, deleted, inherited, already in the main tree, merged, settled - or is refused, and one refusal refuses the whole
 fold before anything is written. A shared path is compared with what both trees held - a file, or its absence; any
 other with the blob at the agent's own base (`cat-file --batch-check`, one process), never the main tree's HEAD, which a
 sibling's committed fold moves, and the main tree is asked whether it moved from that base as git status would answer
@@ -686,13 +686,44 @@ the directories it empties, then every file written. A path reached through a li
 its own - a submodule, or the agent's own - what the main tree holds in the way of the agent's files (a file where one
 needs a directory, or files the agent did not delete in a directory one replaces), a HEAD off the base and a move of
 the base stopped part way are refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
-against the registry the fold would otherwise have written over. `--settled` is the one way out of a path's refusal, asked before the deletion branch so a
+against the registry the fold would otherwise have written over. `--settled` is the way out of any path's refusal -
+`--merge` only of a path whose merge is clean - asked before the deletion branch so a
 deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. A path the main
 tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
 cannot look at is never read as absent, which would take the agent's file for its deletion: the fold fails before
 anything is written. A file of either tree that changed after it was weighed is never written over: the agent's copy is
 refused where it no longer holds the SHA-256 weighed (`VerifiedFileCopy`), and the main tree's file is weighed again
 before each write and each removal. The fold stops there, exit 21, for a run again to weigh it anew.
+
+A path both trees changed - each holds a file there, neither is what the two last agreed on, and they differ - is
+resolved in one place, whichever command meets it (`TwoChanges`, made for each command with that command's
+`TwoChangePolicy`: the arm registry's path, the anchor registries' and the paths named with `--merge`). Every such
+path is weighed in full before anything is written, asked for or not, and what a three-way merge of it gives ends
+the path's refusal: clean, with the hunks each side brought; conflicting, with the conflicts shown under the
+refusals; or none offered, with why - one of a closed list (`NoMerge`) that owns each reason's sentence, so no
+command words one itself. The refusal then names the command that takes the clean ones. Asking, `--merge <path>`
+once for each, changes one thing: a clean merge is taken. None is offered for a deletion against a change, a path
+both trees made with nothing either held there before, a file above 16 MiB (`TwoChanges.MostBytes`, the bound a
+kept copy has too), one whose `merge` attribute asks for another merge than git's own of text, or one git reads as
+binary or will not merge; and an anchor registry, which changes only through the rows an agent files, and the arm
+registry are never merged by line. What both held is, for a path the agent shares, the bytes kept under the digest
+its seed records, used only where they still hash to it; where the seed was written by a build that kept none, the
+versions of the path in the main tree's history are read (`ListHeldInHistoryAsync`, at most 64 among the last 512
+commits that changed it), each as its commit holds it and then as a checkout writes it, and the first that hashes
+to the recorded digest is taken - kept by a run that goes on to write, so it is looked for once, and never by a dry
+run. For any other path it is the blob at the agent's base. Nothing is merged against a guess: where neither gives
+it, no merge is offered, and the line says why. A fold merges in the main tree's forms, since the same bytes go to
+both trees and one digest is then true of both. Whether a file can be run is merged with its content
+(`TwoChanges.MergedBit`): the merged bit is the one that differs from what both held, where either side's does. A
+bit has two values, so two sides that both changed it changed it alike, and it never conflicts by itself. What both
+held is the seed's record of the bit for a shared path - whichever source gave the bytes, since a kept copy is bytes
+under a digest and holds no bit - and the base's entry for any other (`ListEntriesAtAsync`, for those paths alone);
+each side's is its file's. Where the platform keeps no such bit, as on Windows, none is read, merged or set. A merged
+path is written after the fold's own writes: both trees' copies are asked to be what was weighed before either is
+written, the main tree's is written first, and the path is recorded as shared, at the merged bytes and bit, only once
+both hold it. Stopped between the two, the main tree holds the merge, the agent its own copy and the seed what both
+held before; the same command run again merges those again, and since every change of the agent's is already in the
+merge, comes to the same bytes. A tree that already holds what the merge gives is not written again.
 
 The rows an agent files (`AgentRows`) are read strictly - a directory for each anchor, a file for each cell, read
 as write-anchor reads a cell file - and applied through `IAnchorRegistryService.ApplyAsync`, which composes each

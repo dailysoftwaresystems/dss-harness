@@ -140,6 +140,7 @@ public sealed class AgentService(
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
+    private readonly IFilePermissions _permissions = permissions;
     private readonly IWorktreeService _worktrees = worktrees;
     private readonly RunLock _runLock = runLock;
     private readonly IAnchorRegistryLocator _anchorLocator = anchorLocator;
@@ -1120,9 +1121,9 @@ public sealed class AgentService(
             var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch.Unaccepted, "write them");
 
             return CommandOutcome.Ok(
-                $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, removes "
-                + $"{measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
-                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name)), .. line]);
+                $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
+                + $"{Merging(measured.Plan, "merges")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
+                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. line]);
         }
 
         // The agent's worktree is held too: a leg building in it would be writing what is being folded.
@@ -1145,10 +1146,10 @@ public sealed class AgentService(
             var written = await WriteAsync(context, layout, record, path, seed!, measured).ConfigureAwait(false);
 
             return written.Failure ?? CommandOutcome.Ok(
-                $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, removed "
-                + $"{measured.Plan.Deleted.Count} and applied {ReportText.Counted(written.Rows.Planned, "row")}; its worktree is kept, and what the fold wrote is "
+                $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
+                + $"{Merging(measured.Plan, "merged")}removed {measured.Plan.Deleted.Count} and applied {ReportText.Counted(written.Rows.Planned, "row")}; its worktree is kept, and what the fold wrote is "
                 + "recorded as shared, so a fold after a review weighs the agent's change of it",
-                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, written.Rows, layout.RowsDirectory(record.Name)), .. written.Notes, .. Records(layout, record)]);
+                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, written.Rows, layout.RowsDirectory(record.Name), applied: true), .. written.Notes, .. Records(layout, record)]);
         }
     }
 
@@ -1278,12 +1279,15 @@ public sealed class AgentService(
 
             return CommandOutcome.Ok(
                 $"dry run: deleting {Lower(Agent(record))} "
-                + (discard ? $"discards {ReportText.Counted(dry.Discarded.Count, "changed path")}, folding nothing" : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, removes {dry.Fold.Plan.Deleted.Count} and applies {ReportText.Counted(dry.Fold.Rows.Planned, "row")}")
+                + (discard
+                    ? $"discards {ReportText.Counted(dry.Discarded.Count, "changed path")}, folding nothing"
+                    : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, {Merging(dry.Fold.Plan, "merges")}removes {dry.Fold.Plan.Deleted.Count} and applies "
+                        + ReportText.Counted(dry.Fold.Rows.Planned, "row"))
                 + $", keeps its transcripts and {ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, then removes its worktree and its copies on hosts; {tail}",
                 [
                     .. discard
                         ? [$"{ReportText.Counted(dry.Discarded.Count, "changed path")} discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
-                        : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name)),
+                        : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name), applied: false),
                     evidence,
                     TranscriptsPlan(record),
                     .. line,
@@ -1337,7 +1341,7 @@ public sealed class AgentService(
                 }
 
                 seed = written.Seed;
-                lines.AddRange(OrchestrationReports.FoldAndRowLines(fold.Plan, written.Rows, layout.RowsDirectory(record.Name)));
+                lines.AddRange(OrchestrationReports.FoldAndRowLines(fold.Plan, written.Rows, layout.RowsDirectory(record.Name), applied: true));
                 lines.AddRange(written.Notes);
             }
 
@@ -1351,14 +1355,23 @@ public sealed class AgentService(
                 if (!discard)
                 {
                     // Nothing may be left to fold: the removal discards the worktree's uncommitted work on this measurement alone.
-                    var after = await _fold.MeasureAsync(context.Layout.MainCheckoutRoot, path, record.Base!, seed!, allowances.Settled, Floor(context), CancellationToken.None).ConfigureAwait(false);
+                    var after = await _fold.MeasureAsync(
+                        context.Layout.MainCheckoutRoot,
+                        path,
+                        record.Base!,
+                        seed!,
+                        allowances.Settled,
+                        TwoChangePolicy.Of(context, allowances.Merge),
+                        Changes(context, layout, record.Name, keeping: true),
+                        Floor(context),
+                        CancellationToken.None).ConfigureAwait(false);
 
                     if (!after.NothingLeft)
                     {
                         return CommandOutcome.Failed(
                             HarnessExit.Incomplete,
                             $"{Agent(record)} was not deleted: after its fold was written, it still differs from the main tree - "
-                            + $"{ReportText.Listed([.. after.Written, .. after.Deleted, .. after.Refusals])}. {what}, and its worktree is kept; nothing was removed.",
+                            + $"{ReportText.Listed([.. after.Written, .. after.Merged.Select(merge => merge.Path), .. after.Deleted, .. after.Refusals])}. {what}, and its worktree is kept; nothing was removed.",
                             [.. lines, .. Records(layout, record)]);
                     }
                 }
@@ -1859,11 +1872,23 @@ public sealed class AgentService(
         var main = context.Layout.MainCheckoutRoot;
         var verb = deleting ? "deleted" : "folded";
         var nothing = deleting ? "Nothing was written or removed." : "Nothing was written.";
+        var policy = TwoChangePolicy.Of(context, allowances.Merge);
         FoldPlan plan;
 
         try
         {
-            plan = await _fold.MeasureAsync(main, path, record.Base!, seed, allowances.Settled, Floor(context), cancellationToken).ConfigureAwait(false);
+            // What a search of the main tree's history finds for a seed with no kept copy is kept by a run that goes on to
+            // write, never by a dry run, which writes nothing.
+            plan = await _fold.MeasureAsync(
+                main,
+                path,
+                record.Base!,
+                seed,
+                allowances.Settled,
+                policy,
+                Changes(context, layout, record.Name, keeping: mode != AnchorBatchMode.Plan),
+                Floor(context),
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -1874,10 +1899,8 @@ public sealed class AgentService(
 
         // A registry the agent changed as a file would be written over by the fold and then changed again by its rows, which
         // were weighed against the registry before the fold wrote it: an agent's rows go in through its rows directory only.
-        var registries = new[] { context.Config.Anchors.PendingAnchorsPath, context.Config.Anchors.DoneAnchorsPath }
-            .Select(AnchorRegistryLocator.Normalize)
-            .ToHashSet(StringComparer.Ordinal);
-        var filedAsFiles = plan.Written.Concat(plan.Deleted).Where(registries.Contains).Order(StringComparer.Ordinal)
+        // The policy never takes a merge of one, and a merged one would be refused here all the same.
+        var filedAsFiles = plan.Written.Concat(plan.Deleted).Concat(plan.Merged.Select(merge => merge.Path)).Where(policy.AnchorRegistries.Contains).Order(StringComparer.Ordinal)
             .Select(changed => $"'{changed}' is an anchor registry, which a fold changes only through the rows the agent files in "
                 + $"'{layout.RowsDirectory(record.Name)}', never as a file: file its rows there instead, or reconcile the file by hand")
             .ToList();
@@ -1922,10 +1945,22 @@ public sealed class AgentService(
             what.Add($"{ReportText.Counted(rowsPlan.Batch.Problems.Count, "problem")} with its rows");
         }
 
+        // The command that names every path whose merge is clean and that nobody asked for, beside what this one was given.
+        var merging = plan.Mergeable.Count == 0
+            ? null
+            : OrchestrationReports.Line(
+                deleting ? DeleteCommand : FoldCommand,
+                [record.Orchestrator, record.Name, .. (allowances with { Merge = [.. allowances.Merge, .. plan.Mergeable] }).Arguments()]);
+
         return new Measured(plan, request, all, rowsPlan, CommandOutcome.Refused(
             $"{Agent(record)} was not {verb}: {string.Join(", and ", what)}. {nothing}",
-            [.. OrchestrationReports.RefusalLines(plan, rowsPlan, layout.RowsDirectory(record.Name))]));
+            [.. OrchestrationReports.RefusalLines(plan, rowsPlan, layout.RowsDirectory(record.Name), merging)]));
     }
+
+    /// <summary>How many paths a fold merges, as its summary says it between what it writes and what it removes; nothing where it merges none.</summary>
+    /// <param name="plan">The fold measured.</param>
+    /// <param name="verb">"merges", of a fold to come; "merged", of one written.</param>
+    private static string Merging(FoldPlan plan, string verb) => plan.Merged.Count == 0 ? string.Empty : $"{verb} {plan.Merged.Count}, ";
 
     /// <summary>
     /// The agent's rows as a fold weighs them: those it declares anew - or never had applied - planned or checked as
@@ -2035,7 +2070,9 @@ public sealed class AgentService(
         var plan = measured.Plan!;
         var applied = await _fold.ApplyAsync(main, path, plan).ConfigureAwait(false);
         IReadOnlyList<string> records = Records(layout, record);
-        var progress = $"after writing {applied.Written.Count} of {ReportText.Counted(plan.Written.Count, "path")} and removing {applied.Deleted.Count} of {plan.Deleted.Count}";
+        var progress = $"after writing {applied.Written.Count} of {ReportText.Counted(plan.Written.Count, "path")}"
+            + (plan.Merged.Count == 0 ? string.Empty : $", merging {applied.Merged.Count} of {plan.Merged.Count}")
+            + $" and removing {applied.Deleted.Count} of {plan.Deleted.Count}";
         SeedRecord folded;
         IReadOnlyList<string> notes;
 
@@ -2434,6 +2471,14 @@ public sealed class AgentService(
 
     /// <summary>The recorder of what <paramref name="agent"/> shares with the main tree, starting from <paramref name="seed"/>, its bytes kept beside its seed.</summary>
     private SharedLedger Ledger(OrchestratorLayout layout, string agent, SeedRecord seed) => new(seed, new SharedCopies(_fileSystem, layout, agent));
+
+    /// <summary>What measures a three-way merge of a path both trees changed, for one agent and one command.</summary>
+    /// <param name="context">The repository, whose main checkout's history is read where no copy of shared bytes was kept.</param>
+    /// <param name="layout">The agent's orchestrator.</param>
+    /// <param name="agent">The agent, whose kept copies are what both trees held at a shared path.</param>
+    /// <param name="keeping">Whether bytes found in that history are kept: true of a command that goes on to write.</param>
+    private TwoChanges Changes(HarnessContext context, OrchestratorLayout layout, string agent, bool keeping)
+        => new(_gitClient, _fileSystem, _permissions, new SharedCopies(_fileSystem, layout, agent), context.Layout.MainCheckoutRoot, keeping);
 
     /// <summary>
     /// Writes what <paramref name="ledger"/> recorded as the agent's seed, then prunes the bytes kept beside it to what that

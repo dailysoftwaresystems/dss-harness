@@ -17,11 +17,18 @@ internal static class OrchestrationArguments
 
     internal static Option<bool> Apply(string description) => new("--apply") { Description = description };
 
+    /// <summary>The option that takes a clean three-way merge of a path both trees changed: one name, whichever command takes it.</summary>
+    internal static Option<string[]> Merge(string description) => new(FoldAllowances.MergeOption) { HelpName = "path", Description = description };
 }
 
 /// <summary>The options that let a fold through what it otherwise refuses, which fold-agent and delete-agent both take.</summary>
 internal static class FoldOptions
 {
+    /// <summary>A path both trees changed, whose clean three-way merge the fold may write.</summary>
+    internal static Option<string[]> Merge { get; } = OrchestrationArguments.Merge(
+        "A path both trees changed whose three-way merge is clean, as the dry run says of it: the merged file is written into both trees and recorded as shared. "
+        + "Never taken unasked, and a clean textual merge proves nothing about the program. Once for each path.");
+
     /// <summary>A path reconciled in the main tree by hand, left out of the fold.</summary>
     internal static Option<string[]> Settled { get; } = new(FoldAllowances.SettledOption)
     {
@@ -46,6 +53,7 @@ internal static class FoldOptions
     /// <summary>Adds the options to <paramref name="command"/>, in the order its help lists them.</summary>
     internal static void AddTo(Command command)
     {
+        command.Options.Add(Merge);
         command.Options.Add(Settled);
         command.Options.Add(New);
         command.Options.Add(AcceptLost);
@@ -54,6 +62,7 @@ internal static class FoldOptions
     /// <summary>What <paramref name="result"/> lets a fold through.</summary>
     internal static FoldAllowances Read(ParseResult result) => new()
     {
+        Merge = result.GetValue(Merge) ?? [],
         Settled = result.GetValue(Settled) ?? [],
         New = result.GetValue(New) ?? [],
         AcceptLost = result.GetValue(AcceptLost) ?? [],

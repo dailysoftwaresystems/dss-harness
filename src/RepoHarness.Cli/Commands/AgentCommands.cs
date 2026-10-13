@@ -215,7 +215,8 @@ internal static class FoldAgentCommand
         var command = new Command(
             Name,
             "Fold a live agent's own changes into the main tree, then apply the anchor rows it filed: everything that refuses it is named before "
-            + "anything is written, the rows go in all or nothing, and a file of either tree that changed after it was weighed stops the fold "
+            + $"anything is written, a path both trees changed with what a three-way merge of it gives, which {FoldAllowances.MergeOption} takes where it is "
+            + "clean; the rows go in all or nothing, and a file of either tree that changed after it was weighed stops the fold "
             + $"part way (exit {HarnessExit.Incomplete}) rather than being written over or copied changed; its worktree is kept.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);

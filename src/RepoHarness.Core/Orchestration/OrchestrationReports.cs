@@ -148,9 +148,10 @@ public static class OrchestrationReports
         };
     }
 
-    /// <summary>What a fold would write, remove and leave out, every path it weighed in exactly one list.</summary>
+    /// <summary>What a fold would write, merge, remove and leave out - or did - every path it weighed in exactly one list.</summary>
     /// <param name="plan">A fold with no refusal.</param>
-    public static IEnumerable<string> FoldLines(FoldPlan plan)
+    /// <param name="applied">Whether the fold was written, rather than only measured.</param>
+    public static IEnumerable<string> FoldLines(FoldPlan plan, bool applied)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
@@ -169,8 +170,11 @@ public static class OrchestrationReports
         {
             int Of(IReadOnlyList<string> list) => list.Count(plan.Seeded.Contains);
 
+            // A fold that merges nothing says what it always said.
+            var merged = plan.Merged.Count == 0 ? string.Empty : $", {Of([.. plan.Merged.Select(merge => merge.Path)])} merged";
+
             yield return $"{ReportText.Counted(plan.Seeded.Count, "path")} it shares with the main tree, handed to it or folded before: {Of(plan.Written)} its own, "
-                + $"{Of(plan.Inherited)} inherited, {Of(plan.AlreadyIn)} already in the main tree, {Of(plan.Deleted)} deleted, {Of(plan.Settled)} settled";
+                + $"{Of(plan.Inherited)} inherited, {Of(plan.AlreadyIn)} already in the main tree, {Of(plan.Deleted)} deleted, {Of(plan.Settled)} settled{merged}";
         }
 
         yield return $"{ReportText.Counted(plan.Inherited.Count, "inherited path")} left out; {ReportText.Counted(plan.Written.Count, "path")} are its own:";
@@ -179,6 +183,22 @@ public static class OrchestrationReports
         {
             // Whether it was shared before, not whether the file is new: a file no agent was handed may be tracked all along.
             yield return plan.Seeded.Contains(path) ? $"  {path}" : $"  {path}   (not handed to it, nor folded before)";
+        }
+
+        if (plan.Merged.Count > 0)
+        {
+            // Never silent, and never taken for more than it is: git merged the text, and nobody has built it.
+            yield return $"{ReportText.Counted(plan.Merged.Count, "path")} both trees changed, merged three-way, "
+                + (applied ? "written into both trees and recorded as shared" : "to write into both trees and record as shared")
+                + " - a clean textual merge proves nothing about the program, so build and test the tree before you commit it:";
+
+            foreach (var merge in plan.Merged)
+            {
+                yield return $"  {merge.Path}   {merge.Listed}";
+            }
+
+            yield return "the agent's session must read these again before it writes them: a write made from what it held before would fold as its change, "
+                + "over what the main tree brought";
         }
 
         if (plan.Deleted.Count > 0)
@@ -202,9 +222,13 @@ public static class OrchestrationReports
         }
     }
 
-    /// <summary>Why a fold is refused, each path with its reason, and how a path reconciled by hand is let through.</summary>
+    /// <summary>
+    /// Why a fold is refused, each path with its reason and what a three-way merge of it gives, the conflicts of each that
+    /// conflicts, and how a path is let through: merged where its merge is clean, or reconciled by hand.
+    /// </summary>
     /// <param name="plan">A fold with refusals.</param>
-    public static IEnumerable<string> FoldRefusalLines(FoldPlan plan)
+    /// <param name="merging">The command that names every path whose merge is clean and was not asked for, quoted; null where there is none.</param>
+    public static IEnumerable<string> FoldRefusalLines(FoldPlan plan, string? merging)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
@@ -215,11 +239,22 @@ public static class OrchestrationReports
             yield return $"  {refusal}";
         }
 
+        foreach (var line in plan.Shown)
+        {
+            yield return line;
+        }
+
         yield return "A path the main tree changed is usually two agents on one file: by an uncommitted edit while the other's fold is in the "
-            + "tree, by a commit once it was committed. Merge this agent's change into the main tree by hand, then run again naming each "
-            + "path you reconciled with --settled <path>, which leaves just those paths out so the rest can go in. Run again without it, "
-            + "and the fold refuses the same way: merging by hand makes the main tree differ more from the agent's baseline, not less. "
-            + "--settled says you reconciled the path yourself; it is not a --force, and nothing is written for it.";
+            + $"tree, by a commit once it was committed. Where a three-way merge of the two is clean, {FoldAllowances.MergeOption} <path> writes it "
+            + "into both trees: it is never taken unasked, and a clean textual merge proves nothing about the program. Where it conflicts, or "
+            + "none is offered, merge this agent's change into the main tree by hand, then run again naming the path with --settled <path>, "
+            + "which leaves just that path out so the rest can go in: nothing is written for it, and run again without it, the fold refuses "
+            + "the same way. Neither is a --force: each names one path.";
+
+        if (merging is not null)
+        {
+            yield return $"to merge the {ReportText.Counted(plan.Mergeable.Count, "path")} that merge clean: {merging}";
+        }
     }
 
     /// <summary>
@@ -229,23 +264,25 @@ public static class OrchestrationReports
     /// <param name="plan">The fold, with no refusal; null where nothing is folded.</param>
     /// <param name="rows">The rows applied, or planned.</param>
     /// <param name="rowsDirectory">Where the agent files its rows.</param>
-    public static IEnumerable<string> FoldAndRowLines(FoldPlan? plan, AgentRowsPlan rows, string rowsDirectory)
+    /// <param name="applied">Whether the fold was written, rather than only measured.</param>
+    public static IEnumerable<string> FoldAndRowLines(FoldPlan? plan, AgentRowsPlan rows, string rowsDirectory, bool applied)
     {
         ArgumentNullException.ThrowIfNull(rows);
 
-        return (plan is null ? [] : FoldLines(plan)).Concat(RowReport(rows, rowsDirectory));
+        return (plan is null ? [] : FoldLines(plan, applied)).Concat(RowReport(rows, rowsDirectory));
     }
 
     /// <summary>Why a fold is refused, and its rows' problems where they have any: the one report of a refused measure.</summary>
     /// <param name="plan">The fold measured.</param>
     /// <param name="rows">The rows planned.</param>
     /// <param name="rowsDirectory">Where the agent files its rows.</param>
-    public static IEnumerable<string> RefusalLines(FoldPlan plan, AgentRowsPlan rows, string rowsDirectory)
+    /// <param name="merging">The command that names every path whose merge is clean and was not asked for, quoted; null where there is none.</param>
+    public static IEnumerable<string> RefusalLines(FoldPlan plan, AgentRowsPlan rows, string rowsDirectory, string? merging)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(rows);
 
-        return (plan.Refusals.Count > 0 ? FoldRefusalLines(plan) : FoldLines(plan)).Concat(rows.Batch.Succeeded ? [] : RowReport(rows, rowsDirectory));
+        return (plan.Refusals.Count > 0 ? FoldRefusalLines(plan, merging) : FoldLines(plan, applied: false)).Concat(rows.Batch.Succeeded ? [] : RowReport(rows, rowsDirectory));
     }
 
     private static IEnumerable<string> RowReport(AgentRowsPlan rows, string rowsDirectory)
@@ -341,6 +378,12 @@ public static class OrchestrationReports
     /// <param name="argument">One argument, as its command is to receive it.</param>
     internal static string Argument(string argument)
         => argument.Any(char.IsWhiteSpace) ? $"\"{argument}\"" : argument;
+
+    /// <summary>The arguments that name each of <paramref name="paths"/> with <paramref name="option"/>, each path once, as a command line takes them.</summary>
+    /// <param name="option">The option, given once for each path.</param>
+    /// <param name="paths">The paths it was given.</param>
+    internal static IEnumerable<string> PathArguments(string option, IEnumerable<string> paths)
+        => paths.Distinct(StringComparer.Ordinal).SelectMany(path => new[] { option, Argument(path) });
 
     /// <summary>A command line a message names, quoted: the tool, the command, and its arguments as given.</summary>
     /// <param name="command">The command.</param>

@@ -4,9 +4,11 @@ using System.Text.RegularExpressions;
 using RepoHarness.Core.Anchors;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
@@ -1610,6 +1612,52 @@ public sealed partial class HelpTests
             + "makes room for what replaced it",
             text,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says what a fold does with a path both trees changed: what a three-way merge of it gives
+    /// is said, a clean one is taken only where --merge names it, what is never merged, and that whether a file can be
+    /// run is merged with its content. The bound it names is the code's.
+    /// </summary>
+    [Fact]
+    public async Task OrchestratorsTopic_SaysWhatAFoldMerges_WhatItNeverMerges_AndHowTheBitIsMerged()
+    {
+        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Equal(0, result.ExitCode);
+
+        foreach (var command in new[] { "fold-agent", "delete-agent" })
+        {
+            Assert.Contains($"  {ToolPackage.Command} {command} <o> <a> [--apply] [--merge <path>]... [--settled <path>]...", result.StandardOutput, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("already in the main tree; merged, where both trees changed it and --merge names it; or settled", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "its refusal says what a three-way merge of the two gives - git's merge, of the forms git stores, from what both held, which for a shared "
+            + "path are the bytes kept beside the agent's seed, or found by their digest in the main tree's history where none were kept, and for any "
+            + "other its base's - clean, with the hunks each side brought; conflicting, with the conflicts shown; or none offered, with why - and names "
+            + "the command that takes the clean ones.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "--merge <path>, once for each, takes a clean merge: written into both trees, the main tree's first, and recorded as shared once both "
+            + "hold it, so a fold that stopped between the two merges again to the same bytes. It is never taken unasked, a conflict never, and a "
+            + "clean textual merge proves nothing about the program",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Never merged, whatever is named: a deletion against a change, a path both trees made, a file git reads as binary or will not merge, one "
+            + $"whose merge attribute asks for another merge, a file above {DiskSpace.Size(TwoChanges.MostBytes)}, and an anchor registry; nor is the "
+            + "arm registry ever merged by line.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Whether a file can be run is merged with its content: the merged file takes the bit of the side that changed it, and the bit alone never "
+            + "conflicts; Windows keeps no such bit, and none is read or set there.",
+            text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("mode is never merged", text, StringComparison.Ordinal);
     }
 
     [Fact]

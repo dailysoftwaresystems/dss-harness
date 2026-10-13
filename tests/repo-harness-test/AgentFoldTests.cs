@@ -83,7 +83,10 @@ public sealed class AgentFoldTests
         var refused = await kit.FoldAsync("ag", apply: true);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains("  'a.txt': the main tree changed it after it was handed to the agent, so writing the agent's copy would lose that change", refused.Details!);
+        Assert.Contains(
+            "  'a.txt': the main tree changed it after it was handed to the agent, so writing the agent's copy would lose that change; a three-way merge "
+            + "of the two conflicts in 1 place(s), shown below: reconcile it by hand, then --settled a.txt",
+            refused.Details!);
         Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
         Assert.Equal("one\nmain edit again\n", OrchestrationKit.Read(kit.Main, "a.txt"));
     }
@@ -160,7 +163,8 @@ public sealed class AgentFoldTests
         var refused = await kit.FoldAsync("ag", apply: true);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains(refused.Details!, line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal) && line.EndsWith("so writing the agent's copy would lose that change", StringComparison.Ordinal));
+        Assert.Contains(refused.Details!, line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal)
+            && line.EndsWith("so writing the agent's copy would lose that change; a three-way merge of the two conflicts in 1 place(s), shown below: reconcile it by hand, then --settled b.txt", StringComparison.Ordinal));
         Assert.Contains(refused.Details!, line => line.StartsWith("  'docs/x.md': the main tree changed it after the agent's base", StringComparison.Ordinal) && line.EndsWith("so removing it would lose that change", StringComparison.Ordinal));
 
         var applied = await kit.FoldAsync("ag", apply: true, "b.txt", "docs/x.md");
@@ -446,7 +450,8 @@ public sealed class AgentFoldTests
         var refused = await kit.FoldAsync("a2", apply: true);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains(refused.Details!, line => line.StartsWith("  'tests/new.c' is not at the agent's base", StringComparison.Ordinal) && line.EndsWith("and the main tree holds it", StringComparison.Ordinal));
+        Assert.Contains(refused.Details!, line => line.StartsWith("  'tests/new.c' is not at the agent's base", StringComparison.Ordinal)
+            && line.EndsWith("and the main tree holds it; no three-way merge is offered: both trees made it, and neither held a file there before", StringComparison.Ordinal));
         Assert.Equal("first\n", OrchestrationKit.Read(kit.Main, "tests/new.c"));
     }
 
