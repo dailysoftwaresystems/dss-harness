@@ -12,6 +12,7 @@ using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Runners;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Tools;
 
@@ -664,6 +665,64 @@ public sealed partial class CliEndToEndTests
         Assert.Equal(HarnessExit.Refused, nowhere.ExitCode);
         Assert.Contains("runs none of the steps this run names", nowhere.StandardError, StringComparison.Ordinal);
         Assert.Equal(begun, Directory.GetDirectories(runs).Length);
+    }
+
+    /// <summary>
+    /// A runner whose steps change the tree works in place whatever localCopy says - the leg's own key, the repository's
+    /// default, either - and is refused for a leg a host would run before any host is measured, and for --local-copy on
+    /// the command.
+    /// </summary>
+    [Fact]
+    public async Task ARunnerThatWritesTheTree_WorksInPlace_IsRefusedForALegAHostWouldRun_AndForLocalCopy()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            WslDistros = ["Ubuntu"],
+            Hosts = new HostsConfig { Wsl = { ["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" } } },
+            Defaults = new HarnessDefaults { LocalCopy = true },
+            Legs =
+            {
+                ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", LocalCopy = true },
+                ["distro"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Wsl = "Ubuntu" },
+            },
+            PredefinedRunners =
+            {
+                ["format"] = new RunnerConfig
+                {
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }],
+                },
+            },
+        });
+
+        var inPlace = await CliRunner.RunAsync(["run", "format", "--legs", "native", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.Success, inPlace.ExitCode);
+        Assert.Contains($"native: starting on local, in '{temp.Path}' itself", inPlace.StandardOutput, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetDirectories(Path.Combine(temp.Path, HarnessLayout.LegsDirectoryName)));
+
+        var onAHost = await CliRunner.RunAsync(["run", "format", "--legs", "distro", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.Refused, onAHost.ExitCode);
+        Assert.Contains(
+            "Runner 'format' writes the tree (writesTree), and leg 'distro' would work in a copy of it on wsl Ubuntu, "
+                + "which the next sync makes the tree again. Nothing was run. Run it on a leg this machine runs itself.",
+            onAHost.StandardError,
+            StringComparison.Ordinal);
+
+        var askedForACopy = await CliRunner.RunAsync(["run", "format", "--legs", "native", "--local-copy", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.UsageError, askedForACopy.ExitCode);
+        Assert.Contains(
+            "Runner 'format' writes the tree (writesTree), which --local-copy would have it write in a copy. Leave --local-copy out.",
+            askedForACopy.StandardError,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

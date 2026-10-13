@@ -264,9 +264,10 @@ dssharness host-exec --ssh mac-mini -- verify-git
 ```
 
 Where this machine runs a leg itself, it works in its tree or in a copy of it kept in the tree's
-`.legs`: said by `--local-copy` or `--in-place` on the command for one run, then by the leg's own
-`localCopy` - `false` on a leg turns a `true` default off for it - then by `defaults.localCopy`,
-and by none of them, its tree. The copy is made from the run's one reading of the tree and kept
+`.legs`: said by `--local-copy` or `--in-place` on the command for one run, then by a runner's
+`writesTree`, which works in place, then by the leg's own `localCopy` - `false` on a leg turns a
+`true` default off for it - then by `defaults.localCopy`, and by none of them, its tree. The copy
+is made from the run's one reading of the tree and kept
 warm between runs, so a fold, a commit or an edit while the leg runs ends nothing of the leg's;
 the first build in one starts cold, files git ignores are not in it, and `clean` removes it
 (`help legs`).

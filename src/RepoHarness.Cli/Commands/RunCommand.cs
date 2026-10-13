@@ -4,8 +4,9 @@ using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Legs;
-using RepoHarness.Core.Output;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
@@ -207,6 +208,36 @@ internal static class RunCommand
 
             var toolchains = context.Get<CMakeToolchainReader>();
 
+            // Where this run's own legs work, as the command's two options say - and as the runner says too: one that
+            // writes the tree works in place whatever the leg's own key or the repository's default says, for what it
+            // wrote in a copy the next sync would make the tree again. Both refusals are made here, as a leg that
+            // would run nothing is refused: before a host is measured, and naming every such leg.
+            var where = DispatchOptions.WhereWorkRuns(arguments);
+
+            if (runner.WritesTree)
+            {
+                if (where == LocalTrees.Copy)
+                {
+                    throw new HarnessException(
+                        HarnessExit.UsageError,
+                        $"Runner '{runnerName}' writes the tree (writesTree), which --local-copy would have it write "
+                        + "in a copy. Leave --local-copy out.");
+                }
+
+                var platform = context.Get<IHostPlatform>();
+
+                foreach (var leg in legs.Where(leg => !RunsHere(platform, leg.Leg)))
+                {
+                    throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"Runner '{runnerName}' writes the tree (writesTree), and leg '{leg.Name}' would work in a copy of "
+                        + $"it on {WhereItWouldRun(harness.Config, leg.Leg)}, which the next sync makes the tree again. "
+                        + "Nothing was run. Run it on a leg this machine runs itself.");
+                }
+
+                where = LocalTrees.InPlace;
+            }
+
             return await context.Get<LegRunService>()
                 .RunAsync(
                     Name,
@@ -222,15 +253,24 @@ internal static class RunCommand
                         RunnerRunService.RemoteArguments(runnerName, arguments.GetValue(TimeOption), inputs, manualSteps))
                     {
                         Workload = workload,
-                        LocalTrees = DispatchOptions.WhereWorkRuns(arguments),
+                        LocalTrees = where,
                     },
                     (work, token) => RunLegAsync(runners, builds, toolchains, runnerName, inputs, manualSteps, workload, work, token),
                     cancellationToken)
                 .ConfigureAwait(false);
         }, JsonOption));
-
         return command;
     }
+
+    /// <summary>Whether this machine would run <paramref name="leg"/> itself: no emulator, and its own system and processor.</summary>
+    private static bool RunsHere(IHostPlatform platform, LegConfig leg)
+        => leg.Emulator is null
+            && string.Equals(leg.Os, platform.PlatformKey, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(leg.Processor, platform.Processor, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The first host that would run <paramref name="leg"/> where this machine cannot, as a line names it.</summary>
+    private static string WhereItWouldRun(HarnessConfig config, LegConfig leg)
+        => LegPlacement.Candidates(config, leg).FirstOrDefault(host => host != HostId.Local)?.ToString() ?? "another machine";
 
     private static RunnerConfig Resolve(HarnessConfig config, string runnerName)
     {

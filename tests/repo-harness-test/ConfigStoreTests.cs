@@ -454,6 +454,23 @@ public sealed class ConfigStoreTests
         Assert.Null(config.Legs["there"].LocalCopy);
     }
 
+    /// <summary>A runner's writesTree reads as it is, and a runner that says nothing of it works wherever its legs do.</summary>
+    [Fact]
+    public void Load_ARunnerMaySayItWritesTheTree()
+    {
+        var config = LoadValid("""
+            {
+              "predefinedRunners": {
+                "format": { "phases": [ { "name": "tidy", "command": ["true"] } ], "writesTree": true },
+                "corpus": { "phases": [ { "name": "sweep", "command": ["true"] } ] }
+              }
+            }
+            """);
+
+        Assert.True(config.PredefinedRunners["format"].WritesTree);
+        Assert.False(config.PredefinedRunners["corpus"].WritesTree);
+    }
+
     [Fact]
     public void Load_AcceptsALegThatNamesNoHost_BecauseWhereItRunsIsMeasured()
     {

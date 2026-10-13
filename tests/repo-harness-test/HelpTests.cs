@@ -834,7 +834,8 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The legs topic says where a leg works - its tree, its host's copy, or its own in the tree's .legs - and the order
-    /// of precedence in one sentence: the command's option, the leg's own key, the default, the tree.
+    /// of precedence in one sentence: the command's option, a runner's writesTree, the leg's own key, the default, the
+    /// tree.
     /// </summary>
     [Fact]
     public async Task LegsTopic_SaysWhereALegWorks_AndTheOrderOfPrecedence()
@@ -844,13 +845,31 @@ public sealed partial class HelpTests
         Assert.Contains(
             "A leg a host runs works in that host's copy of its tree, whatever anything else says. A leg this machine runs "
                 + "itself works where the first of these says anything: --local-copy or --in-place on the command, for that run "
-                + "(build, test, run); the leg's own localCopy, true or false; defaults.localCopy, a default for every leg of the "
-                + "repository; and, where none says, its tree itself.",
+                + "(build, test, run); a runner's writesTree, which is in place ('help runners'); the leg's own localCopy, true "
+                + "or false; defaults.localCopy, a default for every leg of the repository; and, where none says, its tree itself.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
         Assert.Contains(
             "made from the run's one reading of the tree and kept warm between runs: a write the tree receives while the leg "
                 + "runs - a fold, a commit, an edit - ends nothing of the leg's",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The runners topic says what a writesTree runner does: its legs work in place whatever localCopy says, a leg a host
+    /// would run is refused before any host is measured, and so is --local-copy.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysWhatARunnerThatWritesTheTreeDoes()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "A runner whose steps change files of the tree says writesTree: its legs work in their trees themselves, "
+                + "whatever the leg's own localCopy or defaults.localCopy says ('help legs'), for what it wrote in a copy "
+                + "the next sync would make the tree again. A leg a host would run is refused before any host is measured, "
+                + "and so is --local-copy on the command.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
     }

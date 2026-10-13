@@ -1186,10 +1186,13 @@ failures compare.
 A leg's work happens in a tree, and which tree is not where it runs: a leg a host runs works in
 that host's copy of its tree, whatever anything else says. A leg this machine runs itself works
 where the first of these says anything - `--local-copy` or `--in-place` on the command, for that
-run of `build`, `test` or `run`; the leg's own `localCopy`, `true` or `false`; the repository's
-`defaults.localCopy`; and, where none says, its tree itself. The key is refused when the
-configuration is read on a leg that names a host, whichever value it gives, since a host's leg
-always works in that host's copy; the default never is, for it says nothing of such a leg. Where
+run of `build`, `test` or `run`; a runner's `writesTree`, which works in place, its legs refused
+before any host is measured for a leg a host would run and for `--local-copy`, since what it wrote
+in a copy the next sync would make the tree again; the leg's own `localCopy`, `true` or `false`;
+the repository's `defaults.localCopy`; and, where none says, its tree itself. The key is refused
+when the configuration is read on a leg that names a host, whichever value it gives, since a
+host's leg always works in that host's copy; the default never is, for it says nothing of such a
+leg. Where
 the leg works in a copy, the copy is kept in the tree's own `.legs` slot, one per tree and
 variant and named by the variant's key, made from the run's one reading of the tree as a host's
 copy is and kept warm between runs: its build directory is the variant's own within it, and a

@@ -649,6 +649,12 @@ internal static class HelpCommand
         builder.AppendLine("quiet one, the same day. A check whose own runner's watch cannot start was not");
         builder.AppendLine("run, and confirms nothing: the failure stays genuine, and the run fails.");
         builder.AppendLine();
+        builder.AppendLine("A runner whose steps change files of the tree says writesTree: its legs work in");
+        builder.AppendLine("their trees themselves, whatever the leg's own localCopy or defaults.localCopy");
+        builder.AppendLine("says ('help legs'), for what it wrote in a copy the next sync would make the tree");
+        builder.AppendLine("again. A leg a host would run is refused before any host is measured, and so is");
+        builder.AppendLine("--local-copy on the command.");
+        builder.AppendLine();
         builder.AppendLine("Every key");
         builder.AppendLine();
         builder.AppendLine("These are all of them: any other is refused when the file is read. A runner under");
@@ -1605,9 +1611,10 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("A leg a host runs works in that host's copy of its tree, whatever anything else");
         builder.AppendLine("says. A leg this machine runs itself works where the first of these says anything:");
-        builder.AppendLine("--local-copy or --in-place on the command, for that run (build, test, run); the");
-        builder.AppendLine("leg's own localCopy, true or false; defaults.localCopy, a default for every leg of");
-        builder.AppendLine("the repository; and, where none says, its tree itself. A copy is kept in the tree's");
+        builder.AppendLine("--local-copy or --in-place on the command, for that run (build, test, run); a");
+        builder.AppendLine("runner's writesTree, which is in place ('help runners'); the leg's own localCopy,");
+        builder.AppendLine("true or false; defaults.localCopy, a default for every leg of the repository; and,");
+        builder.AppendLine("where none says, its tree itself. A copy is kept in the tree's own");
         builder.AppendLine($"own {HarnessLayout.LegsDirectoryName} slot, <tree>/.legs/<key>, one per tree and variant, made");
         builder.AppendLine("from the run's one reading of the tree and kept warm between runs: a write the tree");
         builder.AppendLine("receives while the leg runs - a fold, a commit, an edit - ends nothing of the leg's,");
@@ -2608,7 +2615,8 @@ internal static class HelpCommand
         builder.AppendLine("                 build comes to, is 'help space'");
         builder.AppendLine("  legSets        named groups of legs, selected with --legs like a leg");
         builder.AppendLine("  tools          external tools to verify and install");
-        builder.AppendLine("  predefinedRunners  multi-phase procedures such as a corpus test or a benchmark");
+        builder.AppendLine("  predefinedRunners  multi-phase procedures such as a corpus test or a benchmark;");
+        builder.AppendLine("                     one whose steps change the tree says writesTree ('help legs')");
         builder.AppendLine($"  exec           named commands to run through '{ToolPackage.Command} exec'");
         builder.AppendLine("  commit         commit template and sign-off policy");
         builder.AppendLine("  sync           what the tree mirror carries, and what it must never carry; history,");

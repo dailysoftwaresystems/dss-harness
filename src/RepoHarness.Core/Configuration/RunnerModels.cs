@@ -27,6 +27,15 @@ public sealed class RunnerConfig
     [Description("the legs it runs when --legs names none; absent, every leg")]
     public List<string>? Legs { get; init; }
 
+    /// <summary>
+    /// Whether this runner's steps change files of the tree - a formatter, a code generator - so its legs work in
+    /// their trees themselves, whatever the leg's own <c>localCopy</c> key or the repository's default says: what it
+    /// wrote in a copy the next sync would make the tree again. A leg a host would run is refused for it before any
+    /// host is measured, and so is <c>--local-copy</c> on the command.
+    /// </summary>
+    [Description("its steps change the tree, so its legs work in place; refused on a host's leg")]
+    public bool WritesTree { get; init; }
+
     /// <summary>Phases executed in order; a failing phase ends that leg.</summary>
     /// <remarks>
     /// A runner declares <see cref="Phases"/> or <see cref="Action"/>, never both. Two descriptions
