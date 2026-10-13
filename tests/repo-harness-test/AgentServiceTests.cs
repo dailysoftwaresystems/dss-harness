@@ -1002,17 +1002,23 @@ public sealed class AgentServiceTests
         Assert.Equal(
             "Agent 'ag' of 'o1' changed 3 of the path(s) to refresh - a.txt, b.txt, docs/with space.md - and refreshing would undo those changes. Nothing was copied.",
             refused.Message);
+        // Each path both trees changed says what a merge of the two gives, and the conflicts are shown under the paths.
         Assert.Equal(
             [
-                "  a.txt",
+                "  a.txt   (a three-way merge of the two conflicts in 1 place(s), shown below)",
                 "  b.txt",
-                "  docs/with space.md",
+                "  docs/with space.md   (no three-way merge is offered: both trees made it, and neither held a file there before)",
+            ],
+            refused.Details!.Take(3));
+        Assert.StartsWith("conflicts of 'a.txt', 1 place(s) - as the main tree holds it, as both trees held it, as the agent holds it:", refused.Details![3], StringComparison.Ordinal);
+        Assert.Equal(
+            [
                 "To hand it every other path and leave these as it changed them, run again with --except <path> for each:",
                 "  --except a.txt --except b.txt --except \"docs/with space.md\"",
                 "--except says the path stays the agent's change, for its fold to weigh against what the main tree holds; it is not a --force.",
                 $"log {kit.Layout.LogFile("ag")}",
             ],
-            refused.Details);
+            refused.Details.TakeLast(4));
         Assert.Equal("x\n", OrchestrationKit.Read(worktree, "docs/x.md"));
 
         var one = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Except = ["a.txt"] }, apply: true, Token);
@@ -1093,6 +1099,7 @@ public sealed class AgentServiceTests
         Assert.Equal("docs \"with space\"", RefreshRequest.Under("docs", "with space").Arguments());
         Assert.Equal("docs --except a.txt --except \"b c.txt\"", new RefreshRequest { Paths = ["docs"], Except = ["a.txt", "b c.txt"] }.Arguments());
         Assert.Equal("--all --except a.txt --stale b.txt --stale \"c d.txt\"", new RefreshRequest { All = true, Except = ["a.txt"], Stale = ["b.txt", "c d.txt"] }.Arguments());
+        Assert.Equal("src --stale b.txt --merge \"c d.txt\"", new RefreshRequest { Paths = ["src"], Stale = ["b.txt"], Merge = ["c d.txt"] }.Arguments());
     }
 
     /// <summary>
@@ -1112,7 +1119,7 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(worktree, "a.txt", "one\n");
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nthird\n");
         await kit.Harness.CommitAllAsync(kit.Main, "the third version", Token);
-        var at = $"(its bytes are the main tree's at {Core.Output.ReportText.Commit(first)})";
+        var at = $"its bytes are the main tree's at {Core.Output.ReportText.Commit(first)}";
 
         var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
 
@@ -1120,9 +1127,9 @@ public sealed class AgentServiceTests
         Assert.Equal(
             "Agent 'ag' of 'o1' changed 1 of the path(s) to refresh - a.txt - and refreshing would undo those changes. Nothing was copied.",
             refused.Message);
+        Assert.StartsWith($"  a.txt   ({at}; a three-way merge of the two conflicts in 1 place(s), shown below)", refused.Details![0], StringComparison.Ordinal);
         Assert.Equal(
             [
-                $"  a.txt   {at}",
                 "To hand it every other path and leave these as it changed them, run again with --except <path> for each:",
                 "  --except a.txt",
                 "1 of them hold bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. To hand it the "
@@ -1132,7 +1139,7 @@ public sealed class AgentServiceTests
                     + "not the agent's work, and is taken only where the main tree's history holds those very bytes at that path. None is a --force.",
                 $"log {kit.Layout.LogFile("ag")}",
             ],
-            refused.Details);
+            refused.Details.SkipWhile(line => !line.StartsWith("To hand it", StringComparison.Ordinal)));
 
         var request = new RefreshRequest { Paths = ["a.txt"], Stale = ["a.txt"] };
         var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", request, apply: false, Token);
@@ -1140,7 +1147,7 @@ public sealed class AgentServiceTests
         Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
         Assert.Equal("dry run: 1 path(s) would be refreshed into agent 'ag' of 'o1'; pass --apply to hand them over", dry.Message);
         Assert.Equal(
-            ["1 path(s) named with --stale, whose copy is the main tree's own at an earlier commit, to hand the main tree's copy:", $"  a.txt   {at}"],
+            ["1 path(s) named with --stale, whose copy is the main tree's own at an earlier commit, to hand the main tree's copy:", $"  a.txt   ({at})"],
             dry.Details!.Take(2));
         Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
 
@@ -1148,7 +1155,7 @@ public sealed class AgentServiceTests
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
         Assert.Equal(
-            ["1 path(s) named with --stale, whose copy is the main tree's own at an earlier commit, handed the main tree's copy:", $"  a.txt   {at}"],
+            ["1 path(s) named with --stale, whose copy is the main tree's own at an earlier commit, handed the main tree's copy:", $"  a.txt   ({at})"],
             applied.Details!.Take(2));
         Assert.Equal("one\nthird\n", OrchestrationKit.Read(worktree, "a.txt"));
         Assert.Equal(await DigestAsync(kit.Main, "a.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["a.txt"]);
@@ -1275,7 +1282,8 @@ public sealed class AgentServiceTests
         var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Equal("  a.txt", refused.Details![0]);
+        Assert.StartsWith("  a.txt   (a three-way merge of the two", refused.Details![0], StringComparison.Ordinal);
+        Assert.DoesNotContain("its bytes are the main tree's", refused.Details[0], StringComparison.Ordinal);
         Assert.Contains(
             "The last 512 commit(s) of the main tree that changed these paths were searched, and its history goes further back: a copy older than that "
             + "is not found stale.",

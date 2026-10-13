@@ -2,9 +2,10 @@ namespace RepoHarness.Core.Orchestration;
 
 /// <summary>
 /// What a refresh of an agent weighs, and what of the agent's own it leaves alone: the paths named, the directory the
-/// anchor registries are kept in where none is, or every path the main tree moved; and the paths the agent changed that
-/// stay as it changed them, each said by name. Nothing is left out that nobody named, and a name for a path the refresh
-/// would not have refused is refused as the typo it usually is.
+/// anchor registries are kept in where none is, or every path the main tree moved; the paths the agent changed that stay
+/// as it changed them, each said by name; the stale copies handed the main tree's; and the paths both changed whose clean
+/// three-way merge is written into the agent's worktree. Nothing is left out that nobody named, and a name for a path the
+/// refresh would not have refused is refused as the typo it usually is.
 /// </summary>
 public sealed record RefreshRequest
 {
@@ -41,14 +42,21 @@ public sealed record RefreshRequest
     /// </summary>
     public IReadOnlyList<string> Stale { get; init; } = [];
 
+    /// <summary>
+    /// Paths both the agent and the main tree changed whose clean three-way merge is written into the agent's worktree as
+    /// its change, the path recorded as shared at the main tree's bytes: <see cref="FoldAllowances.MergeOption"/>.
+    /// </summary>
+    public IReadOnlyList<string> Merge { get; init; } = [];
+
     /// <summary>A refresh of what is under <paramref name="paths"/>; of the registries' directory where there are none.</summary>
     /// <param name="paths">The paths, relative to the tree.</param>
     public static RefreshRequest Under(params string[] paths) => new() { Paths = paths };
 
     /// <summary>
     /// What is wrong with how it is spelt, before anything is read: a path that could name nothing in the tree, the whole
-    /// tree named as a path, paths given beside <see cref="AllOption"/>, or one named both to be left as the agent changed
-    /// it and to be handed the main tree's copy; <see langword="null"/> where nothing is.
+    /// tree named as a path, paths given beside <see cref="AllOption"/>, or one named by two options that say different
+    /// things of it - left as the agent changed it, handed the main tree's copy, merged; <see langword="null"/> where
+    /// nothing is.
     /// </summary>
     public string? Problem()
     {
@@ -65,19 +73,23 @@ public sealed record RefreshRequest
         return OrchestrationRules.PathsProblem(Paths, "a path to refresh")
             ?? OrchestrationRules.PathsProblem(Except, ExceptOption)
             ?? OrchestrationRules.PathsProblem(Stale, StaleOption)
-            ?? OrchestrationRules.NamedTwiceProblem((ExceptOption, Except, ExceptDoes), (StaleOption, Stale, StaleDoes));
+            ?? OrchestrationRules.PathsProblem(Merge, FoldAllowances.MergeOption)
+            ?? OrchestrationRules.NamedTwiceProblem(
+                (ExceptOption, Except, ExceptDoes),
+                (StaleOption, Stale, StaleDoes),
+                (FoldAllowances.MergeOption, Merge, FoldAllowances.MergeDoes));
     }
 
     /// <summary>
     /// The arguments that ask for this refresh again, each as a command line takes it: its paths, or
-    /// <see cref="AllOption"/>, then <see cref="ExceptOption"/> for each path left as the agent changed it and
-    /// <see cref="StaleOption"/> for each handed the main tree's copy. Nothing where it names none, which is a refresh of the
-    /// registries' directory.
+    /// <see cref="AllOption"/>, then <see cref="ExceptOption"/> for each path left as the agent changed it,
+    /// <see cref="StaleOption"/> for each handed the main tree's copy and <see cref="FoldAllowances.MergeOption"/> for each
+    /// merged. Nothing where it names none, which is a refresh of the registries' directory.
     /// </summary>
     public string Arguments()
         => string.Join(
             ' ',
-            new[] { All ? AllOption : string.Join(' ', Paths.Select(OrchestrationReports.Argument)), ExceptArguments(Except), StaleArguments(Stale) }
+            new[] { All ? AllOption : string.Join(' ', Paths.Select(OrchestrationReports.Argument)), ExceptArguments(Except), StaleArguments(Stale), MergeArguments(Merge) }
                 .Where(part => part.Length > 0));
 
     /// <summary>The arguments that leave <paramref name="paths"/> as the agent changed them, each as a command line takes it.</summary>
@@ -89,4 +101,9 @@ public sealed record RefreshRequest
     /// <param name="paths">The paths, as git names them.</param>
     public static string StaleArguments(IEnumerable<string> paths)
         => string.Join(' ', OrchestrationReports.PathArguments(StaleOption, paths));
+
+    /// <summary>The arguments that merge <paramref name="paths"/>, each as a command line takes it.</summary>
+    /// <param name="paths">The paths, as git names them.</param>
+    public static string MergeArguments(IEnumerable<string> paths)
+        => string.Join(' ', OrchestrationReports.PathArguments(FoldAllowances.MergeOption, paths));
 }

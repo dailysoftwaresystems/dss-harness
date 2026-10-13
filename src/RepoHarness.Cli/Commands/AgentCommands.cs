@@ -127,6 +127,11 @@ internal static class RefreshAgentCommand
             + "very bytes at that path. Once for each path.",
     };
 
+    private static readonly Option<string[]> MergeOption = OrchestrationArguments.Merge(
+        "A path the agent and the main tree both changed whose three-way merge is clean, as the refusal says of it: the merge is written into the agent's "
+        + "worktree as its change, for its fold to write, and the path recorded as handed the main tree's copy. Never taken unasked, and a clean textual "
+        + "merge proves nothing about the program. Once for each path.");
+
     private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Hand them over; without it, only say what would be handed over.");
 
     internal static Command Create()
@@ -135,14 +140,16 @@ internal static class RefreshAgentCommand
             Name,
             $"Hand a live agent every path under the paths, or anywhere with {RefreshRequest.AllOption}, that the main tree holds otherwise than the agent "
             + "shares it - not what it was last handed, or not what its base holds - committed or not, recorded as handed to it so its fold leaves them "
-            + $"out; refused, copying nothing, where the agent changed or deleted one of them, unless {RefreshRequest.ExceptOption} names it, or "
-            + $"{RefreshRequest.StaleOption} names it and the main tree's history holds its very bytes there.");
+            + $"out; refused, copying nothing, where the agent changed or deleted one of them, unless {RefreshRequest.ExceptOption} names it, "
+            + $"{RefreshRequest.StaleOption} names it and the main tree's history holds its very bytes there, or {FoldAllowances.MergeOption} names it and "
+            + "its three-way merge with the main tree's is clean; the arm registry both changed is merged by arm, unasked.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
         command.Arguments.Add(PathsArgument);
         command.Options.Add(AllOption);
         command.Options.Add(ExceptOption);
         command.Options.Add(StaleOption);
+        command.Options.Add(MergeOption);
         command.Options.Add(ApplyOption);
         GlobalOptions.AddTo(command);
 
@@ -157,6 +164,7 @@ internal static class RefreshAgentCommand
                     All = context.ParseResult.GetValue(AllOption),
                     Except = context.ParseResult.GetValue(ExceptOption) ?? [],
                     Stale = context.ParseResult.GetValue(StaleOption) ?? [],
+                    Merge = context.ParseResult.GetValue(MergeOption) ?? [],
                 },
                 context.ParseResult.GetValue(ApplyOption),
                 cancellationToken)));

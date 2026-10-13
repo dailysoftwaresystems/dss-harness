@@ -203,6 +203,7 @@ internal sealed record TwoChangeOffer
         TwoChangeRule rule,
         byte[]? working,
         bool executable,
+        string gives,
         string said,
         string listed,
         IReadOnlyList<string> shown,
@@ -214,6 +215,7 @@ internal sealed record TwoChangeOffer
         Working = working;
         Digest = working is null ? null : FileContentHash.Of(working);
         Executable = executable;
+        Gives = gives;
         Said = said;
         Listed = listed;
         Shown = shown;
@@ -236,7 +238,16 @@ internal sealed record TwoChangeOffer
     /// <summary>Whether the merged file can be run, where the merge is clean.</summary>
     public bool Executable { get; }
 
-    /// <summary>What the merge gives, as a clause to end the line that refuses the path; empty where nothing is said of one.</summary>
+    /// <summary>
+    /// What the merge gives, as a clause, and nothing of what to do about it: what a command with ways out of its own says
+    /// beside a path it refuses. Empty where nothing is said of one.
+    /// </summary>
+    public string Gives { get; }
+
+    /// <summary>
+    /// What the merge gives, as a clause to end the line that refuses the path, with the way on that a fold and a move of
+    /// an agent's base offer; empty where nothing is said of one.
+    /// </summary>
     public string Said { get; }
 
     /// <summary>The clause after the path in the list of merged paths, where the merge is clean.</summary>
@@ -260,7 +271,7 @@ internal sealed record TwoChangeOffer
     /// <summary>A path never merged: nothing is measured, and nothing said of a merge.</summary>
     /// <param name="path">The path.</param>
     /// <param name="rule">How it is resolved: an anchor registry's rule.</param>
-    public static TwoChangeOffer Unmeasured(string path, TwoChangeRule rule) => new(path, rule, null, false, string.Empty, string.Empty, [], null);
+    public static TwoChangeOffer Unmeasured(string path, TwoChangeRule rule) => new(path, rule, null, false, string.Empty, string.Empty, string.Empty, [], null);
 
     /// <summary>A path no merge is offered for, with why.</summary>
     /// <param name="path">The path.</param>
@@ -270,28 +281,33 @@ internal sealed record TwoChangeOffer
     {
         ArgumentNullException.ThrowIfNull(none);
 
-        return new(path, rule, null, false, $"no three-way merge is offered: {none.Said}", string.Empty, [], none);
+        var said = $"no three-way merge is offered: {none.Said}";
+
+        return new(path, rule, null, false, said, said, string.Empty, [], none);
     }
 
     /// <summary>A merge that conflicts, with what to show of it.</summary>
     /// <param name="path">The path.</param>
     /// <param name="rule">How it is resolved.</param>
-    /// <param name="said">What the merge gives, to end the line that refuses the path.</param>
+    /// <param name="gives">What the merge gives, as a clause.</param>
+    /// <param name="said">The same, with the way on, to end the line that refuses the path.</param>
     /// <param name="shown">The conflicts, as a block printed under the refusals.</param>
-    public static TwoChangeOffer Conflicting(string path, TwoChangeRule rule, string said, IReadOnlyList<string> shown) => new(path, rule, null, false, said, string.Empty, shown, null);
+    public static TwoChangeOffer Conflicting(string path, TwoChangeRule rule, string gives, string said, IReadOnlyList<string> shown)
+        => new(path, rule, null, false, gives, said, string.Empty, shown, null);
 
     /// <summary>A clean merge.</summary>
     /// <param name="path">The path.</param>
     /// <param name="rule">How it is resolved.</param>
     /// <param name="working">The merged bytes as the tree would hold them.</param>
     /// <param name="executable">Whether the merged file can be run.</param>
-    /// <param name="said">What the merge gives, to end the line that refuses the path where it is not taken.</param>
+    /// <param name="gives">What the merge gives, as a clause.</param>
+    /// <param name="said">The same, with the option that takes it, to end the line that refuses the path where it is not taken.</param>
     /// <param name="listed">The clause after the path in the list of merged paths.</param>
-    public static TwoChangeOffer Clean(string path, TwoChangeRule rule, byte[] working, bool executable, string said, string listed)
+    public static TwoChangeOffer Clean(string path, TwoChangeRule rule, byte[] working, bool executable, string gives, string said, string listed)
     {
         ArgumentNullException.ThrowIfNull(working);
 
-        return new(path, rule, working, executable, said, listed, [], null);
+        return new(path, rule, working, executable, gives, said, listed, [], null);
     }
 
     /// <summary>
@@ -307,7 +323,7 @@ internal sealed record TwoChangeOffer
     {
         ArgumentNullException.ThrowIfNull(merged);
 
-        return new(path, TwoChangeRule.Arms, merged.Bytes, executable, said, listed, [], null, merged);
+        return new(path, TwoChangeRule.Arms, merged.Bytes, executable, said, said, listed, [], null, merged);
     }
 
     /// <summary>
@@ -315,9 +331,11 @@ internal sealed record TwoChangeOffer
     /// the merged text does not read as one in the tree it would be written into.
     /// </summary>
     /// <param name="path">The path.</param>
-    /// <param name="said">Why, to end the line that refuses the path.</param>
+    /// <param name="gives">Why, as a clause.</param>
+    /// <param name="said">The same, with the way on, to end the line that refuses the path.</param>
     /// <param name="shown">What to show of it under the refusals; empty where the line says it all.</param>
-    public static TwoChangeOffer NotTaken(string path, string said, IReadOnlyList<string> shown) => new(path, TwoChangeRule.Arms, null, false, said, string.Empty, shown, null);
+    public static TwoChangeOffer NotTaken(string path, string gives, string said, IReadOnlyList<string> shown)
+        => new(path, TwoChangeRule.Arms, null, false, gives, said, string.Empty, shown, null);
 
     /// <summary>
     /// This offer, judged by <paramref name="validation"/>: as it is, no longer waiting to be judged, where the merged text
@@ -331,12 +349,11 @@ internal sealed record TwoChangeOffer
     {
         ArgumentNullException.ThrowIfNull(validation);
 
+        var problems = $"merged by arm, it does not read as a registry - {ReportText.Counted(validation.Problems.Count, "problem")}, listed below";
+
         return validation.Valid
-            ? new(Path, Rule, Working, Executable, Said, Listed, Shown, None)
-            : NotTaken(
-                Path,
-                $"merged by arm, it does not read as a registry - {ReportText.Counted(validation.Problems.Count, "problem")}, listed below",
-                validation.Refusal(registry, subject));
+            ? new(Path, Rule, Working, Executable, Gives, Said, Listed, Shown, None)
+            : NotTaken(Path, problems, problems, validation.Refusal(registry, subject));
     }
 
     /// <summary>The line that refuses the path, ended with what a merge of it gives.</summary>
@@ -488,10 +505,13 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
 
         if (!merge!.IsClean)
         {
+            var conflicts = $"a three-way merge of the two conflicts in {merge.ConflictsSaid}, shown below";
+
             return TwoChangeOffer.Conflicting(
                 ask.Path,
                 rule,
-                $"a three-way merge of the two conflicts in {merge.ConflictsSaid}, shown below: reconcile it by hand, then {FoldAllowances.SettledOption} {path}",
+                conflicts,
+                $"{conflicts}: reconcile it by hand, then {FoldAllowances.SettledOption} {path}",
                 [
                     $"conflicts of '{ask.Path}', {merge.ConflictsSaid} - as {Ours} holds it, as both trees held it, as {Theirs} holds it:",
                     .. merge.Shown.Select(line => $"  {line}"),
@@ -511,13 +531,15 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
 
         var executable = MergedBit(ask.Ancestor!.Executable, ask.Ours.Executable, ask.Theirs.Executable);
         var hunks = $"{ReportText.Counted(merge.TheirsHunks, "hunk")} from {Theirs}, {merge.OursHunks} from {Ours}";
+        var clean = $"a three-way merge of the two is clean - {hunks}";
 
         return TwoChangeOffer.Clean(
             ask.Path,
             rule,
             working,
             executable,
-            $"a three-way merge of the two is clean - {hunks} - and {FoldAllowances.MergeOption} {path} writes it",
+            clean,
+            $"{clean} - and {FoldAllowances.MergeOption} {path} writes it",
             $"({FoldAllowances.MergeOption}: {hunks}{BitSaid(ask, executable)})");
     }
 
@@ -629,10 +651,12 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
             case RegistryMerge.Conflicted conflicted:
             {
                 var places = ReportText.Counted(conflicted.Conflicts.Count, "place");
+                var conflicts = $"merged by arm, it conflicts in {places}, shown below";
 
                 return TwoChangeOffer.NotTaken(
                     ask.Path,
-                    $"merged by arm, it conflicts in {places}, shown below: {settle}",
+                    conflicts,
+                    $"{conflicts}: {settle}",
                     [
                         $"conflicts of '{ask.Path}' merged by arm, {places}:",
                         .. conflicted.Conflicts.SelectMany(conflict => conflict.Said(Sides)).Select(line => $"  {line}"),
@@ -640,10 +664,11 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
             }
 
             case RegistryMerge.Unreadable unreadable:
-                return TwoChangeOffer.NotTaken(
-                    ask.Path,
-                    $"merged by arm and never by line, and it cannot be read as a registry - {string.Join("; ", unreadable.Said(Sides))}: {settle}",
-                    []);
+            {
+                var unread = $"merged by arm and never by line, and it cannot be read as a registry - {string.Join("; ", unreadable.Said(Sides))}";
+
+                return TwoChangeOffer.NotTaken(ask.Path, unread, $"{unread}: {settle}", []);
+            }
 
             case var other:
                 throw new UnreachableException($"A merge by arm comes to one of three answers, and {other.GetType().Name} is none of them.");

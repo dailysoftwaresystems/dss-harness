@@ -1779,15 +1779,26 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
         Assert.Contains($"  {ToolPackage.Command} refresh-agent <o> <a> [<path>... | --all] [--except <path>]...", result.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains("      [--stale <path>]... [--apply]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("      [--stale <path>]... [--merge <path>]... [--apply]", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(
             "--stale <path>, once for each, says its copy is not the agent's work and hands it the main tree's - taken only where the agent's copy, "
             + $"as git would store it, is a blob the main tree's history held at that path, among the last {TwoChanges.MostCommits} commits that "
             + "changed it, and refused otherwise, nothing copied, as is one naming a path the agent holds no file at. The refusal over the agent's "
             + "changes names each such copy with the commit whose bytes it holds, and the arguments that hand them; it says too where the search "
             + "stopped short of the main tree's history. It reaches a path the main tree did not move as well - a copy put back by hand to an older "
-            + "version - and one naming a path the agent holds as the main tree does is let stand. A path named with both --except and --stale is a "
-            + $"usage error, exit {HarnessExit.UsageError}.",
+            + "version - and one naming a path the agent holds as the main tree does is let stand.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A path the agent changed that the main tree moved too, each holding a file there, is weighed in full as a fold weighs one: the refusal "
+            + "says beside it what a three-way merge of the two gives - from what the agent last shared, or its base - shows the conflicts, and names "
+            + "the arguments that take the clean ones. --merge <path>, once for each, takes a clean merge: written into the agent's worktree as its "
+            + "change, for its fold to write, and the path recorded as handed the main tree's copy, which the merge descends from. It is never taken "
+            + "unasked, and a clean textual merge proves nothing about the program; one naming no path under the paths refreshed is refused as a "
+            + "misspelling, and one naming a path with nothing left to merge is let stand. The arm registry both changed is merged by arm, unasked, "
+            + "and taken where the result reads as a registry of the worktree as the refresh leaves it; one that does not, or that conflicts, is "
+            + "among the agent's changes, and a --merge naming it or an anchor registry is refused. A path named by two of --except, --stale and "
+            + $"--merge is a usage error, exit {HarnessExit.UsageError}.",
             text,
             StringComparison.Ordinal);
         Assert.Contains("the anchor registries' directory where none are, and anywhere in the tree with --all, which takes no path beside it", text, StringComparison.Ordinal);

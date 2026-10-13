@@ -144,16 +144,25 @@ public sealed record RebasePlan
 /// <param name="Commit">The newest commit of the main tree's history that holds the agent's very bytes there.</param>
 public sealed record StaleCopy(string Path, string Commit);
 
-/// <summary>A path the agent changed, and where its copy is the main tree's own at an earlier commit, that commit.</summary>
+/// <summary>
+/// A path the agent changed that a refresh would hand: where its copy is the main tree's own at an earlier commit, that
+/// commit; and where both trees hold a file there, what a three-way merge of the two gives.
+/// </summary>
 /// <param name="Path">The path, as git names it.</param>
 /// <param name="StaleAt">The newest commit of the main tree's history that holds its very bytes there; null where none does, or it holds no file.</param>
-public sealed record RefreshChange(string Path, string? StaleAt);
+/// <param name="Merge">What a three-way merge of the agent's copy and the main tree's gives, as a clause; null where none was weighed.</param>
+public sealed record RefreshChange(string Path, string? StaleAt, string? Merge);
+
+/// <summary>A merge a refresh writes into the agent's worktree, and what the main tree held there: what the path is recorded as shared at.</summary>
+/// <param name="Merge">The merge, and the agent's copy it is written over.</param>
+/// <param name="Main">What the main tree held at the path when it was weighed.</param>
+public sealed record RefreshMerge(MergedPath Merge, FileIdentity Main);
 
 /// <summary>
 /// What refreshing an agent does, measured; nothing written. Every path under the paths asked for that the main tree holds
 /// otherwise than the agent shares it is in exactly one list: handed - a stale copy named with
 /// <see cref="RefreshRequest.StaleOption"/> among them - already held as the main tree does, left by name as the agent
-/// changed it, or changed by the agent - which refuses the refresh.
+/// changed it, merged where both changed it and the merge is taken, or changed by the agent - which refuses the refresh.
 /// </summary>
 public sealed record RefreshPlan
 {
@@ -174,9 +183,26 @@ public sealed record RefreshPlan
 
     /// <summary>
     /// The paths it changed that nothing named: handing the main tree's over them would undo its work, so the refresh is
-    /// refused - each with the commit its copy is the main tree's own at, where it is one.
+    /// refused - each with the commit its copy is the main tree's own at, where it is one, and what a merge of it gives.
     /// </summary>
     public required IReadOnlyList<RefreshChange> Changed { get; init; }
+
+    /// <summary>
+    /// The paths both trees changed whose three-way merge is clean and is taken - named with
+    /// <see cref="FoldAllowances.MergeOption"/>, or the arm registry, merged by arm unasked where it reads as a registry of
+    /// the worktree the refresh leaves: the merge written into the agent's worktree as its change, and the path recorded as
+    /// shared at the main tree's bytes, which its copy descends from.
+    /// </summary>
+    public required IReadOnlyList<RefreshMerge> Merged { get; init; }
+
+    /// <summary>The conflicts of each changed path whose merge conflicts, as a block printed under them.</summary>
+    public required IReadOnlyList<string> Shown { get; init; }
+
+    /// <summary>The changed paths whose three-way merge is clean and was not asked for: what naming each to be merged would write.</summary>
+    public required IReadOnlyList<string> Mergeable { get; init; }
+
+    /// <summary>The paths named with <see cref="FoldAllowances.MergeOption"/> outside the paths weighed: a misspelling, most likely.</summary>
+    public required IReadOnlyList<string> MergeStray { get; init; }
 
     /// <summary>
     /// The paths named with <see cref="RefreshRequest.StaleOption"/> whose copy is proved the main tree's own at an earlier
@@ -342,6 +368,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
     /// <summary>What writes one into the agent's worktree on a move of its base.</summary>
     private const string RebaseWriter = "the rebase";
+
+    /// <summary>What writes one into the agent's worktree as a refresh hands it what the main tree moved.</summary>
+    private const string RefreshWriter = "the refresh";
 
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
@@ -614,7 +643,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         // The arm registry merged by arm is judged as a registry of the main tree as the fold leaves it: what it removes
         // gone, and what it writes and merges there - each read only where the registry cites it.
-        await JudgeAsync(changes, policy, weighed, main, FoldWriter, merges => TreeAfter.Folded(_fileSystem, worktree, deleted, written, merges), cancellationToken).ConfigureAwait(false);
+        await JudgeAsync(changes, policy, weighed, main, FoldWriter, merges => TreeAfter.Copied(_fileSystem, worktree, deleted, written, merges), cancellationToken).ConfigureAwait(false);
 
         // A merge that is clean and was asked for - or the arm registry's, which reads as one - is taken, and any other ends
         // the path's refusal with what a merge of it gives.
@@ -1200,7 +1229,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// (<see cref="MovedAsync"/>) is, in this order: held by the agent as the main tree holds it already, and so recorded
     /// as shared; changed by the agent (<see cref="EditedAsync"/>) and named in <paramref name="except"/>, left as it is;
     /// changed by the agent, named in <paramref name="stale"/> and proved the main tree's own copy at an earlier commit,
-    /// handed; changed by the agent otherwise, which refuses the refresh; or handed. A path named stale that the main tree
+    /// handed; changed by the agent, each tree holding a file there, whose three-way merge is clean and taken, merged into
+    /// the worktree; changed by the agent otherwise, which refuses the refresh; or handed. A path named stale that the main tree
     /// did not move is weighed too, where the agent's copy is not the main tree's. What the agent's worktree holds at each
     /// path handed is measured with it, so the hand-over writes over nothing it did not weigh.
     /// </summary>
@@ -1220,6 +1250,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="within">Only the paths these cover; every path where null.</param>
     /// <param name="except">The paths named to be left as the agent changed them.</param>
     /// <param name="stale">The paths named as stale copies, to be handed the main tree's where the proof holds.</param>
+    /// <param name="policy">How a path both trees changed is resolved, the paths named to be merged among it.</param>
+    /// <param name="changes">Measures what a three-way merge of such a path gives.</param>
     /// <param name="cancellationToken">Stops the measuring.</param>
     /// <exception cref="HarnessException">A path is one a hand-over refuses (<see cref="MovedAsync"/>), or git could not answer.</exception>
     /// <exception cref="IOException">A path could not be looked at.</exception>
@@ -1232,10 +1264,14 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         IReadOnlyList<string>? within,
         IReadOnlySet<string> except,
         IReadOnlySet<string> stale,
+        TwoChangePolicy policy,
+        TwoChanges changes,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(except);
         ArgumentNullException.ThrowIfNull(stale);
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(changes);
 
         // Every path the main tree holds otherwise than the agent shares it, committed or not: a copy it was handed goes
         // stale as soon as the main tree moves it, back to its HEAD's bytes included.
@@ -1303,12 +1339,60 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Links = [.. moved.Links.Concat(unmovedHanded.Links).Order(StringComparer.Ordinal)],
         };
 
+        // What the agent changed that the main tree moved too, each tree holding a file there, is weighed in full, asked for
+        // or not: a clean merge named to be taken - or the arm registry's, judged as a registry of the worktree the refresh
+        // leaves, each path it hands read from the main tree - is written; any other is said beside the path it refuses.
+        var weighed = await WeighChangedAsync(main, worktree, baseCommit, seed, policy, changes, [.. edited.Where(path => !except.Contains(path) && !handing.Contains(path))], cancellationToken)
+            .ConfigureAwait(false);
+        var twice = weighed.Select(one => (one.Offer, Why: string.Empty, one.Into)).ToList();
+
+        await JudgeAsync(changes, policy, twice, worktree, RefreshWriter, merges => TreeAfter.Copied(_fileSystem, main, handed.Deletions, handed.Files, merges), cancellationToken)
+            .ConfigureAwait(false);
+
+        var mains = weighed.ToDictionary(one => one.Offer.Path, one => one.Main, StringComparer.Ordinal);
+        var merged = new List<RefreshMerge>();
+        var gives = new Dictionary<string, string>(StringComparer.Ordinal);
+        var shown = new List<string>();
+        var mergeable = new List<string>();
+
+        foreach (var (offer, _, into) in twice)
+        {
+            if (TwoChanges.Taken(policy, offer))
+            {
+                merged.Add(new RefreshMerge(new MergedPath(offer.Path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, into), mains[offer.Path]));
+                continue;
+            }
+
+            if (offer.Gives.Length > 0)
+            {
+                gives[offer.Path] = offer.Gives;
+            }
+
+            shown.AddRange(offer.Shown);
+
+            if (offer.IsClean)
+            {
+                mergeable.Add(offer.Path);
+            }
+        }
+
+        var merging = merged.Select(merge => merge.Merge.Path).ToHashSet(StringComparer.Ordinal);
+
         return new RefreshPlan
         {
             Handed = handed,
             Alike = [.. alike.Order(StringComparer.Ordinal)],
             Left = [.. edited.Where(except.Contains)],
-            Changed = [.. edited.Where(path => !except.Contains(path) && !handing.Contains(path)).Select(path => new RefreshChange(path, proved.At.GetValueOrDefault(path)))],
+            Changed = [.. edited
+                .Where(path => !except.Contains(path) && !handing.Contains(path) && !merging.Contains(path))
+                .Select(path => new RefreshChange(path, proved.At.GetValueOrDefault(path), gives.GetValueOrDefault(path)))],
+            Merged = merged,
+            Shown = shown,
+            Mergeable = mergeable,
+
+            // A path named to be merged under the paths weighed that has nothing to merge is let stand, so a line that ran
+            // once runs again; one outside them names nothing.
+            MergeStray = [.. policy.NamedAsText().Where(path => !Covered(path, floor, within))],
             Stale = staleCopies,
             StaleRefused = refused,
             StaleStray = strays,
@@ -1316,6 +1400,100 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             InTheWay = InTheWayOfHanding(worktree, handed),
             Held = await HoldingAsync(worktree, [.. handed.Deletions, .. handed.Files, .. alike], cancellationToken).ConfigureAwait(false),
         };
+    }
+
+    /// <summary>
+    /// What a three-way merge of each of <paramref name="paths"/> gives where both trees hold a file there - the main
+    /// tree's the side merged into, the agent's the side merged in, from what both last held: the bytes its seed records,
+    /// or for a path it shares nothing for, the blob at its base - each with the agent's copy a merge is written over and
+    /// what the main tree held. A copy that is a link or reached through one is offered no merge, and is written over by
+    /// none.
+    /// </summary>
+    private async Task<List<(TwoChangeOffer Offer, IReadOnlyList<MergeTarget> Into, FileIdentity Main)>> WeighChangedAsync(
+        string main,
+        string worktree,
+        string baseCommit,
+        SeedRecord seed,
+        TwoChangePolicy policy,
+        TwoChanges changes,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken)
+    {
+        var both = paths.Where(path => _fileSystem.KindOf(Path.Combine(main, path)) == PathKind.File && _fileSystem.KindOf(Path.Combine(worktree, path)) == PathKind.File).ToList();
+        var weighed = new List<(TwoChangeOffer Offer, IReadOnlyList<MergeTarget> Into, FileIdentity Main)>();
+
+        if (both.Count == 0)
+        {
+            return weighed;
+        }
+
+        var shared = new Baselines(seed);
+        var unseeded = both.Where(path => shared.Of(path) is null).ToList();
+        var entries = unseeded.Count > 0
+            ? await _gitClient.ListEntriesAtAsync(worktree, baseCommit, unseeded, cancellationToken).ConfigureAwait(false)
+            : new Dictionary<string, GitEntry>(StringComparer.Ordinal);
+        var reachedMain = _fileSystem.ResolveLinks(main);
+        var reachedAgent = _fileSystem.ResolveLinks(worktree);
+
+        foreach (var path in both)
+        {
+            TwoChangeAncestor? ancestor = shared.Of(path) is { } baseline
+                ? baseline.File is { } held ? new TwoChangeAncestor.Shared(held.Digest, held.Executable) : null
+                : entries.GetValueOrDefault(path) is { IsBlob: true } entry ? new TwoChangeAncestor.Committed(entry.ObjectId, Bit(entry), entry.IsLink) : null;
+            var mainFile = Path.Combine(main, path);
+            var agentFile = Path.Combine(worktree, path);
+            var mainLinked = ThroughLink(main, reachedMain, path);
+            var agentLinked = ThroughLink(worktree, reachedAgent, path);
+            var ours = mainLinked ? default : await IdentityAsync(mainFile, cancellationToken).ConfigureAwait(false);
+            var theirs = agentLinked ? default : await IdentityAsync(agentFile, cancellationToken).ConfigureAwait(false);
+            var offer = await changes.OfferAsync(
+                policy,
+                new TwoChangeAsk(
+                    path,
+                    ancestor,
+                    new TwoChangeSide(new GitContent.File(mainFile), ours.Executable, mainLinked),
+                    new TwoChangeSide(new GitContent.File(agentFile), theirs.Executable, agentLinked),
+                    worktree),
+                cancellationToken).ConfigureAwait(false);
+
+            weighed.Add((offer, mainLinked || agentLinked ? [] : [new MergeTarget(agentFile, AgentTreeName, theirs)], ours));
+        }
+
+        return weighed;
+    }
+
+    /// <summary>
+    /// Writes each merge <paramref name="plan"/> takes into the agent's worktree - the copy asked first to be what was
+    /// weighed, its content and its bit - and records each path in <paramref name="ledger"/> as it goes, as shared at what
+    /// the main tree held, its bytes kept from the main tree's file: the merge is the agent's change over that, for its
+    /// fold to write, and what its copy descends from. Never cancelled part way.
+    /// </summary>
+    /// <param name="main">The main checkout's root.</param>
+    /// <param name="plan">The refresh measured.</param>
+    /// <param name="ledger">What the agent shares with the main tree, to add them to.</param>
+    /// <returns>How many were merged, and why it stopped where it did not merge them all.</returns>
+    public async Task<(int Merged, string? Stopped)> MergeRefreshAsync(string main, RefreshPlan plan, SharedLedger ledger)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(ledger);
+
+        var count = 0;
+
+        try
+        {
+            foreach (var (merge, held) in plan.Merged)
+            {
+                await WriteMergeAsync(merge).ConfigureAwait(false);
+                await ledger.FileAsync(merge.Path, held.Digest, held.Executable, Path.Combine(main, merge.Path)).ConfigureAwait(false);
+                count++;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (count, ex.Message.TrimEnd('.'));
+        }
+
+        return (count, null);
     }
 
     /// <summary>

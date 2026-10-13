@@ -56,23 +56,24 @@ internal static class TreeAfter
     }
 
     /// <summary>
-    /// What a fold changes in the main tree: each path it deletes removed, each it writes read from the agent's worktree,
-    /// and each merged path read from the bytes in hand - the merged registry among them.
+    /// What a command that copies files from one tree into the other changes there: each path it removes, each it copies
+    /// read from the tree it copies from, and each merged path read from the bytes in hand - the merged registry among
+    /// them. A fold copies from the agent's worktree into the main tree; a refresh from the main tree into the worktree.
     /// </summary>
-    /// <param name="fileSystem">Reads the agent's files.</param>
-    /// <param name="worktree">The agent's worktree.</param>
-    /// <param name="deleted">The paths the fold removes.</param>
-    /// <param name="written">The paths it copies from the agent's worktree.</param>
+    /// <param name="fileSystem">Reads the files copied.</param>
+    /// <param name="from">The tree the files are copied from.</param>
+    /// <param name="removed">The paths the command removes.</param>
+    /// <param name="copied">The paths it copies.</param>
     /// <param name="merged">The paths it merges, each with the merged bytes.</param>
-    public static IEnumerable<(string Path, Func<CancellationToken, Task<byte[]>>? Read)> Folded(
+    public static IEnumerable<(string Path, Func<CancellationToken, Task<byte[]>>? Read)> Copied(
         IFileSystem fileSystem,
-        string worktree,
-        IEnumerable<string> deleted,
-        IEnumerable<string> written,
+        string from,
+        IEnumerable<string> removed,
+        IEnumerable<string> copied,
         IEnumerable<(string Path, byte[] Bytes)> merged)
         => [
-            .. deleted.Select(path => (path, (Func<CancellationToken, Task<byte[]>>?)null)),
-            .. written.Select(path => (path, (Func<CancellationToken, Task<byte[]>>?)(token => fileSystem.ReadAllBytesAsync(Path.Combine(worktree, path), token)))),
+            .. removed.Select(path => (path, (Func<CancellationToken, Task<byte[]>>?)null)),
+            .. copied.Select(path => (path, (Func<CancellationToken, Task<byte[]>>?)(token => fileSystem.ReadAllBytesAsync(Path.Combine(from, path), token)))),
             .. merged.Select(merge => (merge.Path, Held(merge.Bytes))),
         ];
 

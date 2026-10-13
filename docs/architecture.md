@@ -601,12 +601,23 @@ replacing them loses nothing it does not keep; the bound limits the cost only, a
 proved copy is handed and recorded like the rest (`RefreshPlan.Stale`), listed apart with its commit; one not proved,
 or a deletion, is refused, nothing copied; one the main tree did not move is weighed too, where the agent's copy is not
 the main tree's. The refusal over the agent's changes names each changed path whose copy qualifies
-(`RefreshChange.StaleAt`) with the `--stale` arguments that hand them. The refusal names each such path and the arguments that leave them:
+(`RefreshChange.StaleAt`) with the `--stale` arguments that hand them. A path the agent changed that the main tree moved
+too, each tree holding a file there, is weighed in full as a fold weighs one (`TwoChanges`, from what the seed records or
+the agent's base holds; the main tree's file the side merged into): what a merge gives stands beside the path in the
+refusal (`RefreshChange.Merge`, the offer's clause without the way on a fold names, `TwoChangeOffer.Gives`), the
+conflicts are shown, and the `--merge` arguments that take the clean ones are named. A clean merge `--merge` names - or
+the arm registry's, merged by arm unasked and judged as a registry of the agent's worktree as the refresh leaves it,
+with each path it hands read from the main tree (`TreeAfter.Copied`) - is written into the worktree once everything
+else is handed, over only what was weighed (`AgentFold.MergeRefreshAsync`), and the path recorded as shared at the main
+tree's bytes, kept from its file: the agent's copy differs from that, so it is its change, which its fold writes, and it
+is what that copy descends from, so the next merge starts there. A `--merge` naming no path under the paths refreshed is
+refused as a misspelling; one naming a path with nothing left to merge is let stand, so a line that ran once runs again.
+The refusal names each such path and the arguments that leave them:
 `--except <path>`, once for each, takes that path out of what is handed, so the rest goes over and it stays the agent's
 change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed, would be,
 or needed no handing, and one naming a path the refresh would not have refused is refused as a stray `--settled` is. A
 refresh that stops part way says the line that asks for it again with everything it was asked (`RefreshRequest.Arguments`):
-its paths or `--all`, and each `--except`. What is left out is still weighed as in the way of
+its paths or `--all`, and each `--except`, `--stale` and `--merge`. What is left out is still weighed as in the way of
 what is handed. seed-agent hands the same paths besides the main tree's uncommitted state. A
 symbolic link the main tree committed is named and never handed; one it has not committed refuses the hand-over. What a
 commit holds at a path is told apart - a file, a directory, a submodule's entry, or nothing (`IGitClient.HeldAtAsync`,

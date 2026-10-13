@@ -8,7 +8,7 @@ using RepoHarness.Core.Results;
 namespace RepoHarness.Tests;
 
 /// <summary>
-/// The arm registry both trees changed, met by a fold or a move of an agent's base: merged by arm with no option given and
+/// The arm registry both trees changed, met by a fold, a move of an agent's base or a refresh: merged by arm with no option given and
 /// never by line, judged as a registry of the tree the command leaves, and refused - saying why - where two sides changed an
 /// arm differently, a version cannot be read as a registry, or the merged text does not read as one.
 /// </summary>
@@ -85,6 +85,69 @@ public sealed class AgentArmRegistryTests
 
     private static Task<CommandOutcome> RebaseAsync(OrchestrationKit kit, bool apply, RebaseRequest? request = null)
         => kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, request ?? new RebaseRequest(), apply, Token);
+
+    private static Task<CommandOutcome> RefreshAsync(OrchestrationKit kit, bool apply, RefreshRequest? request = null)
+        => kit.Harness.AgentService.RefreshAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, request ?? RefreshRequest.Under("mutations"), apply, Token);
+
+    /// <summary>
+    /// A registry both trees added arms to is merged by arm in a refresh too, with no option given: written into the agent's
+    /// worktree as its change, and recorded as handed the main tree's copy, which the merge descends from. The texts of the
+    /// main tree's arm come with the same refresh, and are read from the main tree to judge the merged registry as one of
+    /// the worktree the refresh leaves, so it reads as a registry.
+    /// </summary>
+    [Fact]
+    public async Task ARegistryBothTreesAddedArmsTo_IsMergedByArm_InARefresh_Unasked_AndRecordedAtTheMainTreesBytes()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha");
+        await MainAddsAsync(kit, "beta", "alpha");
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("gamma")));
+        WriteTexts(worktree, "gamma");
+        const string Listed = $"  {Registry}   (merged by arm: 1 from the agent (1 added), 1 from the main tree (1 added); 3 arm(s) in all; it reads as a registry)";
+
+        var dry = await RefreshAsync(kit, apply: false);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Contains(Listed, dry.Details!);
+        Assert.Equal(Text(Arm("alpha"), Arm("gamma")), OrchestrationKit.Read(worktree, Registry));
+
+        var applied = await RefreshAsync(kit, apply: true);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Contains(Listed, applied.Details!);
+        Assert.Equal(Text(Arm("alpha"), Arm("beta"), Arm("gamma")), OrchestrationKit.Read(worktree, Registry));
+        Assert.Equal("x <= beta", OrchestrationKit.Read(worktree, $"{Texts}/beta.before"));
+        Assert.Equal(Text(Arm("alpha"), Arm("beta")), OrchestrationKit.Read(kit.Main, Registry));
+        Assert.Equal(Digest(Text(Arm("alpha"), Arm("beta"))), Seed(kit).Paths[Registry]);
+    }
+
+    /// <summary>
+    /// An arm both trees changed differently leaves the registry among the agent's changes in a refresh, its conflict shown,
+    /// and nothing copied; a --merge naming the registry is refused, since it is merged by arm and never by line.
+    /// </summary>
+    [Fact]
+    public async Task AnArmBothTreesChangedDifferently_IsAmongTheAgentsChanges_InARefresh_AndAMergeNamingTheRegistryIsRefused()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha", "beta");
+        OrchestrationKit.Write(kit.Main, Registry, Text(Arm("alpha"), Arm("beta", "Suite.betaMain")));
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree's case", Token);
+        var agents = Text(Arm("alpha"), Arm("beta", "Suite.betaAgent"));
+        OrchestrationKit.Write(worktree, Registry, agents);
+
+        var refused = await RefreshAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal($"  {Registry}   (merged by arm, it conflicts in 1 place(s), shown below)", refused.Details![0]);
+        Assert.Equal($"conflicts of '{Registry}' merged by arm, 1 place(s):", refused.Details[1]);
+        Assert.DoesNotContain(refused.Details, line => line.StartsWith("  --merge", StringComparison.Ordinal));
+
+        var named = await RefreshAsync(kit, apply: true, new RefreshRequest { Paths = ["mutations"], Merge = [Registry] });
+
+        Assert.Equal(HarnessExit.Refused, named.ExitCode);
+        Assert.Equal($"--merge '{Registry}' names the arm registry, which is merged by arm without it and never by line: drop it. Nothing was copied.", named.Message);
+        Assert.Equal(agents, OrchestrationKit.Read(worktree, Registry));
+    }
 
     /// <summary>
     /// A registry both trees added arms to - at one place, which git's merge of text would take for a conflict - is merged

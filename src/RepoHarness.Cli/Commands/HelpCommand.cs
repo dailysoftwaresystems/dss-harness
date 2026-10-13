@@ -2210,7 +2210,7 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]...");
-        builder.AppendLine($"      [{RefreshRequest.StaleOption} <path>]... [--apply]");
+        builder.AppendLine($"      [{RefreshRequest.StaleOption} <path>]... [{FoldAllowances.MergeOption} <path>]... [--apply]");
         var paths = $"[{FoldAllowances.MergeOption} <path>]... [{FoldAllowances.SettledOption} <path>]...";
         builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] {paths}");
         var rows = $"[{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
@@ -2258,8 +2258,18 @@ internal static class HelpCommand
             + "otherwise, nothing copied, as is one naming a path the agent holds no file at. The refusal over the agent's changes "
             + "names each such copy with the commit whose bytes it holds, and the arguments that hand them; it says too where the "
             + "search stopped short of the main tree's history. It reaches a path the main tree did not move as well - a copy put "
-            + "back by hand to an older version - and one naming a path the agent holds as the main tree does is let stand. A "
-            + $"path named with both {RefreshRequest.ExceptOption} and {RefreshRequest.StaleOption} is a usage error, exit "
+            + "back by hand to an older version - and one naming a path the agent holds as the main tree does is let stand. A path "
+            + "the agent changed that the main tree moved too, each holding a file there, is weighed in full as a fold weighs one: "
+            + "the refusal says beside it what a three-way merge of the two gives - from what the agent last shared, or its base - "
+            + "shows the conflicts, and names the arguments that take the clean ones. "
+            + $"{FoldAllowances.MergeOption} <path>, once for each, takes a clean merge: written into the agent's worktree as its "
+            + "change, for its fold to write, and the path recorded as handed the main tree's copy, which the merge descends from. "
+            + "It is never taken unasked, and a clean textual merge proves nothing about the program; one naming no path under the "
+            + "paths refreshed is refused as a misspelling, and one naming a path with nothing left to merge is let stand. The arm "
+            + "registry both changed is merged by arm, unasked, and taken where the result reads as a registry of the worktree as "
+            + "the refresh leaves it; one that does not, or that conflicts, is among the agent's changes, and a --merge naming it "
+            + "or an anchor registry is refused. A path named by two of "
+            + $"{RefreshRequest.ExceptOption}, {RefreshRequest.StaleOption} and {FoldAllowances.MergeOption} is a usage error, exit "
             + $"{HarnessExit.UsageError}. "
             + "What the agent holds of its own where what it is handed needs room - a file or a link where a directory goes, or "
             + "files of its own in a directory a file replaces - refuses the hand-over, forced or not, naming each: copied, it "
