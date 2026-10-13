@@ -56,6 +56,54 @@ public sealed class FilePermissionsTests
         Assert.True(permissions.IsWritableByOthers(path), "A file every user can change was not reported so.");
     }
 
+    /// <summary>
+    /// A file made one that can be run is so for whoever may read it, and for its owner whatever it held: no wider than
+    /// the file already was. Made one that cannot, it is so for everyone; and nothing else of its mode moves.
+    /// </summary>
+    [Theory]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead, true,
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite, true, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.GroupWrite, true,
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute, false,
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead)]
+    [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead, false, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead)]
+    [UnsupportedOSPlatform("windows")]
+    public void ModeBits_AreSetForWhoeverMayRead_WhereAFileIsMadeOneThatCanBeRun_AndClearedForEveryoneWhereItIsNot(UnixFileMode mode, bool executable, UnixFileMode expected)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows has no mode bits.");
+
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile("file", "contents");
+        File.SetUnixFileMode(path, mode);
+
+        var permissions = FilePermissionsFactory.Create();
+        permissions.SetExecutable(path, executable);
+
+        Assert.Equal(expected, File.GetUnixFileMode(path));
+        Assert.Equal(executable, permissions.IsExecutable(path));
+    }
+
+    /// <summary>Windows keeps no such bit with a file: asked to set or clear one, nothing of the file changes.</summary>
+    [Fact]
+    public void OnWindows_MakingAFileOneThatCanBeRun_OrOneThatCannot_ChangesNothing()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Linux and macOS keep the bit; see that test.");
+
+        using var temp = new TempDirectory();
+        var path = temp.WriteFile("file.cmd", "contents");
+        var attributes = File.GetAttributes(path);
+        var permissions = FilePermissionsFactory.Create();
+
+        permissions.SetExecutable(path, executable: false);
+        permissions.SetExecutable(path, executable: true);
+
+        Assert.Equal(attributes, File.GetAttributes(path));
+        Assert.Equal("contents", File.ReadAllText(path));
+        Assert.True(permissions.IsExecutable(path));
+    }
+
     /// <summary>Allows <paramref name="rights"/> on <paramref name="path"/> to every user of the machine.</summary>
     [SupportedOSPlatform("windows")]
     private static void Grant(string path, FileSystemRights rights)

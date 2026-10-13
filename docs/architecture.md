@@ -387,7 +387,9 @@ hook — or from a shell someone left in another checkout — would otherwise re
 repository nobody named: measured with `GIT_COMMON_DIR` naming another repository, deleting a
 worktree was refused and left it registered. Settings passed that way do not reach the harness's
 git either. A caller that deliberately wants a different index still gets one: the inherited value
-is cleared first and the requested one set after. An answer that does not name `GIT_DIR` is not
+is cleared first and the requested one set after. So does one that has git store a file only to read
+it back: it is given an object directory of its own, with the repository's beside it to read from,
+so nothing it stores reaches the repository. An answer that does not name `GIT_DIR` is not
 taken, and the command fails without running git.
 
 An orchestrator's agents' worktrees sit below the directory named for it,
@@ -610,6 +612,31 @@ place a seed is written). Stopped anywhere, the seed never names a path the tree
 the seed does not name goes at the next write. A file above 16 MiB (`SharedCopies.MostBytes`) is recorded and not
 kept. A copy that cannot be kept or pruned never fails the command that met it: the path is recorded all the same,
 and a line says why. list-orchestrator `--json` names the directory as each agent's `shared`.
+
+Merging two changes of one file is git's work, never a comparison of lines made here (`GitClient.Merge.cs`). Each of
+the three versions - what both held, and each side's - is first read as git would store it at the path
+(`IGitClient.ReadStagedAsync`: `git hash-object -w --path=<path>`, then `cat-file --batch`), through the clean filters
+and the line-ending rules of that path, so a file one tree checked out with other line endings merges as `git merge`
+would merge it. git stores a file to read it so, and what it stores goes to an object directory of the question's
+own - a temporary directory as `GIT_OBJECT_DIRECTORY`, the repository's own as `GIT_ALTERNATE_OBJECT_DIRECTORIES`,
+quoted so a path holding the character that parts that list is still one entry - discarded with the answer: neither
+the repository's objects nor its index are written by a merge that was only measured. `GitClient.HashAsync` is the one
+caller of `hash-object`, told what differs - written or not, filtered or not, as which path, into which directory.
+The three are merged by `git merge-file -p --diff3` (`MergeTextAsync`), outside any repository. Its exit code is the
+answer and is read as one, never as success or failure: 0 is a clean merge, whose output is the merged bytes; 1 to
+127 is that many conflicts, 127 standing for as many or more; anything else is no merge - a binary file, for one -
+kept in git's own words. `--diff3` is passed so no configuration changes what a conflict shows, and the markers are
+made one longer than the longest line of the three that could be read as one, so a file that holds such lines is
+merged like any other. A conflict is shown from its opening marker to its closing one, six of them and forty lines of
+each at most. How many hunks each side brought is git's count too (`git diff --no-index -U0` of each side against
+what both held). The merged bytes are brought to what a checkout would write (`ReadCheckedOutAsync`: `cat-file
+--filters --path=<path>`) and written as a copy between trees is - beside the destination, read back, compared by
+SHA-256, put in place in one step (`VerifiedFileCopy.WriteAsync`) - with the execute bit asked for
+(`IFilePermissions.SetExecutable`, which changes nothing on Windows, where no such bit is kept), not the bit of the
+file replaced. What a history held at a path is asked with `git rev-list --full-history` (`ListHeldInHistoryAsync`),
+since a version a merge dropped was still that history's, for one more commit than its bound, which is how a history
+cut short is told from one read whole; and what git's attributes declare for a path is asked of `git check-attr`
+(`ReadAttributesAsync`), by this and by fix-line-endings alike.
 
 rebase-agent moves an agent's base to the main tree's HEAD (`AgentFold.MeasureRebaseAsync`). Each path the two commits
 hold differently (`git diff --name-only`, commit to commit) is shared - kept as its seed records it, since the seed,

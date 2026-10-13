@@ -35,6 +35,27 @@ public sealed class PosixFilePermissions : IFilePermissions
         return File.Exists(path) && (File.GetUnixFileMode(path) & AnyExecute) != 0;
     }
 
+    public void SetExecutable(string path, bool executable)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var mode = File.GetUnixFileMode(path);
+
+        // Whoever may read it may run it, and its owner always: what git itself writes for a file it holds as one that
+        // can be run, and no wider than the file already was.
+        var wanted = executable
+            ? mode
+                | UnixFileMode.UserExecute
+                | ((mode & UnixFileMode.GroupRead) != 0 ? UnixFileMode.GroupExecute : UnixFileMode.None)
+                | ((mode & UnixFileMode.OtherRead) != 0 ? UnixFileMode.OtherExecute : UnixFileMode.None)
+            : mode & ~AnyExecute;
+
+        if (wanted != mode)
+        {
+            File.SetUnixFileMode(path, wanted);
+        }
+    }
+
     public bool IsPrivate(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

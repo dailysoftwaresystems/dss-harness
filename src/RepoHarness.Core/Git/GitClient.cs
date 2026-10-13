@@ -413,7 +413,13 @@ public sealed partial class GitClient(
             .Where(path => File.Exists(Path.Combine(directory, path)))
             .ToList();
 
-        var ids = await HashAsync(directory, wanted, cancellationToken).ConfigureAwait(false);
+        // Each file's bytes as they stand, through no filter and no line-ending conversion. Staging a file runs it
+        // through the filters and conversions the repository's attributes name, under whatever git configuration the
+        // machine has, and a filter that fails fails the whole staging: a host that set Git LFS up where a
+        // non-interactive shell cannot find it, or one that refuses a line ending conversion it cannot undo, then
+        // failed every sync. Nothing here needs what a filter makes of a file: the index names the files a tree holds,
+        // and a build reads each one's bytes itself.
+        var ids = await HashAsync(directory, wanted, new Hashing(Written: true, Filtered: false), "read what the tree holds", cancellationToken).ConfigureAwait(false);
         var modes = await ModesAsync(directory, wanted, cancellationToken).ConfigureAwait(false);
 
         // Built afresh in an index of this tool's own, and put in place whole. Staging into the index git
@@ -590,39 +596,58 @@ public sealed partial class GitClient(
         Ensure(result, $"move '{directory}' to {commit}");
     }
 
+    /// <summary>How <c>git hash-object</c> is asked to read files: what differs between its callers.</summary>
+    /// <param name="Written">Whether each object is written: into <paramref name="Store"/> where one is given, into the repository otherwise.</param>
+    /// <param name="Filtered">
+    /// Whether each file is read as git would store it - through the clean filters and the line-ending rules of a path, its
+    /// own or <paramref name="AsPath"/> - rather than as its bytes stand.
+    /// </param>
+    /// <param name="AsPath">The path whose rules apply to every file, for files kept somewhere else; each file's own where null.</param>
+    /// <param name="Store">An object directory of the question's own; the repository's where null.</param>
+    private sealed record Hashing(bool Written, bool Filtered, string? AsPath = null, ObjectStore? Store = null);
+
     /// <summary>
-    /// The object each of <paramref name="paths"/> holds, written to the repository, in the same order:
-    /// its bytes as they stand, through no filter and no line-ending conversion.
+    /// The object each of <paramref name="files"/> holds, in the same order, read as <paramref name="how"/> says: the one
+    /// caller of <c>git hash-object</c>, so the rule for a name that cannot travel on its standard input
+    /// (<see cref="NeedsAHashOfItsOwn"/>) is in one place.
     /// </summary>
-    /// <remarks>
-    /// Staging a file runs it through the filters and conversions the repository's attributes name,
-    /// under whatever git configuration the machine has, and a filter that fails fails the whole
-    /// staging. A host that set Git LFS up where a non-interactive shell cannot find it, or one that
-    /// refuses a line ending conversion it cannot undo, then failed every sync. Nothing here needs what
-    /// a filter makes of a file: the index names the files a tree holds, and a build reads each one's
-    /// bytes itself.
-    /// </remarks>
+    /// <param name="directory">The directory git runs in, which the files are relative to.</param>
+    /// <param name="files">The files to read.</param>
+    /// <param name="how">Whether each is written, whether it is filtered and as which path, and where its object goes.</param>
+    /// <param name="what">What was being done, for the failure.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
     private async Task<IReadOnlyList<string>> HashAsync(
         string directory,
-        IReadOnlyList<string> paths,
+        IReadOnlyList<string> files,
+        Hashing how,
+        string what,
         CancellationToken cancellationToken)
     {
+        string[] command =
+        [
+            "hash-object",
+            .. how.Written ? ["-w"] : Array.Empty<string>(),
+            .. !how.Filtered ? ["--no-filters"] : how.AsPath is { } asPath ? [$"--path={asPath}"] : Array.Empty<string>(),
+        ];
+
+        Task<GitCommandResult> RunAsync(IReadOnlyList<string> arguments, ChildInput? input)
+            => RunCoreAsync(directory, [.. command, .. arguments], echoOutput: false, untranslated: false, indexFile: null, input, cancellationToken, objects: how.Store);
+
         var ids = new Dictionary<string, string>(StringComparer.Ordinal);
-        var together = paths.Where(path => !NeedsAHashOfItsOwn(path)).ToList();
+
+        // A path given for them all names their rules, and git reads no list of files on its standard input beside it:
+        // they are named as arguments, a handful of this client's own. Otherwise every name that can travel on standard
+        // input does, and each that cannot is asked about on its own.
+        var alone = how.AsPath is null ? files.Where(NeedsAHashOfItsOwn).ToHashSet(StringComparer.Ordinal) : [];
+        var together = files.Where(file => !alone.Contains(file)).ToList();
 
         if (together.Count > 0)
         {
-            var hashed = await RunCoreAsync(
-                    directory,
-                    ["hash-object", "-w", "--no-filters", "--stdin-paths"],
-                    echoOutput: false,
-                    untranslated: false,
-                    indexFile: null,
-                    string.Join('\n', together) + '\n',
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var hashed = how.AsPath is null
+                ? await RunAsync(["--stdin-paths"], string.Join('\n', together) + '\n').ConfigureAwait(false)
+                : await RunAsync(["--", .. together], null).ConfigureAwait(false);
 
-            Ensure(hashed, "read what the tree holds");
+            Ensure(hashed, what);
 
             var answers = hashed.StandardOutput
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries)
@@ -642,23 +667,15 @@ public sealed partial class GitClient(
             }
         }
 
-        foreach (var path in paths.Where(NeedsAHashOfItsOwn))
+        foreach (var file in alone)
         {
-            var hashed = await RunCoreAsync(
-                    directory,
-                    ["hash-object", "-w", "--no-filters", "--", path],
-                    echoOutput: false,
-                    untranslated: false,
-                    indexFile: null,
-                    standardInput: null,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var hashed = await RunAsync(["--", file], null).ConfigureAwait(false);
 
-            Ensure(hashed, "read what the tree holds");
-            ids[path] = hashed.StandardOutput.Trim();
+            Ensure(hashed, what);
+            ids[file] = hashed.StandardOutput.Trim();
         }
 
-        return [.. paths.Select(path => ids[path])];
+        return [.. files.Select(file => ids[file])];
     }
 
     /// <summary>
@@ -1389,9 +1406,16 @@ public sealed partial class GitClient(
 
         Ensure(result, $"list the files at {commit}");
 
+        return TreeEntries(result.StandardOutput);
+    }
+
+    /// <summary>The entries <c>git ls-tree -z</c> listed, read as bytes: one reading of them, whichever listing asked.</summary>
+    /// <exception cref="HarnessException">git listed an entry in a form this build cannot read.</exception>
+    private static List<TreeEntry> TreeEntries(string output)
+    {
         // '<mode> <type> <object>TAB<name>': the name is everything after the first tab, so one
         // holding a tab keeps it.
-        return [.. Records(result.StandardOutput).Select(entry =>
+        return [.. Records(output).Select(entry =>
             entry.IndexOf('\t', StringComparison.Ordinal) is var tab and > 0
                 && entry[..tab].Split(' ') is [var mode, var type, var objectId]
                 ? new TreeEntry(mode, type, objectId, GitName.FromBytes(entry[(tab + 1)..]))
@@ -1429,7 +1453,8 @@ public sealed partial class GitClient(
         string directory,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken,
-        string? standardInput = null)
+        ChildInput? standardInput = null,
+        ObjectStore? objects = null)
         => RunCoreAsync(
             directory,
             arguments,
@@ -1438,11 +1463,12 @@ public sealed partial class GitClient(
             indexFile: null,
             standardInput,
             cancellationToken,
-            Encoding.Latin1);
+            Encoding.Latin1,
+            objects);
 
     /// <summary>
     /// The objects <paramref name="objects"/> names, in order, read by one <c>git cat-file --batch</c>:
-    /// each file's text, or <see langword="null"/> for a name that is not a file git could read.
+    /// each file's text - its bytes, decoded - or <see langword="null"/> for a name that is not a file git could read.
     /// </summary>
     /// <remarks>
     /// The commit is asked about first, in the same process: git answers "missing" for a commit it
@@ -1456,28 +1482,48 @@ public sealed partial class GitClient(
         IReadOnlyList<string> objects,
         CancellationToken cancellationToken)
     {
-        var input = new StringBuilder().Append(commit).Append("^{commit}\n");
-
-        foreach (var name in objects)
-        {
-            input.Append(name).Append('\n');
-        }
-
-        var result = await RunForBytesAsync(directory, ["cat-file", "--batch"], cancellationToken, input.ToString())
+        var answers = await ReadBatchAsync(directory, [$"{commit}^{{commit}}", .. objects], $"read {ReportText.Counted(objects.Count, "file")} at {commit}", store: null, cancellationToken)
             .ConfigureAwait(false);
 
-        Ensure(result, $"read {ReportText.Counted(objects.Count, "file")} at {commit}");
-
-        var answers = new BatchAnswers(result.StandardOutput);
-
-        if (answers.Next() is not { Type: "commit" })
+        if (answers[0] is not { Type: "commit" })
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
                 $"Could not read {ReportText.Counted(objects.Count, "file")} at {commit}: git cannot read that commit.");
         }
 
-        return [.. objects.Select(_ => answers.Next() is { Type: "blob" } blob ? Decoded(blob.Content) : null)];
+        return [.. answers.Skip(1).Select(answer => answer is { Type: "blob" } blob ? Decoded(blob.Content) : null)];
+    }
+
+    /// <summary>
+    /// What one <c>git cat-file --batch</c> answers for <paramref name="names"/>, in order: each object's type and its
+    /// bytes, carried one to a character, or <see langword="null"/> for a name that names nothing git can read.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="names">Names git reads as objects, none holding a line break.</param>
+    /// <param name="what">What was being read, for the failure.</param>
+    /// <param name="store">An object directory of the question's own to read from besides; the repository's alone where null.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    private async Task<IReadOnlyList<(string Type, string Content)?>> ReadBatchAsync(
+        string directory,
+        IReadOnlyList<string> names,
+        string what,
+        ObjectStore? store,
+        CancellationToken cancellationToken)
+    {
+        if (names.Count == 0)
+        {
+            return [];
+        }
+
+        var result = await RunForBytesAsync(directory, ["cat-file", "--batch"], cancellationToken, string.Join('\n', names) + '\n', store)
+            .ConfigureAwait(false);
+
+        Ensure(result, what);
+
+        var answers = new BatchAnswers(result.StandardOutput);
+
+        return [.. names.Select(_ => answers.Next())];
     }
 
     /// <summary>A file's bytes, carried one to a character, as the text they are.</summary>
@@ -1610,7 +1656,8 @@ public sealed partial class GitClient(
         string? indexFile,
         ChildInput? standardInput,
         CancellationToken cancellationToken,
-        Encoding? outputEncoding = null)
+        Encoding? outputEncoding = null,
+        ObjectStore? objects = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
@@ -1637,6 +1684,14 @@ public sealed partial class GitClient(
         if (indexFile is not null)
         {
             environment["GIT_INDEX_FILE"] = indexFile;
+        }
+
+        // As the index is: an object directory a caller asks for is set once the inherited one is gone. What git writes
+        // goes there, and the repository's own objects are still read, beside it.
+        if (objects is not null)
+        {
+            environment["GIT_OBJECT_DIRECTORY"] = objects.Directory;
+            environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = objects.AlternateList;
         }
 
         var request = new ProcessRequest

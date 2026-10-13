@@ -1237,6 +1237,34 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlyDictionary<string, GitHeld>> HeldAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
         => Call(() => inner.HeldAtAsync(directory, commit, paths, Token(cancellationToken)));
 
+    public Task<IReadOnlyDictionary<string, GitEntry>> ListEntriesAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListEntriesAtAsync(directory, commit, paths, Token(cancellationToken)));
+
+    public Task<GitPathHistory> ListHeldInHistoryAsync(string directory, string tip, IReadOnlyList<string> paths, int most, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListHeldInHistoryAsync(directory, tip, paths, most, Token(cancellationToken)));
+
+    public Task<IReadOnlyList<string>> ListStagedIdsAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
+        => Call(() => inner.ListStagedIdsAsync(directory, paths, Token(cancellationToken)));
+
+    public Task<IReadOnlyList<byte[]>> ReadStagedAsync(string directory, string path, IReadOnlyList<GitContent> contents, CancellationToken cancellationToken = default)
+        => Call(() => inner.ReadStagedAsync(directory, path, contents, Token(cancellationToken)));
+
+    public Task<byte[]> ReadCheckedOutAsync(string directory, string path, byte[] staged, CancellationToken cancellationToken = default)
+        => Call(() => inner.ReadCheckedOutAsync(directory, path, staged, Token(cancellationToken)));
+
+    public Task<GitTextMerge> MergeTextAsync(byte[] ancestor, byte[] ours, byte[] theirs, GitMergeNames names, CancellationToken cancellationToken = default)
+        => Call(() => inner.MergeTextAsync(ancestor, ours, theirs, names, Token(cancellationToken)));
+
+    public Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default)
+        => Call(() => inner.ReadBlobsAsync(directory, objects, Token(cancellationToken)));
+
+    public Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>> ReadAttributesAsync(
+        string directory,
+        IReadOnlyList<string> attributes,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default)
+        => Call(() => inner.ReadAttributesAsync(directory, attributes, paths, Token(cancellationToken)));
+
     public Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(string directory, CancellationToken cancellationToken = default)
         => ListWorktreesFailure is { } failure && (ListWorktreesFailsWhen?.Invoke() ?? true)
             ? Task.FromException<IReadOnlyList<GitWorktree>>(failure)

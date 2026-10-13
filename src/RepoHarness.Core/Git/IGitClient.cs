@@ -96,6 +96,118 @@ public interface IGitClient
         IReadOnlyList<string> paths,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The entry <paramref name="commit"/> holds at each of <paramref name="paths"/> - its mode among it, which says
+    /// whether a file can be run and whether it is a symbolic link - asked for those paths alone; a path the commit holds
+    /// nothing at is in no answer.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="commit">A commit id, as <see cref="ResolveCommitAsync"/> returns.</param>
+    /// <param name="paths">Paths from the repository's root, with forward separators, as git names them, each read literally.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not list the commit.</exception>
+    Task<IReadOnlyDictionary<string, GitEntry>> ListEntriesAtAsync(
+        string directory,
+        string commit,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What the history of <paramref name="tip"/> held at each of <paramref name="paths"/>, newest first: every version
+    /// found among the <paramref name="most"/> newest commits that changed any of them - a commit a merge dropped among
+    /// them, since what it held was still that history's - each with a commit that holds it there; and whether that
+    /// history goes further back than was read.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="tip">The commit whose history is read, or a name of it, read as <see cref="ResolveCommitAsync"/> reads it.</param>
+    /// <param name="paths">Paths from the repository's root, with forward separators, as git names them, each read literally.</param>
+    /// <param name="most">The most commits read: what bounds the cost, and what <see cref="GitPathHistory.Cut"/> says was hit.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not walk the history, or answer for every commit and path.</exception>
+    Task<GitPathHistory> ListHeldInHistoryAsync(
+        string directory,
+        string tip,
+        IReadOnlyList<string> paths,
+        int most,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The blob each of <paramref name="paths"/> would be stored as at its own path in the work tree at
+    /// <paramref name="directory"/>, in the same order: its file read through the clean filters and the line-ending rules
+    /// of that path, as <c>git add</c> would read it. Nothing is written, in the repository or anywhere else.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="paths">Files in it, relative to the root, with forward separators.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not read a file, or a filter of its path failed.</exception>
+    Task<IReadOnlyList<string>> ListStagedIdsAsync(string directory, IReadOnlyList<string> paths, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Each of <paramref name="contents"/> as git would store it at <paramref name="path"/> in the work tree at
+    /// <paramref name="directory"/>, in the same order: a blob's bytes as they are, and a file's or bytes in hand through
+    /// the clean filters and the line-ending rules of that path. Nothing in the repository is written - neither its index
+    /// nor its objects.
+    /// </summary>
+    /// <param name="directory">The work tree's root, whose attributes and configuration say how the path is stored.</param>
+    /// <param name="path">The path whose rules apply, relative to the root, with forward separators.</param>
+    /// <param name="contents">The contents to read.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not read one of them as it would store it: a filter that failed, or a blob it does not hold.</exception>
+    Task<IReadOnlyList<byte[]>> ReadStagedAsync(string directory, string path, IReadOnlyList<GitContent> contents, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The bytes git would write into the work tree at <paramref name="directory"/> for <paramref name="staged"/> checked
+    /// out at <paramref name="path"/>: the smudge filters and the line-ending rules of that path applied. Nothing in the
+    /// repository is written.
+    /// </summary>
+    /// <param name="directory">The work tree's root, whose attributes and configuration say how the path is checked out.</param>
+    /// <param name="path">The path whose rules apply, relative to the root, with forward separators.</param>
+    /// <param name="staged">The bytes as git stores them.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not check them out: a filter that failed, for one.</exception>
+    Task<byte[]> ReadCheckedOutAsync(string directory, string path, byte[] staged, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Three versions of one text merged as <c>git merge-file</c> merges them, each given as git stores it: clean, with
+    /// the merged bytes and how many hunks each side changed; in conflict, counted and shown, each side under its name and
+    /// what both held between them; or not merged at all, in git's own words, which is an answer and no failure of the
+    /// question. No repository is read or written.
+    /// </summary>
+    /// <param name="ancestor">What both sides held.</param>
+    /// <param name="ours">The side the merge is made into.</param>
+    /// <param name="theirs">The side merged in.</param>
+    /// <param name="names">What the three are called in a conflict's markers.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not be run, or the three could not be written for it to read.</exception>
+    Task<GitTextMerge> MergeTextAsync(byte[] ancestor, byte[] ours, byte[] theirs, GitMergeNames names, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The objects <paramref name="objects"/> names, in order, each as its bytes, read by one git process;
+    /// <see langword="null"/> for one that is no blob git can read.
+    /// </summary>
+    /// <param name="directory">A directory inside the repository.</param>
+    /// <param name="objects">Blob ids, or names git reads as one, none holding a line break.</param>
+    /// <param name="cancellationToken">Cancels the git process.</param>
+    /// <exception cref="HarnessException">git could not answer.</exception>
+    Task<IReadOnlyList<byte[]?>> ReadBlobsAsync(string directory, IReadOnlyList<string> objects, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// What git's attributes declare for each of <paramref name="paths"/> in the work tree at <paramref name="directory"/>:
+    /// for each path, each of <paramref name="attributes"/> with what <c>git check-attr</c> answers for it - its value, or
+    /// one of <see cref="GitAttributes"/>. Asked of git rather than parsed: git's own precedence between patterns,
+    /// directories and the repository's info attributes is the answer, and a second reading of it would be a second answer.
+    /// </summary>
+    /// <param name="directory">The work tree's root.</param>
+    /// <param name="attributes">The attributes to ask about.</param>
+    /// <param name="paths">Paths relative to the root, with forward separators, whether or not a file is there.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not answer.</exception>
+    Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>> ReadAttributesAsync(
+        string directory,
+        IReadOnlyList<string> attributes,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Lists every worktree attached to the repository, the main worktree first.</summary>
     Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(string directory, CancellationToken cancellationToken = default);
 

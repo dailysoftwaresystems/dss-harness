@@ -1340,6 +1340,509 @@ public sealed class GitClientTests
         Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
         Assert.Equal("git answered which rule decides 'a.log' in a form this build cannot read: 'one' is not a line number.", refusal.Message);
     }
+
+    private static readonly GitMergeNames MergeNames = new("the main tree", "what both held", "the agent");
+
+    private static byte[] Utf8(string text) => Encoding.UTF8.GetBytes(text);
+
+    private static string Text(byte[]? bytes) => Encoding.UTF8.GetString(bytes ?? []);
+
+    /// <summary>Every file under the repository's object directory: what a stored object would add to.</summary>
+    private static string[] ObjectFiles(string repository)
+        => [.. Directory.EnumerateFiles(Path.Combine(repository, ".git", "objects"), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal)];
+
+    /// <summary>
+    /// A repository whose text files are checked out with CRLF and stored with LF, holding <c>a.txt</c> so, and the blob
+    /// its commit holds it as.
+    /// </summary>
+    private static async Task<string> CommitCheckedOutWithCrlfAsync(HarnessFactory harness, string repository, CancellationToken cancellationToken)
+    {
+        await harness.InitializeGitRepositoryAsync(repository, cancellationToken);
+        File.WriteAllText(Path.Combine(repository, ".gitattributes"), "*.txt text eol=crlf\n*.bin -text\n");
+        File.WriteAllText(Path.Combine(repository, "a.txt"), "one\r\ntwo\r\n");
+        await harness.CommitAllAsync(repository, "a file checked out with other line endings than it is stored with", cancellationToken);
+
+        return (await harness.RunGitAsync(repository, ["rev-parse", "HEAD:a.txt"], cancellationToken)).StandardOutput.Trim();
+    }
+
+    /// <summary>
+    /// The three versions of a merge are brought to the form git stores before they are merged, and the result to the
+    /// form a checkout writes: a file one tree holds with other line endings then merges as git itself would merge it.
+    /// </summary>
+    [Fact]
+    public async Task AFile_IsReadAsGitWouldStoreIt_AndAFileCheckedOutWithOtherLineEndings_IsReadAsTheCommitsOwn()
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var committed = await CommitCheckedOutWithCrlfAsync(harness, temp.Path, cancellationToken);
+        var kept = outside.WriteFile("kept", "one\r\nthree\r\n");
+
+        var staged = await harness.GitClient.ReadStagedAsync(
+            temp.Path,
+            "a.txt",
+            [new GitContent.Blob(committed), new GitContent.File(temp.Combine("a.txt")), new GitContent.File(kept), new GitContent.Bytes(Utf8("one\r\nfour\r\n"))],
+            cancellationToken);
+
+        Assert.Equal(["one\ntwo\n", "one\ntwo\n", "one\nthree\n", "one\nfour\n"], staged.Select(Text));
+
+        // A path whose bytes are the file is stored as it stands, and checked out so.
+        var asItStands = await harness.GitClient.ReadStagedAsync(temp.Path, "a.bin", [new GitContent.File(kept)], cancellationToken);
+
+        Assert.Equal("one\r\nthree\r\n", Text(Assert.Single(asItStands)));
+        Assert.Equal("one\r\nmerged\r\n", Text(await harness.GitClient.ReadCheckedOutAsync(temp.Path, "a.txt", Utf8("one\nmerged\n"), cancellationToken)));
+        Assert.Equal("one\nmerged\n", Text(await harness.GitClient.ReadCheckedOutAsync(temp.Path, "a.bin", Utf8("one\nmerged\n"), cancellationToken)));
+    }
+
+    /// <summary>
+    /// git reads a file as it would store it by storing it, and what it stores for a question goes to a directory of the
+    /// question's own: a merge that was only measured leaves the repository as it found it.
+    /// </summary>
+    [Fact]
+    public async Task ReadingAFileAsGitWouldStoreIt_LeavesNoObjectInTheRepository_AndNoChangeToItsIndex()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await CommitCheckedOutWithCrlfAsync(harness, temp.Path, cancellationToken);
+        var edited = temp.WriteFile("a.txt", "one\r\nnever stored\r\n");
+        var index = Path.Combine(temp.Path, ".git", "index");
+        var objects = ObjectFiles(temp.Path);
+        var indexed = File.ReadAllBytes(index);
+        var processes = new CountingProcesses(harness.ProcessRunner);
+        var git = new GitClient(processes, harness.Output, localVariables: harness.LocalVariables);
+
+        var staged = await git.ReadStagedAsync(temp.Path, "a.txt", [new GitContent.File(edited), new GitContent.Bytes(Utf8("nor this\r\n"))], cancellationToken);
+        var checkedOut = await git.ReadCheckedOutAsync(temp.Path, "a.txt", Utf8("nor this either\n"), cancellationToken);
+        var ids = await git.ListStagedIdsAsync(temp.Path, ["a.txt"], cancellationToken);
+
+        Assert.Equal(["one\nnever stored\n", "nor this\n"], staged.Select(Text));
+        Assert.Equal("nor this either\r\n", Text(checkedOut));
+        Assert.Equal(objects, ObjectFiles(temp.Path));
+        Assert.Equal(indexed, File.ReadAllBytes(index));
+
+        // And git does not hold what was read: the id is the one git would give it, of an object it was never given.
+        var unknown = await harness.GitClient.RunAsync(temp.Path, ["cat-file", "-e", Assert.Single(ids)], cancellationToken: cancellationToken);
+        Assert.False(unknown.Succeeded, "The repository holds an object for a file that was only read.");
+
+        // Every object git was told to write went to a directory outside the repository, set once the inherited one was
+        // cleared, with the repository's own beside it, as one entry of a list.
+        var written = processes.Started.Where(request => request.Arguments.Contains("-w")).ToList();
+        Assert.NotEmpty(written);
+        Assert.All(written, request =>
+        {
+            Assert.Null(request.Environment["GIT_COMMON_DIR"]);
+            Assert.False(
+                Path.GetFullPath(request.Environment["GIT_OBJECT_DIRECTORY"]!).StartsWith(Path.GetFullPath(temp.Path), StringComparison.OrdinalIgnoreCase),
+                "git was told to write into the repository.");
+            Assert.StartsWith("\"", request.Environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"], StringComparison.Ordinal);
+        });
+        Assert.All(written, request => Assert.False(Directory.Exists(request.Environment["GIT_OBJECT_DIRECTORY"]), "The directory of a question's own was left behind."));
+    }
+
+    /// <summary>
+    /// A linked worktree keeps its objects in the repository it belongs to, not under itself: read from inside one, the
+    /// repository's objects are still found beside the directory of the question's own, and still not written.
+    /// </summary>
+    [Fact]
+    public async Task FromInsideALinkedWorktree_AFileIsStillReadAsGitWouldStoreIt_AndTheRepositoryIsNotWritten()
+    {
+        using var temp = new TempDirectory();
+        using var elsewhere = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var committed = await CommitCheckedOutWithCrlfAsync(harness, temp.Path, cancellationToken);
+        var linked = elsewhere.Combine("linked");
+        await harness.RunGitAsync(temp.Path, ["worktree", "add", "--quiet", "--detach", linked], cancellationToken);
+        File.WriteAllText(Path.Combine(linked, "a.txt"), "one\r\nchanged in the worktree\r\n");
+        var objects = ObjectFiles(temp.Path);
+
+        var staged = await harness.GitClient.ReadStagedAsync(
+            linked,
+            "a.txt",
+            [new GitContent.Blob(committed), new GitContent.File(Path.Combine(linked, "a.txt"))],
+            cancellationToken);
+        var checkedOut = await harness.GitClient.ReadCheckedOutAsync(linked, "a.txt", staged[1], cancellationToken);
+
+        Assert.Equal(["one\ntwo\n", "one\nchanged in the worktree\n"], staged.Select(Text));
+        Assert.Equal("one\r\nchanged in the worktree\r\n", Text(checkedOut));
+        Assert.Equal(objects, ObjectFiles(temp.Path));
+    }
+
+    /// <summary>
+    /// git reads its other object directories from one variable, as a list parted by a colon - a semicolon on Windows -
+    /// and a repository may sit under a directory whose name holds that character: its objects are still read.
+    /// </summary>
+    [Fact]
+    public async Task ARepositoryWhosePathHoldsTheCharacterThatPartsGitsListOfObjectDirectories_IsStillRead()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var repository = Directory.CreateDirectory(temp.Combine(OperatingSystem.IsWindows() ? "one;two" : "one:two \"quoted\"")).FullName;
+        var committed = await CommitCheckedOutWithCrlfAsync(harness, repository, cancellationToken);
+
+        var staged = await harness.GitClient.ReadStagedAsync(repository, "a.txt", [new GitContent.Blob(committed), new GitContent.Bytes(Utf8("in hand\r\n"))], cancellationToken);
+
+        Assert.Equal(["one\ntwo\n", "in hand\n"], staged.Select(Text));
+    }
+
+    [Fact]
+    public async Task ThreeVersions_MergeClean_WhereTheTwoSidesChangedDifferentLines_AndTheMergedBytesAreGits()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        // A byte that is no UTF-8 among them: what is merged is bytes, carried as they are.
+        byte[] Version(string first, string last) => [.. Utf8($"{first}\ntwo\ncaf"), 0xE9, .. Utf8($"\nfour\nfive\nsix\n{last}\n")];
+
+        var merge = await harness.GitClient.MergeTextAsync(Version("one", "seven"), Version("ONE", "seven"), Version("one", "SEVEN"), MergeNames, cancellationToken);
+
+        Assert.True(merge.IsClean);
+        Assert.Equal(Version("ONE", "SEVEN"), merge.Merged);
+        Assert.Equal(0, merge.Conflicts);
+        Assert.Empty(merge.Shown);
+        Assert.Null(merge.NotMerged);
+
+        // git's own, run by hand on the same three.
+        File.WriteAllBytes(temp.Combine("a"), Version("one", "seven"));
+        File.WriteAllBytes(temp.Combine("o"), Version("ONE", "seven"));
+        File.WriteAllBytes(temp.Combine("t"), Version("one", "SEVEN"));
+        await harness.RunGitAsync(temp.Path, ["merge-file", "o", "a", "t"], cancellationToken);
+
+        Assert.Equal(File.ReadAllBytes(temp.Combine("o")), merge.Merged);
+    }
+
+    [Fact]
+    public async Task TwoSidesThatChangedOneLineDifferently_AreAConflict_Counted_AndShownWithBothVersionsAndWhatBothHeld()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        static byte[] Version(string second, string eighth) => Utf8($"one\n{second}\nthree\nfour\nfive\nsix\nseven\n{eighth}\nnine\n");
+
+        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version("two", "eight"), Version("OURS", "eight of ours"), Version("THEIRS", "eight of theirs"), MergeNames, cancellationToken);
+
+        Assert.False(merge.IsClean);
+        Assert.Null(merge.Merged);
+        Assert.Null(merge.NotMerged);
+        Assert.Equal(2, merge.Conflicts);
+        Assert.Equal("2 place(s)", merge.ConflictsSaid);
+        Assert.Equal(
+            [
+                "<<<<<<< the main tree", "OURS", "||||||| what both held", "two", "=======", "THEIRS", ">>>>>>> the agent",
+                "<<<<<<< the main tree", "eight of ours", "||||||| what both held", "eight", "=======", "eight of theirs", ">>>>>>> the agent",
+            ],
+            merge.Shown);
+    }
+
+    [Fact]
+    public async Task AChangeBothSidesMadeAlike_MergesClean_Once()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Utf8("one\ntwo\nthree\n"), Utf8("one\nBOTH\nthree\n"), Utf8("one\nBOTH\nthree\n"), MergeNames, cancellationToken);
+
+        Assert.True(merge.IsClean);
+        Assert.Equal("one\nBOTH\nthree\n", Text(merge.Merged));
+
+        // Counted for each side, since each made it.
+        Assert.Equal((1, 1), (merge.OursHunks, merge.TheirsHunks));
+    }
+
+    /// <summary>
+    /// A file may hold a line that reads as a conflict's marker - a document about merging does. The markers of its merge
+    /// are made longer than any such line, so the line is merged like any other and never taken for a conflict.
+    /// </summary>
+    [Fact]
+    public async Task AFileHoldingALineOfSevenOpeningMarks_IsStillMerged_AndItsLineIsNotShownAsAConflict()
+    {
+        var git = new HarnessFactory().GitClient;
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        static byte[] Version(string first, string fifth) => Utf8($"{first}\n<<<<<<< not a marker\n=======\n>>>>>>> nor this\n{fifth}\nsix\n");
+
+        var clean = await git.MergeTextAsync(Version("one", "five"), Version("ONE", "five"), Version("one", "FIVE"), MergeNames, cancellationToken);
+
+        Assert.True(clean.IsClean);
+        Assert.Equal(Version("ONE", "FIVE"), clean.Merged);
+
+        var conflict = await git.MergeTextAsync(Version("one", "five"), Version("one", "OURS"), Version("one", "THEIRS"), MergeNames, cancellationToken);
+
+        Assert.Equal(1, conflict.Conflicts);
+        Assert.Equal(
+            ["<<<<<<<< the main tree", "OURS", "|||||||| what both held", "five", "========", "THEIRS", ">>>>>>>> the agent"],
+            conflict.Shown);
+    }
+
+    [Fact]
+    public async Task ABinaryFile_IsNotMerged_InGitsWords_AndIsNotAnErrorOfTheQuestion()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        static byte[] Version(byte changed) => [0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, changed, 0x00, 0x0A, 0xFF];
+
+        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version(1), Version(2), Version(3), MergeNames, cancellationToken);
+
+        Assert.False(merge.IsClean);
+        Assert.Equal(0, merge.Conflicts);
+        Assert.Empty(merge.Shown);
+        Assert.False(string.IsNullOrWhiteSpace(merge.NotMerged), "git's reason was not kept.");
+    }
+
+    [Fact]
+    public async Task MoreThan127Conflicts_AreSaidAs127OrMore_AndOnlyTheFirstAreShown()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        // Two hundred lines the two sides changed differently, each among lines neither changed.
+        static byte[] Version(string changed)
+            => Utf8(string.Concat(Enumerable.Range(0, 200).Select(at => $"kept {at} a\nkept {at} b\nkept {at} c\nkept {at} d\n{changed} {at}\n")));
+
+        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version("line"), Version("ours"), Version("theirs"), MergeNames, cancellationToken);
+
+        Assert.False(merge.IsClean);
+        Assert.Equal(GitTextMerge.MostConflictsCounted, merge.Conflicts);
+        Assert.Equal("127 place(s) or more", merge.ConflictsSaid);
+        Assert.Equal((GitTextMerge.MostConflictsShown * 7) + 1, merge.Shown.Count);
+        Assert.Equal(["<<<<<<< the main tree", "ours 5", "||||||| what both held", "line 5", "=======", "theirs 5", ">>>>>>> the agent"], merge.Shown.Skip(35).Take(7));
+        Assert.Equal("(194 more conflict(s), not shown)", merge.Shown[^1]);
+    }
+
+    [Fact]
+    public async Task AConflictLongerThanIsShown_IsCutAtItsBound_WithHowMuchMoreThereIs()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        static byte[] Version(string changed, int lines) => Utf8("first\n" + string.Concat(Enumerable.Range(0, lines).Select(at => $"{changed} {at}\n")) + "last\n");
+
+        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version("line", 1), Version("ours", 50), Version("theirs", 2), MergeNames, cancellationToken);
+
+        // Opening marker, fifty of ours, the marker of what both held, its one line, the divider, two of theirs, the closing marker.
+        Assert.Equal(1, merge.Conflicts);
+        Assert.Equal(GitTextMerge.MostLinesShown + 1, merge.Shown.Count);
+        Assert.Equal("<<<<<<< the main tree", merge.Shown[0]);
+        Assert.Equal("ours 38", merge.Shown[GitTextMerge.MostLinesShown - 1]);
+        Assert.Equal("(17 more line(s) of this conflict, not shown)", merge.Shown[^1]);
+    }
+
+    [Fact]
+    public async Task TheHunksOfEachSide_AreCountedAsGitCountsThem()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        static byte[] Version(params int[] changed)
+            => Utf8(string.Concat(Enumerable.Range(1, 30).Select(line => changed.Contains(line) ? $"CHANGED {line}\n" : $"line {line}\n")));
+
+        // Ours: two runs of changed lines. Theirs: three, one of them two lines long.
+        var merge = await new HarnessFactory().GitClient.MergeTextAsync(Version(), Version(2, 10), Version(16, 17, 22, 29), MergeNames, cancellationToken);
+
+        Assert.True(merge.IsClean);
+        Assert.Equal(Version(2, 10, 16, 17, 22, 29), merge.Merged);
+        Assert.Equal((2, 3), (merge.OursHunks, merge.TheirsHunks));
+    }
+
+    [Fact]
+    public async Task TheHistoryOfAPath_ListsEachVersionWithItsCommit_NewestFirst_StopsAtItsBound_AndSaysItStopped()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+
+        async Task<string> CommitAsync(string file, string content)
+        {
+            temp.WriteFile(file, content);
+            await harness.CommitAllAsync(temp.Path, $"{file}: {content}", cancellationToken);
+
+            return (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
+        }
+
+        async Task<string> BlobAsync(string commit, string file)
+            => (await harness.RunGitAsync(temp.Path, ["rev-parse", $"{commit}:{file}"], cancellationToken)).StandardOutput.Trim();
+
+        var first = await CommitAsync("a.txt", "first");
+        var other = await CommitAsync("b.txt", "another file");
+        await CommitAsync("unrelated.txt", "neither of them");
+        var second = await CommitAsync("a.txt", "second");
+        var third = await CommitAsync("a.txt", "third");
+        var again = await CommitAsync("a.txt", "first");
+
+        var whole = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt", "b.txt", "never.txt"], 64, cancellationToken);
+
+        Assert.False(whole.Cut);
+        Assert.Equal(5, whole.Commits);
+
+        // The commit that changed only the other file holds the first version too, and is no version of its own: the
+        // run is named by its oldest commit, the one that made it.
+        Assert.Equal(
+            [
+                new GitHeldAt(again, await BlobAsync(first, "a.txt")),
+                new GitHeldAt(third, await BlobAsync(third, "a.txt")),
+                new GitHeldAt(second, await BlobAsync(second, "a.txt")),
+                new GitHeldAt(first, await BlobAsync(first, "a.txt")),
+            ],
+            whole.Held["a.txt"]);
+        Assert.Equal([new GitHeldAt(other, await BlobAsync(other, "b.txt"))], whole.Held["b.txt"]);
+        Assert.Empty(whole.Held["never.txt"]);
+
+        var bounded = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt"], 2, cancellationToken);
+
+        Assert.True(bounded.Cut, "A history cut short at its bound was not said to be.");
+        Assert.Equal(2, bounded.Commits);
+        Assert.Equal([again, third], bounded.Held["a.txt"].Select(held => held.Commit));
+
+        // Exactly as many as the bound is the whole of it, and is not said to be cut.
+        var exact = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt"], 4, cancellationToken);
+
+        Assert.False(exact.Cut);
+        Assert.Equal(4, exact.Held["a.txt"].Count);
+    }
+
+    /// <summary>
+    /// A merge that kept its own side of a file dropped what the other side held there, and that version was still the
+    /// history's: an agent seeded from the other side holds it. Walked as git walks by default, only the side taken is
+    /// followed and the version is never found.
+    /// </summary>
+    [Fact]
+    public async Task AVersionAMergeDropped_IsStillListed()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("a.txt", "what the main side holds");
+        await harness.CommitAllAsync(temp.Path, "a file", cancellationToken);
+        var main = (await harness.RunGitAsync(temp.Path, ["rev-parse", "--abbrev-ref", "HEAD"], cancellationToken)).StandardOutput.Trim();
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", "-b", "side"], cancellationToken);
+        temp.WriteFile("a.txt", "what the other side held");
+        await harness.CommitAllAsync(temp.Path, "the other side's version", cancellationToken);
+        var dropped = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
+        var droppedBlob = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:a.txt"], cancellationToken)).StandardOutput.Trim();
+
+        await harness.RunGitAsync(temp.Path, ["checkout", "--quiet", main], cancellationToken);
+        temp.WriteFile("other.txt", "something else");
+        await harness.CommitAllAsync(temp.Path, "another file on the main side", cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["merge", "--quiet", "-s", "ours", "-m", "the other side merged, its file dropped", "side"], cancellationToken);
+
+        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["a.txt"], 64, cancellationToken);
+
+        Assert.Contains(new GitHeldAt(dropped, droppedBlob), history.Held["a.txt"]);
+        Assert.False(history.Cut);
+    }
+
+    [Fact]
+    public async Task TheEntriesOfACommit_AreListedForThePathsAskedAlone_EachWithItsMode()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("plain.txt", "a file");
+        temp.WriteFile("run.sh", "#!/bin/sh\n");
+        temp.WriteFile("[ab].txt", "a name that reads as a pattern");
+        temp.WriteFile("a.txt", "what the pattern would match");
+        temp.WriteFile(Path.Combine("dir", "inner.txt"), "inside a directory");
+        await harness.RunGitAsync(temp.Path, ["add", "-A"], cancellationToken);
+
+        // Set in the index, so the commit holds them on a file system that keeps no such bit and makes no such link.
+        await harness.RunGitAsync(temp.Path, ["update-index", "--chmod=+x", "run.sh"], cancellationToken);
+        var target = (await harness.RunGitAsync(temp.Path, ["rev-parse", ":plain.txt"], cancellationToken)).StandardOutput.Trim();
+        await harness.RunGitAsync(temp.Path, ["update-index", "--add", "--cacheinfo", $"120000,{target},link"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", "entries of every kind"], cancellationToken);
+        var commit = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
+
+        var entries = await harness.GitClient.ListEntriesAtAsync(
+            temp.Path,
+            commit,
+            ["plain.txt", "run.sh", "[ab].txt", "dir", "dir/inner.txt", "link", "absent.txt"],
+            cancellationToken);
+
+        Assert.Equal(["[ab].txt", "dir", "dir/inner.txt", "link", "plain.txt", "run.sh"], entries.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(new GitEntry("100644", "blob", target), entries["plain.txt"]);
+        Assert.True(entries["plain.txt"] is { IsBlob: true, IsExecutable: false, IsLink: false });
+        Assert.True(entries["run.sh"] is { IsBlob: true, IsExecutable: true, IsLink: false });
+        Assert.True(entries["link"] is { IsBlob: true, IsExecutable: false, IsLink: true });
+        Assert.True(entries["dir"] is { IsBlob: false, Type: "tree" });
+        Assert.True(entries["dir/inner.txt"].IsBlob);
+        Assert.Empty(await harness.GitClient.ListEntriesAtAsync(temp.Path, commit, [], cancellationToken));
+    }
+
+    [Fact]
+    public async Task TheBlobAFileWouldBeStoredAs_IsNamedWithoutStoringIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var committed = await CommitCheckedOutWithCrlfAsync(harness, temp.Path, cancellationToken);
+        temp.WriteFile("new.txt", "one\r\ntwo\r\n");
+        temp.WriteFile("other.txt", "something else\r\n");
+        var objects = ObjectFiles(temp.Path);
+
+        var ids = await harness.GitClient.ListStagedIdsAsync(temp.Path, ["other.txt", "a.txt", "new.txt"], cancellationToken);
+
+        // The file as checked out and one new to the tree with the same lines are the blob the commit holds.
+        Assert.Equal(3, ids.Count);
+        Assert.NotEqual(committed, ids[0]);
+        Assert.Equal([committed, committed], ids.Skip(1));
+        Assert.Equal(objects, ObjectFiles(temp.Path));
+        Assert.Empty(await harness.GitClient.ListStagedIdsAsync(temp.Path, [], cancellationToken));
+    }
+
+    [Fact]
+    public async Task Blobs_AreReadAsTheirBytes_AndWhatIsNoBlobGitCanRead_AsNone()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        byte[] content = [.. Utf8("caf"), 0xE9, 0x00, 0x0A, .. Utf8("more\n")];
+        File.WriteAllBytes(temp.Combine("bytes.bin"), content);
+        File.WriteAllText(temp.Combine(".gitattributes"), "*.bin -text\n");
+        await harness.CommitAllAsync(temp.Path, "bytes that are no text", cancellationToken);
+        var blob = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:bytes.bin"], cancellationToken)).StandardOutput.Trim();
+        var tree = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD^{tree}"], cancellationToken)).StandardOutput.Trim();
+
+        var read = await harness.GitClient.ReadBlobsAsync(temp.Path, [blob, new string('0', blob.Length), tree, "HEAD:bytes.bin"], cancellationToken);
+
+        Assert.Equal(4, read.Count);
+        Assert.Equal(content, read[0]);
+        Assert.Null(read[1]);
+        Assert.Null(read[2]);
+        Assert.Equal(content, read[3]);
+        Assert.Empty(await harness.GitClient.ReadBlobsAsync(temp.Path, [], cancellationToken));
+    }
+
+    [Fact]
+    public async Task WhatGitsAttributesDeclare_IsReadForEveryPathAsked_HoweverMany()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        File.WriteAllText(temp.Combine(".gitattributes"), "*.txt text eol=lf\n*.bin -text\n*.gen merge=union\n*.own merge\n*.never -merge\n");
+
+        // More paths than one command line carries, none of them a file that exists: the attributes are of names.
+        string[] many = [.. Enumerable.Range(0, 450).Select(at => $"deep/directory/of/many/files/number-{at}.txt")];
+
+        var declared = await harness.GitClient.ReadAttributesAsync(
+            temp.Path,
+            ["text", "eol", "merge"],
+            ["a.txt", "b.bin", "c.gen", "d.own", "e.never", "with space.other", .. many],
+            cancellationToken);
+
+        Assert.Equal(456, declared.Count);
+        Assert.Equal((GitAttributes.Set, "lf", GitAttributes.Unspecified), (declared["a.txt"]["text"], declared["a.txt"]["eol"], declared["a.txt"]["merge"]));
+        Assert.Equal((GitAttributes.Unset, GitAttributes.Unspecified), (declared["b.bin"]["text"], declared["b.bin"]["merge"]));
+        Assert.Equal("union", declared["c.gen"]["merge"]);
+        Assert.Equal(GitAttributes.Set, declared["d.own"]["merge"]);
+        Assert.Equal(GitAttributes.Unset, declared["e.never"]["merge"]);
+        Assert.All(declared["with space.other"].Values, value => Assert.Equal(GitAttributes.Unspecified, value));
+        Assert.All(many, path => Assert.Equal("lf", declared[path]["eol"]));
+        Assert.Empty(await harness.GitClient.ReadAttributesAsync(temp.Path, ["text"], [], cancellationToken));
+    }
 }
 
 /// <summary>What the git client sends to git, and how it reads answers, against scripted results.</summary>

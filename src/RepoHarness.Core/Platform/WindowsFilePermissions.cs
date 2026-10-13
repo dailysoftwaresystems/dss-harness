@@ -49,6 +49,13 @@ public sealed class WindowsFilePermissions : IFilePermissions
         return File.Exists(path);
     }
 
+    public void SetExecutable(string path, bool executable)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        // Nothing to set: Windows keeps no such bit with a file, and none is read or compared there either.
+    }
+
     public bool IsPrivate(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

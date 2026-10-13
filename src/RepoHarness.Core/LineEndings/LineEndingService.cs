@@ -100,17 +100,11 @@ public sealed class LineEndingService(
     /// </summary>
     private const int BinaryProbeLength = 8000;
 
-    /// <summary>
-    /// Paths named in one <c>git check-attr</c> invocation. Batched because a command line is bounded
-    /// -- 32,767 characters on Windows -- and a repository has more tracked files than that allows.
-    /// </summary>
-    private const int AttributeBatchSize = 200;
+    /// <summary>The attribute that says whether a path is text, and so whether its line endings are git's to write.</summary>
+    private const string TextAttribute = "text";
 
-    /// <summary>
-    /// Characters of path a single batch may carry, well inside the bound above, so a tree of long
-    /// paths is batched by what it actually costs rather than by a count that assumes short names.
-    /// </summary>
-    private const int AttributeBatchCharacters = 8000;
+    /// <summary>The attribute that declares which line ending a path is checked out with.</summary>
+    private const string EndingAttribute = "eol";
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
     private readonly IGitClient _gitClient = gitClient;
@@ -307,82 +301,33 @@ public sealed class LineEndingService(
         IReadOnlyList<string> paths,
         CancellationToken cancellationToken)
     {
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> answered;
+
+        try
+        {
+            answered = await _gitClient.ReadAttributesAsync(root, [TextAttribute, EndingAttribute], paths, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"The declared policy could not be read and nothing was rewritten. {ex.Message}", ex);
+        }
+
         var declared = new Dictionary<string, DeclaredLineEnding>(StringComparer.Ordinal);
 
-        foreach (var batch in Batch(paths))
+        foreach (var (path, attributes) in answered)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var output = await RunAsync(
-                root,
-                ["check-attr", "-z", "text", "eol", "--", .. batch],
-                cancellationToken).ConfigureAwait(false);
-
-            // NUL-separated triples of path, attribute and value. A path carrying a space or a quote
-            // survives this where git's default quoting would have to be undone first.
-            var fields = output.Split('\0');
-
-            for (var index = 0; index + 2 < fields.Length; index += 3)
-            {
-                var path = fields[index];
-                var attribute = fields[index + 1];
-                var value = fields[index + 2];
-
-                var current = declared.GetValueOrDefault(path, DeclaredLineEnding.None);
-
-                declared[path] = (attribute, value) switch
+            // `-text` is git's own way of saying "these bytes are the file", so the policy does not reach it.
+            declared[path] = attributes.GetValueOrDefault(TextAttribute) == GitAttributes.Unset
+                ? DeclaredLineEnding.Binary
+                : attributes.GetValueOrDefault(EndingAttribute) switch
                 {
-                    // `-text` is git's own way of saying "these bytes are the file", so the policy
-                    // does not reach it.
-                    ("text", "unset") => DeclaredLineEnding.Binary,
-                    ("eol", "lf") when current != DeclaredLineEnding.Binary => DeclaredLineEnding.Lf,
-                    ("eol", "crlf") when current != DeclaredLineEnding.Binary => DeclaredLineEnding.Crlf,
-                    _ => current,
+                    "lf" => DeclaredLineEnding.Lf,
+                    "crlf" => DeclaredLineEnding.Crlf,
+                    _ => DeclaredLineEnding.None,
                 };
-            }
         }
 
         return declared;
-    }
-
-    /// <summary>Groups paths into invocations neither too many nor too long for one command line.</summary>
-    private static IEnumerable<List<string>> Batch(IReadOnlyList<string> paths)
-    {
-        var batch = new List<string>();
-        var characters = 0;
-
-        foreach (var path in paths)
-        {
-            if (batch.Count > 0 && (batch.Count >= AttributeBatchSize || characters + path.Length > AttributeBatchCharacters))
-            {
-                yield return batch;
-                batch = [];
-                characters = 0;
-            }
-
-            batch.Add(path);
-            characters += path.Length + 1;
-        }
-
-        if (batch.Count > 0)
-        {
-            yield return batch;
-        }
-    }
-
-    private async Task<string> RunAsync(string root, string[] arguments, CancellationToken cancellationToken)
-    {
-        var result = await _gitClient.RunAsync(root, arguments, cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        if (!result.Succeeded)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"git {arguments[0]} failed, so the declared policy could not be read and nothing was rewritten: "
-                + result.FailureMessage);
-        }
-
-        return result.StandardOutput;
     }
 }
 

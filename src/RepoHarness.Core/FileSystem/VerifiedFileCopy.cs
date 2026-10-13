@@ -1,11 +1,13 @@
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.FileSystem;
 
 /// <summary>
 /// Copies one file from one tree into another and proves the copy: written beside its destination, read back and
 /// compared with what was read from the source, and only then put in place in one step. A reader of the destination
-/// never sees a file half written, and a copy that came out other than its source is never left in place.
+/// never sees a file half written, and a copy that came out other than its source is never left in place. Bytes in
+/// hand, which no file holds yet, are written the same way.
 /// </summary>
 /// <remarks>
 /// The copy is the platform's own, which on Linux and macOS keeps the file's mode - an executable script stays one -
@@ -45,6 +47,84 @@ public static class VerifiedFileCopy
             throw new IOException($"'{source}' holds other content now than when it was measured - SHA-256 {read.Content}, where it was {expected} - so it was not copied.");
         }
 
+        return await PlaceAsync(
+                fileSystem,
+                destination,
+                read,
+                temporary =>
+                {
+                    fileSystem.CopyFile(source, temporary, overwrite: true);
+                    return Task.CompletedTask;
+                },
+                copied => $"'{source}' was copied to '{destination}' as {ReportText.Counted(copied.Length, "byte")} with SHA-256 {copied.Content}, where it holds "
+                    + $"{read.Length} with {read.Content}; the copy was not put in place.",
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="contents"/>, bytes no file holds yet, to <paramref name="destination"/>, making its
+    /// directory, as a file that can be run or one that cannot, and returns what it holds.
+    /// </summary>
+    /// <param name="fileSystem">Reads and writes the files.</param>
+    /// <param name="permissions">Gives the file the bit asked for, where the platform keeps one.</param>
+    /// <param name="contents">The bytes to write.</param>
+    /// <param name="destination">Where they go; a file there is replaced, and its own bit is not what the new file gets.</param>
+    /// <param name="executable">Whether the file written is one that can be run.</param>
+    /// <param name="cancellationToken">Stops it before the file is put in place.</param>
+    /// <exception cref="IOException">What was written did not read back as the bytes given; nothing was put in place.</exception>
+    public static async Task<FileContent> WriteAsync(
+        IFileSystem fileSystem,
+        IFilePermissions permissions,
+        byte[] contents,
+        string destination,
+        bool executable,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentNullException.ThrowIfNull(permissions);
+        ArgumentNullException.ThrowIfNull(contents);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destination);
+
+        var given = FileContent.Of(contents);
+
+        return await PlaceAsync(
+                fileSystem,
+                destination,
+                given,
+                async temporary =>
+                {
+                    await fileSystem.WriteAllBytesAtomicAsync(temporary, contents, cancellationToken).ConfigureAwait(false);
+
+                    // The bit asked for, and never the one of the file replaced: what is written may have been made
+                    // runnable, or no longer so, by the change that made its bytes.
+                    permissions.SetExecutable(temporary, executable);
+                },
+                written => $"'{destination}' was written as {ReportText.Counted(written.Length, "byte")} with SHA-256 {written.Content}, where it was given "
+                    + $"{given.Length} with {given.Content}; what was written was not put in place.",
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Puts a file in place at <paramref name="destination"/>, proved first: made beside it by <paramref name="make"/>,
+    /// read back, required to hold <paramref name="expected"/>, and only then renamed over whatever is there. What was
+    /// made is taken back where any of that fails.
+    /// </summary>
+    /// <param name="fileSystem">Reads and writes the files.</param>
+    /// <param name="destination">Where the file goes; its directory is made.</param>
+    /// <param name="expected">What the file must hold to be put in place.</param>
+    /// <param name="make">Makes the file at the temporary path it is given, beside the destination.</param>
+    /// <param name="mismatch">What to say where the file made holds something else, given what it holds.</param>
+    /// <param name="cancellationToken">Stops it before the file is put in place.</param>
+    private static async Task<FileContent> PlaceAsync(
+        IFileSystem fileSystem,
+        string destination,
+        FileContent expected,
+        Func<string, Task> make,
+        Func<FileContent, string> mismatch,
+        CancellationToken cancellationToken)
+    {
         var directory = Path.GetDirectoryName(Path.GetFullPath(destination));
 
         if (!string.IsNullOrEmpty(directory))
@@ -56,20 +136,18 @@ public static class VerifiedFileCopy
 
         try
         {
-            fileSystem.CopyFile(source, temporary, overwrite: true);
+            await make(temporary).ConfigureAwait(false);
 
-            var copied = await FileContentHash.OfAsync(fileSystem, temporary, cancellationToken).ConfigureAwait(false);
+            var made = await FileContentHash.OfAsync(fileSystem, temporary, cancellationToken).ConfigureAwait(false);
 
-            if (copied != read)
+            if (made != expected)
             {
-                throw new IOException(
-                    $"'{source}' was copied to '{destination}' as {ReportText.Counted(copied.Length, "byte")} with SHA-256 {copied.Content}, where it holds "
-                    + $"{read.Length} with {read.Content}; the copy was not put in place.");
+                throw new IOException(mismatch(made));
             }
 
             cancellationToken.ThrowIfCancellationRequested();
             fileSystem.ReplaceFile(temporary, destination);
-            return read;
+            return expected;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
         {

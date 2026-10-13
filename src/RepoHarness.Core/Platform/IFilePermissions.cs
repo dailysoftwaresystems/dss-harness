@@ -20,6 +20,15 @@ public interface IFilePermissions
     bool IsExecutable(string path);
 
     /// <summary>
+    /// Makes the file at <paramref name="path"/> one that can be run, or one that cannot, where the platform keeps that
+    /// with the file: on Unix its execute bits, set for whoever may read it, or cleared for everyone. On Windows nothing
+    /// is changed, since what runs there is decided by a file's name.
+    /// </summary>
+    /// <param name="path">The file.</param>
+    /// <param name="executable">Whether it is to be one that can be run.</param>
+    void SetExecutable(string path, bool executable);
+
+    /// <summary>
     /// Whether <paramref name="path"/> is a file no other user can open: the condition ssh sets for
     /// a private key, which it ignores otherwise. A file that does not exist is not private.
     /// </summary>
