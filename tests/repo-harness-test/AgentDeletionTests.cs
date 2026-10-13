@@ -177,7 +177,8 @@ public sealed class AgentDeletionTests
 
     /// <summary>
     /// A closed agent whose worktree is no longer one - no .git of its own, as a removal that stopped part way leaves it -
-    /// has its evidence kept again and is never forced: the removal that would force it is named for a person.
+    /// has its evidence kept again and is never forced: the removal that would force it is named for a person. Its dry run
+    /// answers as every --apply of it does - exit 21, naming the same removal - and keeps no evidence.
     /// </summary>
     [Fact]
     public async Task AClosedAgentsHusk_IsNeverForced()
@@ -189,12 +190,21 @@ public sealed class AgentDeletionTests
         var agents = kit.Harness.Agents(new LateEvidenceFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "evidence", "late.log")), kit.Harness.AnchorRegistryService);
         Assert.Equal(HarnessExit.Incomplete, (await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token)).ExitCode);
         File.Delete(Path.Combine(worktree, ".git"));
+        var kept = Directory.GetDirectories(kit.Layout.EvidenceDirectory("ag")).Length;
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+
+        Assert.Equal(HarnessExit.Incomplete, dry.ExitCode);
+        Assert.Contains("is no longer a git worktree - it holds no .git of its own", dry.Message);
+        Assert.Contains("--apply keeps its evidence again and cannot finish the removal", dry.Message);
+        Assert.Contains($"'{Core.Hosts.ToolPackage.Command} delete-worktree o1/ag --force' removes it - nothing here forces it -", dry.Message);
+        Assert.Equal(kept, Directory.GetDirectories(kit.Layout.EvidenceDirectory("ag")).Length);
 
         var left = await kit.DeleteAsync("ag", apply: true);
 
         Assert.Equal(HarnessExit.Incomplete, left.ExitCode);
         Assert.Contains("is no longer a git worktree - it holds no .git of its own", left.Message);
-        Assert.Contains("'dssharness delete-worktree o1/ag --force' removes it - nothing here forces it -", left.Message);
+        Assert.Contains($"'{Core.Hosts.ToolPackage.Command} delete-worktree o1/ag --force' removes it - nothing here forces it -", left.Message);
         Assert.True(Directory.Exists(worktree));
         Assert.Equal(AgentStates.Closed, kit.Record("ag").State);
     }
@@ -220,6 +230,63 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
+    /// A live agent whose worktree's identity cannot be read - git names no commondir in its git directory - fails its
+    /// deletion before anything is written, and its dry run fails the same, in the apply's words: which git worktree it is
+    /// is what an --apply reads first, and a worktree whose identity cannot be read is never closed.
+    /// </summary>
+    [Fact]
+    public async Task ALiveAgentWhoseWorktreeCannotBeIdentified_FailsItsDryRunAsItsDeletion()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var commondir = Path.Combine(Directory.GetDirectories(Path.Combine(kit.Main, ".git", "worktrees")).Single(), "commondir");
+        var agents = kit.Harness.Agents(new UnknowableFileSystem(kit.Harness.FileSystem, commondir), kit.Harness.AnchorRegistryService);
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+        var failed = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.CommandFailed, dry.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted: which git worktree", dry.Message);
+        Assert.Equal(dry.Message, failed.Message);
+        Assert.Equal(HarnessExit.CommandFailed, failed.ExitCode);
+        Assert.Equal("two\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+    }
+
+    /// <summary>
+    /// A dry run of a deletion exits 0 exactly where the --apply typed after it, nothing having moved, exits 0; and where
+    /// the agent's worktree is gone and nothing is folded, both refuse it until --discard-uncommitted is given, whose dry
+    /// run then exits 0 as its apply goes through.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfADeletion_ExitsExactlyAsItsApplyWould()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+
+        var dry = await kit.DeleteAsync("ag", apply: false);
+        var deleted = await kit.DeleteAsync("ag", apply: true);
+        await kit.CreateAgentAsync("ag2");
+        Assert.True((await kit.Harness.WorktreeService.DeleteAsync(kit.Main, "o1/ag2", force: true, deleteEvidence: true, cancellationToken: Token)).Succeeded);
+        var gone = await kit.DeleteAsync("ag2", apply: false);
+        var abandoning = await kit.DeleteAsync("ag2", apply: false, discard: true);
+        var abandoned = await kit.DeleteAsync("ag2", apply: true, discard: true);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.False(Directory.Exists(worktree));
+        Assert.Equal(HarnessExit.Refused, gone.ExitCode);
+        Assert.StartsWith("Agent 'ag2' of 'o1' has no worktree at", gone.Message);
+        Assert.True(abandoning.Succeeded, OrchestrationKit.Describe(abandoning));
+        Assert.True(abandoned.Succeeded, OrchestrationKit.Describe(abandoned));
+        Assert.Equal(AgentStates.Deleted, kit.Record("ag2").State);
+    }
+
+    /// <summary>
     /// Evidence is found as a removal reaches it: a link under an evidence root is never followed, so what it leads to is
     /// neither kept nor deleted.
     /// </summary>
@@ -242,7 +309,7 @@ public sealed class AgentDeletionTests
         Assert.Equal("not the agent's\n", File.ReadAllText(outside.Combine("elsewhere.log")));
     }
 
-    /// <summary>A deletion started from inside the agent's worktree is refused: the removal cannot take a directory this process stands in.</summary>
+    /// <summary>A deletion started from inside the agent's worktree is refused - its dry run too, in the same words - reading nothing: the removal cannot take a directory this process stands in.</summary>
     [Fact]
     public async Task DeletingFromInsideTheAgentsWorktree_IsRefused()
     {
@@ -251,8 +318,11 @@ public sealed class AgentDeletionTests
         var worktree = await kit.CreateAgentAsync("ag");
         kit.Harness.CurrentDirectory = Path.Combine(worktree, "docs");
 
+        var dry = await kit.DeleteAsync("ag", apply: false, discard: true);
         var refused = await kit.DeleteAsync("ag", apply: true, discard: true);
 
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.StartsWith("This process's working directory", dry.Message);
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.StartsWith("This process's working directory", refused.Message);
         Assert.True(Directory.Exists(worktree));
@@ -433,8 +503,8 @@ public sealed class AgentDeletionTests
     /// </summary>
     /// <summary>
     /// delete-agent holds a row that does not keep its stored text to the fold's checks: its dry run names the command that
-    /// deletes it accepting the loss, on the line its summary points at, --apply refuses with nothing written and the agent
-    /// still live, and the command it named deletes it.
+    /// deletes it accepting the loss, on the line its summary points at, and exits 13, as the --apply that refuses with
+    /// nothing written and the agent still live does; the command it named deletes it.
     /// </summary>
     [Fact]
     public async Task DeletingAnAgent_WhoseRowLosesStoredText_IsRefusedUntilItIsAccepted()
@@ -453,7 +523,7 @@ public sealed class AgentDeletionTests
         var dry = await kit.DeleteAsync("ag", apply: false);
         var refused = await kit.DeleteAsync("ag", apply: true);
 
-        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
         Assert.Equal($"to do it: '{Core.Hosts.ToolPackage.Command} delete-agent o1 ag --apply --accept-lost D-TEST-AGENT-ROW:closing'", dry.Details![^1]);
         Assert.EndsWith("the line 'to do it:' above is the command that does it", dry.Message, StringComparison.Ordinal);
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
@@ -654,5 +724,14 @@ public sealed class AgentDeletionTests
             => string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase)
                 ? throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.")
                 : base.OpenRead(path);
+    }
+
+    /// <summary>The real file system, except that one file's kind cannot be told, as while another program holds it without sharing.</summary>
+    private sealed class UnknowableFileSystem(IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    {
+        public override PathKind KindOf(string path)
+            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase)
+                ? throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.")
+                : base.KindOf(path);
     }
 }

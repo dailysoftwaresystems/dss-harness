@@ -804,16 +804,18 @@ public sealed class AgentService(
 
         if (!apply)
         {
-            return CommandOutcome.Ok(
-                (all.Count, merges.Count) switch
-                {
-                    (0, 0) => $"{holds}; {alike.Count} of them {(alike.Count == 1 ? "is" : "are")} not recorded as shared yet: pass --apply to record them",
-                    (0, _) => $"dry run: {merging}{(alike.Count == 0 ? string.Empty : $", and {alike.Count} recorded as shared")}; pass --apply to write them",
-                    _ => $"dry run: {ReportText.Counted(all.Count, "path")} would be refreshed into {Lower(Agent(record))}"
-                        + $"{(alike.Count == 0 ? string.Empty : $", and {alike.Count} recorded as shared")}"
-                        + $"{(merges.Count == 0 ? string.Empty : $", and {merges.Count} merged into its worktree as its own change")}; pass --apply to hand them over",
-                },
-                [.. handedLines, .. staleLines, .. mergedLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]);
+            return DryRuns.Outcome(
+                CommandOutcome.Ok(
+                    (all.Count, merges.Count) switch
+                    {
+                        (0, 0) => $"{holds}; {alike.Count} of them {(alike.Count == 1 ? "is" : "are")} not recorded as shared yet: pass --apply to record them",
+                        (0, _) => $"dry run: {merging}{(alike.Count == 0 ? string.Empty : $", and {alike.Count} recorded as shared")}; pass --apply to write them",
+                        _ => $"dry run: {ReportText.Counted(all.Count, "path")} would be refreshed into {Lower(Agent(record))}"
+                            + $"{(alike.Count == 0 ? string.Empty : $", and {alike.Count} recorded as shared")}"
+                            + $"{(merges.Count == 0 ? string.Empty : $", and {merges.Count} merged into its worktree as its own change")}; pass --apply to hand them over",
+                    },
+                    [.. handedLines, .. staleLines, .. mergedLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]),
+                RequestStanding.Sound);
         }
 
         // The agent's worktree is held too: a leg building in it would be building what is being replaced.
@@ -962,7 +964,9 @@ public sealed class AgentService(
 
         if (!apply)
         {
-            return CommandOutcome.Ok($"dry run: the base of {Lower(Agent(record))} would move {moving}; pass --apply to move it", [.. RebaseLines(plan!, applied: false)]);
+            return DryRuns.Outcome(
+                CommandOutcome.Ok($"dry run: the base of {Lower(Agent(record))} would move {moving}; pass --apply to move it", [.. RebaseLines(plan!, applied: false)]),
+                RequestStanding.Sound);
         }
 
         // The agent's worktree is held: a leg building in it would be building what is being replaced. Measured again under
@@ -1276,15 +1280,17 @@ public sealed class AgentService(
 
             if (measured.Refusal is { } refused)
             {
-                return refused;
+                return DryRuns.Outcome(refused, DryRuns.StandingOf(refused));
             }
 
-            var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch.Unaccepted, "write them");
+            var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch, "write them");
 
-            return CommandOutcome.Ok(
-                $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
-                + $"{Merging(measured.Plan, "merges")}{Handing(measured.Plan, "hands")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
-                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. line]);
+            return DryRuns.Outcome(
+                CommandOutcome.Ok(
+                    $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, "
+                    + $"{Merging(measured.Plan, "merges")}{Handing(measured.Plan, "hands")}removes {measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
+                    [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name), applied: false), .. line]),
+                Consenting(measured.Rows.Batch));
         }
 
         // The agent's worktree is held too: a leg building in it would be writing what is being folded.
@@ -1372,8 +1378,8 @@ public sealed class AgentService(
         }
 
         // A removal cannot take a directory a process stands in: Windows refuses it, naming this process, and elsewhere the
-        // process is left standing in a directory that is gone.
-        if (apply && StandsIn(path) is { } here)
+        // process is left standing in a directory that is gone. A dry run is refused as its --apply is.
+        if (StandsIn(path) is { } here)
         {
             return CommandOutcome.Refused(
                 $"This process's working directory '{here}' is inside the worktree of {Lower(Agent(record))}, '{path}', which deleting the agent "
@@ -1430,29 +1436,37 @@ public sealed class AgentService(
 
             if (dry.Refusal is { } refusal)
             {
-                return refusal;
+                return DryRuns.Outcome(refusal, DryRuns.StandingOf(refusal));
+            }
+
+            // Which git worktree this is, as its --apply reads it before it writes: one that cannot be read fails both alike.
+            if (StampOf(target).Failure is { } unread)
+            {
+                return DryRuns.Outcome(unread, standing: null);
             }
 
             var evidence = dry.Evidence.Files.Count == 0
                 ? "its evidence roots hold nothing to keep"
                 : $"{ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, to be kept in a directory named for the run in '{layout.EvidenceDirectory(record.Name)}'";
-            var (tail, line) = Ending(DeleteCommand, record, allowances, dry.Fold?.Rows.Batch.Unaccepted ?? [], "do it");
+            var (tail, line) = Ending(DeleteCommand, record, allowances, dry.Fold?.Rows.Batch, "do it");
 
-            return CommandOutcome.Ok(
-                $"dry run: deleting {Lower(Agent(record))} "
-                + (discard
-                    ? $"discards {ReportText.Counted(dry.Discarded.Count, "changed path")}, folding nothing"
-                    : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, {Merging(dry.Fold.Plan, "merges")}{Handing(dry.Fold.Plan, "hands")}removes {dry.Fold.Plan.Deleted.Count} and applies "
-                        + ReportText.Counted(dry.Fold.Rows.Planned, "row"))
-                + $", keeps its transcripts and {ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, then removes its worktree and its copies on hosts; {tail}",
-                [
-                    .. discard
-                        ? [$"{ReportText.Counted(dry.Discarded.Count, "changed path")} discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
-                        : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name), applied: false),
-                    evidence,
-                    TranscriptsPlan(record),
-                    .. line,
-                ]);
+            return DryRuns.Outcome(
+                CommandOutcome.Ok(
+                    $"dry run: deleting {Lower(Agent(record))} "
+                    + (discard
+                        ? $"discards {ReportText.Counted(dry.Discarded.Count, "changed path")}, folding nothing"
+                        : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, {Merging(dry.Fold.Plan, "merges")}{Handing(dry.Fold.Plan, "hands")}removes {dry.Fold.Plan.Deleted.Count} and applies "
+                            + ReportText.Counted(dry.Fold.Rows.Planned, "row"))
+                    + $", keeps its transcripts and {ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, then removes its worktree and its copies on hosts; {tail}",
+                    [
+                        .. discard
+                            ? [$"{ReportText.Counted(dry.Discarded.Count, "changed path")} discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
+                            : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name), applied: false),
+                        evidence,
+                        TranscriptsPlan(record),
+                        .. line,
+                    ]),
+                dry.Fold is { } fold ? Consenting(fold.Rows.Batch) : RequestStanding.Sound);
         }
 
         var hold = await HoldAsync(context.Layout, DeleteCommand, cancellationToken, context.Layout.MainCheckoutRoot, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
@@ -1473,18 +1487,11 @@ public sealed class AgentService(
 
             // Which git worktree this is, read before anything is written: its closing records it, and a worktree whose
             // identity cannot be read is never closed.
-            string stamp;
+            var (stamp, unreadable) = StampOf(target);
 
-            try
+            if (unreadable is not null)
             {
-                stamp = WorktreeStamp.Of(_fileSystem, target.Standing.AdministrativeDirectory!) ?? throw new IOException($"git names no '{WorktreeStamp.FileName}' in its git directory");
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                return CommandOutcome.Failed(
-                    HarnessExit.CommandFailed,
-                    $"{Agent(record)} was not deleted: which git worktree '{path}' is cannot be read - {ex.Message.TrimEnd('.')} - so its closing could "
-                    + "not record it. Nothing was written or removed.");
+                return unreadable;
             }
 
             var lines = new List<string>();
@@ -1574,7 +1581,7 @@ public sealed class AgentService(
 
                 lines.Add(EvidenceLine(kept, destination));
                 var holding = await _fold.HeldAsync(path, seed, [], Floor(context), CancellationToken.None).ConfigureAwait(false);
-                target = target with { Record = Close(target, stamp, discard, kept.Kept.Count > 0 ? keeping : string.Empty, holding) };
+                target = target with { Record = Close(target, stamp!, discard, kept.Kept.Count > 0 ? keeping : string.Empty, holding) };
             }
             catch (Exception ex) when (Unfinished(ex))
             {
@@ -1713,14 +1720,13 @@ public sealed class AgentService(
 
         if (!apply)
         {
-            return CommandOutcome.Ok(
-                $"dry run: {Lower(was)}; pass --apply to "
-                + target.Standing.Kind switch
-                {
-                    Standing.Husk => "keep its evidence again - nothing here removes a directory with no .git of its own",
-                    Standing.Gone => "finish the removal",
-                    _ => "keep its evidence again and finish the removal",
-                });
+            // A directory that is no longer a git worktree: every --apply keeps its evidence again and leaves the removal
+            // unfinished, so its dry run answers as that --apply does, keeping nothing.
+            return target.Standing.Kind == Standing.Husk
+                ? DryRuns.Outcome(CommandOutcome.Failed(HarnessExit.Incomplete, Husk(target, was, applied: false)), RequestStanding.Refused)
+                : DryRuns.Outcome(
+                    CommandOutcome.Ok($"dry run: {Lower(was)}; pass --apply to {(target.Standing.Kind == Standing.Gone ? "finish the removal" : "keep its evidence again and finish the removal")}"),
+                    RequestStanding.Sound);
         }
 
         var hold = await HoldAsync(context.Layout, DeleteCommand, cancellationToken, _fileSystem.ResolveLinks(path)).ConfigureAwait(false);
@@ -1766,13 +1772,7 @@ public sealed class AgentService(
                 {
                     // Never forced from here: --force checks nothing, and a directory with no .git of its own is what a removal
                     // that stopped part way leaves - or a directory made there since, which nothing here can tell apart.
-                    return CommandOutcome.Failed(
-                        HarnessExit.Incomplete,
-                        $"{was}. '{path}' is no longer a git worktree - it holds no .git of its own - which is what a removal that stopped part way "
-                        + "leaves, or a directory made there since. Look at what else it holds; once nothing in it is needed, "
-                        + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, target.Address.Name, "--force")} removes it - nothing here forces it - "
-                        + $"and {again} then finishes this agent.",
-                        [.. lines, .. Records(layout, record)]);
+                    return CommandOutcome.Failed(HarnessExit.Incomplete, Husk(target, was, applied: true), [.. lines, .. Records(layout, record)]);
                 }
 
                 return await AfterClosingAsync(target, kept.Kept, lines).ConfigureAwait(false);
@@ -1792,10 +1792,12 @@ public sealed class AgentService(
 
         if (!apply)
         {
-            return CommandOutcome.Ok(
-                $"dry run: {Lower(Agent(record))} has no worktree at '{target.Path}'; pass --apply to delete it with nothing folded, keeping its "
-                + "transcripts, once git's record of its worktree and every copy of it on a host are gone",
-                [TranscriptsPlan(record)]);
+            return DryRuns.Outcome(
+                CommandOutcome.Ok(
+                    $"dry run: {Lower(Agent(record))} has no worktree at '{target.Path}'; pass --apply to delete it with nothing folded, keeping its "
+                    + "transcripts, once git's record of its worktree and every copy of it on a host are gone",
+                    [TranscriptsPlan(record)]),
+                RequestStanding.Sound);
         }
 
         var hold = await HoldAsync(target.Context.Layout, DeleteCommand, cancellationToken, _fileSystem.ResolveLinks(target.Path)).ConfigureAwait(false);
@@ -2112,16 +2114,17 @@ public sealed class AgentService(
     private static string Handing(FoldPlan plan, string verb) => plan.Handed.Count == 0 ? string.Empty : $"{verb} the agent {plan.Handed.Count} settled by hand, ";
 
     /// <summary>
-    /// The agent's rows as a fold weighs them: those it declares anew - or never had applied - planned or checked as
-    /// applying them would write them (<paramref name="mode"/>), making only the rows named new and losing no stored text
-    /// nobody accepted; those an earlier fold applied and it declares as it did then, never applied again; and a row it
-    /// declares anew over one an earlier fold applied refused where the registries changed that row since, as a file the
-    /// main tree changed since is refused.
+    /// The agent's rows as a fold weighs them, every one it declares sent with what an earlier fold of it recorded, planned
+    /// or checked as applying them would write them (<paramref name="mode"/>): one never applied, making only the rows named
+    /// new and losing no stored text nobody accepted; one an earlier fold applied and it declares as it did then, left
+    /// untouched; any other weighed cell by cell, inside the registries' own lock, against what they took since - each cell
+    /// both changed otherwise written only where --accept-over names it.
     /// </summary>
     /// <remarks>
-    /// --new and --accept-lost name rows the agent filed; one naming a row it did not file is refused. A row an earlier fold
-    /// of the agent applied is an existing row now - made or changed by that fold - so a --new naming it is let stand, as is
-    /// an --accept-lost naming a row the agent declares as that fold applied it: the command line of that fold runs again.
+    /// --new, --accept-lost and --accept-over name rows the agent filed; one naming a row it did not file is refused. A row
+    /// an earlier fold of the agent applied is an existing row now - made or changed by that fold - so a --new naming it is
+    /// let stand, as is a consent naming a row the agent declares as that fold applied it: the command line of that fold
+    /// runs again.
     /// </remarks>
     private async Task<(AgentRowsPlan Plan, AnchorBatchRequest Request, IReadOnlyList<AnchorRowDeclaration> All)> MeasureRowsAsync(
         string main,
@@ -2141,42 +2144,33 @@ public sealed class AgentService(
         }
 
         var applied = (_store.ReadAppliedRows(layout, record.Name)?.Rows ?? []).ToDictionary(row => row.Id, AnchorIdMatch.Comparer);
-        var fresh = declared.Where(row => !applied.TryGetValue(row.Id, out var last) || last != row).ToList();
-        var freshIds = fresh.Select(row => row.Id).ToHashSet(AnchorIdMatch.Comparer);
-        var unchanged = declared.Where(row => !freshIds.Contains(row.Id)).Select(row => row.Id).ToList();
         var filed = declared.Select(row => row.Id).ToHashSet(AnchorIdMatch.Comparer);
         var named = allowances.New.Distinct(AnchorIdMatch.Comparer).ToList();
-        var accepted = allowances.LostCells;
+        var (lost, over) = (allowances.LostCells, allowances.OverCells);
 
-        var unfiled = named.Where(id => !filed.Contains(id))
-            .Select(id => $"{AnchorBatchRequest.NewOption} {id} names no row filed in '{directory}': drop it, or correct the id.")
-            .Concat(accepted.Where(cell => !filed.Contains(cell.Id))
-                .Select(cell => $"{AnchorBatchRequest.AcceptLostOption} {cell} names no row filed in '{directory}': drop it, or correct the id."))
+        string Unfiled(string option, string what) => $"{option} {what} names no row filed in '{directory}': drop it, or correct the id.";
+
+        var unfiled = named.Where(id => !filed.Contains(id)).Select(id => Unfiled(AnchorBatchRequest.NewOption, id))
+            .Concat(lost.Where(cell => !filed.Contains(cell.Id)).Select(cell => Unfiled(AnchorBatchRequest.AcceptLostOption, cell.ToString())))
+            .Concat(over.Where(cell => !filed.Contains(cell.Id)).Select(cell => Unfiled(AnchorBatchRequest.AcceptOverOption, cell.ToString())))
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        var request = new AnchorBatchRequest(fresh)
+        // Every row it declares, each with what an earlier fold of it recorded: weighed inside the registries' own lock, a row
+        // declared as it was then left as they hold it, any other cell by cell against what they took since.
+        var request = new AnchorBatchRequest(declared)
         {
-            New = [.. named.Where(id => freshIds.Contains(id) && !applied.ContainsKey(id))],
-            AcceptLost = [.. accepted.Where(cell => freshIds.Contains(cell.Id))],
+            New = [.. named.Where(id => filed.Contains(id) && !applied.ContainsKey(id))],
+            AcceptLost = [.. lost.Where(cell => filed.Contains(cell.Id))],
+            AcceptOver = [.. over.Where(cell => filed.Contains(cell.Id))],
+            Earlier = applied.Where(row => filed.Contains(row.Key)).ToDictionary(row => row.Key, row => row.Value, AnchorIdMatch.Comparer),
             Roots = roots,
         };
 
         var batch = await _anchors.ApplyAsync(main, request, mode, cancellationToken).ConfigureAwait(false);
+        var untouched = batch.Rows.Where(outcome => outcome.Action == AnchorRowAction.Untouched).Select(outcome => outcome.Id).ToList();
 
-        // Every row declared anew over one an earlier fold applied - planned, or refused for something else - but for one the
-        // registries hold as it is declared now.
-        var standing = batch.Rows.Where(outcome => outcome.Action == AnchorRowAction.AlreadyIn).Select(outcome => outcome.Id).ToHashSet(AnchorIdMatch.Comparer);
-        var redeclared = fresh.Where(row => applied.ContainsKey(row.Id) && !standing.Contains(row.Id)).Select(row => applied[row.Id]).ToList();
-
-        // What an earlier fold applied is compared with the registries as they are, and held to nothing a write is held to:
-        // a row applied before a rule it breaks is still the row that was applied.
-        var moved = (await _anchors.DifferencesAsync(main, redeclared, cancellationToken).ConfigureAwait(false))
-            .Select(difference => $"{difference.Id}: the registries changed it after an earlier fold of this agent applied it - {difference.How} - so "
-                + "applying what it declares now would lose that change. Set the row by hand as it should be; a row already as declared is recorded, not written again")
-            .ToList();
-
-        return (new AgentRowsPlan(batch with { Problems = [.. unfiled, .. batch.Problems, .. moved] }, unchanged), request, declared);
+        return (new AgentRowsPlan(batch with { Problems = [.. unfiled, .. batch.Problems] }, untouched), request, declared);
     }
 
     /// <summary>That the options <paramref name="allowances"/> gives let a fold through what it otherwise refuses, for a refusal of them.</summary>
@@ -2184,29 +2178,84 @@ public sealed class AgentService(
         => $"{ReportText.Listed(allowances.Given)} {(allowances.Given.Count == 1 ? "lets" : "let")} a fold through what it otherwise refuses";
 
     /// <summary>
-    /// How the summary of a dry run of a fold ends, and the line it points at: where its rows lose stored text nobody
-    /// accepted, that --apply refuses the fold, writing nothing, until each such cell is named with --accept-lost - and the
-    /// line opening "to <paramref name="what"/>:" with the command that does it: what the dry run was let through, and an
-    /// --accept-lost for each. The summary names that line by its opening words rather than by where it stands: it is the
-    /// last of the details, and every report prints its summary after them. Otherwise, that --apply does
-    /// <paramref name="what"/>. Like every command line a report names, it runs from where the dry run ran.
+    /// How the summary of a dry run of a fold ends, and the line it points at: where its rows have cells that need a
+    /// consent nobody gave - stored text a cell does not keep, or a cell the registries and the agent both changed - that
+    /// --apply refuses it, writing nothing, until each is named, with --accept-lost or --accept-over; and the line opening
+    /// "to <paramref name="what"/>:" with the command that does it: what the dry run was let through, and the consent for
+    /// each. The summary names that line by its opening words rather than by where it stands: it is the last of the
+    /// details, and every report prints its summary after them. Otherwise, that --apply does <paramref name="what"/>. Like
+    /// every command line a report names, it runs from where the dry run ran.
     /// </summary>
-    private static (string Tail, IReadOnlyList<string> Line) Ending(string command, AgentRecord record, FoldAllowances allowances, IReadOnlyList<AnchorRowCell> unaccepted, string what)
+    private static (string Tail, IReadOnlyList<string> Line) Ending(string command, AgentRecord record, FoldAllowances allowances, AnchorBatch? rows, string what)
     {
-        if (unaccepted.Count == 0)
+        var (lost, over) = (rows?.Unaccepted ?? [], rows?.UnacceptedOver ?? []);
+
+        if (lost.Count + over.Count == 0)
         {
             return ($"pass --apply to {what}", []);
         }
 
-        var accepting = allowances with { AcceptLost = [.. allowances.AcceptLost, .. unaccepted.Select(cell => cell.ToString())] };
+        var accepting = allowances with
+        {
+            AcceptLost = [.. allowances.AcceptLost, .. lost.Select(cell => cell.ToString())],
+            AcceptOver = [.. allowances.AcceptOver, .. over.Select(cell => cell.ToString())],
+        };
         var opening = $"to {what}:";
+        var naming = $"the line '{opening}' above is the command that does it";
 
-        return (
-            $"{ReportText.Counted(unaccepted.Count, "cell")} of its rows do not keep their stored text word for word, and --apply refuses it, writing nothing, "
-                + $"until each is named with {AnchorBatchRequest.AcceptLostOption}, once its word diff above is read: the line '{opening}' above "
-                + "is the command that does it",
-            [$"{opening} {OrchestrationReports.Line(command, [record.Orchestrator, record.Name, "--apply", .. accepting.Arguments()])}"]);
+        // With no cell both changed, the sentence a dry run always said of a loss.
+        var tail = over.Count == 0
+            ? $"{ReportText.Counted(lost.Count, "cell")} of its rows do not keep their stored text word for word, and --apply refuses it, writing nothing, "
+                + $"until each is named with {AnchorBatchRequest.AcceptLostOption}, once its word diff above is read: {naming}"
+            : $"{ReportText.Counted(lost.Count + over.Count, "cell")} of its rows need a consent --apply refuses it without, writing nothing - "
+                + string.Join(
+                    ", ",
+                    new[]
+                    {
+                        lost.Count == 0 ? null : $"{lost.Count} that does not keep its stored text word for word ({AnchorBatchRequest.AcceptLostOption})",
+                        $"{over.Count} that the registries and the agent both changed ({AnchorBatchRequest.AcceptOverOption})",
+                    }.OfType<string>())
+                + $" - once each diff above is read: {naming}";
+
+        return (tail, [$"{opening} {OrchestrationReports.Line(command, [record.Orchestrator, record.Name, "--apply", .. accepting.Arguments()])}"]);
     }
+
+    /// <summary>How a dry run's request stands where its rows were planned: needing a consent where a cell of them waits for one, sound otherwise.</summary>
+    private static RequestStanding Consenting(AnchorBatch rows)
+        => rows.Unaccepted.Count + rows.UnacceptedOver.Count > 0 ? RequestStanding.NeedsConsent : RequestStanding.Sound;
+
+    /// <summary>
+    /// Which git worktree a live agent's is, read before anything of it is written - its closing records it - or the failure
+    /// that ends a deletion where it cannot be read: the same for a dry run as for its --apply.
+    /// </summary>
+    private (string? Stamp, CommandOutcome? Failure) StampOf(Target target)
+    {
+        try
+        {
+            return (WorktreeStamp.Of(_fileSystem, target.Standing.AdministrativeDirectory!) ?? throw new IOException($"git names no '{WorktreeStamp.FileName}' in its git directory"), null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, CommandOutcome.Failed(
+                HarnessExit.CommandFailed,
+                $"{Agent(target.Record)} was not deleted: which git worktree '{target.Path}' is cannot be read - {ex.Message.TrimEnd('.')} - so its closing "
+                + "could not record it. Nothing was written or removed."));
+        }
+    }
+
+    /// <summary>
+    /// What is said of a closed agent whose directory is no longer a git worktree, which every --apply of delete-agent keeps
+    /// the evidence of again and cannot remove: the sentence its --apply ends with, and its dry run's, which keeps nothing.
+    /// </summary>
+    /// <param name="target">The closed agent.</param>
+    /// <param name="was">What closing it recorded, as a sentence.</param>
+    /// <param name="applied">Whether its evidence was kept again, rather than only weighed.</param>
+    private static string Husk(Target target, string was, bool applied)
+        => (applied ? $"{was}. " : $"dry run: {Lower(was)}; --apply keeps its evidence again and cannot finish the removal: ")
+            + $"'{target.Path}' is no longer a git worktree - it holds no .git of its own - which is what a removal that stopped part way leaves, or a "
+            + "directory made there since. Look at what else it holds; once nothing in it is needed, "
+            + $"{OrchestrationReports.Line(WorktreeService.DeleteCommand, target.Address.Name, "--force")} removes it - nothing here forces it - and "
+            + $"{OrchestrationReports.DeleteAgentLine(target.Record.Orchestrator, target.Record.Name)} then finishes this agent.";
 
     /// <summary>
     /// Writes a measured fold into the main tree, records what it wrote as shared, then applies the rows the agent declared

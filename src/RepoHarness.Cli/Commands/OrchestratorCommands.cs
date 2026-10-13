@@ -51,6 +51,14 @@ internal static class FoldOptions
         Description = $"A cell of an existing row - {string.Join(", ", AnchorCellNames.Text)} - the fold may write though the agent's text does not keep its stored text word for word: read its word diff in the dry run first. Once for each cell.",
     };
 
+    /// <summary>A cell of a row an earlier fold applied that the registries and the agent both changed since, which the fold may write the agent's over.</summary>
+    internal static Option<string[]> AcceptOver { get; } = new(AnchorBatchRequest.AcceptOverOption)
+    {
+        HelpName = AcceptLost.HelpName,
+        Description = $"A cell of a row an earlier fold of the agent applied - {string.Join(", ", AnchorCellNames.All)} - that the registries and the agent both changed since, "
+            + "each otherwise: the fold may write the agent's over the registries'. Read the three texts in the dry run first. Once for each cell.",
+    };
+
     /// <summary>Adds the options to <paramref name="command"/>, in the order its help lists them.</summary>
     internal static void AddTo(Command command)
     {
@@ -58,6 +66,7 @@ internal static class FoldOptions
         command.Options.Add(Settled);
         command.Options.Add(New);
         command.Options.Add(AcceptLost);
+        command.Options.Add(AcceptOver);
     }
 
     /// <summary>What <paramref name="result"/> lets a fold through.</summary>
@@ -67,6 +76,7 @@ internal static class FoldOptions
         Settled = result.GetValue(Settled) ?? [],
         New = result.GetValue(New) ?? [],
         AcceptLost = result.GetValue(AcceptLost) ?? [],
+        AcceptOver = result.GetValue(AcceptOver) ?? [],
     };
 }
 

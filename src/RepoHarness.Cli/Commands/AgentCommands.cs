@@ -132,7 +132,7 @@ internal static class RefreshAgentCommand
         + "worktree as its change, for its fold to write, and the path recorded as handed the main tree's copy. Never taken unasked, and a clean textual "
         + "merge proves nothing about the program. Once for each path.");
 
-    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Hand them over; without it, only say what would be handed over.");
+    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Hand them over; without it, only say what would be handed over, and exit as --apply would.");
 
     internal static Command Create()
     {
@@ -193,7 +193,7 @@ internal static class RebaseAgentCommand
         Description = "A path the agent changed that the main tree committed a change to since its base, whose copy you reconciled by hand: kept as its own change on the new base. Once for each path.",
     };
 
-    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Move it; without it, only say what moving it would bring in and keep.");
+    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Move it; without it, only say what moving it would bring in and keep, and exit as --apply would.");
 
     internal static Command Create()
     {
@@ -236,7 +236,7 @@ internal static class FoldAgentCommand
 
     private static readonly Argument<string> AgentArgument = OrchestrationArguments.Agent("The agent to fold.");
 
-    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Write the fold and the rows; without it, only say what would be written.");
+    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Write the fold and the rows; without it, only say what would be written, and exit as --apply would.");
 
     internal static Command Create()
     {
@@ -274,7 +274,7 @@ internal static class DeleteAgentCommand
 
     private static readonly Argument<string> AgentArgument = OrchestrationArguments.Agent("The agent to delete.");
 
-    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Do it; without it, only say what would be done.");
+    private static readonly Option<bool> ApplyOption = OrchestrationArguments.Apply("Do it; without it, only say what would be done, and exit as --apply would.");
 
     private static readonly Option<bool> DiscardUncommittedOption = new("--discard-uncommitted")
     {

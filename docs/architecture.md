@@ -553,6 +553,22 @@ never replaces what the command did; the command says so instead. Once a command
 it as long as a deletion expects (`PointOfNoReturn`, the one list the command line reads), and what stops it from there
 on is exit 21, naming what is in and how running it again finishes.
 
+**What a dry run answers.** A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its
+`--apply`, given the same arguments, would exit with at that moment: 0 only where that `--apply` would go through.
+`DryRuns.Outcome` is the one place that decides it: each verb composes its dry run's outcome - its summary and its
+lines, or the refusal or failure it met - and hands it over with how the request stands (`RequestStanding`: sound, a
+consent nobody gave, or refused; none where what it weighs could not be read). Read downwards, the first case that
+applies gives the code: delete-agent run from inside the worktree it removes is refused (13), nothing read; what the
+command weighs that cannot be read - for a live agent's deletion, which git worktree it is (`StampOf`, the one read
+both make) - fails it (20); a path, a row or an option that is refused, 13; cells of the rows that need a consent
+nobody gave (`--accept-lost`, `--accept-over`), 13 - the same summary and lines, the line 'to write them:' among them,
+since a plan of rows still shows every such cell (`AnchorBatchMode.Plan`) and the rule is the command's, not the
+anchors' service's; a closed agent whose directory is no longer a git worktree, 21, as every `--apply` of it is
+(`Husk`, the one sentence both say); otherwise 0. Every line a dry run prints stays: only its code, and with it where
+its summary is printed, follows the rule. What an `--apply` learns only by doing its work - a file changed after it
+was weighed, a write or a copy that fails, transcripts or evidence that cannot be kept - is not in a dry run, so 0
+says that nothing known now stops the `--apply`, never that it will finish.
+
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
 orchestrator under the root is shared with plain worktrees' names, so create-worktree refuses an orchestrator's
@@ -849,11 +865,22 @@ empty one (`AnchorCellComparison`) - only where the request accepts it (`--accep
 refuses before its files are written. Every refusal of a row is collected, so one run names them all. The directories a
 fold makes at the top of the tree are handed to the batch (`AnchorBatchRequest.Roots`), so its rows are judged the same
 before its files are written and after. The rows a fold applied are recorded as declared
-then (`applied-rows.json`): one the agent declares as it did then is never applied again, so a change the registries
-took since - the orchestrator closing the row, a sibling's cross-reference - stands; one it declares anew over it is
-refused where the registries no longer hold what the fold applied (`DifferencesAsync`, which holds a row to no rule a
-write is held to: one applied before a rule it breaks is still the row that was applied), as a file the main tree
-changed is.
+then (`applied-rows.json`), and every row the agent declares is sent with that record (`AnchorBatchRequest.Earlier`):
+one it declares as it did then is `Untouched` - never judged, never written, and not among the rows the batch's
+others may cite - so a change the registries took since, the orchestrator closing the row or a sibling's
+cross-reference, stands. One it declares anew over it is weighed cell by cell inside `ApplyAsync`, under the lock its
+write takes, so it is decided against the registries as they are written (`AnchorCellMerge`): each of its five cells -
+priority, status, trigger, closing, cross-refs - three ways, the earlier declaration the ancestor. A cell only the
+agent changed is written; one only the registries changed is kept, said, and kept again at each fold until the agent
+changes it, since the record stays the declaration rather than what the registries held - recording theirs would make
+the agent's unchanged file read as its change; one both changed alike is left; one both changed otherwise is shown
+with its three texts and written only where `--accept-over` names it, which consents too to what the registries'
+text loses. The row the registries are to hold (`AnchorRowOutcome.Effective`) is composed and judged by the same code
+as any change, so every rule about a status, a closure or a move between the registries judges it, and the rows read
+back are compared with it, not with what was declared. A declared cell is compared with a stored one through one
+`AnchorRowCells`, as a row stores it. A row an earlier fold applied that the registries no longer hold is refused, to
+be set by hand. The fold never writes the agent's row files: its report tells the agent, once, to write the
+registries' text into a kept cell's file before it changes it.
 
 ### Deleting an agent
 

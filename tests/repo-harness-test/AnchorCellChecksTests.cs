@@ -124,23 +124,28 @@ public sealed class AnchorCellChecksTests
     }
 
     /// <summary>
-    /// A cell is named <c>ID:cell</c>, split at its last colon: the cell one that holds prose, and the id one an anchor
-    /// could have - not empty, and holding no space and no colon. Built by hand, a cell that holds no prose is refused.
+    /// A cell is named <c>ID:cell</c>, split at its last colon: the cell one of a row's five, and the id one an anchor
+    /// could have - not empty, and holding no space and no colon. Only the three that hold prose are prose, the cells a
+    /// loss of stored text is judged in; built by hand, a name no cell has is refused.
     /// </summary>
     [Theory]
-    [InlineData("D-AREA-TOPIC-ONE:closing", "D-AREA-TOPIC-ONE", "closing")]
-    [InlineData("D-AREA-TOPIC-ONE:cross-refs", "D-AREA-TOPIC-ONE", "cross-refs")]
-    [InlineData("D-AREA-TOPIC-ONE:status", null, null)]
-    [InlineData("closing", null, null)]
-    [InlineData(":closing", null, null)]
-    [InlineData(" D-AREA-TOPIC-ONE:closing", null, null)]
-    [InlineData("D-AREA:TOPIC:trigger", null, null)]
-    public void ARowCell_IsReadAsIdColonCell(string text, string? id, string? cell)
+    [InlineData("D-AREA-TOPIC-ONE:closing", "D-AREA-TOPIC-ONE", "closing", true)]
+    [InlineData("D-AREA-TOPIC-ONE:cross-refs", "D-AREA-TOPIC-ONE", "cross-refs", true)]
+    [InlineData("D-AREA-TOPIC-ONE:trigger", "D-AREA-TOPIC-ONE", "trigger", true)]
+    [InlineData("D-AREA-TOPIC-ONE:status", "D-AREA-TOPIC-ONE", "status", false)]
+    [InlineData("D-AREA-TOPIC-ONE:priority", "D-AREA-TOPIC-ONE", "priority", false)]
+    [InlineData("D-AREA-TOPIC-ONE:notes", null, null, false)]
+    [InlineData("closing", null, null, false)]
+    [InlineData(":closing", null, null, false)]
+    [InlineData(" D-AREA-TOPIC-ONE:closing", null, null, false)]
+    [InlineData("D-AREA:TOPIC:trigger", null, null, false)]
+    public void ARowCell_IsReadAsIdColonCell(string text, string? id, string? cell, bool prose)
     {
         var read = AnchorRowCell.Parse(text);
 
         Assert.Equal(id, read?.Id);
         Assert.Equal(cell, read?.Cell);
-        Assert.Throws<ArgumentException>(() => new AnchorRowCell("D-AREA-TOPIC-ONE", "status"));
+        Assert.Equal(prose, read?.IsProse ?? false);
+        Assert.Throws<ArgumentException>(() => new AnchorRowCell("D-AREA-TOPIC-ONE", "notes"));
     }
 }

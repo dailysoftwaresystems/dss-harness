@@ -1420,6 +1420,33 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// A dry run of a refresh exits exactly as its --apply, typed with the same arguments, does: 13 where the agent's own
+    /// changes refuse it, 0 once they are left with --except and the hand-over goes through.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfARefresh_ExitsExactlyAsItsApplyWould()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+
+        var refusedDry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: false, Token);
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+        var handedDry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Except = ["a.txt"] }, apply: false, Token);
+        var handed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true, Except = ["a.txt"] }, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refusedDry.ExitCode);
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.True(handedDry.Succeeded, OrchestrationKit.Describe(handedDry));
+        Assert.True(handed.Succeeded, OrchestrationKit.Describe(handed));
+        Assert.Equal("two\nmain edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal("one\nagent edit\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
     /// What the main tree committed under the paths never moved between trees - the orchestrators' directory here, forced
     /// past its ignore rule - is never handed, committed or not, by seeding as by making.
     /// </summary>

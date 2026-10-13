@@ -338,26 +338,64 @@ public static class OrchestrationReports
         {
             yield return $"  {id}: applied by an earlier fold and not declared anew since, so the registries keep what they hold now";
         }
+
+        // Said once, so the agent's own files do not raise the same cell again: the fold never writes them.
+        if (batch.Rows.Any(row => row.Kept.Count > 0))
+        {
+            yield return "A cell kept is not written into the agent's own file. Before the agent changes that cell again it writes what the registries hold "
+                + $"into '{Path.Combine(rowsDirectory, "<ID>", "<cell>" + AgentRows.CellExtension)}' - {Line("read-anchor", "<ID>")} prints the row - or its "
+                + $"change, made from the earlier text, is two changes of one cell and is written only with {AnchorBatchRequest.AcceptOverOption}.";
+        }
     }
 
     /// <summary>
     /// What applying an agent's rows does, or did: each row, and where it goes - each prose cell it changes said with what
-    /// becomes of its stored text - and each cell that does not keep its stored text shown word by word, what it removes
-    /// and what replaces it, with whether that was accepted.
+    /// becomes of its stored text - each cell the registries took since the agent's earlier fold that is kept, each both
+    /// changed with the three texts, and each cell that does not keep its stored text shown word by word, what it removes
+    /// and what replaces it, with whether that was accepted. A row left untouched is said by the report of the agent's rows.
     /// </summary>
     /// <param name="batch">The rows applied, or planned.</param>
     public static IEnumerable<string> RowLines(AnchorBatch batch)
     {
         ArgumentNullException.ThrowIfNull(batch);
 
-        foreach (var row in batch.Rows)
+        foreach (var row in batch.Rows.Where(row => row.Action != AnchorRowAction.Untouched))
         {
             yield return row.Action switch
             {
-                AnchorRowAction.New => $"  {row.Id}: a new row, {row.Change.StatusAfter}, in the {row.Change.To.Name} registry",
-                AnchorRowAction.Changed => $"  {row.Id}: {Changed(row.Change)}",
+                AnchorRowAction.New => $"  {row.Id}: a new row, {row.Change!.StatusAfter}, in the {row.Change.To.Name} registry",
+                AnchorRowAction.Changed => $"  {row.Id}: {Changed(row.Change!)}",
+                _ when row.Kept.Count > 0 => $"  {row.Id}: the registries hold it as they took it since its earlier fold, and the agent changed none of what they changed: nothing to write",
                 _ => $"  {row.Id}: already as it declares, with nothing to write",
             };
+
+            foreach (var kept in row.Kept)
+            {
+                yield return AnchorCellNames.Text.Contains(kept.Cell, StringComparer.Ordinal)
+                    ? $"    its {AnchorCellNames.HeadingOf(kept.Cell)} keeps what the registries took since its earlier fold, which the agent's file does not hold: "
+                        + AnchorCellComparison.WordDiff(kept.Agent, kept.Registries)
+                    : $"    its {AnchorCellNames.HeadingOf(kept.Cell)} keeps what the registries took since its earlier fold: '{kept.Registries}', where the agent's file holds '{kept.Agent}'";
+            }
+
+            foreach (var over in row.Over)
+            {
+                var heading = AnchorCellNames.HeadingOf(over.Cell.Cell);
+                var consent = over.Accepted
+                    ? $"and the agent's is written over the registries', accepted with {AnchorBatchRequest.AcceptOverOption} {over.Cell}"
+                    : $"and the agent's is written only with {AnchorBatchRequest.AcceptOverOption} {over.Cell}";
+
+                if (!over.Cell.IsProse)
+                {
+                    yield return $"    its {heading} was changed by the registries and by the agent since its earlier fold - then '{over.Earlier}', the registries "
+                        + $"'{over.Registries}', the agent '{over.Agent}' - {consent}";
+                    continue;
+                }
+
+                yield return $"    its {heading} was changed by the registries and by the agent since its earlier fold, {consent}";
+                yield return $"      the registries: {AnchorCellComparison.WordDiff(over.Earlier, over.Registries)}";
+                yield return $"      the agent:      {AnchorCellComparison.WordDiff(over.Earlier, over.Agent)}";
+                yield return $"      written over the registries': {AnchorCellComparison.WordDiff(over.Registries, over.Agent)}";
+            }
 
             foreach (var lost in row.Lost)
             {

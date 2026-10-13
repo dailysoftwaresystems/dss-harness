@@ -103,6 +103,32 @@ public sealed class AgentRebaseTests
     }
 
     /// <summary>
+    /// A dry run of a rebase exits exactly as its --apply, typed with the same arguments, does: 13 where a path both changed
+    /// refuses the move, and 0 where the same command, the path declared settled, goes through.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfARebase_ExitsExactlyAsItsApplyWould()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+
+        var refusedDry = await RebaseAsync(kit, apply: false);
+        var refused = await RebaseAsync(kit, apply: true);
+        var settledDry = await RebaseAsync(kit, apply: false, "b.txt");
+        var settled = await RebaseAsync(kit, apply: true, "b.txt");
+
+        Assert.Equal(HarnessExit.Refused, refusedDry.ExitCode);
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.True(settledDry.Succeeded, OrchestrationKit.Describe(settledDry));
+        Assert.True(settled.Succeeded, OrchestrationKit.Describe(settled));
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
     /// A file the agent made where the main tree committed one, and a file the agent deleted that the main tree changed, each
     /// refuse the move, saying which; a --settled naming a path no such clash holds settles nothing, and refuses too.
     /// </summary>

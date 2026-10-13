@@ -343,7 +343,6 @@ public sealed class AnchorRegistryServiceTests
                 () => impatient.LintAsync(temp.Path, cancellationToken),
                 () => impatient.ListAsync(temp.Path, new AnchorListFilter(), cancellationToken),
                 () => impatient.ReadAsync(temp.Path, [One], AnchorScope.All, cancellationToken),
-                () => impatient.DifferencesAsync(temp.Path, [Declared(One, "open", "work")], cancellationToken),
             ];
 
             foreach (var read in reads)
@@ -379,7 +378,6 @@ public sealed class AnchorRegistryServiceTests
             () => service.LintAsync(temp.Path, cancellationToken),
             () => service.ListAsync(temp.Path, new AnchorListFilter(), cancellationToken),
             () => service.ReadAsync(temp.Path, [One], AnchorScope.All, cancellationToken),
-            () => service.DifferencesAsync(temp.Path, [Declared(One, "open", "work")], cancellationToken),
             () => balance.CheckAsync(temp.Path, null, cancellationToken),
         ];
 
@@ -810,7 +808,7 @@ public sealed class AnchorRegistryServiceTests
 
         Assert.True(batch.Succeeded, string.Join("; ", batch.Problems));
         Assert.Equal([AnchorRowAction.AlreadyIn, AnchorRowAction.Changed, AnchorRowAction.New], batch.Rows.Select(row => row.Action));
-        Assert.Equal(["status"], batch.Rows[1].Change.Fields.Select(field => field.Field));
+        Assert.Equal(["status"], batch.Rows[1].Change!.Fields.Select(field => field.Field));
 
         var rows = Rows(harness, PendingPath(temp));
         Assert.Equal([One, Two, Three], rows.Select(row => row.Id));
@@ -830,7 +828,7 @@ public sealed class AnchorRegistryServiceTests
         var batch = await harness.AnchorRegistryService.ApplyAsync(temp.Path, new AnchorBatchRequest([Declared(One, "closed", "work")]), AnchorBatchMode.Apply, cancellationToken);
 
         Assert.True(batch.Succeeded, string.Join("; ", batch.Problems));
-        Assert.True(batch.Rows[0].Change.Moved);
+        Assert.True(batch.Rows[0].Change!.Moved);
         Assert.Empty(Rows(harness, PendingPath(temp)));
         Assert.Equal([One], Rows(harness, DonePath(temp)).Select(row => row.Id));
     }
@@ -1064,7 +1062,8 @@ public sealed class AnchorRegistryServiceTests
 
     /// <summary>
     /// A cell whose stored text would not survive is shown with its word diff when a batch is planned, refused when it is
-    /// checked or applied, and written once accepted; an addendum that keeps the stored text needs no acceptance.
+    /// checked or applied, and written once accepted; an addendum that keeps the stored text needs no acceptance. A plan
+    /// still succeeds with such a cell: what a dry run exits with is the command's rule, not the anchors' service's.
     /// </summary>
     [Fact]
     public async Task ApplyAsync_ShowsALosingCellWhenPlanned_RefusesItUntilAccepted_AndLetsAnAddendumThrough()
@@ -1125,37 +1124,6 @@ public sealed class AnchorRegistryServiceTests
         Assert.StartsWith(
             $"{Three}: '{Three}' cites D-AREA-TOPIC-NOWHERE in its Trigger, which no row of either registry holds, nor any row of the batch",
             Assert.Single(nowhere.Problems));
-    }
-
-    /// <summary>
-    /// How the registries hold rows other than as declared is read as they are, held to no rule a write is held to: a
-    /// row declared with a value no write would take now - a path cut in two - still compares as the row it is.
-    /// </summary>
-    [Fact]
-    public async Task DifferencesAsync_SaysHowEachRowIsHeldOtherThanDeclared_WhateverAWriteWouldRefuse()
-    {
-        using var temp = new TempDirectory();
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var harness = await PrepareAsync(temp);
-        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
-        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
-        File.WriteAllText(PendingPath(temp), File.ReadAllText(PendingPath(temp)).Replace($"| trigger for {Two} | work |", $"| trigger for {Two} | see src/ main_x.c |", StringComparison.Ordinal));
-
-        var differences = await harness.AnchorRegistryService.DifferencesAsync(
-            temp.Path,
-            [
-                new(One, "gated", $"trigger for {One}", "work", "refs"),
-                new(Two, "open", $"trigger for {Two}", "see src/\nmain_x.c", "refs"),
-                new(Three, "open", "t", "c", "r"),
-            ],
-            cancellationToken);
-
-        Assert.Equal(
-            [
-                new AnchorDifference(One, $"its status is '{AnchorStatus.Render(AnchorState.Open)}'"),
-                new AnchorDifference(Three, "it has no row in either registry"),
-            ],
-            differences);
     }
 
     /// <summary>
@@ -1305,29 +1273,134 @@ public sealed class AnchorRegistryServiceTests
     }
 
     /// <summary>
-    /// A row an id has twice is said to have two, and a declaration whose status does not read is said to differ as such:
-    /// comparing holds a row to no rule a write is held to, and refuses nothing.
+    /// A row with a record of what an earlier fold of the agent applied is weighed cell by cell against what the
+    /// registries took since, from that record as the ancestor: a cell only they changed is kept, with no consent and said
+    /// in the outcome, and the row the registries are to hold takes the agent's change of a cell only it changed. What is
+    /// written reads back as what they are to hold, not as what was declared.
     /// </summary>
     [Fact]
-    public async Task DifferencesAsync_SaysATwiceHeldRow_AndADeclarationThatDoesNotRead_WithoutRefusingEither()
+    public async Task ApplyAsync_KeepsACellOnlyTheRegistriesChangedSinceTheEarlierFold_AndWritesOneOnlyTheAgentChanged()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
         var harness = await PrepareAsync(temp);
         await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
-        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(Two), dryRun: false, cancellationToken);
-        var line = File.ReadAllLines(PendingPath(temp)).Single(text => text.Contains($"`{One}`", StringComparison.Ordinal));
-        var done = File.ReadAllText(DonePath(temp));
-        File.WriteAllText(DonePath(temp), (done.EndsWith('\n') ? done : done + "\n") + line + "\n");
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "gated" }, dryRun: false, cancellationToken);
+        var weighed = new AnchorBatchRequest([Declared(One, "open", "work and a test")])
+        {
+            Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = Declared(One, "open", "work") },
+        };
 
-        var differences = await harness.AnchorRegistryService.DifferencesAsync(temp.Path, [Declared(One, "open", "work"), Declared(Two, "bogus", "work")], cancellationToken);
+        var planned = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed, AnchorBatchMode.Plan, cancellationToken);
+        var applied = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed, AnchorBatchMode.Apply, cancellationToken);
 
+        Assert.True(planned.Succeeded, string.Join("; ", planned.Problems));
+        var kept = Assert.Single(planned.Rows[0].Kept);
+        Assert.Equal(AnchorCellNames.Status, kept.Cell);
+        Assert.Equal(AnchorStatus.Render(AnchorState.Open), kept.Agent);
+        Assert.Equal(AnchorStatus.Render(AnchorState.Gated), kept.Registries);
+        Assert.True(applied.Succeeded, string.Join("; ", applied.Problems));
+        Assert.Equal(AnchorRowAction.Changed, applied.Rows[0].Action);
+        var row = Assert.Single(Rows(harness, PendingPath(temp)));
+        Assert.Equal(AnchorStatus.Render(AnchorState.Gated), row.Status);
+        Assert.Equal("work and a test", row.ClosingWork);
+    }
+
+    /// <summary>
+    /// A cell the registries and the agent both changed since the earlier fold, to the same text, is left as it is: no
+    /// consent, nothing said, nothing written.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_LeavesACellTheRegistriesAndTheAgentBothChangedToTheSameText()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { ClosingWork = "work and a test" }, dryRun: false, cancellationToken);
+
+        var applied = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([Declared(One, "open", "work and a test")])
+            {
+                Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = Declared(One, "open", "work") },
+            },
+            AnchorBatchMode.Apply,
+            cancellationToken);
+
+        Assert.True(applied.Succeeded, string.Join("; ", applied.Problems));
+        Assert.Equal(AnchorRowAction.AlreadyIn, Assert.Single(applied.Rows).Action);
+        Assert.Empty(applied.Rows[0].Kept);
+        Assert.Empty(applied.Rows[0].Over);
+        Assert.Equal("work and a test", Assert.Single(Rows(harness, PendingPath(temp))).ClosingWork);
+    }
+
+    /// <summary>
+    /// A status the registries and the agent both changed since the earlier fold, each otherwise, is shown with its three
+    /// values and refuses the batch until --accept-over names it; named, the agent's is written - a cell that holds no
+    /// prose asks for no --accept-lost.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_WritesAStatusBothChanged_OnlyWhereAcceptOverNamesIt()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "gated" }, dryRun: false, cancellationToken);
+        var weighed = new AnchorBatchRequest([Declared(One, "closed", "work")])
+        {
+            Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = Declared(One, "open", "work") },
+        };
+
+        var planned = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed, AnchorBatchMode.Plan, cancellationToken);
+        var refused = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed, AnchorBatchMode.Apply, cancellationToken);
+        var applied = await harness.AnchorRegistryService.ApplyAsync(temp.Path, weighed with { AcceptOver = [new(One, "status")] }, AnchorBatchMode.Apply, cancellationToken);
+
+        Assert.True(planned.Succeeded, string.Join("; ", planned.Problems));
+        Assert.Equal([new AnchorRowCell(One, "status")], planned.UnacceptedOver);
         Assert.Equal(
-            [
-                new AnchorDifference(One, "it has 2 rows"),
-                new AnchorDifference(Two, "what was declared of it, status 'bogus' and priority '', does not read as a row"),
-            ],
-            differences);
+            $"{One}: its status was changed by the registries and by the agent since an earlier fold of this agent applied it, so the agent's text is written over "
+            + $"the registries' only with {AnchorBatchRequest.AcceptOverOption} {One}:status; the dry run shows the three texts.",
+            Assert.Single(refused.Problems));
+        Assert.True(applied.Succeeded, string.Join("; ", applied.Problems));
+        Assert.True(Assert.Single(applied.Rows[0].Over).Accepted);
+        Assert.Equal(AnchorStatus.Render(AnchorState.Closed), Assert.Single(Rows(harness, DonePath(temp))).Status);
+    }
+
+    /// <summary>
+    /// An --accept-over naming a cell the registries and the agent did not both change is refused as the typo it is, and
+    /// one naming a row declared as its earlier fold recorded it is let stand: the command line of the fold that ran with
+    /// it runs again.
+    /// </summary>
+    [Fact]
+    public async Task ApplyAsync_RefusesAnAcceptOverOfACellNotBothChanged_AndLetsOneOfARowDeclaredAsRecordedStand()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        await harness.AnchorRegistryService.WriteAsync(temp.Path, Anchor(One), dryRun: false, cancellationToken);
+        await harness.AnchorRegistryService.SetAsync(temp.Path, new AnchorSetRequest(One) { Status = "gated" }, dryRun: false, cancellationToken);
+        var earlier = Declared(One, "open", "work");
+
+        var stray = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([Declared(One, "open", "work and a test")])
+            {
+                Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier },
+                AcceptOver = [new(One, "closing")],
+            },
+            AnchorBatchMode.Plan,
+            cancellationToken);
+        var stood = await harness.AnchorRegistryService.ApplyAsync(
+            temp.Path,
+            new AnchorBatchRequest([earlier]) { Earlier = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer) { [One] = earlier }, AcceptOver = [new(One, "status")] },
+            AnchorBatchMode.Plan,
+            cancellationToken);
+
+        Assert.Equal([$"{AnchorBatchRequest.AcceptOverOption} {One}:closing names a cell the registries and the agent did not both change since its earlier fold: drop it, or correct it."], stray.Problems);
+        Assert.True(stood.Succeeded, string.Join("; ", stood.Problems));
+        Assert.Equal(AnchorRowAction.Untouched, Assert.Single(stood.Rows).Action);
     }
 
     private static AnchorRowDeclaration Declared(string id, string status, string closing)

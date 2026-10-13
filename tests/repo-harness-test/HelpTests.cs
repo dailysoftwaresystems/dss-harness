@@ -1957,6 +1957,49 @@ public sealed partial class HelpTests
         Assert.Contains("a change, a new file, a deletion, a file renamed in case alone, a link, a submodule's entry,", text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The orchestrators topic says the one rule of what a dry run exits with, where its summary then stands, that a row
+    /// an earlier fold applied is weighed cell by cell with --accept-over, and that a closed agent's husk is answered by
+    /// its dry run as every --apply of it answers.
+    /// </summary>
+    [Fact]
+    public async Task OrchestratorsTopic_SaysWhatADryRunExitsWith_AndWeighsRowsCellByCell()
+    {
+        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+        var text = Words(result.StandardOutput);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains(
+            "Dry runs. A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its --apply, typed "
+            + "with the same arguments, would exit with at that moment: 0 only where that --apply would go through. Where a path, "
+            + $"a row, or a consent nobody gave would refuse it, the dry run exits {HarnessExit.Refused}, and where it would fail "
+            + "before writing anything, with that failure's code - and either way it still prints all it weighed, its summary "
+            + "last, on standard error. What an --apply can only find by writing - a file changed after it was weighed, a write "
+            + "that fails - is not in a dry run, so 0 never promises that the --apply will finish.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "and --apply refuses the fold, writing nothing, until each is named - and so the dry run that shows it "
+            + $"exits {HarnessExit.Refused} itself.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "One declared anew over it is weighed cell by cell - priority, status, trigger, closing, cross-refs - from what that "
+            + "fold recorded as declared, against the registries as the write finds them: a cell only the agent changed is "
+            + "written; one only the registries changed is kept, and said, and stays kept at each fold until the agent changes "
+            + "it; one both changed alike is left; and one both changed otherwise is written over the registries' only where "
+            + "--accept-over <ID>:<cell> names it, the dry run showing the three texts - what --accept-over consents to includes "
+            + "what the registries' text loses. The fold never writes the agent's own row files: before it changes a kept cell, "
+            + "the agent writes the registries' text into it, or its change is two changes of one cell.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "since every --apply of it ends so, its dry run exits " + HarnessExit.Incomplete + " too, naming the same command and keeping nothing.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("delete-agent refuses to run from inside the worktree it removes, and so does its dry run,", text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task UnknownTopic_SaysSoAndListsTheRealOnes()
     {

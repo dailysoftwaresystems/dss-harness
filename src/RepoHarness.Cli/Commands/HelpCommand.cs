@@ -2214,10 +2214,12 @@ internal static class HelpCommand
         var paths = $"[{FoldAllowances.MergeOption} <path>]... [{FoldAllowances.SettledOption} <path>]...";
         builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] {paths}");
         var rows = $"[{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
+        var over = $"[{AnchorBatchRequest.AcceptOverOption} {AnchorRowCell.Form}]...";
         builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {paths}");
-        builder.AppendLine($"      {rows}");
+        builder.AppendLine($"      {rows} {over}");
         builder.AppendLine($"  {command} {AgentService.DeleteCommand} <o> <a> [--apply] {paths}");
-        builder.AppendLine($"      {rows} [--discard-uncommitted]");
+        builder.AppendLine($"      {rows} {over}");
+        builder.AppendLine("      [--discard-uncommitted]");
         builder.AppendLine($"  {command} {OrchestratorService.ListCommand} [<o>] [--json]");
         builder.AppendLine($"  {command} {OrchestratorService.DeleteCommand} <o> [--delete-evidence]");
         builder.AppendLine();
@@ -2316,6 +2318,15 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
+            "Dry runs. A dry run of refresh-agent, rebase-agent, fold-agent or delete-agent exits with what its --apply, typed "
+            + "with the same arguments, would exit with at that moment: 0 only where that --apply would go through. Where a path, "
+            + $"a row, or a consent nobody gave would refuse it, the dry run exits {HarnessExit.Refused}, and where it would fail "
+            + "before writing anything, with that failure's code - and either way it still prints all it weighed, its summary "
+            + "last, on standard error. What an --apply can only find by writing - a file changed after it was weighed, a write "
+            + "that fails - is not in a dry run, so 0 never promises that the --apply will finish.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
             "Folding. fold-agent writes an agent's own work into the main tree, a dry run until --apply, and never removes its "
             + "worktree. Every path its status lists and every path it shares with the main tree - handed to it, or written or "
             + "removed by an earlier fold - goes in one list: its own, written; deleted, removed first, with the directories that "
@@ -2372,14 +2383,23 @@ internal static class HelpCommand
             + "id would make it a second row; and a cell of an existing row whose stored text the agent's does not keep word for "
             + "word - neither respaced, nor kept whole in an addendum, nor filling an empty cell - is written only where "
             + "--accept-lost <ID>:<cell> names it: the dry run shows what each such cell loses, word by word, and the command that "
-            + "writes it, on its line 'to write them:', and --apply refuses the fold, writing nothing, until each is named. Every "
+            + "writes it, on its line 'to write them:', and --apply refuses the fold, writing nothing, until each is named - and so "
+            + $"the dry run that shows it exits {HarnessExit.Refused} itself. Every "
             + "refusal of every row is named in one run. A --new or an --accept-lost naming a row the agent did not file is "
             + "refused, and so is an --accept-lost naming a cell that keeps its stored text, and a --new naming a row a registry "
             + "holds other than as declared; one naming a row an earlier fold of the agent applied is let stand, so the command "
             + "line of that fold runs again. An existing row is changed in the cells that differ, and one already as declared left "
             + "alone; a write that fails puts both registries back byte for byte. A row an earlier fold applied, declared as it was "
-            + "then, is never applied again, so a change the registries took since stands; one declared anew over it is refused "
-            + "where the registries changed it since, as a file is.");
+            + "then, is never applied again, so a change the registries took since stands. One declared anew over it is weighed "
+            + "cell by cell - priority, status, trigger, closing, cross-refs - from what that fold recorded as declared, against "
+            + "the registries as the write finds them: a cell only the agent changed is written; one only the registries changed "
+            + "is kept, and said, and stays kept at each fold until the agent changes it; one both changed alike is left; and one "
+            + "both changed otherwise is written over the registries' only where --accept-over <ID>:<cell> names it, the dry run "
+            + "showing the three texts - what --accept-over consents to includes what the registries' text loses. The fold never "
+            + "writes the agent's own row files: before it changes a kept cell, the agent writes the registries' text into it, or "
+            + "its change is two changes of one cell. An --accept-over naming a cell not both changed is refused, as is one naming "
+            + "a row the agent did not file, and one naming a row declared as its earlier fold recorded it is let stand; a row an "
+            + "earlier fold applied that the registries no longer hold is refused, to be set by hand.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2400,8 +2420,9 @@ internal static class HelpCommand
             "A closed agent is never folded again. Run again, delete-agent compares its worktree with what closing it recorded, "
             + $"never with the main tree: a file changed or new since is work, left for you, and it exits {HarnessExit.Incomplete}; "
             + "a file gone since is the debris of a removal that stopped part way. A directory at its path with no .git of its "
-            + "own is never forced: its evidence is kept again, and the delete-worktree --force that removes it is named for you. "
-            + "A worktree made at its path since is not its to remove.");
+            + "own is never forced: its evidence is kept again, and the delete-worktree --force that removes it is named for you; "
+            + $"since every --apply of it ends so, its dry run exits {HarnessExit.Incomplete} too, naming the same command and "
+            + "keeping nothing. A worktree made at its path since is not its to remove.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2409,7 +2430,7 @@ internal static class HelpCommand
             + "seed-agent, refresh-agent and delete-agent hold the agent's worktree as well as the main tree, and rebase-agent "
             + "holds its worktree - so no leg builds in either meanwhile, and once one has written, an interruption waits for it "
             + "to finish. delete-agent refuses to run from "
-            + "inside the worktree it removes, "
+            + "inside the worktree it removes, and so does its dry run, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
             + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
             + "directory, and the evidence and transcripts its agents kept only with --delete-evidence; it removes the record "

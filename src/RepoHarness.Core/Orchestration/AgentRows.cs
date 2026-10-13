@@ -13,7 +13,7 @@ namespace RepoHarness.Core.Orchestration;
 public sealed record AgentRowsPlan(AnchorBatch Batch, IReadOnlyList<string> Unchanged)
 {
     /// <summary>How many rows applying it writes: new, or changed.</summary>
-    public int Planned => Batch.Rows.Count(row => row.Action != AnchorRowAction.AlreadyIn);
+    public int Planned => Batch.Rows.Count(row => row.Action is AnchorRowAction.New or AnchorRowAction.Changed);
 }
 
 /// <summary>

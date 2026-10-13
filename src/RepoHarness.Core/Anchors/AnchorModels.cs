@@ -285,6 +285,9 @@ public static class AnchorCellNames
     /// <summary>The cells that hold prose: each stored on one line, whatever lines it was written on.</summary>
     public static IReadOnlyList<string> Text { get; } = [Trigger, Closing, CrossRefs];
 
+    /// <summary>Every cell of a row but its id, in the order the registry's table gives them.</summary>
+    public static IReadOnlyList<string> All { get; } = [Priority, Status, Trigger, Closing, CrossRefs];
+
     /// <summary>The heading the registry's table gives <paramref name="cell"/>.</summary>
     /// <param name="cell">One of the keys above.</param>
     public static string HeadingOf(string cell) => cell switch
@@ -302,10 +305,14 @@ public static class AnchorCellNames
     public static string OptionOf(string cell) => "--" + cell;
 }
 
-/// <summary>One prose cell of one anchor's row, as --accept-lost names it: <c>&lt;ID&gt;:&lt;cell&gt;</c>.</summary>
+/// <summary>
+/// One cell of one anchor's row, as --accept-lost and --accept-over name it: <c>&lt;ID&gt;:&lt;cell&gt;</c>, the cell one
+/// of <see cref="AnchorCellNames.All"/>.
+/// </summary>
 /// <remarks>
-/// Built only for a cell that holds prose and an id that could be one, so a set of them - what a batch accepts losing -
-/// never holds a cell no loss could be judged in.
+/// Built only for a cell of a row and an id that could be one. A loss is judged in prose alone (<see cref="IsProse"/>), so
+/// what a batch accepts losing is held to a prose cell where it is named, and what it accepts writing over the registries'
+/// is any of the five.
 /// </remarks>
 public sealed record AnchorRowCell
 {
@@ -313,8 +320,8 @@ public sealed record AnchorRowCell
     public const string Form = "<ID>:<cell>";
 
     /// <param name="id">The anchor.</param>
-    /// <param name="cell">One of <see cref="AnchorCellNames.Text"/>.</param>
-    /// <exception cref="ArgumentException">The id could be no id, or the cell holds no prose.</exception>
+    /// <param name="cell">One of <see cref="AnchorCellNames.All"/>.</param>
+    /// <exception cref="ArgumentException">The id could be no id, or the cell is no cell of a row.</exception>
     public AnchorRowCell(string id, string cell)
     {
         ArgumentNullException.ThrowIfNull(id);
@@ -325,9 +332,9 @@ public sealed record AnchorRowCell
             throw new ArgumentException(problem, nameof(id));
         }
 
-        if (!AnchorCellNames.Text.Contains(cell, StringComparer.Ordinal))
+        if (!AnchorCellNames.All.Contains(cell, StringComparer.Ordinal))
         {
-            throw new ArgumentException($"'{cell}' is not a cell that holds prose: {string.Join(", ", AnchorCellNames.Text)}.", nameof(cell));
+            throw new ArgumentException($"'{cell}' is not a cell of a row: {string.Join(", ", AnchorCellNames.All)}.", nameof(cell));
         }
 
         Id = id;
@@ -337,8 +344,11 @@ public sealed record AnchorRowCell
     /// <summary>The anchor.</summary>
     public string Id { get; }
 
-    /// <summary>One of <see cref="AnchorCellNames.Text"/>.</summary>
+    /// <summary>One of <see cref="AnchorCellNames.All"/>.</summary>
     public string Cell { get; }
+
+    /// <summary>Whether the cell holds prose (<see cref="AnchorCellNames.Text"/>): the only cells a loss of stored text is judged in.</summary>
+    public bool IsProse => AnchorCellNames.Text.Contains(Cell, StringComparer.Ordinal);
 
     /// <summary>
     /// What is wrong with <paramref name="id"/> as --new or --accept-lost names one, before any registry is read: that it
@@ -356,7 +366,7 @@ public sealed record AnchorRowCell
 
     /// <summary>
     /// <paramref name="text"/> read as <see cref="Form"/>, split at its last colon: <see langword="null"/> where the cell
-    /// is not one of <see cref="AnchorCellNames.Text"/>, or the id could be no id.
+    /// is not one of <see cref="AnchorCellNames.All"/>, or the id could be no id.
     /// </summary>
     /// <param name="text">As given.</param>
     public static AnchorRowCell? Parse(string text)
@@ -365,12 +375,12 @@ public sealed record AnchorRowCell
 
         var colon = text.LastIndexOf(':');
 
-        return colon > 0 && IdProblem(text[..colon]) is null && AnchorCellNames.Text.Contains(text[(colon + 1)..], StringComparer.Ordinal)
+        return colon > 0 && IdProblem(text[..colon]) is null && AnchorCellNames.All.Contains(text[(colon + 1)..], StringComparer.Ordinal)
             ? new AnchorRowCell(text[..colon], text[(colon + 1)..])
             : null;
     }
 
-    /// <summary>As --accept-lost names it.</summary>
+    /// <summary>As --accept-lost and --accept-over name it.</summary>
     public override string ToString() => $"{Id}:{Cell}";
 }
 
@@ -397,11 +407,30 @@ public sealed record AnchorBatchRequest(IReadOnlyList<AnchorRowDeclaration> Rows
     /// <summary>The option that accepts a cell's loss, as the commands that apply a batch take it and its refusals name it.</summary>
     public const string AcceptLostOption = "--accept-lost";
 
+    /// <summary>
+    /// The option that writes the agent's text of a cell over the registries' where both changed it since the agent's
+    /// earlier fold, as the commands that fold an agent take it and its refusals name it.
+    /// </summary>
+    public const string AcceptOverOption = "--accept-over";
+
     /// <summary>The ids it may create: a row no registry holds is otherwise refused, as a typo would make it a second row.</summary>
     public IReadOnlyCollection<string> New { get; init; } = [];
 
     /// <summary>The cells of existing rows it may write though their stored text does not survive in what replaces it.</summary>
     public IReadOnlyCollection<AnchorRowCell> AcceptLost { get; init; } = [];
+
+    /// <summary>
+    /// Each row an earlier fold of the agent applied, by its id, as the agent declared it then: what both the registries
+    /// and the agent started from. A row declared as it was then is left as the registries hold it, never weighed again;
+    /// any other is weighed cell by cell (<see cref="AnchorCellMerge"/>). Empty for a batch with no history.
+    /// </summary>
+    public IReadOnlyDictionary<string, AnchorRowDeclaration> Earlier { get; init; } = new Dictionary<string, AnchorRowDeclaration>(AnchorIdMatch.Comparer);
+
+    /// <summary>
+    /// The cells of rows with an earlier record it may write over the registries' where both changed them since -
+    /// accepting, for a prose cell, the loss of what the registries hold.
+    /// </summary>
+    public IReadOnlyCollection<AnchorRowCell> AcceptOver { get; init; } = [];
 
     /// <summary>
     /// Directories at the top of the tree, beside those it holds when the batch runs, where a path a cell cites may start:
@@ -421,6 +450,23 @@ public sealed record AnchorLostCell(AnchorRowCell Cell, string Diff, bool Accept
 /// <param name="How">What differs, said of the row: <c>its status is '...'</c>, that it has no row, or how many it has.</param>
 public sealed record AnchorDifference(string Id, string How);
 
+/// <summary>A cell of a row the registries changed since the agent's earlier fold and the agent did not: theirs kept.</summary>
+/// <param name="Cell">One of <see cref="AnchorCellNames.All"/>.</param>
+/// <param name="Agent">What the agent's file holds, as a row stores it.</param>
+/// <param name="Registries">What the registries hold, and keep.</param>
+public sealed record AnchorKeptCell(string Cell, string Agent, string Registries);
+
+/// <summary>
+/// A cell of a row the registries and the agent both changed since its earlier fold, each otherwise: the agent's written
+/// over the registries' only where <see cref="AnchorBatchRequest.AcceptOverOption"/> names it.
+/// </summary>
+/// <param name="Cell">The row's cell.</param>
+/// <param name="Earlier">What both started from: the agent's declaration at its earlier fold, as a row stores it.</param>
+/// <param name="Registries">What the registries hold.</param>
+/// <param name="Agent">What the agent's file holds.</param>
+/// <param name="Accepted">Whether the request names it.</param>
+public sealed record AnchorOverCell(AnchorRowCell Cell, string Earlier, string Registries, string Agent, bool Accepted);
+
 /// <summary>What applying one declared row does.</summary>
 public enum AnchorRowAction
 {
@@ -432,16 +478,34 @@ public enum AnchorRowAction
 
     /// <summary>Its row already holds what was declared, and is not written again.</summary>
     AlreadyIn,
+
+    /// <summary>
+    /// It is declared as an earlier fold of the agent recorded it: never weighed or written, the registries keeping what
+    /// they hold, whatever they took since.
+    /// </summary>
+    Untouched,
 }
 
 /// <summary>What applying one declared row did, or would do.</summary>
 /// <param name="Id">The anchor.</param>
 /// <param name="Action">What was done with it.</param>
-/// <param name="Change">The change, as write-anchor or set-anchor describes one.</param>
-public sealed record AnchorRowOutcome(string Id, AnchorRowAction Action, AnchorChange Change)
+/// <param name="Change">The change, as write-anchor or set-anchor describes one; null for a row left <see cref="AnchorRowAction.Untouched"/>.</param>
+public sealed record AnchorRowOutcome(string Id, AnchorRowAction Action, AnchorChange? Change)
 {
     /// <summary>The cells of a changed row whose stored text does not survive what replaces it.</summary>
     public IReadOnlyList<AnchorLostCell> Lost { get; init; } = [];
+
+    /// <summary>
+    /// The row the registries are to hold once it is applied: as declared, but for each cell the registries changed since
+    /// the agent's earlier fold and the agent did not, kept as they hold it; null for a row left untouched.
+    /// </summary>
+    public AnchorRowDeclaration? Effective { get; init; }
+
+    /// <summary>The cells the registries changed since the agent's earlier fold and the agent did not: theirs kept.</summary>
+    public IReadOnlyList<AnchorKeptCell> Kept { get; init; } = [];
+
+    /// <summary>The cells both changed since, each otherwise: the agent's written only where the request names it.</summary>
+    public IReadOnlyList<AnchorOverCell> Over { get; init; } = [];
 }
 
 /// <summary>What applying declared rows did, or would do planned or checked (<see cref="AnchorBatchMode"/>).</summary>
@@ -459,13 +523,17 @@ public sealed record AnchorBatch(IReadOnlyList<AnchorRowOutcome> Rows, IReadOnly
     public IReadOnlyList<string> RestoreFailed { get; init; } = [];
 
     /// <summary>
-    /// Whether every row was checked and, unless planned or checked only, is in the registries as declared. A plan succeeds
-    /// with cells that lose stored text nobody accepted (<see cref="Unaccepted"/>), which it shows and a check refuses.
+    /// Whether every row was checked and, unless planned or checked only, is in the registries as it is to be held. A plan
+    /// succeeds with cells that need a consent nobody gave (<see cref="Unaccepted"/>, <see cref="UnacceptedOver"/>), which
+    /// it shows and a check refuses.
     /// </summary>
     public bool Succeeded => Problems.Count == 0 && Failure is null;
 
     /// <summary>The cells of its rows that would lose stored text, and that nobody accepted losing.</summary>
     public IReadOnlyList<AnchorRowCell> Unaccepted => [.. Rows.SelectMany(row => row.Lost).Where(cell => !cell.Accepted).Select(cell => cell.Cell)];
+
+    /// <summary>The cells of its rows the registries and the agent both changed, each otherwise, that nobody named to be written over.</summary>
+    public IReadOnlyList<AnchorRowCell> UnacceptedOver => [.. Rows.SelectMany(row => row.Over).Where(cell => !cell.Accepted).Select(cell => cell.Cell)];
 }
 
 /// <summary>Which anchors to list.</summary>

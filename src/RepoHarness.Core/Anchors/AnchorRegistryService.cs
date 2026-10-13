@@ -18,25 +18,19 @@ public interface IAnchorRegistryService
     /// <summary>
     /// Makes the registries hold each of the request's rows as declared, all or nothing: a new id written as write-anchor
     /// writes one, an existing one changed as set-anchor changes it - naming only the cells that differ - and one already
-    /// as declared left alone. A row no registry holds is written only where the request names it new, and a cell whose
-    /// stored text does not survive only where the request accepts losing it. Every row is checked before any is written,
-    /// and every refusal is named; a write that fails, or rows that do not read back as declared, put both registries back
-    /// byte for byte.
+    /// as declared left alone. A row an earlier fold of the agent applied (<see cref="AnchorBatchRequest.Earlier"/>) is
+    /// left untouched where it is declared as it was then, and otherwise weighed cell by cell against what the registries
+    /// took since, under the lock the write takes (<see cref="AnchorCellMerge"/>). A row no registry holds is written only
+    /// where the request names it new, a cell whose stored text does not survive only where the request accepts losing it,
+    /// and a cell both changed otherwise only where it accepts writing it over. Every row is checked before any is written,
+    /// and every refusal is named; a write that fails, or rows that do not read back as they are to be held, put both
+    /// registries back byte for byte.
     /// </summary>
     /// <param name="startDirectory">A directory in the tree whose registries are written.</param>
     /// <param name="request">The rows, and what the person applying them allows.</param>
     /// <param name="mode">Whether to plan them, check them as applying them would, or write them.</param>
     /// <param name="cancellationToken">Stops it before the registries are opened.</param>
     Task<AnchorBatch> ApplyAsync(string startDirectory, AnchorBatchRequest request, AnchorBatchMode mode, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Which of <paramref name="rows"/> the registries do not hold as declared, and how each differs, read as they are now:
-    /// nothing is checked against the rules a write is held to, and nothing is written.
-    /// </summary>
-    /// <param name="startDirectory">A directory in the tree whose registries are read.</param>
-    /// <param name="rows">The rows as declared.</param>
-    /// <param name="cancellationToken">Stops it before the registries are read.</param>
-    Task<IReadOnlyList<AnchorDifference>> DifferencesAsync(string startDirectory, IReadOnlyList<AnchorRowDeclaration> rows, CancellationToken cancellationToken = default);
 
     /// <summary>Finds anchors by exact id.</summary>
     Task<AnchorLookup> ReadAsync(string startDirectory, IReadOnlyList<string> ids, AnchorScope scope, CancellationToken cancellationToken = default);
@@ -164,7 +158,7 @@ public sealed class AnchorRegistryService(
 
         var rows = request.Rows;
 
-        if (rows.Count == 0 && request.New.Count == 0 && request.AcceptLost.Count == 0)
+        if (rows.Count == 0 && request.New.Count == 0 && request.AcceptLost.Count == 0 && request.AcceptOver.Count == 0)
         {
             return new AnchorBatch([], []);
         }
@@ -174,9 +168,15 @@ public sealed class AnchorRegistryService(
         var settings = context.Config.Anchors;
         var door = DoorFor(context, request.Roots);
         var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
-        var batch = rows.Select(row => row.Id).ToHashSet(AnchorIdMatch.Comparer);
+
+        // A row declared as an earlier fold of the agent recorded it is never weighed again: the registries keep what they
+        // hold, and the batch's other rows do not cite it as one of its own.
+        bool Untouched(AnchorRowDeclaration row) => request.Earlier.TryGetValue(row.Id, out var earlier) && earlier == row;
+
+        var batch = rows.Where(row => !Untouched(row)).Select(row => row.Id).ToHashSet(AnchorIdMatch.Comparer);
         var named = request.New.ToHashSet(AnchorIdMatch.Comparer);
         var accepted = request.AcceptLost.ToHashSet();
+        var over = request.AcceptOver.ToHashSet();
         var written = mode == AnchorBatchMode.Apply;
 
         return _registryLock.RunExclusive(registries, () =>
@@ -192,11 +192,21 @@ public sealed class AnchorRegistryService(
             // What the rows made of each acceptance: a cell that loses stored text, a row already as declared - which an
             // acceptance of an earlier run left as it is - or a row whose declaration did not read, whose loss is not judged.
             var losing = new HashSet<AnchorRowCell>();
+            var bothChanged = new HashSet<AnchorRowCell>();
             var standing = new HashSet<string>(AnchorIdMatch.Comparer);
             var unjudged = new HashSet<string>(AnchorIdMatch.Comparer);
 
             foreach (var declared in rows)
             {
+                if (Untouched(declared))
+                {
+                    outcomes.Add(new AnchorRowOutcome(declared.Id, AnchorRowAction.Untouched, null));
+                    standing.Add(declared.Id);
+                    continue;
+                }
+
+                var earlier = request.Earlier.GetValueOrDefault(declared.Id);
+
                 try
                 {
                     var pending = Parse(registries.Pending, texts[AnchorRegistryKind.Pending], rules);
@@ -209,7 +219,15 @@ public sealed class AnchorRegistryService(
                     Placement? placement = null;
                     AnchorRowOutcome? outcome = null;
 
-                    if (matches.Count == 0)
+                    if (matches.Count == 0 && earlier is not null)
+                    {
+                        // Gone since an earlier fold applied it: nothing says what its cells became, and making it again
+                        // would bring back a row somebody removed.
+                        refusals.Refuse(
+                            "the registries no longer hold the row an earlier fold of this agent applied, so nothing says what its cells became. Set the "
+                            + "row by hand as it should be.");
+                    }
+                    else if (matches.Count == 0)
                     {
                         // A row no registry holds is one the batch makes, and a typo in an existing row's id is one too: it is
                         // made only where the person applying the batch said it is new, as write-anchor is only ever asked to
@@ -233,7 +251,7 @@ public sealed class AnchorRegistryService(
                         if (!refusals.Any)
                         {
                             placement = PlaceNew(row!, registries, pending, done, written);
-                            outcome = new AnchorRowOutcome(declared.Id, AnchorRowAction.New, placement.Change);
+                            outcome = new AnchorRowOutcome(declared.Id, AnchorRowAction.New, placement.Change) { Effective = declared };
                         }
                     }
                     else if (matches.Count > 1)
@@ -244,10 +262,21 @@ public sealed class AnchorRegistryService(
                     {
                         var (existing, registry) = (matches[0].Entry.Row, matches[0].Entry.Registry);
                         AnchorSetRequest? change = null;
+                        var effective = declared;
+                        IReadOnlyList<AnchorCellWeighed> weighed = [];
 
                         try
                         {
-                            change = ChangesTo(declared, existing);
+                            // A row an earlier fold applied is weighed cell by cell from what that fold recorded as declared,
+                            // here, under the lock its write takes: decided against the registries as they are when it is
+                            // written, never as they were when a command looked first.
+                            if (earlier is not null)
+                            {
+                                weighed = AnchorCellMerge.Of(AnchorRowCells.Of(declared), AnchorRowCells.Of(earlier), AnchorRowCells.Of(existing));
+                                effective = AnchorCellMerge.Effective(declared, existing, weighed);
+                            }
+
+                            change = ChangesTo(effective, existing);
                         }
                         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.UsageError)
                         {
@@ -255,13 +284,29 @@ public sealed class AnchorRegistryService(
                             unjudged.Add(declared.Id);
                         }
 
-                        // A row already as declared is left alone, named new or not: one named new is the batch's own.
+                        IReadOnlyList<AnchorKeptCell> kept = [.. weighed
+                            .Where(cell => cell.Resolution == AnchorCellResolution.Kept)
+                            .Select(cell => new AnchorKeptCell(cell.Cell, cell.Agent!, cell.Registries!))];
+                        IReadOnlyList<AnchorOverCell> both = [.. weighed
+                            .Where(cell => cell.Resolution == AnchorCellResolution.Both)
+                            .Select(cell =>
+                            {
+                                var one = new AnchorRowCell(declared.Id, cell.Cell);
+                                return new AnchorOverCell(one, cell.Earlier!, cell.Registries!, cell.Agent!, over.Contains(one));
+                            })];
+                        bothChanged.UnionWith(both.Select(cell => cell.Cell));
+
+                        // A row already as it is to be held is left alone, named new or not: one named new is the batch's own.
                         if (change is { HasChanges: false })
                         {
                             outcomes.Add(new AnchorRowOutcome(
                                 declared.Id,
                                 AnchorRowAction.AlreadyIn,
-                                new AnchorChange(declared.Id, registry, registry, existing.Status, existing.Status, [], Written: false)));
+                                new AnchorChange(declared.Id, registry, registry, existing.Status, existing.Status, [], Written: false))
+                            {
+                                Effective = effective,
+                                Kept = kept,
+                            });
                             standing.Add(declared.Id);
                             continue;
                         }
@@ -275,7 +320,8 @@ public sealed class AnchorRegistryService(
                                     + $"{AnchorBatchRequest.NewOption} {declared.Id} to change that row, or give the new row an id of its own.");
                             }
 
-                            var lost = Lost(change, existing, accepted);
+                            // A cell both changed is shown, and consented to, as such: what its writing over loses is said there.
+                            var lost = Lost(change, existing, accepted, both.Select(cell => cell.Cell.Cell));
                             losing.UnionWith(lost.Select(cell => cell.Cell));
 
                             var cells = ComposeChanges(change, rules, refusals);
@@ -292,12 +338,26 @@ public sealed class AnchorRegistryService(
                                         $"its {cell.Cell.Cell} does not keep its stored text word for word - {cell.Diff} - so it is written "
                                         + $"only with {AnchorBatchRequest.AcceptLostOption} {cell.Cell}.");
                                 }
+
+                                foreach (var cell in both.Where(cell => !cell.Accepted))
+                                {
+                                    refusals.Refuse(
+                                        $"its {cell.Cell.Cell} was changed by the registries and by the agent since an earlier fold of this agent applied it, so "
+                                        + $"the agent's text is written over the registries' only with {AnchorBatchRequest.AcceptOverOption} {cell.Cell}; the dry "
+                                        + "run shows the three texts.");
+                                }
                             }
 
                             if (!refusals.Any)
                             {
                                 placement = PlaceChange(Found.Of(matches[0]), change, cells!, registries, pending, done, rules, settings, written);
-                                outcome = new AnchorRowOutcome(declared.Id, AnchorRowAction.Changed, placement.Change) { Lost = lost };
+                                outcome = new AnchorRowOutcome(declared.Id, AnchorRowAction.Changed, placement.Change)
+                                {
+                                    Lost = lost,
+                                    Effective = effective,
+                                    Kept = kept,
+                                    Over = both,
+                                };
                             }
                         }
                     }
@@ -330,6 +390,11 @@ public sealed class AnchorRegistryService(
                 .Select(cell => cell.ToString())
                 .Order(StringComparer.Ordinal)
                 .Select(cell => $"{AnchorBatchRequest.AcceptLostOption} {cell} names a cell that keeps its stored text here: drop it, or correct it."));
+            problems.AddRange(over
+                .Where(cell => !bothChanged.Contains(cell) && !standing.Contains(cell.Id) && !unjudged.Contains(cell.Id))
+                .Select(cell => cell.ToString())
+                .Order(StringComparer.Ordinal)
+                .Select(cell => $"{AnchorBatchRequest.AcceptOverOption} {cell} names a cell the registries and the agent did not both change since its earlier fold: drop it, or correct it."));
 
             // Every row is checked, and every one refused is named, before any is written.
             if (problems.Count > 0 || !written || writes.Count == 0)
@@ -348,37 +413,14 @@ public sealed class AnchorRegistryService(
                 return Restored(outcomes, snapshot, $"writing the rows failed: {ex.Message.TrimEnd('.')}");
             }
 
-            // Every row read back and compared: that a write returned is not proof of what the file holds.
-            var wrong = Verify(rows, registries, rules);
+            // Every row read back and compared with what it is to be held as - a cell kept is the registries', not the
+            // declaration's: that a write returned is not proof of what the file holds.
+            var wrong = Verify([.. outcomes.Where(outcome => outcome.Effective is not null).Select(outcome => outcome.Effective!)], registries, rules);
 
             return wrong.Count > 0
                 ? Restored(outcomes, snapshot, $"the rows did not read back as declared: {string.Join("; ", wrong)}")
                 : new AnchorBatch(outcomes, []);
         });
-    }
-
-    public async Task<IReadOnlyList<AnchorDifference>> DifferencesAsync(
-        string startDirectory,
-        IReadOnlyList<AnchorRowDeclaration> rows,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(rows);
-
-        if (rows.Count == 0)
-        {
-            return [];
-        }
-
-        var context = await _contextLoader.LoadAsync(startDirectory, cancellationToken).ConfigureAwait(false);
-        var rules = AnchorIdRules.From(context.Config.Anchors);
-        var registries = await _locator.LocateAsync(context, cancellationToken).ConfigureAwait(false);
-
-        // Both read as one moment, so a row moving between them is never seen in neither or both.
-        var documents = _registryLock
-            .ReadTogether(registries, _fileSystem)
-            .ToDictionary(read => read.Registry.Kind, read => Load(read.Registry, read.Text, rules));
-
-        return Differing(rows, registries, documents[AnchorRegistryKind.Pending], documents[AnchorRegistryKind.Done]);
     }
 
     public async Task<AnchorLookup> ReadAsync(
@@ -804,20 +846,19 @@ public sealed class AnchorRegistryService(
     /// </summary>
     private static RowDifferences Differences(AnchorRowDeclaration declared, AnchorRow existing)
     {
-        var status = AnchorStatus.Render(RequireStatus(declared.Status));
-        var priority = declared.Priority is null ? null : RequirePriority(declared.Priority);
+        var (cells, stored) = (AnchorRowCells.Of(declared), AnchorRowCells.Of(existing));
 
         return new RowDifferences(
-            status != existing.Status ? status : null,
-            priority is not null && priority != existing.Priority ? priority : null,
-            AnchorCells.Flatten(declared.Trigger) != existing.Trigger,
-            AnchorCells.Flatten(declared.ClosingWork) != existing.ClosingWork,
-            AnchorCells.Flatten(declared.CrossRefs) != existing.CrossRefs);
+            cells.Status != stored.Status ? cells.Status : null,
+            cells.Priority is not null && cells.Priority != stored.Priority ? cells.Priority : null,
+            cells.Trigger != stored.Trigger,
+            cells.ClosingWork != stored.ClosingWork,
+            cells.CrossRefs != stored.CrossRefs);
     }
 
     /// <summary>
-    /// Which of <paramref name="rows"/> the registries do not hold as declared, read back from disk: one row for each id,
-    /// in the registry its status belongs in, with every declared cell.
+    /// Which of <paramref name="rows"/> - each as the registries are to hold it - they do not hold so, read back from disk:
+    /// one row for each id, in the registry its status belongs in, with every cell.
     /// </summary>
     private IReadOnlyList<string> Verify(IReadOnlyList<AnchorRowDeclaration> rows, AnchorRegistries registries, AnchorIdRules rules)
     {
@@ -907,13 +948,16 @@ public sealed class AnchorRegistryService(
 
     /// <summary>
     /// The cells of <paramref name="existing"/> that <paramref name="change"/> rewrites and whose stored text does not
-    /// survive in what replaces it, each with its word diff and whether <paramref name="accepted"/> names it.
+    /// survive in what replaces it, each with its word diff and whether <paramref name="accepted"/> names it - but those
+    /// <paramref name="both"/> names, which the registries and the agent both changed, and whose writing over is shown and
+    /// consented to as such.
     /// </summary>
-    private static List<AnchorLostCell> Lost(AnchorSetRequest change, AnchorRow existing, IReadOnlySet<AnchorRowCell> accepted)
+    private static List<AnchorLostCell> Lost(AnchorSetRequest change, AnchorRow existing, IReadOnlySet<AnchorRowCell> accepted, IEnumerable<string> both)
     {
         var lost = new List<AnchorLostCell>();
+        var over = both.ToHashSet(StringComparer.Ordinal);
 
-        foreach (var cell in ProseCells(existing, change.Trigger, change.ClosingWork, change.CrossRefs).Where(cell => cell.After is not null))
+        foreach (var cell in ProseCells(existing, change.Trigger, change.ClosingWork, change.CrossRefs).Where(cell => cell.After is not null && !over.Contains(cell.Name)))
         {
             var written = AnchorCells.Flatten(cell.After!);
 
@@ -1216,10 +1260,12 @@ public sealed class AnchorRegistryService(
         }
     }
 
-    private static string RequirePriority(string? value)
+    /// <summary>The band <paramref name="value"/> names, as a row stores it; a usage error where it names none.</summary>
+    internal static string RequirePriority(string? value)
         => AnchorPriority.TryNormalize(value, out var band) ? band : throw Usage(PriorityProblem(value));
 
-    private static AnchorState RequireStatus(string? value)
+    /// <summary>The status <paramref name="value"/> names; a usage error where it names none.</summary>
+    internal static AnchorState RequireStatus(string? value)
         => AnchorStatus.TryParse(value, out var state) ? state : throw Usage(StatusProblem(value));
 
     /// <summary>The band <paramref name="value"/> names; null, with the refusal collected, where it names none.</summary>

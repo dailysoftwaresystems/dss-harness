@@ -41,6 +41,13 @@ public sealed record FoldAllowances
     /// </summary>
     public IReadOnlyList<string> AcceptLost { get; init; } = [];
 
+    /// <summary>
+    /// The cells of rows an earlier fold of the agent applied that the registries and the agent both changed since, each
+    /// otherwise, whose agent's text its fold may write over the registries', each as <see cref="AnchorRowCell.Form"/>:
+    /// <see cref="AnchorBatchRequest.AcceptOverOption"/>. It accepts, for a prose cell, the loss of what the registries hold.
+    /// </summary>
+    public IReadOnlyList<string> AcceptOver { get; init; } = [];
+
     /// <summary>The options given, as the command line names them, for a refusal that none of them may be given.</summary>
     public IReadOnlyList<string> Given =>
         [.. new (string Option, int Count)[]
@@ -49,6 +56,7 @@ public sealed record FoldAllowances
                 (SettledOption, Settled.Count),
                 (AnchorBatchRequest.NewOption, New.Count),
                 (AnchorBatchRequest.AcceptLostOption, AcceptLost.Count),
+                (AnchorBatchRequest.AcceptOverOption, AcceptOver.Count),
             }
             .Where(option => option.Count > 0)
             .Select(option => option.Option)];
@@ -56,7 +64,8 @@ public sealed record FoldAllowances
     /// <summary>
     /// What is wrong with how they are spelt, before anything is read: a path that could name nothing in the tree, one
     /// named both to be merged and as settled by hand, an id no anchor could have, a cell that is not
-    /// <see cref="AnchorRowCell.Form"/>; <see langword="null"/> where nothing is.
+    /// <see cref="AnchorRowCell.Form"/> - for <see cref="AnchorBatchRequest.AcceptLostOption"/>, a prose cell; for
+    /// <see cref="AnchorBatchRequest.AcceptOverOption"/>, any of a row's five; <see langword="null"/> where nothing is.
     /// </summary>
     public string? Problem()
     {
@@ -70,10 +79,16 @@ public sealed record FoldAllowances
             return $"{AnchorBatchRequest.NewOption} {id}.";
         }
 
-        if (AcceptLost.FirstOrDefault(cell => AnchorRowCell.Parse(cell) is null) is { } cell)
+        if (AcceptLost.FirstOrDefault(cell => AnchorRowCell.Parse(cell) is not { IsProse: true }) is { } cell)
         {
             return $"{AnchorBatchRequest.AcceptLostOption} '{cell}' is not {AnchorRowCell.Form}, where the id is an anchor's and the cell is "
                 + $"{string.Join(", ", AnchorCellNames.Text)}.";
+        }
+
+        if (AcceptOver.FirstOrDefault(cell => AnchorRowCell.Parse(cell) is null) is { } over)
+        {
+            return $"{AnchorBatchRequest.AcceptOverOption} '{over}' is not {AnchorRowCell.Form}, where the id is an anchor's and the cell is "
+                + $"{string.Join(", ", AnchorCellNames.All)}.";
         }
 
         return null;
@@ -81,8 +96,11 @@ public sealed record FoldAllowances
 
     /// <summary>The cells <see cref="AcceptLost"/> names, each once.</summary>
     /// <exception cref="InvalidOperationException">One is not <see cref="AnchorRowCell.Form"/>: <see cref="Problem"/> was not asked first.</exception>
-    public IReadOnlyList<AnchorRowCell> LostCells =>
-        [.. AcceptLost.Select(cell => AnchorRowCell.Parse(cell) ?? throw new InvalidOperationException($"'{cell}' is not {AnchorRowCell.Form}; its problem was not asked first.")).Distinct()];
+    public IReadOnlyList<AnchorRowCell> LostCells => Cells(AcceptLost);
+
+    /// <summary>The cells <see cref="AcceptOver"/> names, each once.</summary>
+    /// <exception cref="InvalidOperationException">One is not <see cref="AnchorRowCell.Form"/>: <see cref="Problem"/> was not asked first.</exception>
+    public IReadOnlyList<AnchorRowCell> OverCells => Cells(AcceptOver);
 
     /// <summary>
     /// What is wrong with the paths named with <see cref="MergeOption"/> and with <see cref="SettledOption"/>, whichever
@@ -106,5 +124,10 @@ public sealed record FoldAllowances
     public IEnumerable<string> Arguments() =>
         PathArguments(Merge, Settled)
             .Concat(New.Distinct(StringComparer.Ordinal).SelectMany(id => new[] { AnchorBatchRequest.NewOption, id }))
-            .Concat(LostCells.SelectMany(cell => new[] { AnchorBatchRequest.AcceptLostOption, cell.ToString() }));
+            .Concat(LostCells.SelectMany(cell => new[] { AnchorBatchRequest.AcceptLostOption, cell.ToString() }))
+            .Concat(OverCells.SelectMany(cell => new[] { AnchorBatchRequest.AcceptOverOption, cell.ToString() }));
+
+    /// <summary>The cells <paramref name="named"/> names, each once.</summary>
+    private static IReadOnlyList<AnchorRowCell> Cells(IReadOnlyList<string> named)
+        => [.. named.Select(cell => AnchorRowCell.Parse(cell) ?? throw new InvalidOperationException($"'{cell}' is not {AnchorRowCell.Form}; its problem was not asked first.")).Distinct()];
 }
