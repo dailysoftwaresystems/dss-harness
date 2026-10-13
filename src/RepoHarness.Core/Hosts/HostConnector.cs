@@ -1,4 +1,5 @@
 using System.Globalization;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
@@ -362,7 +363,7 @@ public sealed class HostConnector(
             {
                 refusal = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{refusal}; tried {connections} time(s) over the {waited.TotalSeconds:0} seconds wakeWaitSeconds gives it to wake");
+                    $"{refusal}; tried {ReportText.Counted(connections, "time")} over the {waited.TotalSeconds:0} seconds wakeWaitSeconds gives it to wake");
                 _wakeWindow.Remember(host, refusal);
             }
 
@@ -390,7 +391,7 @@ public sealed class HostConnector(
                 ? string.Create(
                     CultureInfo.InvariantCulture,
                     $"answered after {_wakeWindow.Since(started).TotalSeconds:0} seconds of waiting for it to wake "
-                    + $"({lookups} lookup(s) of its name, {connections} connection attempt(s))")
+                    + $"({ReportText.Counted(lookups, "lookup")} of its name, {ReportText.Counted(connections, "connection attempt")})")
                 : null,
         };
     }

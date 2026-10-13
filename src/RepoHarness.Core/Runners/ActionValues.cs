@@ -190,7 +190,7 @@ public sealed class ActionValues : ILineMask
 
     /// <summary>How many values there are, and never what they are.</summary>
     public override string ToString()
-        => $"{_values.Count} value(s), {_secrets.Count} secret(s)";
+        => $"{ReportText.Counted(_values.Count, "value")}, {ReportText.Counted(_secrets.Count, "secret")}";
 }
 
 /// <summary>
@@ -260,14 +260,14 @@ public sealed class ActionValuesReader(IFileSystem fileSystem, IHarnessOutput ou
 
             throw new HarnessException(
                 HarnessExit.ConfigInvalid,
-                $"the runner value directories have {problems.Count} problem(s):"
+                $"the runner value directories have {ReportText.Counted(problems.Count, "problem")}:"
                 + $"{Environment.NewLine}{detail}");
         }
 
         // Names only. The count of secrets is worth seeing; a secret is not.
         _output.Detail(
             "run",
-            $"read {values.Count} value(s) and {secrets.Count} secret(s) for this action");
+            $"read {ReportText.Counted(values.Count, "value")} and {ReportText.Counted(secrets.Count, "secret")} for this action");
 
         return Task.FromResult(new ActionValues(values, secrets));
     }

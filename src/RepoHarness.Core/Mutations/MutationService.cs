@@ -659,7 +659,7 @@ public sealed class MutationService(
         {
             throw new HarnessException(
                 HarnessExit.ConfigInvalid,
-                string.Join(Environment.NewLine, [$"The arms registry '{registry}' cannot be swept: {problems.Count} problem(s), each to fix:", .. problems.Select(problem => "  - " + problem)]));
+                string.Join(Environment.NewLine, [$"The arms registry '{registry}' cannot be swept: {ReportText.Counted(problems.Count, "problem")}, each to fix:", .. problems.Select(problem => "  - " + problem)]));
         }
     }
 

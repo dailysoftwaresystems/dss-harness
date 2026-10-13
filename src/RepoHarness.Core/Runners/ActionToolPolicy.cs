@@ -1,6 +1,7 @@
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
@@ -250,7 +251,7 @@ public sealed class ActionToolPolicy(IHostPlatform platform)
 
         throw new HarnessException(
             HarnessExit.Refused,
-            $"'{action.Path}' names {problems.Count} program(s) that may not run:"
+            $"'{action.Path}' names {ReportText.Counted(problems.Count, "program")} that may not run:"
             + $"{Environment.NewLine}{detail}");
     }
 

@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Sync;
@@ -152,7 +153,7 @@ public static class SyncServe
             ? string.Equals(arguments[index], Nothing, StringComparison.Ordinal) ? null : arguments[index]
             : throw new HarnessException(
                 HarnessExit.UsageError,
-                $"sync operation '{operation}' needs {(index + 1).ToString(CultureInfo.InvariantCulture)} argument(s); it was given "
+                $"sync operation '{operation}' needs {ReportText.Counted(index + 1, "argument")}; it was given "
                 + $"{arguments.Count.ToString(CultureInfo.InvariantCulture)}.");
     }
 
@@ -415,8 +416,8 @@ public static class SyncServe
         {
             throw new HarnessException(
                 HarnessExit.UsageError,
-                $"The files to write arrived in a shape this build cannot read: {(arguments.Count - 1).ToString(CultureInfo.InvariantCulture)} "
-                + "argument(s) after the copy's root, where each file is its path then its content. The two ends are different builds.");
+                $"The files to write arrived in a shape this build cannot read: {ReportText.Counted(arguments.Count - 1, "argument")} "
+                + "after the copy's root, where each file is its path then its content. The two ends are different builds.");
         }
 
         return [.. arguments.Skip(1).Chunk(2).Select(file => new SyncFileWrite(file[0], file[1]))];

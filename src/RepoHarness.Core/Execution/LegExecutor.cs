@@ -181,7 +181,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
         {
             _output.Warn(
                 ledger.CommandName,
-                $"The run was interrupted; {unfinished.Count} leg(s) reached no verdict: {string.Join(", ", unfinished)}");
+                $"The run was interrupted; {ReportText.Counted(unfinished.Count, "leg")} reached no verdict: {string.Join(", ", unfinished)}");
         }
 
         foreach (var machine in machines.Values)
@@ -227,7 +227,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             var (perMachine, total) => $"up to {perMachine.Value} at once per machine, {total.Value} in all",
         };
 
-        ledger.Announce($"starting {request.Legs.Count} leg(s) across {machineCount} machine(s), {caps}: {legs}");
+        ledger.Announce($"starting {ReportText.Counted(request.Legs.Count, "leg")} across {ReportText.Counted(machineCount, "machine")}, {caps}: {legs}");
     }
 
     /// <summary>

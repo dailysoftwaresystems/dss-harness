@@ -1194,6 +1194,6 @@ public sealed class ActionFileParser(
 
         return new HarnessException(
             HarnessExit.ConfigInvalid,
-            $"'{path}' has {problems.Count} problem(s):{Environment.NewLine}{detail}");
+            $"'{path}' has {ReportText.Counted(problems.Count, "problem")}:{Environment.NewLine}{detail}");
     }
 }

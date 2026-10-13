@@ -282,7 +282,7 @@ public sealed partial class GitClient(
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"git answered {lines.Count} line(s) for the {asked.Count + 1} it was asked about {commit}, so which files it holds cannot be told.");
+                $"git answered {ReportText.Counted(lines.Count, "line")} for the {asked.Count + 1} it was asked about {commit}, so which files it holds cannot be told.");
         }
 
         if (!lines[0].StartsWith("commit ", StringComparison.Ordinal))
@@ -633,7 +633,7 @@ public sealed partial class GitClient(
             {
                 throw new HarnessException(
                     HarnessExit.CommandFailed,
-                    $"git named {answers.Count} object(s) for the {together.Count} file(s) it was given to read.");
+                    $"git named {ReportText.Counted(answers.Count, "object")} for the {ReportText.Counted(together.Count, "file")} it was given to read.");
             }
 
             for (var at = 0; at < together.Count; at++)
@@ -950,7 +950,7 @@ public sealed partial class GitClient(
 
         throw new HarnessException(
             HarnessExit.CommandFailed,
-            $"Could not ask git which rules decide {paths.Count} path(s) in '{directory}': {result.FailureMessage}");
+            $"Could not ask git which rules decide {ReportText.Counted(paths.Count, "path")} in '{directory}': {result.FailureMessage}");
     }
 
     public async Task<IReadOnlySet<string>> FindIgnoredAsync(
@@ -971,7 +971,7 @@ public sealed partial class GitClient(
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"Could not ask git which of {paths.Count} path(s) it ignores in '{directory}': {result.FailureMessage}");
+                $"Could not ask git which of {ReportText.Counted(paths.Count, "path")} it ignores in '{directory}': {result.FailureMessage}");
         }
 
         return ReadDecisions(result.StandardOutput, paths)
@@ -1012,7 +1012,7 @@ public sealed partial class GitClient(
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"git answered which rules decide {paths.Count} path(s) in a form this build cannot read.");
+                $"git answered which rules decide {ReportText.Counted(paths.Count, "path")} in a form this build cannot read.");
         }
 
         var decisions = new List<IgnoreDecision>(paths.Count);
@@ -1466,7 +1466,7 @@ public sealed partial class GitClient(
         var result = await RunForBytesAsync(directory, ["cat-file", "--batch"], cancellationToken, input.ToString())
             .ConfigureAwait(false);
 
-        Ensure(result, $"read {objects.Count} file(s) at {commit}");
+        Ensure(result, $"read {ReportText.Counted(objects.Count, "file")} at {commit}");
 
         var answers = new BatchAnswers(result.StandardOutput);
 
@@ -1474,7 +1474,7 @@ public sealed partial class GitClient(
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"Could not read {objects.Count} file(s) at {commit}: git cannot read that commit.");
+                $"Could not read {ReportText.Counted(objects.Count, "file")} at {commit}: git cannot read that commit.");
         }
 
         return [.. objects.Select(_ => answers.Next() is { Type: "blob" } blob ? Decoded(blob.Content) : null)];

@@ -226,7 +226,7 @@ public sealed class RunSegments(IFileSystem fileSystem, IHarnessOutput output)
         if (record.Segments.Count > 1)
         {
             var done = record.Union.Count;
-            _output.Info("run", $"resuming run '{runId}': {done} unit(s) already completed");
+            _output.Info("run", $"resuming run '{runId}': {ReportText.Counted(done, "unit")} already completed");
         }
 
         return Task.FromResult(record);

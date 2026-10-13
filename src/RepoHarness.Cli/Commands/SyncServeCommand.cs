@@ -1,4 +1,5 @@
 using System.CommandLine;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
 
@@ -207,5 +208,5 @@ internal static class SyncServeCommand
             ? arguments[index]
             : throw new HarnessException(
                 HarnessExit.UsageError,
-                $"sync operation '{operation}' needs {index + 1} argument(s); it was given {arguments.Length}.");
+                $"sync operation '{operation}' needs {ReportText.Counted(index + 1, "argument")}; it was given {arguments.Length}.");
 }

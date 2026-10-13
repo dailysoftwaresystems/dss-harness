@@ -2,6 +2,7 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -313,8 +314,8 @@ public sealed class HostCopyRemover(
             var gone = (workers.Removed.Count, removal) switch
             {
                 (0, _) => string.Empty,
-                (var count, CopyRemoval.Removed) => $", with the {count} mutation worker(s) kept beside it, {DiskSpace.Size(workers.Bytes)}",
-                var (count, _) => $"; the {count} mutation worker(s) kept beside it were removed, {DiskSpace.Size(workers.Bytes)}",
+                (var count, CopyRemoval.Removed) => $", with the {ReportText.Counted(count, "mutation worker")} kept beside it, {DiskSpace.Size(workers.Bytes)}",
+                var (count, _) => $"; the {ReportText.Counted(count, "mutation worker")} kept beside it were removed, {DiskSpace.Size(workers.Bytes)}",
             };
 
             return workers.Left.Count == 0
@@ -343,7 +344,7 @@ public sealed class HostCopyRemover(
         static string Went(WorkersRemoval workers)
             => workers.Removed.Count == 0
                 ? string.Empty
-                : $"; {workers.Removed.Count} mutation worker(s) kept beside it were removed before that, {DiskSpace.Size(workers.Bytes)}";
+                : $"; {ReportText.Counted(workers.Removed.Count, "mutation worker")} kept beside it were removed before that, {DiskSpace.Size(workers.Bytes)}";
     }
 
     /// <summary>Whether <paramref name="entry"/> names a path a worktree's copy is kept at: its own name, after the suffix.</summary>

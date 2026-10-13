@@ -3,6 +3,7 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Execution;
@@ -281,12 +282,12 @@ public sealed class LegAdmission(
 
                     if (heldBy is null || !heldBy.SequenceEqual(standing.Holders) || ownSaid != own)
                     {
-                        Say($"waits for {Slots(standing)}, {standing.Ahead} leg(s) ahead{whose}; held by {Holders(standing)}");
+                        Say($"waits for {Slots(standing)}, {ReportText.Counted(standing.Ahead, "leg")} ahead{whose}; held by {Holders(standing)}");
                         (heldBy, ownSaid) = (standing.Holders, own);
                     }
                     else if (Due())
                     {
-                        Say($"still waits for {Slots(standing)}{After()}, {standing.Ahead} leg(s) ahead{whose}; held by {Holders(standing)}");
+                        Say($"still waits for {Slots(standing)}{After()}, {ReportText.Counted(standing.Ahead, "leg")} ahead{whose}; held by {Holders(standing)}");
                     }
 
                     (waitingForMemory, settled) = (false, false);
@@ -666,7 +667,7 @@ public sealed class LegAdmission(
     }
 
     /// <summary>The slots a leg waits for, as its line names them: <c>one of this machine's 2 heavy-leg slot(s)</c>.</summary>
-    private static string Slots(SlotStanding standing) => $"one of this machine's {standing.Slots} heavy-leg slot(s)";
+    private static string Slots(SlotStanding standing) => $"one of this machine's {ReportText.Counted(standing.Slots, "heavy-leg slot")}";
 
     private static string Holders(SlotStanding standing) => string.Join("; ", standing.Holders.Select(holder => holder.Describe()));
 

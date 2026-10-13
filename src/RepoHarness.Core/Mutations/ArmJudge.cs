@@ -1,4 +1,5 @@
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Mutations;
 
@@ -372,7 +373,7 @@ public static class ArmJudge
         {
             return ReachedVerdict.Of(
                 LegVerdict.Violated,
-                $"the text in '{miscounted.Text}' occurs {miscounted.Count} time(s) in '{miscounted.Site}', where it must occur exactly once");
+                $"the text in '{miscounted.Text}' occurs {ReportText.Counted(miscounted.Count, "time")} in '{miscounted.Site}', where it must occur exactly once");
         }
 
         if (preflight.Unchanged.FirstOrDefault() is { } unchanged)
@@ -494,12 +495,12 @@ public static class ArmJudge
 
         if (report.Ran != arm.Cases)
         {
-            return ReachedVerdict.Of(LegVerdict.Violated, $"ran {report.Ran} case(s), and the arm declares {arm.Cases}");
+            return ReachedVerdict.Of(LegVerdict.Violated, $"ran {ReportText.Counted(report.Ran, "case")}, and the arm declares {arm.Cases}");
         }
 
         if (reds.Count == 0)
         {
-            return ReachedVerdict.Of(LegVerdict.Survived, $"ran {report.Ran} case(s), and none failed");
+            return ReachedVerdict.Of(LegVerdict.Survived, $"ran {ReportText.Counted(report.Ran, "case")}, and none failed");
         }
 
         var missing = arm.Reds.Except(reds, StringComparer.Ordinal).ToList();
@@ -522,7 +523,7 @@ public static class ArmJudge
         }
 
         return run.DiagnosticSaid
-            ? ReachedVerdict.Of(LegVerdict.Passed, $"ran {report.Ran} case(s), {reds.Count} red as declared, and said its diagnostic")
+            ? ReachedVerdict.Of(LegVerdict.Passed, $"ran {ReportText.Counted(report.Ran, "case")}, {reds.Count} red as declared, and said its diagnostic")
             : ReachedVerdict.Of(LegVerdict.Violated, $"the run did not say its diagnostic, the text in '{arm.Diagnostic}'");
     }
 

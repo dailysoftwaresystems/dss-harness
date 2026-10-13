@@ -17,7 +17,7 @@ public static class OrchestrationReports
     {
         ArgumentNullException.ThrowIfNull(orchestrators);
 
-        var message = orchestrators.Count == 0 ? "no orchestrators" : $"{orchestrators.Count} orchestrator(s)";
+        var message = orchestrators.Count == 0 ? "no orchestrators" : ReportText.Counted(orchestrators.Count, "orchestrator");
 
         return json
             ? CommandOutcome.Ok(message) with { Data = [Document(orchestrators).ToJsonString(ReportJson.Options)], Quiet = true }
@@ -30,7 +30,7 @@ public static class OrchestrationReports
         {
             var record = orchestrator.Record;
 
-            yield return $"{record.Name}  model {record.Model}, {orchestrator.Open.Count} of at most {record.Parallel} agent(s) open{Session(record.Session)}";
+            yield return $"{record.Name}  model {record.Model}, {orchestrator.Open.Count} of at most {ReportText.Counted(record.Parallel, "agent")} open{Session(record.Session)}";
 
             foreach (var agent in orchestrator.Agents)
             {
@@ -53,7 +53,7 @@ public static class OrchestrationReports
 
         var kept = agent.Evidence.Count == 0 && agent.Transcripts == 0
             ? string.Empty
-            : $"; kept {agent.Evidence.Count} evidence set(s), {agent.Transcripts} transcript file(s)";
+            : $"; kept {ReportText.Counted(agent.Evidence.Count, "evidence set")}, {ReportText.Counted(agent.Transcripts, "transcript file")}";
 
         var abandoned = record.Abandoned is true ? ", abandoned" : string.Empty;
 
@@ -156,7 +156,7 @@ public static class OrchestrationReports
         if (plan.Settled.Count > 0)
         {
             // Never silent: a path left out without a word is how an agent's work goes missing while its fold succeeds.
-            yield return $"{plan.Settled.Count} path(s) declared settled by hand, neither compared nor written:";
+            yield return $"{ReportText.Counted(plan.Settled.Count, "path")} declared settled by hand, neither compared nor written:";
 
             foreach (var path in plan.Settled)
             {
@@ -168,11 +168,11 @@ public static class OrchestrationReports
         {
             int Of(IReadOnlyList<string> list) => list.Count(plan.Seeded.Contains);
 
-            yield return $"{plan.Seeded.Count} path(s) it shares with the main tree, handed to it or folded before: {Of(plan.Written)} its own, "
+            yield return $"{ReportText.Counted(plan.Seeded.Count, "path")} it shares with the main tree, handed to it or folded before: {Of(plan.Written)} its own, "
                 + $"{Of(plan.Inherited)} inherited, {Of(plan.AlreadyIn)} already in the main tree, {Of(plan.Deleted)} deleted, {Of(plan.Settled)} settled";
         }
 
-        yield return $"{plan.Inherited.Count} inherited path(s) left out; {plan.Written.Count} path(s) are its own:";
+        yield return $"{ReportText.Counted(plan.Inherited.Count, "inherited path")} left out; {ReportText.Counted(plan.Written.Count, "path")} are its own:";
 
         foreach (var path in plan.Written)
         {
@@ -182,7 +182,7 @@ public static class OrchestrationReports
 
         if (plan.Deleted.Count > 0)
         {
-            yield return $"and {plan.Deleted.Count} path(s) it deleted, removed from the main tree:";
+            yield return $"and {ReportText.Counted(plan.Deleted.Count, "path")} it deleted, removed from the main tree:";
 
             foreach (var path in plan.Deleted)
             {
@@ -192,7 +192,7 @@ public static class OrchestrationReports
 
         if (plan.AlreadyIn.Count > 0)
         {
-            yield return $"and {plan.AlreadyIn.Count} path(s) the main tree already holds as it does, with nothing to write:";
+            yield return $"and {ReportText.Counted(plan.AlreadyIn.Count, "path")} the main tree already holds as it does, with nothing to write:";
 
             foreach (var path in plan.AlreadyIn)
             {
@@ -207,7 +207,7 @@ public static class OrchestrationReports
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        yield return $"{plan.Refusals.Count} problem(s), and nothing was written:";
+        yield return $"{ReportText.Counted(plan.Refusals.Count, "problem")}, and nothing was written:";
 
         foreach (var refusal in plan.Refusals)
         {

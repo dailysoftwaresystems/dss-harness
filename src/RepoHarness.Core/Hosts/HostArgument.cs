@@ -1,6 +1,6 @@
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Hosts;
 
@@ -99,7 +99,7 @@ public sealed record HostArgument
     /// carries would be made whole as, what carrying it a piece at a time is for.
     /// </summary>
     public override string ToString()
-        => _text ?? string.Create(CultureInfo.InvariantCulture, $"{_bytes.Length} byte(s), read as their base64 text");
+        => _text ?? $"{ReportText.Counted(_bytes.Length, "byte")}, read as their base64 text";
 }
 
 /// <summary>Reads an argument as the text it is, and writes one as <see cref="HostArgument.WriteTo"/> does.</summary>

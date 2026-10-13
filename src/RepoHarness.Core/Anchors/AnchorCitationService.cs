@@ -341,8 +341,8 @@ public static class AnchorCitationReports
                 : $"{citation.Path}:{citation.LineNumber}: {citation.Id}")];
 
         var looked =
-            $"{report.CitationsFound} citation(s) over {report.FilesScanned} file(s) of {report.SubjectDescription}, "
-            + $"against {report.RegistryRows} registry row(s)";
+            $"{ReportText.Counted(report.CitationsFound, "citation")} over {ReportText.Counted(report.FilesScanned, "file")} of {report.SubjectDescription}, "
+            + $"against {ReportText.Counted(report.RegistryRows, "registry row")}";
 
         if (report.Passed)
         {
@@ -363,14 +363,14 @@ public static class AnchorCitationReports
                 .Count();
 
             findings.Add(
-                $"{missing.Count} citation(s) of {distinct} anchor id(s) resolve to no row in either registry; "
+                $"{ReportText.Counted(missing.Count, "citation")} of {ReportText.Counted(distinct, "anchor id")} resolve to no row in either registry; "
                 + "add the row, or correct the citation.");
         }
 
         if (cut > 0)
         {
             findings.Add(
-                $"{cut} citation(s) are cut at the end of a line, so none spells the id it was cut from; "
+                $"{ReportText.Counted(cut, "citation")} are cut at the end of a line, so none spells the id it was cut from; "
                 + "keep each id whole on one line.");
         }
 

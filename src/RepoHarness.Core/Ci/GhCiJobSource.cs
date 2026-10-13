@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 
@@ -161,7 +162,7 @@ public sealed class GhCiJobSource(IProcessRunner processRunner, GitLocalVariable
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"Run {id} reports {total} job(s) and only {collected.Count} came back, so some legs were "
+                $"Run {id} reports {ReportText.Counted(total, "job")} and only {collected.Count} came back, so some legs were "
                 + "never read. This is not a pass.");
         }
 

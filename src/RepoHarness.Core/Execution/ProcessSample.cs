@@ -1,3 +1,4 @@
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Execution;
@@ -84,7 +85,7 @@ public sealed record ContentionReport(
             // reported even when another sample could not be read.
             return ReachedVerdict.Of(
                 LegVerdict.Contended,
-                $"{Contenders.Count} process(es) used the build directory: "
+                $"{ReportText.Counted(Contenders.Count, "process")} used the build directory: "
                 + string.Join(", ", Contenders.Select(found => $"{found.Process.Name} (pid {found.Process.Id}, seen {Describe(found.Seen)})")));
         }
 
@@ -99,7 +100,7 @@ public sealed record ContentionReport(
             ? null
             : ReachedVerdict.Of(
                 LegVerdict.Unmeasured,
-                $"the process table could not be read for any of {Samples.Count} sample(s), so nothing "
+                $"the process table could not be read for any of {ReportText.Counted(Samples.Count, "sample")}, so nothing "
                 + $"established that this leg had the build directory to itself: {Unreadable[0]}");
     }
 

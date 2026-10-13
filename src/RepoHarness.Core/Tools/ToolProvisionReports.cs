@@ -94,7 +94,7 @@ public static class ToolProvisionReports
         }
 
         var ready = report.Legs.Count(leg => leg.Provisioned);
-        var counted = $"{ready} of {report.Legs.Count} leg(s) have every tool they need";
+        var counted = $"{ready} of {ReportText.Counted(report.Legs.Count, "leg")} have every tool they need";
         var dryRun = report.DryRun ? "; --dry-run installed nothing" : string.Empty;
 
         if (report.Passed)

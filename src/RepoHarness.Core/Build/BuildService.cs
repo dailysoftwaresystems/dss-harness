@@ -420,7 +420,7 @@ public sealed class BuildService(
             return await FinishAsync(
                 ReachedVerdict.Of(
                     LegVerdict.Unwitnessed,
-                    $"project '{request.Project.Name}' declares {unresolved.Count} buildOutput(s) naming no "
+                    $"project '{request.Project.Name}' declares {ReportText.Counted(unresolved.Count, "buildOutput")} naming no "
                     + $"path for '{request.PlatformKey}', so this build would be held to fewer files than "
                     + $"the configuration declares: {string.Join("; ", unresolved)}"),
                 null)
@@ -468,7 +468,7 @@ public sealed class BuildService(
             return await FinishAsync(
                 ReachedVerdict.Of(
                     LegVerdict.Failed,
-                    $"{dependencies.WithoutHeaders.Count} object(s) recorded no header dependencies: "
+                    $"{ReportText.Counted(dependencies.WithoutHeaders.Count, "object")} recorded no header dependencies: "
                     + ReportText.Listed(dependencies.WithoutHeaders)),
                 dependencies)
                 .ConfigureAwait(false);
@@ -566,7 +566,7 @@ public sealed class BuildService(
         {
             _output.Info(
                 CommandName,
-                $"{request.Leg}: {left.DeadCount} output(s) below this build directory are ones no target of this build "
+                $"{request.Leg}: {ReportText.Counted(left.DeadCount, "output")} below this build directory are ones no target of this build "
                 + $"produces any more, the deepest {left.DeadDeepest.Length} characters long ('{left.DeadDeepest}'), past the "
                 + $"{reserve} worktrees.pathBudgetReserve declares; they were left out of that check, since a new "
                 + "worktree's build never holds them, and 'ninja -t cleandead' in this build directory removes them.");
@@ -1035,7 +1035,7 @@ public sealed class BuildService(
 
             _output.Warn(
                 CommandName,
-                $"{request.Leg}: none of the {tracked.Count} tracked file(s) is a build input by "
+                $"{request.Leg}: none of the {ReportText.Counted(tracked.Count, "tracked file")} is a build input by "
                 + $"{source}, so nothing was watched while this built and nothing here can say the "
                 + "tree held still.");
         }

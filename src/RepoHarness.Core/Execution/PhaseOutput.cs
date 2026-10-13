@@ -1,5 +1,6 @@
 using System.Text;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 
 namespace RepoHarness.Core.Execution;
@@ -188,7 +189,7 @@ public abstract class PhaseOutput
             {
                 if (log.Length < end + closes.Length)
                 {
-                    throw new PhaseOutputUnreadException(logFile, $"it holds {log.Length} byte(s), fewer than the {end + closes.Length} the phase left in it");
+                    throw new PhaseOutputUnreadException(logFile, $"it holds {ReportText.Counted(log.Length, "byte")}, fewer than the {end + closes.Length} the phase left in it");
                 }
 
                 var found = new byte[closes.Length];

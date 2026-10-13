@@ -413,7 +413,7 @@ public sealed class InputWatch : IDisposable
 
         if (_watchers.Count == 0)
         {
-            _failure ??= $"no directory holding any of the {_tracked.Count} input(s) is present under "
+            _failure ??= $"no directory holding any of the {ReportText.Counted(_tracked.Count, "input")} is present under "
                 + $"'{_root}', so nothing about them could be watched";
         }
     }

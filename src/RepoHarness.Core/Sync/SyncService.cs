@@ -524,7 +524,7 @@ public sealed class SyncService(
         {
             return CommandOutcome.Failed(
                 HarnessExit.Refused,
-                $"{unreachable.Count} of {hosts.Count} host(s) hold no finished copy this harness made, so "
+                $"{unreachable.Count} of {ReportText.Counted(hosts.Count, "host")} hold no finished copy this harness made, so "
                 + $"run '{options.Artifact}' was carried nowhere. A carry writes an existing copy's "
                 + "own files and nothing else: it creates no directory, takes none over and finishes none a "
                 + "sync left part made, because a repositoryPath that is a typo would otherwise be filled in "
@@ -548,7 +548,7 @@ public sealed class SyncService(
                 if (options.DryRun)
                 {
                     details.Add(
-                        $"{host.Host}: would carry {carrying.Count} artifact file(s) of run "
+                        $"{host.Host}: would carry {ReportText.Counted(carrying.Count, "artifact file")} of run "
                         + $"'{options.Artifact}' into '{destination}'");
                     continue;
                 }
@@ -557,7 +557,7 @@ public sealed class SyncService(
                         transport, context.Layout.RepositoryRoot, destination, carrying, cancellationToken)
                     .ConfigureAwait(false);
 
-                details.Add($"{host.Host}: carried {carried} artifact file(s) of run '{options.Artifact}'");
+                details.Add($"{host.Host}: carried {ReportText.Counted(carried, "artifact file")} of run '{options.Artifact}'");
                 continue;
             }
 
@@ -569,7 +569,7 @@ public sealed class SyncService(
 
                 if (options.DryRun && !expands)
                 {
-                    details.Add($"{host.Host}: would bring back {pull.Count} named file(s) from '{destination}'");
+                    details.Add($"{host.Host}: would bring back {ReportText.Counted(pull.Count, "named file")} from '{destination}'");
                     continue;
                 }
 
@@ -588,7 +588,7 @@ public sealed class SyncService(
                     if (asked > 1)
                     {
                         details.Add(
-                            $"{host.Host}: brought back {brought.Files.Count} of {asked} file(s) before the pull stopped"
+                            $"{host.Host}: brought back {brought.Files.Count} of {ReportText.Counted(asked, "file")} before the pull stopped"
                             + (brought.Files.Count > 0 ? ", each left where it was written:" : string.Empty));
                         details.AddRange(brought.Files.Select(file => $"  {file}"));
                         details.Add($"{host.Host}: not brought back:");
@@ -602,8 +602,8 @@ public sealed class SyncService(
                 }
 
                 details.Add(options.DryRun
-                    ? $"{host.Host}: would bring back {brought.Files.Count} file(s) from '{destination}'"
-                    : $"{host.Host}: brought back {brought.Files.Count} file(s)");
+                    ? $"{host.Host}: would bring back {ReportText.Counted(brought.Files.Count, "file")} from '{destination}'"
+                    : $"{host.Host}: brought back {ReportText.Counted(brought.Files.Count, "file")}");
 
                 if (expands)
                 {
@@ -650,7 +650,7 @@ public sealed class SyncService(
         {
             return CommandOutcome.Failed(
                 HarnessExit.Refused,
-                $"{needAdopting.Count} host(s) hold a directory the harness did not create, so a run "
+                $"{ReportText.Counted(needAdopting.Count, "host")} hold a directory the harness did not create, so a run "
                 + $"would refuse them: {string.Join(", ", needAdopting)}. What taking each over would "
                 + "cost is listed above. Nothing was changed.",
                 details);
@@ -699,7 +699,7 @@ public sealed class SyncService(
         }
         return CommandOutcome.Failed(
             report.Defect is not null ? Verdicts.ExitCodeFor(LegVerdict.Poisoned) : Legs.LegsExit.Unavailable,
-            $"{done}; {unplaced.Count} leg(s) could not be placed on any host, so no copy was made for "
+            $"{done}; {ReportText.Counted(unplaced.Count, "leg")} could not be placed on any host, so no copy was made for "
                 + $"them: {string.Join(", ", unplaced)}",
             details);
     }
@@ -711,27 +711,27 @@ public sealed class SyncService(
     /// <param name="pulled">How many files were brought back, over every host.</param>
     private static string Summary(SyncOptions options, int hosts, IReadOnlyList<string> pull, int pulled)
     {
-        var count = hosts.ToString(CultureInfo.InvariantCulture);
+        var reached = ReportText.Counted(hosts, "host");
 
         if (options.DryRun)
         {
-            return $"{count} host(s) inspected; nothing was changed";
+            return $"{reached} inspected; nothing was changed";
         }
 
         if (options.Artifact is { } runId)
         {
-            return $"run '{runId}' carried to {count} host(s)";
+            return $"run '{runId}' carried to {reached}";
         }
 
         if (pull.Count == 0)
         {
-            return $"{count} host(s) in step";
+            return $"{reached} in step";
         }
 
         // A directory named brings back what it held, which nobody counted beforehand.
         return pull.Any(SyncPull.NamesADirectory)
-            ? $"{pulled.ToString(CultureInfo.InvariantCulture)} file(s) brought back from {count} host(s)"
-            : $"{pull.Count.ToString(CultureInfo.InvariantCulture)} named file(s) brought back from {count} host(s)";
+            ? $"{ReportText.Counted(pulled, "file")} brought back from {reached}"
+            : $"{ReportText.Counted(pull.Count, "named file")} brought back from {reached}";
     }
 
     /// <summary>Where <paramref name="host"/> keeps the copy of the tree the command runs in: see <see cref="HostCopies"/>.</summary>
@@ -1087,7 +1087,7 @@ public sealed class SyncService(
             .ConfigureAwait(false);
 
         var commit = ReportText.Commit(wanted.Commit!);
-        var sent = pack is null ? string.Empty : $" ({pack.Bytes.ToString(CultureInfo.InvariantCulture)} byte(s) of history sent)";
+        var sent = pack is null ? string.Empty : $" ({ReportText.Counted(pack.Bytes, "byte")} of history sent)";
 
         _output.Info(
             CommandName,
@@ -1445,7 +1445,7 @@ public sealed class SyncService(
                 throw new HarnessException(
                     HarnessExit.CommandFailed,
                     $"'{directory}/' holds no file in '{sourceRoot}' on {transport.Host}"
-                    + (listing.Links.Count > 0 ? $", only {listing.Links.Count.ToString(CultureInfo.InvariantCulture)} link(s), which are never followed" : string.Empty)
+                    + (listing.Links.Count > 0 ? $", only {ReportText.Counted(listing.Links.Count, "link")}, which are never followed" : string.Empty)
                     + ": nothing to bring back from it.");
             }
 
@@ -1649,7 +1649,7 @@ public sealed class SyncService(
         {
             _output.Warn(
                 CommandName,
-                $"{transport.Host}: the carry stopped part way, so the {written.Count} file(s) it had "
+                $"{transport.Host}: the carry stopped part way, so the {ReportText.Counted(written.Count, "file")} it had "
                 + "already written were taken back. That run has nothing there.");
 
             return;
@@ -1660,7 +1660,7 @@ public sealed class SyncService(
         _output.Warn(
             CommandName,
             $"{transport.Host}: the carry stopped part way and {stayed.Count} of the "
-            + $"{written.Count} file(s) it had written could not be taken back, so that run's "
+            + $"{ReportText.Counted(written.Count, "file")} it had written could not be taken back, so that run's "
             + "artifacts are there in part and a step reading them would measure less than was "
             + $"kept. Remove them before running anything that reads them: {string.Join(", ", stayed)}");
     }
@@ -1835,7 +1835,7 @@ public sealed class SyncService(
                 + $"{configuration} Nothing has been changed by this run.";
         }
 
-        var counted = $"{plan.Overwrites.Count.ToString(CultureInfo.InvariantCulture)} file(s) would be "
+        var counted = $"{ReportText.Counted(plan.Overwrites.Count, "file")} would be "
             + $"overwritten and {plan.Deletes.Count.ToString(CultureInfo.InvariantCulture)} deleted there";
 
         return $"{opening} {verb} is {take}, and {counted}:\n  "
@@ -2056,7 +2056,7 @@ public sealed class SyncService(
         throw new HarnessException(
             HarnessExit.CommandFailed,
             $"The copy at '{destinationRoot}' on {transport.Host} does not match {carrying.Matched} after the "
-            + $"sync: {differing.Count} file(s) still differ: {ReportText.Listed(differing)}. Nothing should be "
+            + $"sync: {ReportText.Counted(differing.Count, "file")} still differ: {ReportText.Listed(differing)}. Nothing should be "
             + "run against it.");
     }
 

@@ -738,7 +738,7 @@ public sealed class WorktreeService(
             {
                 Outcome = outcome.Outcome with
                 {
-                    Details = [.. outcome.Outcome.Details ?? [], $"discarded {discarded.Count} uncommitted change(s): {ReportText.Listed(discarded)}"],
+                    Details = [.. outcome.Outcome.Details ?? [], $"discarded {ReportText.Counted(discarded.Count, "uncommitted change")}: {ReportText.Listed(discarded)}"],
                 },
             };
         }
@@ -813,7 +813,7 @@ public sealed class WorktreeService(
         if (!measureOnly && removal.Removed.Count > 0)
         {
             lines.Add(
-                $"removed {removal.Removed.Count} mutation worker(s) kept beside it, {DiskSpace.Size(removal.Bytes)}: "
+                $"removed {ReportText.Counted(removal.Removed.Count, "mutation worker")} kept beside it, {DiskSpace.Size(removal.Bytes)}: "
                 + string.Join(", ", removal.Removed.Select(worker => $"'{worker.Path}'")));
         }
 
@@ -1134,7 +1134,7 @@ public sealed class WorktreeService(
         {
             var before = ex.Removed.Count == 0
                 ? "Nothing of it was removed"
-                : $"Only the {ex.Removed.Count} junction(s) before it were removed, as links, and what each led to is untouched: {ReportText.Listed(ex.Removed)}";
+                : $"Only the {ReportText.Counted(ex.Removed.Count, "junction")} before it were removed, as links, and what each led to is untouched: {ReportText.Listed(ex.Removed)}";
 
             return Failed(
                 $"Worktree '{name}' was not deleted: its directory junction {ex.Message.TrimEnd('.')}. {before}; git was not run. "
@@ -1157,7 +1157,7 @@ public sealed class WorktreeService(
 
         var junctions = unlinked.Count == 0
             ? string.Empty
-            : $" Its {unlinked.Count} directory junction(s) had been removed first, as links: {ReportText.Listed(unlinked)}.";
+            : $" Its {ReportText.Counted(unlinked.Count, "directory junction")} had been removed first, as links: {ReportText.Listed(unlinked)}.";
 
         // Nothing more is deleted here when git fails: git's refusal is the second check, and
         // deleting past it would undo the point of running it.
@@ -1185,7 +1185,7 @@ public sealed class WorktreeService(
             {
                 Outcome = verified.Outcome with
                 {
-                    Details = [.. verified.Outcome.Details ?? [], $"removed {unlinked.Count} directory junction(s) first, as links, never what they lead to: {ReportText.Listed(unlinked)}"],
+                    Details = [.. verified.Outcome.Details ?? [], $"removed {ReportText.Counted(unlinked.Count, "directory junction")} first, as links, never what they lead to: {ReportText.Listed(unlinked)}"],
                 },
             };
     }
@@ -1519,7 +1519,7 @@ public sealed class WorktreeService(
         if (findings.Changes.Count > 0)
         {
             reasons.Add(
-                $"it has {findings.Changes.Count} uncommitted change(s) that would be lost: {ReportText.Listed(findings.Changes)} "
+                $"it has {ReportText.Counted(findings.Changes.Count, "uncommitted change")} that would be lost: {ReportText.Listed(findings.Changes)} "
                 + "(commit them to a branch, run 'git stash -u', or pass --discard-uncommitted to delete them with the worktree)");
         }
 
@@ -1528,7 +1528,7 @@ public sealed class WorktreeService(
             var shortHead = ReportText.Commit(head);
 
             reasons.Add(
-                $"{findings.Commits} commit(s) up to {shortHead} are on no branch, tag, remote-tracking ref, newest stash or other worktree's HEAD "
+                $"{ReportText.Counted(findings.Commits, "commit")} up to {shortHead} are on no branch, tag, remote-tracking ref, newest stash or other worktree's HEAD "
                 + $"(run 'git branch <name> {shortHead}', or push them)");
         }
 
@@ -1536,8 +1536,8 @@ public sealed class WorktreeService(
         {
             var held = (submodule.Commits > 0, submodule.HasStash) switch
             {
-                (true, true) => $"{submodule.Commits} commit(s) no remote-tracking ref or tag contains, and a stash",
-                (true, false) => $"{submodule.Commits} commit(s) no remote-tracking ref or tag contains",
+                (true, true) => $"{ReportText.Counted(submodule.Commits, "commit")} no remote-tracking ref or tag contains, and a stash",
+                (true, false) => $"{ReportText.Counted(submodule.Commits, "commit")} no remote-tracking ref or tag contains",
                 _ => "a stash",
             };
 

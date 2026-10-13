@@ -401,7 +401,7 @@ public static class LineEndingReports
             : [.. report.Changed.Select(change => $"{change.Path}   -> {Name(change.Ending)}")];
 
         var looked =
-            $"{report.FilesConsidered} file(s) considered, {report.Binary} binary, "
+            $"{ReportText.Counted(report.FilesConsidered, "file")} considered, {report.Binary} binary, "
             + $"{report.Undeclared} with no declared ending, {report.Excluded} excluded";
 
         if (report.Changed.Count == 0)
@@ -415,12 +415,12 @@ public static class LineEndingReports
             // Refused rather than reported as a finding: --check is asked whether the tree may be
             // used as it is, and the answer is no.
             return CommandOutcome.Refused(
-                $"{report.Changed.Count} file(s) do not match the declared line-ending policy. "
+                $"{ReportText.Counted(report.Changed.Count, "file")} do not match the declared line-ending policy. "
                 + $"Run this without --check to rewrite them. {looked}.") with
             { Data = data };
         }
 
-        return CommandOutcome.Ok($"{report.Changed.Count} file(s) rewritten to the declared policy: {looked}") with
+        return CommandOutcome.Ok($"{ReportText.Counted(report.Changed.Count, "file")} rewritten to the declared policy: {looked}") with
         { Data = data };
     }
 

@@ -106,7 +106,7 @@ internal sealed class AgentEvidence(IFileSystem fileSystem, IHostPlatform platfo
                 .Order(StringComparer.Ordinal)
                 .ToList();
 
-            problem = moved.Count > 0 ? $"{moved.Count} file(s) are gone or changed in the worktree since it was measured: {ReportText.Listed(moved)}" : null;
+            problem = moved.Count > 0 ? $"{ReportText.Counted(moved.Count, "file")} are gone or changed in the worktree since it was measured: {ReportText.Listed(moved)}" : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OperationCanceledException)
         {

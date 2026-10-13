@@ -51,7 +51,7 @@ public static class WorktreeReports
 
     private static string Summary(IReadOnlyList<WorktreeListing> worktrees, HostCopyListing copies)
     {
-        var said = worktrees.Count == 0 ? "no worktrees" : $"{worktrees.Count} worktree(s)";
+        var said = worktrees.Count == 0 ? "no worktrees" : ReportText.Counted(worktrees.Count, "worktree");
 
         if (copies.Unreadable is { } unreadable)
         {
@@ -60,7 +60,7 @@ public static class WorktreeReports
 
         if (copies.Gone.Count > 0)
         {
-            said += $"; {copies.Gone.Count} worktree(s) that are gone left copies on hosts, which '{Delete("<name>")}' deals with";
+            said += $"; {ReportText.Counted(copies.Gone.Count, "worktree")} that are gone left copies on hosts, which '{Delete("<name>")}' deals with";
         }
 
         if (copies.Hosts is { } hosts)
@@ -68,8 +68,8 @@ public static class WorktreeReports
             var unasked = hosts.Count(host => host.Unasked is not null);
 
             said += hosts.Count == 0 ? "; no host is declared, so none was asked"
-                : unasked == 0 ? $"; asked {hosts.Count} host(s)"
-                : $"; {unasked} of {hosts.Count} host(s) could not be asked";
+                : unasked == 0 ? $"; asked {ReportText.Counted(hosts.Count, "host")}"
+                : $"; {unasked} of {ReportText.Counted(hosts.Count, "host")} could not be asked";
         }
 
         return said;

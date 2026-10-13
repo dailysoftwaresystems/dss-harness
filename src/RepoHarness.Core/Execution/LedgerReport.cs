@@ -181,7 +181,7 @@ public sealed class LedgerReport
         {
             // Not a red verdict. A caller reading a failure code for an interrupted run would
             // report the code as broken when nothing reached a verdict at all.
-            return $"interrupted after {Lines.Count} leg(s)";
+            return $"interrupted after {ReportText.Counted(Lines.Count, "leg")}";
         }
 
         if (!Passed)
@@ -197,13 +197,13 @@ public sealed class LedgerReport
                 .Select(group => $"{group.Count()} {Verdicts.Display(group.Key)}")
                 .ToList();
 
-            return $"{Verdicts.Display(Verdict)}: {worst} of {Lines.Count} leg(s)"
+            return $"{Verdicts.Display(Verdict)}: {worst} of {ReportText.Counted(Lines.Count, "leg")}"
                 + (others.Count == 0 ? string.Empty : $"; {string.Join(", ", others)}");
         }
 
         if (ExitCodeGiven(cancelled, unfinished) == HarnessExit.Success)
         {
-            return $"{Lines.Count} leg(s) passed";
+            return $"{ReportText.Counted(Lines.Count, "leg")} passed";
         }
 
         // A leg that did no work, or whose work was stopped, is not a leg that passed. Nothing failed, so this is not a
@@ -220,7 +220,7 @@ public sealed class LedgerReport
             .. stopped.Count > 0 ? [$"{stopped.Count} stopped before finishing: {string.Join(", ", stopped)}"] : Array.Empty<string>(),
         ];
 
-        return $"{Reported} of {Lines.Count} leg(s) passed; {string.Join("; ", unreported)}";
+        return $"{Reported} of {ReportText.Counted(Lines.Count, "leg")} passed; {string.Join("; ", unreported)}";
     }
 
     /// <summary>Whether every leg reached a verdict that is not a failure.</summary>
@@ -424,7 +424,7 @@ public sealed class LedgerReport
         foreach (var line in Lines.Where(line => line.LogTail.Count > 0))
         {
             rows.Add(string.Empty);
-            rows.Add(string.Create(CultureInfo.InvariantCulture, $"{line.Leg}: the last {line.LogTail.Count} line(s) its phase printed"));
+            rows.Add($"{line.Leg}: the last {ReportText.Counted(line.LogTail.Count, "line")} its phase printed");
             rows.AddRange(line.LogTail.Select(QuotedLine.Of));
         }
 
@@ -738,7 +738,7 @@ public sealed class LedgerReport
 
             foreach (var entry in counted.Where(entry => entry.TestCount != agreed.Key))
             {
-                marks[entry.Leg] = $"it ran {entry.TestCount} test(s), where {agreed.Count()} other leg(s) ran {agreed.Key}";
+                marks[entry.Leg] = $"it ran {ReportText.Counted(entry.TestCount!.Value, "test")}, where {ReportText.Counted(agreed.Count(), "other leg")} ran {agreed.Key}";
             }
         }
 

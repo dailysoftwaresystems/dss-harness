@@ -160,7 +160,7 @@ public sealed class OrchestratorService(
 
             var outcome = CommandOutcome.Ok(
                 $"created orchestrator '{name}'",
-                [$"record {orchestrator.RecordFile}", $"plans {orchestrator.PlansDirectory(name)}", $"at most {record.Parallel} agent(s) with a worktree at once"]);
+                [$"record {orchestrator.RecordFile}", $"plans {orchestrator.PlansDirectory(name)}", $"at most {ReportText.Counted(record.Parallel, "agent")} with a worktree at once"]);
 
             return _log.Record(orchestrator, name, CreateCommand, outcome);
         });
@@ -189,7 +189,7 @@ public sealed class OrchestratorService(
 
         if (changed.Parallel != existing.Parallel)
         {
-            said.Add($"allows at most {changed.Parallel} agent(s) with a worktree at once, where it allowed {existing.Parallel}");
+            said.Add($"allows at most {ReportText.Counted(changed.Parallel, "agent")} with a worktree at once, where it allowed {existing.Parallel}");
         }
 
         if (changed.Session != existing.Session)
@@ -269,8 +269,8 @@ public sealed class OrchestratorService(
             if (kept.Count > 0 && !deleteEvidence)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{name}' was not deleted, because it keeps {kept.Sum(agent => agent.Evidence)} evidence file(s) and "
-                    + $"{kept.Sum(agent => agent.Transcripts)} transcript file(s) of its agents {string.Join(", ", kept.Select(agent => $"'{agent.Name}'"))}. "
+                    $"Orchestrator '{name}' was not deleted, because it keeps {ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")} and "
+                    + $"{ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")} of its agents {string.Join(", ", kept.Select(agent => $"'{agent.Name}'"))}. "
                     + "Copy out what you need, or pass --delete-evidence to delete them with it. Nothing was changed.");
             }
 
@@ -286,8 +286,8 @@ public sealed class OrchestratorService(
                 $"deleted orchestrator '{name}'",
                 [
                     $"removed {orchestrator.Directory}",
-                    .. agents.Count == 0 ? [] : new[] { $"with the history of {agents.Count} deleted agent(s)" },
-                    .. kept.Count == 0 ? [] : new[] { $"and {kept.Sum(agent => agent.Evidence)} evidence file(s) and {kept.Sum(agent => agent.Transcripts)} transcript file(s)" },
+                    .. agents.Count == 0 ? [] : new[] { $"with the history of {ReportText.Counted(agents.Count, "deleted agent")}" },
+                    .. kept.Count == 0 ? [] : new[] { $"and {ReportText.Counted(kept.Sum(agent => agent.Evidence), "evidence file")} and {ReportText.Counted(kept.Sum(agent => agent.Transcripts), "transcript file")}" },
                 ]);
         });
 

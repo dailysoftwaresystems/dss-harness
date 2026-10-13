@@ -1,4 +1,5 @@
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Configuration;
 
@@ -125,7 +126,7 @@ public sealed class AdmissionSettings
 
         if (problems.Count > 0)
         {
-            throw new ConfigException($"The heavy-leg admission rule has {problems.Count} problem(s): {string.Join("; ", problems)}");
+            throw new ConfigException($"The heavy-leg admission rule has {ReportText.Counted(problems.Count, "problem")}: {string.Join("; ", problems)}");
         }
 
         return new AdmissionRule(

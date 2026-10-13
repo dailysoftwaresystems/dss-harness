@@ -1,3 +1,4 @@
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 using System.Globalization;
 
@@ -212,7 +213,7 @@ public sealed record SyncPlan(
 
         throw new HarnessException(
             HarnessExit.Refused,
-            $"This sync would delete {Deletes.Count} of the {destination.Entries.Count} file(s) in "
+            $"This sync would delete {Deletes.Count} of the {ReportText.Counted(destination.Entries.Count, "file")} in "
             + $"'{destination.Root}', which is {share:P0} of it and over the {maxDeleteFraction:P0} "
             + $"sync.maxDeleteFraction allows. {check}");
     }
@@ -241,7 +242,7 @@ public sealed record SyncPlan(
             lines.Add($"{delete} {path}");
         }
 
-        lines.Add($"unchanged {Unchanged} file(s)");
+        lines.Add($"unchanged {ReportText.Counted(Unchanged, "file")}");
 
         return lines;
     }

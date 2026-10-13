@@ -215,8 +215,8 @@ public sealed class CleanService(
         if (workers.Removed.Count > 0)
         {
             said.Add(dryRun
-                ? $"{workers.Removed.Count} mutation worker(s) left beside where it was: {string.Join(", ", workers.Removed.Select(worker => $"{DiskSpace.Size(worker.Bytes)} in '{worker.Path}'"))}"
-                : $"removed {workers.Removed.Count} mutation worker(s) left beside where it was, {DiskSpace.Size(workers.Bytes)}: {string.Join(", ", workers.Removed.Select(worker => $"'{worker.Path}'"))}");
+                ? $"{ReportText.Counted(workers.Removed.Count, "mutation worker")} left beside where it was: {string.Join(", ", workers.Removed.Select(worker => $"{DiskSpace.Size(worker.Bytes)} in '{worker.Path}'"))}"
+                : $"removed {ReportText.Counted(workers.Removed.Count, "mutation worker")} left beside where it was, {DiskSpace.Size(workers.Bytes)}: {string.Join(", ", workers.Removed.Select(worker => $"'{worker.Path}'"))}");
         }
 
         said.AddRange(workers.Left.Select(worker => $"'{worker.Path}' was left: {worker.Why.TrimEnd('.')}"));
@@ -453,7 +453,7 @@ public sealed class CleanService(
         if (gone.Count > 0)
         {
             said.Add(
-                $"removed {gone.Count} mutation worker(s), {DiskSpace.Size(removed)}"
+                $"removed {ReportText.Counted(gone.Count, "mutation worker")}, {DiskSpace.Size(removed)}"
                 + (asidesGone > 0 ? " with what an earlier removal of them left aside" : string.Empty)
                 + $": {string.Join(", ", gone.Select(worker => $"'{worker.Path}'"))}");
         }
@@ -518,7 +518,7 @@ public sealed class CleanService(
         }
 
         return workers.Count > 0
-            ? $"{workers.Count} mutation worker(s): {string.Join(", ", said)}"
+            ? $"{ReportText.Counted(workers.Count, "mutation worker")}: {string.Join(", ", said)}"
             : $"no mutation worker, and {said.Single()}";
     }
 

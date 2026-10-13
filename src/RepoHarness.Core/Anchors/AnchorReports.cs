@@ -60,12 +60,12 @@ public static class AnchorReports
 
         if (lookup.Missing.Count == 0)
         {
-            return CommandOutcome.Ok($"{found.Count} anchor(s)") with { Data = data, Quiet = true };
+            return CommandOutcome.Ok(ReportText.Counted(found.Count, "anchor")) with { Data = data, Quiet = true };
         }
 
         var message = new List<string>
         {
-            $"{lookup.Missing.Count} id(s) not found: {string.Join(", ", lookup.Missing.Select(miss => miss.Id))}",
+            $"{ReportText.Counted(lookup.Missing.Count, "id")} not found: {string.Join(", ", lookup.Missing.Select(miss => miss.Id))}",
         };
 
         message.AddRange(lookup.Missing
@@ -90,21 +90,21 @@ public static class AnchorReports
                 ["registry"] = entry.Registry.Name,
             })]);
 
-            return CommandOutcome.Ok($"{entries.Count} anchor(s)") with { Data = [array.ToJsonString(JsonOptions)], Quiet = true };
+            return CommandOutcome.Ok(ReportText.Counted(entries.Count, "anchor")) with { Data = [array.ToJsonString(JsonOptions)], Quiet = true };
         }
 
         var lines = entries
             .Select(entry => $"{Pad(entry.Row.Priority, 3)} {Pad(entry.Row.Status, 13)} {entry.Row.Id}")
             .ToList();
 
-        lines.Add($"{entries.Count} row(s){scope switch
+        lines.Add($"{ReportText.Counted(entries.Count, "row")}{scope switch
         {
             AnchorScope.Pending => " in the pending registry",
             AnchorScope.Done => " in the done registry",
             _ => string.Empty,
         }}.");
 
-        return CommandOutcome.Ok($"{entries.Count} anchor(s)") with { Data = lines, Quiet = true };
+        return CommandOutcome.Ok(ReportText.Counted(entries.Count, "anchor")) with { Data = lines, Quiet = true };
     }
 
     /// <summary>What read-anchors --lint reports: a finding fails it, and a note does not.</summary>
@@ -114,13 +114,13 @@ public static class AnchorReports
 
         IReadOnlyList<string> data = json
             ? [FindingsJson(findings).ToJsonString(JsonOptions)]
-            : [.. findings.Select(FindingLine), $"{findings.Count} finding(s)."];
+            : [.. findings.Select(FindingLine), $"{ReportText.Counted(findings.Count, "finding")}."];
 
         var problems = findings.Count(finding => finding.Severity != AnchorFindingSeverity.Note);
 
         return problems == 0
             ? CommandOutcome.Ok("the anchor registries are sound") with { Data = data, Quiet = true }
-            : CommandOutcome.Failed(AnchorExit.Findings, $"{problems} problem(s) in the anchor registries") with { Data = data };
+            : CommandOutcome.Failed(AnchorExit.Findings, $"{ReportText.Counted(problems, "problem")} in the anchor registries") with { Data = data };
     }
 
     /// <summary>What check-anchor-balance reports.</summary>
@@ -140,13 +140,13 @@ public static class AnchorReports
 
         if (report.NetNew > 0)
         {
-            reasons.Add($"this change creates {report.NetNew} more anchor(s) than its work closes; close what was opened, or disclose debt that already existed");
+            reasons.Add($"this change creates {ReportText.Counted(report.NetNew, "more anchor")} than its work closes; close what was opened, or disclose debt that already existed");
         }
 
         var fatal = report.Findings.Count(finding => finding.Severity == AnchorFindingSeverity.Fatal);
         if (fatal > 0)
         {
-            reasons.Add($"{fatal} problem(s) in the registries must be fixed first");
+            reasons.Add($"{ReportText.Counted(fatal, "problem")} in the registries must be fixed first");
         }
 
         return CommandOutcome.Failed(AnchorExit.Findings, string.Join("; ", reasons)) with { Data = data };

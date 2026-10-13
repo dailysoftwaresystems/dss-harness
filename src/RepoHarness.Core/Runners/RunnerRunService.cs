@@ -299,7 +299,7 @@ public sealed class RunnerRunService(
         // backwards to recover.
         _output.Info(
             CommandName,
-            $"{request.Leg}: starting {steps.Phases.Count} step(s): "
+            $"{request.Leg}: starting {ReportText.Counted(steps.Phases.Count, "step")}: "
             + string.Join(", ", steps.Phases.Select(phase => values.Redact(phase.Name))));
 
         // One scope around every step, not one per step: an action of five steps has four gaps
@@ -420,7 +420,7 @@ public sealed class RunnerRunService(
 
         _output.Info(
             CommandName,
-            $"{request.Leg}: finished {state.Outcomes.Count} of {steps.Phases.Count} step(s) in "
+            $"{request.Leg}: finished {state.Outcomes.Count} of {ReportText.Counted(steps.Phases.Count, "step")} in "
             + $"{LedgerReport.FormatDuration(elapsed.Elapsed)}");
 
         await _runSegments
@@ -1153,12 +1153,12 @@ public sealed class RunnerRunService(
         {
             var detail = state.PassedOver.Count == 0
                 ? string.Empty
-                : $"{state.PassedOver.Count} step(s) failed and were passed over: {string.Join("; ", state.PassedOver)}";
+                : $"{ReportText.Counted(state.PassedOver.Count, "step")} failed and were passed over: {string.Join("; ", state.PassedOver)}";
 
             return new Decision(
                 ReachedVerdict.Of(LegVerdict.Passed, detail),
                 RunOutcome.Ok(
-                    detail.Length > 0 ? detail : $"{state.Phases.Count} step(s) passed",
+                    detail.Length > 0 ? detail : $"{ReportText.Counted(state.Phases.Count, "step")} passed",
                     StepOutput(state)),
                 null,
                 null);
@@ -1244,7 +1244,7 @@ public sealed class RunnerRunService(
             return decided;
         }
 
-        var detail = $"{failed.Count} step(s) failed in an earlier segment of this run: {string.Join(", ", failed)}";
+        var detail = $"{ReportText.Counted(failed.Count, "step")} failed in an earlier segment of this run: {string.Join(", ", failed)}";
 
         return decided with
         {
@@ -1567,8 +1567,8 @@ public sealed class RunnerRunService(
                             // a later sync carries to every host as though it were the whole output.
                             _output.Warn(
                                 CommandName,
-                                $"'{phase.StepName}' asked to keep '{output}', which holds {unfollowed.Count} "
-                                + "directory link(s) that were not followed, so what they lead to is not in "
+                                $"'{phase.StepName}' asked to keep '{output}', which holds {ReportText.Counted(unfollowed.Count, "directory link")} "
+                                + "that were not followed, so what they lead to is not in "
                                 + $"the kept copy: {string.Join(", ", unfollowed.Select(link => $"'{link}'"))}");
                         }
 

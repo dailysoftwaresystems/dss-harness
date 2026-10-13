@@ -362,7 +362,7 @@ internal sealed class MutationLegRunner(
                 if (read.Files.Links.Count > 0)
                 {
                     unlinked.Add(
-                        $"the sources of '{source.Name}' the leg's build fetched hold {read.Files.Links.Count} link(s), which no worker is given: "
+                        $"the sources of '{source.Name}' the leg's build fetched hold {ReportText.Counted(read.Files.Links.Count, "link")}, which no worker is given: "
                         + ReportText.Listed(read.Files.Links));
                 }
             }
@@ -493,7 +493,7 @@ internal sealed class MutationLegRunner(
         /// </summary>
         private async Task RemoveBeyondAsync(WorkerCopy beyond, int cap, CancellationToken cancellationToken)
         {
-            var named = $"{_leg.Name}: worker {beyond.Number}, '{beyond.Path}', is beyond the {cap} worker(s) a sweep runs";
+            var named = $"{_leg.Name}: worker {beyond.Number}, '{beyond.Path}', is beyond the {ReportText.Counted(cap, "worker")} a sweep runs";
 
             if (!beyond.Made)
             {
@@ -526,7 +526,7 @@ internal sealed class MutationLegRunner(
             {
                 _runner._output.Info(
                     _runner._commandName,
-                    $"{_leg.Name}: removed worker {beyond.Number}, '{beyond.Path}', {DiskSpace.Size(beyond.Bytes)}, beyond the {cap} worker(s) a sweep runs");
+                    $"{_leg.Name}: removed worker {beyond.Number}, '{beyond.Path}', {DiskSpace.Size(beyond.Bytes)}, beyond the {ReportText.Counted(cap, "worker")} a sweep runs");
             }
             else if (removal != CopyRemoval.Absent)
             {
@@ -1357,7 +1357,7 @@ internal sealed class MutationLegRunner(
                 .Select(group => $"{group.Count()} {Verdicts.Display(group.Key)}");
             var detail = new List<string>(own.Where(reached => reached.Detail.Length > 0).Select(reached => reached.Detail))
             {
-                $"{ordered.Count} arm(s): {string.Join(", ", counts)}",
+                $"{ReportText.Counted(ordered.Count, "arm")}: {string.Join(", ", counts)}",
             };
 
             detail.AddRange(notes);

@@ -3,6 +3,7 @@ using RepoHarness.Core.Anchors;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
@@ -86,7 +87,7 @@ public static partial class HarnessConfigValidator
 
         var detail = string.Join(Environment.NewLine, problems.Select(problem => "  - " + problem));
         throw new ConfigException(
-            $"'{path}' has {problems.Count} problem(s):{Environment.NewLine}{detail}");
+            $"'{path}' has {ReportText.Counted(problems.Count, "problem")}:{Environment.NewLine}{detail}");
     }
 
     private static void ValidateDefaults(HarnessConfig config, List<string> problems)

@@ -202,7 +202,7 @@ public sealed class AgentService(
             if (open.Count >= current.Parallel)
             {
                 return CommandOutcome.Refused(
-                    $"Orchestrator '{orchestrator}' already has {open.Count} open agent(s), its limit: {string.Join(", ", open)}. "
+                    $"Orchestrator '{orchestrator}' already has {ReportText.Counted(open.Count, "open agent")}, its limit: {string.Join(", ", open)}. "
                     + $"Delete one with {OrchestrationReports.DeleteAgentLine(orchestrator, "<agent>")}, or raise the limit with "
                     + $"{OrchestrationReports.Line(OrchestratorService.CreateCommand, orchestrator, "--model", current.Model, "--parallel", "<n>")}. Nothing was created.");
             }
@@ -341,7 +341,7 @@ public sealed class AgentService(
             {
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
-                    $"{what}, and handing it the main tree's uncommitted state stopped after {handed} of {handable.Count} path(s): {stopped}. "
+                    $"{what}, and handing it the main tree's uncommitted state stopped after {handed} of {ReportText.Counted(handable.Count, "path")}: {stopped}. "
                     + $"Its seed records the {handed} it was handed. {Remedy(orchestrator, agent, based)}",
                     records);
             }
@@ -351,7 +351,7 @@ public sealed class AgentService(
                 [
                     created.Path,
                     $"base {OrchestrationReports.Base(baseCommit)}",
-                    seed.Empty ? "handed nothing, as asked" : $"handed {handed} path(s) of the main tree's uncommitted state",
+                    seed.Empty ? "handed nothing, as asked" : $"handed {ReportText.Counted(handed, "path")} of the main tree's uncommitted state",
                     .. NotHanded(handable),
                     .. records,
                     $"plans {layout.PlansDirectory(agent)}",
@@ -458,7 +458,7 @@ public sealed class AgentService(
                 if (own.Count > 0)
                 {
                     return CommandOutcome.Refused(
-                        $"{Agent(record)} already holds {own.Count} changed path(s) of its own - {ReportText.Listed(own)} - and seeding it now would overwrite "
+                        $"{Agent(record)} already holds {ReportText.Counted(own.Count, "changed path")} of its own - {ReportText.Listed(own)} - and seeding it now would overwrite "
                         + "them. Seed an agent before it starts; --empty hands it nothing more, and --force seeds it anyway.");
                 }
             }
@@ -518,7 +518,7 @@ public sealed class AgentService(
             {
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
-                    $"Seeding {Lower(Agent(record))} stopped after {handed} of {handable.Count} path(s): {stopped}. Its seed records what it was handed; "
+                    $"Seeding {Lower(Agent(record))} stopped after {handed} of {ReportText.Counted(handable.Count, "path")}: {stopped}. Its seed records what it was handed; "
                     + $"run {OrchestrationReports.Line(SeedCommand, record.Orchestrator, record.Name, "--force")} again once that is dealt with.",
                     [seedLine]);
             }
@@ -533,7 +533,7 @@ public sealed class AgentService(
             }
 
             return CommandOutcome.Ok(
-                $"seeded {Lower(Agent(record))} with {handed} path(s)",
+                $"seeded {Lower(Agent(record))} with {ReportText.Counted(handed, "path")}",
                 [.. NotHanded(handable), .. await BehindAsync(main, record).ConfigureAwait(false), seedLine]);
         }
     }
@@ -691,7 +691,7 @@ public sealed class AgentService(
         // Never silent: a path left out without a word is how a change of the main tree's goes missing while the refresh succeeds.
         IReadOnlyList<string> leftLines = left.Count == 0
             ? []
-            : [$"{left.Count} path(s) it changed, named with {RefreshRequest.ExceptOption}, {(apply ? "left" : "to leave")} as it changed them:", .. left.Select(relative => $"  {relative}")];
+            : [$"{ReportText.Counted(left.Count, "path")} it changed, named with {RefreshRequest.ExceptOption}, {(apply ? "left" : "to leave")} as it changed them:", .. left.Select(relative => $"  {relative}")];
 
         if (all.Count == 0)
         {
@@ -703,7 +703,7 @@ public sealed class AgentService(
         if (!apply)
         {
             return CommandOutcome.Ok(
-                $"dry run: {all.Count} path(s) would be refreshed into {Lower(Agent(record))}; pass --apply to hand them over",
+                $"dry run: {ReportText.Counted(all.Count, "path")} would be refreshed into {Lower(Agent(record))}; pass --apply to hand them over",
                 [.. all.Select(relative => $"  {relative}"), .. leftLines, .. NotHanded(handable), .. behind]);
         }
 
@@ -738,11 +738,11 @@ public sealed class AgentService(
             return stopped is not null
                 ? CommandOutcome.Failed(
                     HarnessExit.Incomplete,
-                    $"Refreshing {Lower(Agent(record))} stopped after {handed} of {all.Count} path(s): {stopped}. Its seed records the {handed} handed; "
+                    $"Refreshing {Lower(Agent(record))} stopped after {handed} of {ReportText.Counted(all.Count, "path")}: {stopped}. Its seed records the {handed} handed; "
                     + $"run {again} again once that is dealt with.",
                     [seedLine])
                 : CommandOutcome.Ok(
-                    $"refreshed {all.Count} path(s) into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out",
+                    $"refreshed {ReportText.Counted(all.Count, "path")} into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out",
                     [.. all.Select(relative => $"  {relative}"), .. leftLines, .. NotHanded(handable), .. behind, seedLine]);
         }
 
@@ -925,7 +925,7 @@ public sealed class AgentService(
             return measured.Refusals.Count == 0
                 ? (measured, null)
                 : (measured, CommandOutcome.Refused(
-                    $"The base of {Lower(Agent(record))} cannot move {moving}: {measured.Refusals.Count} problem(s), and nothing was changed.",
+                    $"The base of {Lower(Agent(record))} cannot move {moving}: {ReportText.Counted(measured.Refusals.Count, "problem")}, and nothing was changed.",
                     [.. RebaseRefusalLines(measured)]));
         }
     }
@@ -936,7 +936,7 @@ public sealed class AgentService(
         if (plan.Settled.Count > 0)
         {
             // Never silent: a path kept without a word is how a change of the main tree's goes missing while the move succeeds.
-            yield return $"{plan.Settled.Count} path(s) it changed, declared settled by hand, {(applied ? "kept" : "to keep")} as its own change on the new base:";
+            yield return $"{ReportText.Counted(plan.Settled.Count, "path")} it changed, declared settled by hand, {(applied ? "kept" : "to keep")} as its own change on the new base:";
 
             foreach (var path in plan.Settled)
             {
@@ -944,7 +944,7 @@ public sealed class AgentService(
             }
         }
 
-        yield return $"{plan.Taken.Count} path(s) the main tree committed since {(applied ? "came" : "come")} into its worktree as git holds them:";
+        yield return $"{ReportText.Counted(plan.Taken.Count, "path")} the main tree committed since {(applied ? "came" : "come")} into its worktree as git holds them:";
 
         foreach (var path in plan.Taken)
         {
@@ -953,7 +953,7 @@ public sealed class AgentService(
 
         if (plan.Kept.Count > 0)
         {
-            yield return $"and {plan.Kept.Count} path(s) it shares with the main tree, handed to it or folded, {(applied ? "stayed" : "stay")} as its seed "
+            yield return $"and {ReportText.Counted(plan.Kept.Count, "path")} it shares with the main tree, handed to it or folded, {(applied ? "stayed" : "stay")} as its seed "
                 + "records them; refresh-agent hands it any the main tree moved since:";
 
             foreach (var path in plan.Kept)
@@ -964,7 +964,7 @@ public sealed class AgentService(
 
         if (plan.AlreadyThere.Count > 0)
         {
-            yield return $"and {plan.AlreadyThere.Count} path(s) it holds as the new base does already, with nothing to write:";
+            yield return $"and {ReportText.Counted(plan.AlreadyThere.Count, "path")} it holds as the new base does already, with nothing to write:";
 
             foreach (var path in plan.AlreadyThere)
             {
@@ -1117,8 +1117,8 @@ public sealed class AgentService(
             var (tail, line) = Ending(FoldCommand, record, allowances, measured.Rows.Batch.Unaccepted, "write them");
 
             return CommandOutcome.Ok(
-                $"dry run: folding {Lower(Agent(record))} writes {measured.Plan!.Written.Count} path(s) into the main tree, removes "
-                + $"{measured.Plan.Deleted.Count} and applies {measured.Rows.Planned} row(s); {tail}",
+                $"dry run: folding {Lower(Agent(record))} writes {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, removes "
+                + $"{measured.Plan.Deleted.Count} and applies {ReportText.Counted(measured.Rows.Planned, "row")}; {tail}",
                 [.. OrchestrationReports.FoldAndRowLines(measured.Plan, measured.Rows, layout.RowsDirectory(record.Name)), .. line]);
         }
 
@@ -1142,8 +1142,8 @@ public sealed class AgentService(
             var written = await WriteAsync(context, layout, record, path, seed!, measured).ConfigureAwait(false);
 
             return written.Failure ?? CommandOutcome.Ok(
-                $"folded {Lower(Agent(record))}: wrote {measured.Plan!.Written.Count} path(s) into the main tree, removed "
-                + $"{measured.Plan.Deleted.Count} and applied {written.Rows.Planned} row(s); its worktree is kept, and what the fold wrote is "
+                $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, removed "
+                + $"{measured.Plan.Deleted.Count} and applied {ReportText.Counted(written.Rows.Planned, "row")}; its worktree is kept, and what the fold wrote is "
                 + "recorded as shared, so a fold after a review weighs the agent's change of it",
                 [.. OrchestrationReports.FoldAndRowLines(measured.Plan, written.Rows, layout.RowsDirectory(record.Name)), .. Records(layout, record)]);
         }
@@ -1270,16 +1270,16 @@ public sealed class AgentService(
 
             var evidence = dry.Evidence.Files.Count == 0
                 ? "its evidence roots hold nothing to keep"
-                : $"{dry.Evidence.Files.Count} evidence file(s), to be kept in a directory named for the run in '{layout.EvidenceDirectory(record.Name)}'";
+                : $"{ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, to be kept in a directory named for the run in '{layout.EvidenceDirectory(record.Name)}'";
             var (tail, line) = Ending(DeleteCommand, record, allowances, dry.Fold?.Rows.Batch.Unaccepted ?? [], "do it");
 
             return CommandOutcome.Ok(
                 $"dry run: deleting {Lower(Agent(record))} "
-                + (discard ? $"discards {dry.Discarded.Count} changed path(s), folding nothing" : $"folds {dry.Fold!.Plan!.Written.Count} path(s), removes {dry.Fold.Plan.Deleted.Count} and applies {dry.Fold.Rows.Planned} row(s)")
-                + $", keeps its transcripts and {dry.Evidence.Files.Count} evidence file(s), then removes its worktree and its copies on hosts; {tail}",
+                + (discard ? $"discards {ReportText.Counted(dry.Discarded.Count, "changed path")}, folding nothing" : $"folds {ReportText.Counted(dry.Fold!.Plan!.Written.Count, "path")}, removes {dry.Fold.Plan.Deleted.Count} and applies {ReportText.Counted(dry.Fold.Rows.Planned, "row")}")
+                + $", keeps its transcripts and {ReportText.Counted(dry.Evidence.Files.Count, "evidence file")}, then removes its worktree and its copies on hosts; {tail}",
                 [
                     .. discard
-                        ? [$"{dry.Discarded.Count} changed path(s) discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
+                        ? [$"{ReportText.Counted(dry.Discarded.Count, "changed path")} discarded:", .. dry.Discarded.Select(relative => $"  {relative}")]
                         : OrchestrationReports.FoldAndRowLines(dry.Fold!.Plan, dry.Fold.Rows, layout.RowsDirectory(record.Name)),
                     evidence,
                     TranscriptsPlan(record),
@@ -1438,7 +1438,7 @@ public sealed class AgentService(
 
             if (deleted.Left.Count > 0)
             {
-                lines.Add($"{deleted.Left.Count} evidence file(s) were left: {ReportText.Listed(deleted.Left)}");
+                lines.Add($"{ReportText.Counted(deleted.Left.Count, "evidence file")} were left: {ReportText.Listed(deleted.Left)}");
             }
 
             return await RemoveAsync(target, lines).ConfigureAwait(false);
@@ -1512,7 +1512,7 @@ public sealed class AgentService(
                 {
                     return CommandOutcome.Failed(
                         HarnessExit.Incomplete,
-                        $"{was}, and its worktree holds {changed.Count} file(s) its closing did not record, changed or new since: work done in an agent "
+                        $"{was}, and its worktree holds {ReportText.Counted(changed.Count, "file")} its closing did not record, changed or new since: work done in an agent "
                         + $"already closed, which nothing folds again and nothing discards unseen. Copy it out, then remove the worktree with {removal}, "
                         + $"and {again} finishes this agent.",
                         [.. changed.Select(relative => $"  {relative}"), .. Records(layout, record)]);
@@ -1775,7 +1775,7 @@ public sealed class AgentService(
 
             if (copies.Count > 0)
             {
-                left.Add($"the record of host copies still holds {copies.Count} copy(ies) of it: {string.Join(", ", copies.Select(copy => $"{copy.Host}: {copy.Path}"))}");
+                left.Add($"the record of host copies still holds {ReportText.Counted(copies.Count, "copy")} of it: {string.Join(", ", copies.Select(copy => $"{copy.Host}: {copy.Path}"))}");
             }
         }
         catch (HarnessException ex)
@@ -1908,7 +1908,7 @@ public sealed class AgentService(
 
         if (!rowsPlan.Batch.Succeeded)
         {
-            what.Add($"{rowsPlan.Batch.Problems.Count} problem(s) with its rows");
+            what.Add($"{ReportText.Counted(rowsPlan.Batch.Problems.Count, "problem")} with its rows");
         }
 
         return new Measured(plan, request, all, rowsPlan, CommandOutcome.Refused(
@@ -2007,7 +2007,7 @@ public sealed class AgentService(
         var opening = $"to {what}:";
 
         return (
-            $"{unaccepted.Count} cell(s) of its rows do not keep their stored text word for word, and --apply refuses it, writing nothing, "
+            $"{ReportText.Counted(unaccepted.Count, "cell")} of its rows do not keep their stored text word for word, and --apply refuses it, writing nothing, "
                 + $"until each is named with {AnchorBatchRequest.AcceptLostOption}, once its word diff above is read: the line '{opening}' above "
                 + "is the command that does it",
             [$"{opening} {OrchestrationReports.Line(command, [record.Orchestrator, record.Name, "--apply", .. accepting.Arguments()])}"]);
@@ -2024,7 +2024,7 @@ public sealed class AgentService(
         var plan = measured.Plan!;
         var applied = await _fold.ApplyAsync(main, path, plan).ConfigureAwait(false);
         var records = Records(layout, record);
-        var progress = $"after writing {applied.Written.Count} of {plan.Written.Count} path(s) and removing {applied.Deleted.Count} of {plan.Deleted.Count}";
+        var progress = $"after writing {applied.Written.Count} of {ReportText.Counted(plan.Written.Count, "path")} and removing {applied.Deleted.Count} of {plan.Deleted.Count}";
         SeedRecord folded;
 
         try
@@ -2347,7 +2347,7 @@ public sealed class AgentService(
         {
             kept.Kept.Count == 0 && kept.Failed is null
                 ? $"no transcript of session {record.Session} was found under '{kept.Searched}'"
-                : $"kept {kept.Kept.Count} transcript file(s) of session {record.Session} in '{layout.TranscriptsDirectory(record.Name)}', each read back",
+                : $"kept {ReportText.Counted(kept.Kept.Count, "transcript file")} of session {record.Session} in '{layout.TranscriptsDirectory(record.Name)}', each read back",
         };
 
         lines.AddRange(kept.Unread.Select(unread => $"a directory transcripts may be in could not be looked in: {unread}"));
@@ -2361,7 +2361,7 @@ public sealed class AgentService(
             : $"transcripts: session {record.Session}'s, where Claude Code keeps them";
 
     private static string EvidenceLine(EvidenceKept kept, string destination)
-        => (kept.Kept.Count == 0 ? "its evidence roots held nothing to keep" : $"kept {kept.Kept.Count} evidence file(s) in '{destination}', each proved")
+        => (kept.Kept.Count == 0 ? "its evidence roots held nothing to keep" : $"kept {ReportText.Counted(kept.Kept.Count, "evidence file")} in '{destination}', each proved")
             + (kept.Linked.Count == 0 ? string.Empty : $"; {string.Join(", ", kept.Linked)} {(kept.Linked.Count == 1 ? "is a link" : "are links")}, and what a link leads to stays where it is");
 
     /// <summary>
@@ -2385,7 +2385,7 @@ public sealed class AgentService(
     /// </summary>
     private static CommandOutcome InTheWay(string doing, AgentRecord record, IReadOnlyList<string> own)
         => CommandOutcome.Refused(
-            $"{doing} {Lower(Agent(record))} would write over or through {own.Count} path(s) of its own - {ReportText.Listed(own)} - where the main tree "
+            $"{doing} {Lower(Agent(record))} would write over or through {ReportText.Counted(own.Count, "path")} of its own - {ReportText.Listed(own)} - where the main tree "
             + "holds a directory, or a file in place of the directory they are in: move them aside, and run again. Nothing was written.");
 
     /// <summary>Where the agent's records are, as every exit after one is written names them: each that is there.</summary>

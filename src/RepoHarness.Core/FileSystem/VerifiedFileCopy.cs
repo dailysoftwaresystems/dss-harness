@@ -1,3 +1,5 @@
+using RepoHarness.Core.Output;
+
 namespace RepoHarness.Core.FileSystem;
 
 /// <summary>
@@ -61,7 +63,7 @@ public static class VerifiedFileCopy
             if (copied != read)
             {
                 throw new IOException(
-                    $"'{source}' was copied to '{destination}' as {copied.Length} byte(s) with SHA-256 {copied.Content}, where it holds "
+                    $"'{source}' was copied to '{destination}' as {ReportText.Counted(copied.Length, "byte")} with SHA-256 {copied.Content}, where it holds "
                     + $"{read.Length} with {read.Content}; the copy was not put in place.");
             }
 

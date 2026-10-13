@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Mutations;
 
@@ -205,7 +206,7 @@ public static partial class MutationRegistryParser
             if (fields.Length != names.Length + 1)
             {
                 Problems.Add(
-                    $"line {line}: {Article(kind)} {kind} row has {fields.Length} field(s), expected {names.Length + 1}: "
+                    $"line {line}: {Article(kind)} {kind} row has {ReportText.Counted(fields.Length, "field")}, expected {names.Length + 1}: "
                     + $"{kind} | {string.Join(" | ", names)}");
                 return;
             }
@@ -409,7 +410,7 @@ public static partial class MutationRegistryParser
 
                     if (cases is > 0)
                     {
-                        Problems.Add($"line {line}: arm '{id}' is {BuildRed} and declares {cases} case(s): nothing runs, so it declares 0");
+                        Problems.Add($"line {line}: arm '{id}' is {BuildRed} and declares {ReportText.Counted(cases.Value, "case")}: nothing runs, so it declares 0");
                     }
 
                     if (runner != NoRunner)

@@ -1,4 +1,5 @@
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -300,7 +301,7 @@ public static class ActionPath
 
         throw new HarnessException(
             HarnessExit.ConfigInvalid,
-            $"{problems.Count} runner action(s) could not be read:{Environment.NewLine}{detail}");
+            $"{ReportText.Counted(problems.Count, "runner action")} could not be read:{Environment.NewLine}{detail}");
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 
@@ -154,8 +155,8 @@ public sealed partial class GitClient
                 throw new HarnessException(
                     HarnessExit.CommandFailed,
                     $"A piece of the history sent to '{directory}' did not follow what arrived before it: it starts at byte "
-                    + $"{offset.ToString(CultureInfo.InvariantCulture)}, and {before.ToString(CultureInfo.InvariantCulture)} "
-                    + "byte(s) had arrived. Nothing of it was taken.");
+                    + $"{offset.ToString(CultureInfo.InvariantCulture)}, and {ReportText.Counted(before, "byte")} "
+                    + "had arrived. Nothing of it was taken.");
             }
 
             using var writing = new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.None);
@@ -634,7 +635,7 @@ public sealed partial class GitClient
                 cancellationToken)
             .ConfigureAwait(false);
 
-        Ensure(checkedFor, $"look for {ids.Count} commit(s) in '{directory}'");
+        Ensure(checkedFor, $"look for {ReportText.Counted(ids.Count, "commit")} in '{directory}'");
 
         // '<object id> <type> <size>' for one it holds; '<name> missing' for one it does not.
         foreach (var line in checkedFor.OutputLines)

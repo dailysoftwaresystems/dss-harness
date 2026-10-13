@@ -210,7 +210,7 @@ public sealed class RunCheckGate(IHarnessOutput output)
 
         if (counted < check.MinStepsInFailureWindow)
         {
-            yield return $"expected at least {check.MinStepsInFailureWindow} step(s) of at least "
+            yield return $"expected at least {ReportText.Counted(check.MinStepsInFailureWindow, "step")} of at least "
                 + $"{check.MinStepSeconds}s inside the window of '{window.Unit}' but counted {counted}";
         }
     }
@@ -222,7 +222,7 @@ public sealed class RunCheckGate(IHarnessOutput output)
             return "confirmed";
         }
 
-        return $"confirmed, with {window.CountSteps(steps, check.MinStepSeconds)} step(s) of at least "
+        return $"confirmed, with {ReportText.Counted(window.CountSteps(steps, check.MinStepSeconds), "step")} of at least "
             + $"{check.MinStepSeconds}s inside the window of '{window.Unit}'";
     }
 }

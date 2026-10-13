@@ -141,7 +141,7 @@ public static class LegsReports
         }
 
         var runnable = report.Placements.Count(placement => placement.Runnable);
-        var counted = $"{runnable} of {report.Placements.Count} leg(s) can run";
+        var counted = $"{runnable} of {ReportText.Counted(report.Placements.Count, "leg")} can run";
 
         if (report.Defect is { } defect)
         {
@@ -159,7 +159,7 @@ public static class LegsReports
             // carries it rather than a class this file would have to guess from the wording.
             return silent.Count == 0
                 ? counted
-                : $"{counted}; {silent.Count} host(s) cannot take legs, so this survey is incomplete: "
+                : $"{counted}; {ReportText.Counted(silent.Count, "host")} cannot take legs, so this survey is incomplete: "
                     + string.Join("; ", silent.Select(host => $"{host.Host} ({host.Reason})"));
         }
 

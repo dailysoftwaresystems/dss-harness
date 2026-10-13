@@ -3,6 +3,7 @@ using System.Diagnostics;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Legs;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Runs;
 
 namespace RepoHarness.Cli.Commands;
@@ -128,7 +129,7 @@ internal static class BuildCommand
         => result.Verdict.Detail.Length > 0
             ? result.Verdict.Detail
             : result.Dependencies is { } dependencies && dependencies.Excused.Count > 0
-                ? $"{dependencies.ObjectsRead} object(s) read, {dependencies.Excused.Count} excused"
+                ? $"{ReportText.Counted(dependencies.ObjectsRead, "object")} read, {dependencies.Excused.Count} excused"
                 : string.Empty;
 
 }

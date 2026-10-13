@@ -480,21 +480,21 @@ public static class CiLegsReports
             // about the tree, and reporting that as green is what this command exists to stop.
             return CommandOutcome.Failed(
                 CiExit.MatrixDidNotRun,
-                $"no job in {report.Runs.Count} run(s) of branch {report.Branch} is a leg - the matrix did not run, or "
+                $"no job in {ReportText.Counted(report.Runs.Count, "run")} of branch {report.Branch} is a leg - the matrix did not run, or "
                 + "ci.legJobPattern matches none of its jobs - so nothing was verified about the tree. This is not a pass.") with
             { Data = data };
         }
 
         if (report.Red.Count == 0)
         {
-            return CommandOutcome.Ok($"every leg is green: {report.Legs.Count} leg(s) over {report.Runs.Count} run(s)") with
+            return CommandOutcome.Ok($"every leg is green: {ReportText.Counted(report.Legs.Count, "leg")} over {ReportText.Counted(report.Runs.Count, "run")}") with
             { Data = data, Quiet = json };
         }
 
         return CommandOutcome.Failed(
             CiExit.LegRed,
-            $"{report.Red.Count} leg(s) red: {report.RealFailures.Count} real failure(s) and "
-            + $"{report.Overran.Count} possible budget overrun(s)"
+            $"{ReportText.Counted(report.Red.Count, "leg")} red: {ReportText.Counted(report.RealFailures.Count, "real failure")} and "
+            + ReportText.Counted(report.Overran.Count, "possible budget overrun")
             + (report.Unclassified.Count > 0
                 ? $", besides {report.Unclassified.Count} whose test step failed with no budget to measure it against"
                 : string.Empty)
