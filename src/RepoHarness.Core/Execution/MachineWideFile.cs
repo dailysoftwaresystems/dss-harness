@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
 using RepoHarness.Core.FileSystem;
@@ -47,16 +48,49 @@ internal static class MachineWideFile
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(refusal);
 
+        return TryRead<T>(fileSystem, path, out var value, out var unread)
+            ? value
+            : throw new HarnessException(HarnessExit.Refused, refusal(unread), unread);
+    }
+
+    /// <summary>
+    /// Reads what <paramref name="path"/> holds as <see cref="Read{T}"/> does, for a caller that goes on where the
+    /// file cannot be read, and says so, rather than stop.
+    /// </summary>
+    /// <remarks>
+    /// What counts as a file that cannot be read is decided here alone, for both: <see cref="Read{T}"/> refuses exactly
+    /// what this answers <see langword="false"/> for, from the same failure.
+    /// </remarks>
+    /// <typeparam name="T">What the file holds.</typeparam>
+    /// <param name="fileSystem">Reads the file.</param>
+    /// <param name="path">The file.</param>
+    /// <param name="value">What the file holds, or <see langword="null"/> where nothing is there or it could not be read.</param>
+    /// <param name="unread">Why the file could not be read, or <see langword="null"/> where it was read or nothing is there.</param>
+    /// <returns>
+    /// Whether the file was read, or nothing is there to read; <see langword="false"/> where a file is there and could
+    /// not be looked at or read, or not as this build's JSON.
+    /// </returns>
+    public static bool TryRead<T>(IFileSystem fileSystem, string path, out T? value, [NotNullWhen(false)] out Exception? unread)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+
         try
         {
-            return fileSystem.KindOf(path) == PathKind.None
+            value = fileSystem.KindOf(path) == PathKind.None
                 ? null
                 : JsonSerializer.Deserialize<T>(fileSystem.ReadAllText(path), JsonStateFile.Options)
                     ?? throw new JsonException("it holds null");
+            unread = null;
+
+            return true;
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            throw new HarnessException(HarnessExit.Refused, refusal(ex), ex);
+            value = null;
+            unread = ex;
+
+            return false;
         }
     }
 
