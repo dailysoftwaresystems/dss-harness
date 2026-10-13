@@ -46,6 +46,6 @@ internal static class DispatchOptions
     /// <param name="verb">What the command does with the copy, as its description starts: <c>Build</c>.</param>
     internal static Option<bool> UseStaged(string verb) => new("--use-staged")
     {
-        Description = $"{verb} what is already staged on each host, without syncing again. Legs on a copy a sync or a takeover began and did not finish are inputs-moved.",
+        Description = $"{verb} what is already staged on each host, without syncing again. Legs on a copy a sync or a takeover began and did not finish, that is not there, or that holds no copy this tool made are inputs-moved.",
     };
 }

@@ -33,6 +33,9 @@ public sealed record FileFingerprint(string Path, long Length, string Content)
 
     /// <summary>What the file holds, as everything that compares files compares it.</summary>
     public FileContent Identity => new(Length, Content);
+
+    /// <summary>How it stood as it was read: what a file that still stands so is compared by.</summary>
+    public FileStanding Standing => new(Length, Written, Created);
 }
 
 /// <summary>An input file that could not be fingerprinted, and why.</summary>
@@ -692,22 +695,14 @@ public sealed class InputWatch : IDisposable, IWatchSink
     /// </summary>
     private bool AsFound(string declared)
     {
-        if (!_found.TryGetValue(declared, out var found)
-            || found.Length == InputFingerprint.AbsentLength
-            || found.Written is not { } written
-            || found.Created is not { } created)
+        if (!_found.TryGetValue(declared, out var found) || found.Length == InputFingerprint.AbsentLength)
         {
             return false;
         }
 
         try
         {
-            var now = new FileInfo(Path.Combine(_root, declared));
-
-            return now.Exists
-                && now.Length == found.Length
-                && now.LastWriteTimeUtc == written
-                && now.CreationTimeUtc == created;
+            return found.Standing.StandsAs(FileStanding.Of(Path.Combine(_root, declared)));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

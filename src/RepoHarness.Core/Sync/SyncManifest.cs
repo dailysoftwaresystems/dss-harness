@@ -1,6 +1,9 @@
 using System.Text.Json.Serialization;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
+using RepoHarness.Core.Results;
 
 namespace RepoHarness.Core.Sync;
 
@@ -61,6 +64,29 @@ public interface IManifestBuilder
         string root,
         Func<string, bool> isWithheld,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads the tree as <see cref="BuildAsync"/> does, then looks at it once more, without hashing: the same files, each
+    /// standing as it did as it was hashed - or refuses the reading, naming the first path that moved.
+    /// </summary>
+    /// <param name="root">The tree root.</param>
+    /// <param name="isWithheld">Decides whether a relative path is withheld, as for <see cref="BuildAsync"/>.</param>
+    /// <param name="cancellationToken">Stops the walks.</param>
+    /// <exception cref="HarnessException">
+    /// A file was written after it was hashed, one appeared, or one went, before the second look reached it: the tree
+    /// changed while it was read (<see cref="LegExit.InputsMoved"/>).
+    /// </exception>
+    /// <remarks>
+    /// One pass reads each file once, at its own moment, so a write that begins and ends while the tree is read gives a
+    /// manifest holding some files as they were before it and some as after - a tree that never existed. Every hash
+    /// precedes every second look, so a reading that passes is the tree as it stood the instant the hashing ended. How
+    /// each file stood is taken before its bytes are hashed: taken after, a write in between would be recorded as how
+    /// the file stood, beside a hash of what it held before.
+    /// </remarks>
+    Task<SyncManifest> BuildSettledAsync(
+        string root,
+        Func<string, bool> isWithheld,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc cref="IManifestBuilder"/>
@@ -91,20 +117,109 @@ public sealed class ManifestBuilder(IFileSystem fileSystem, IHostPlatform platfo
     {
         ArgumentNullException.ThrowIfNull(isWithheld);
 
+        return (await ReadAsync(root, isWithheld, standings: null, cancellationToken).ConfigureAwait(false)).Manifest;
+    }
+
+    /// <inheritdoc/>
+    public async Task<SyncManifest> BuildSettledAsync(
+        string root,
+        Func<string, bool> isWithheld,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(isWithheld);
+
+        var standings = new Dictionary<string, FileStanding?>(StringComparer.Ordinal);
+        var (manifest, links) = await ReadAsync(root, isWithheld, standings, cancellationToken).ConfigureAwait(false);
+
+        // Every hash is taken by now. The second look lists the tree again and looks at each file, reading no byte.
+        var now = new Dictionary<string, FileStanding?>(StringComparer.Ordinal);
+
+        if (_fileSystem.DirectoryExists(root))
+        {
+            Look(root, root, isWithheld, links, now, cancellationToken);
+        }
+
+        var moved = manifest.Entries.Keys
+            .Select(path => (Path: path, What: Moved(standings[path], now.TryGetValue(path, out var stands) ? stands : null)))
+            .Concat(now.Keys.Where(path => !manifest.Entries.ContainsKey(path)).Select(path => (Path: path, What: (string?)"appeared")))
+            .Where(change => change.What is not null)
+            .OrderBy(change => change.Path, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        return moved.What is null
+            ? manifest
+            : throw new HarnessException(
+                LegExit.InputsMoved,
+                $"'{root}' changed while it was read: '{ReportText.Printable(moved.Path)}' {moved.What}. Let it settle, then run again.");
+
+        // What became of a file the first walk hashed, by how it stood then and how it stands now; nothing where it
+        // stands as it did.
+        static string? Moved(FileStanding? was, FileStanding? now)
+            => now is null ? "went" : was is not null && was.StandsAs(now) ? null : "was written";
+    }
+
+    /// <summary>
+    /// The first walk: every file's entry, and where <paramref name="standings"/> is given, how each stood as it was
+    /// about to be hashed.
+    /// </summary>
+    private async Task<(SyncManifest Manifest, HashSet<string> Links)> ReadAsync(
+        string root,
+        Func<string, bool> isWithheld,
+        Dictionary<string, FileStanding?>? standings,
+        CancellationToken cancellationToken)
+    {
         var entries = new Dictionary<string, SyncEntry>(StringComparer.Ordinal);
 
         if (!_fileSystem.DirectoryExists(root))
         {
-            return SyncManifest.Empty(root);
+            return (SyncManifest.Empty(root), []);
         }
 
         var links = new List<string>();
 
-        await WalkAsync(root, root, isWithheld, entries, links, cancellationToken).ConfigureAwait(false);
+        await WalkAsync(root, root, isWithheld, entries, links, standings, cancellationToken).ConfigureAwait(false);
 
         links.Sort(StringComparer.Ordinal);
 
-        return new SyncManifest(root, entries) { Links = links };
+        return (new SyncManifest(root, entries) { Links = links }, new HashSet<string>(links, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The second walk of <see cref="BuildSettledAsync"/>: each file the first walk would read, by how it stands now. A
+    /// path the first found to be a link is passed over by name, and a directory is asked again whether it is one: one
+    /// that became a link is not followed, and the files below it read as gone.
+    /// </summary>
+    private void Look(
+        string root,
+        string directory,
+        Func<string, bool> isWithheld,
+        HashSet<string> links,
+        Dictionary<string, FileStanding?> now,
+        CancellationToken cancellationToken)
+    {
+        foreach (var file in _fileSystem.EnumerateFiles(directory, recursive: false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var relative = Relative(root, file);
+
+            if (!isWithheld(relative) && !links.Contains(relative))
+            {
+                now[relative] = _fileSystem.StandingOf(file);
+            }
+        }
+
+        foreach (var child in _fileSystem.EnumerateDirectories(directory))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var relative = Relative(root, child);
+
+            if (!isWithheld(relative) && !links.Contains(relative) && !IsLink(child))
+            {
+                Look(root, child, isWithheld, links, now, cancellationToken);
+            }
+        }
     }
 
     private async Task WalkAsync(
@@ -113,6 +228,7 @@ public sealed class ManifestBuilder(IFileSystem fileSystem, IHostPlatform platfo
         Func<string, bool> isWithheld,
         Dictionary<string, SyncEntry> entries,
         List<string> links,
+        Dictionary<string, FileStanding?>? standings,
         CancellationToken cancellationToken)
     {
         foreach (var file in _fileSystem.EnumerateFiles(directory, recursive: false))
@@ -134,6 +250,12 @@ public sealed class ManifestBuilder(IFileSystem fileSystem, IHostPlatform platfo
             {
                 links.Add(relative);
                 continue;
+            }
+
+            // Before its bytes: a write between the hash and the look would otherwise be recorded as how it stood.
+            if (standings is not null)
+            {
+                standings[relative] = _fileSystem.StandingOf(file);
             }
 
             entries[relative] = await DescribeAsync(relative, file, cancellationToken).ConfigureAwait(false);
@@ -158,7 +280,7 @@ public sealed class ManifestBuilder(IFileSystem fileSystem, IHostPlatform platfo
                 continue;
             }
 
-            await WalkAsync(root, child, isWithheld, entries, links, cancellationToken).ConfigureAwait(false);
+            await WalkAsync(root, child, isWithheld, entries, links, standings, cancellationToken).ConfigureAwait(false);
         }
     }
 

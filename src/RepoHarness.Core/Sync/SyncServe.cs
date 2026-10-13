@@ -50,7 +50,8 @@ public static class SyncServe
 
     /// <summary>
     /// Creates the copy's root, with its parents, and marks it as the harness's: complete, a takeover begun, or a sync
-    /// begun. Marking a copy already there keeps how it came to be.
+    /// begun. Marking a copy already there keeps how it came to be. A copy marked complete as a sync of it finishes is
+    /// told the reading it now holds, as <see cref="Recording"/> spells it after the mark.
     /// </summary>
     public const string Create = "create";
 
@@ -200,6 +201,53 @@ public static class SyncServe
                     $"'{arguments[1]}' is not a mark this build can record, so how '{arguments[0]}' "
                     + "came to be, or whether its last sync finished, would be written down wrong. The two ends are "
                     + "different builds.");
+    }
+
+    /// <summary>
+    /// What a <see cref="Create"/> request says, after the mark, of the reading a finished copy holds: the run that read
+    /// it, the commit, each <see cref="Nothing"/> where there is none, then the count of uncommitted changes.
+    /// </summary>
+    /// <param name="reading">The reading.</param>
+    public static IReadOnlyList<string> Recording(CopyReading reading)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
+
+        return [reading.ReadBy ?? Nothing, reading.Commit ?? Nothing, reading.UncommittedChanges.ToString(CultureInfo.InvariantCulture)];
+    }
+
+    /// <summary>
+    /// The reading a <see cref="Create"/> request records, as <see cref="Recording"/> spelled it after the mark; none
+    /// where it carries none.
+    /// </summary>
+    /// <param name="arguments">The request's arguments, the copy's root first, then the mark.</param>
+    /// <exception cref="HarnessException">
+    /// It arrived in part, with a count that is no number, or beside a mark other than complete: the two ends are
+    /// different builds.
+    /// </exception>
+    /// <remarks>
+    /// Refused rather than read as no reading: a finished copy recorded without the reading it holds reads, to the leg
+    /// that finds it, as another run's.
+    /// </remarks>
+    public static CopyReading? ReadingIn(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        if (arguments.Count <= 2)
+        {
+            return null;
+        }
+
+        if (arguments.Count != 5
+            || MarkIn(arguments) != CopyMark.Complete
+            || !int.TryParse(arguments[4], NumberStyles.None, CultureInfo.InvariantCulture, out var changes))
+        {
+            throw new HarnessException(
+                HarnessExit.UsageError,
+                $"The reading '{arguments[0]}' was to be marked as holding arrived in a shape this build cannot read: a "
+                + "complete mark, then the run, the commit and a count of uncommitted changes. The two ends are different builds.");
+        }
+
+        return new CopyReading(Given(arguments, 2, Create), Given(arguments, 3, Create), changes);
     }
 
     /// <summary>Writes one file into the copy.</summary>
@@ -754,6 +802,12 @@ public sealed record SyncInspectAnswer(bool Exists, CopyMark Mark, string? Confi
     /// is then made for it, which holds nothing.
     /// </summary>
     public GitHistoryHeld? Repository { get; init; }
+
+    /// <summary>
+    /// The reading the copy holds, as the sync that last finished it recorded it; <see langword="null"/> where it records
+    /// none - a copy no finished sync of this build marked, or one whose sync has not finished.
+    /// </summary>
+    public CopyReading? Reading { get; init; }
 }
 
 /// <summary>What a copy's marker says about how it came to be, and whether the last sync of it finished.</summary>

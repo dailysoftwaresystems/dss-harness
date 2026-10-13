@@ -297,9 +297,7 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
 
         Change(layout, entries =>
         {
-            holder = entries
-                .FirstOrDefault(kept => kept.SameCopy(entry) && !SameTree(kept.Tree, entry.Tree) && Exists(kept.Tree))
-                ?.Tree;
+            holder = HolderAmong(entries, entry);
 
             if (holder is not null || (entries.Contains(entry) && entries.Count(kept => kept.SameCopy(entry)) == 1))
             {
@@ -311,6 +309,28 @@ public sealed class HostCopyRecord(IFileSystem fileSystem, StringComparison path
 
         return holder;
     }
+
+    /// <summary>
+    /// The tree of the worktree that holds <paramref name="entry"/>'s copy, which <see cref="Claim"/> would refuse it
+    /// for, or <see langword="null"/> where it would record it - read, and nothing recorded: what a dry run of a sync
+    /// asks, so it is refused where the sync would be.
+    /// </summary>
+    /// <param name="layout">The repository.</param>
+    /// <param name="entry">The copy a sync would make, or bring in step.</param>
+    /// <exception cref="HarnessException">The record cannot be read: refused.</exception>
+    public string? Holder(HarnessLayout layout, HostCopyEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        return HolderAmong(All(layout), entry);
+    }
+
+    /// <summary>
+    /// Of <paramref name="entries"/>, the tree of another worktree that still exists and holds <paramref name="entry"/>'s
+    /// copy: the one rule <see cref="Claim"/> records by and <see cref="Holder"/> reads by.
+    /// </summary>
+    private string? HolderAmong(IReadOnlyList<HostCopyEntry> entries, HostCopyEntry entry)
+        => entries.FirstOrDefault(kept => kept.SameCopy(entry) && !SameTree(kept.Tree, entry.Tree) && Exists(kept.Tree))?.Tree;
 
     /// <summary>Stops recording <paramref name="entry"/>, once its copy is gone or is not the harness's to remove.</summary>
     /// <param name="layout">The repository.</param>

@@ -13,6 +13,8 @@ internal class PassThroughFileSystem(IFileSystem inner) : IFileSystem
 
     public virtual bool DirectoryExists(string path) => inner.DirectoryExists(path);
 
+    public virtual FileStanding? StandingOf(string path) => inner.StandingOf(path);
+
     public virtual PathKind KindOf(string path) => inner.KindOf(path);
 
     public virtual string ResolveLinks(string path) => inner.ResolveLinks(path);

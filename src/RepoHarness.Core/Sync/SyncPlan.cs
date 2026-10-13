@@ -186,18 +186,34 @@ public sealed record SyncPlan(
     /// </remarks>
     public void RefuseWhenDeletingTooMuch(SyncManifest destination, double maxDeleteFraction, bool adopting = false)
     {
+        if (OverTheBound(destination, maxDeleteFraction, adopting) is { } refusal)
+        {
+            throw new HarnessException(HarnessExit.Refused, refusal);
+        }
+    }
+
+    /// <summary>
+    /// Why this plan deletes more of the copy than the configuration allows, in the words its refusal says it in; or
+    /// <see langword="null"/> where it does not. What a dry run answers in place of the refusal, so it shows the list the
+    /// refusal sends a reader to, and exits as the sync would.
+    /// </summary>
+    /// <param name="destination">The copy as it stands, which is what the share is measured against.</param>
+    /// <param name="maxDeleteFraction">The share one sync may delete; zero allows any deletion.</param>
+    /// <param name="adopting">Whether the directory is one this tool would be taking over, as for <see cref="RefuseWhenDeletingTooMuch"/>.</param>
+    public string? OverTheBound(SyncManifest destination, double maxDeleteFraction, bool adopting = false)
+    {
         ArgumentNullException.ThrowIfNull(destination);
 
         if (maxDeleteFraction <= 0 || destination.Entries.Count == 0 || Deletes.Count == 0)
         {
-            return;
+            return null;
         }
 
         var share = (double)Deletes.Count / destination.Entries.Count;
 
         if (share <= maxDeleteFraction)
         {
-            return;
+            return null;
         }
 
         // What to check differs by which of the two mistakes this is. A copy this tool already owns
@@ -211,11 +227,9 @@ public sealed record SyncPlan(
             : "Nothing was changed. Confirm the source tree is the one you meant, then raise "
                 + "sync.maxDeleteFraction or run with --dry-run to see the list.";
 
-        throw new HarnessException(
-            HarnessExit.Refused,
-            $"This sync would delete {Deletes.Count} of the {ReportText.Counted(destination.Entries.Count, "file")} in "
+        return $"This sync would delete {Deletes.Count} of the {ReportText.Counted(destination.Entries.Count, "file")} in "
             + $"'{destination.Root}', which is {share:P0} of it and over the {maxDeleteFraction:P0} "
-            + $"sync.maxDeleteFraction allows. {check}");
+            + $"sync.maxDeleteFraction allows. {check}";
     }
 
     /// <summary>The lines <c>--dry-run</c> prints, and the same lines a real sync reports afterwards.</summary>

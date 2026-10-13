@@ -45,6 +45,20 @@ public interface ISyncTransport
     Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Marks the copy finished - a sync of it verified, or a takeover of it done - holding <paramref name="reading"/>,
+    /// keeping how it came to be: what a leg that later finds it reads to know whose tree it holds.
+    /// </summary>
+    /// <param name="root">The copy's root.</param>
+    /// <param name="reading">The reading the copy was made from, and the run that read it.</param>
+    /// <param name="cancellationToken">Stops the work.</param>
+    /// <exception cref="Results.HarnessException">As <see cref="CreateRootAsync"/>.</exception>
+    /// <remarks>
+    /// One mark with the reading, rather than a mark and then the reading: between two, a copy marked finished would
+    /// name the reading before this one.
+    /// </remarks>
+    Task MarkFinishedAsync(string root, CopyReading reading, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// What the harness has recorded about this copy. A directory it did not make is never taken
     /// over on its own, because sync deletes whatever the source does not have and a checkout
     /// somebody made by hand holds work nobody told the harness about.

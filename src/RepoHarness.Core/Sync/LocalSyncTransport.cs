@@ -48,6 +48,22 @@ public sealed class LocalSyncTransport(
 
     /// <inheritdoc/>
     public Task CreateRootAsync(string root, CopyMark mark = CopyMark.Complete, CancellationToken cancellationToken = default)
+        => MarkAsync(root, mark, reading: null);
+
+    /// <inheritdoc/>
+    public Task MarkFinishedAsync(string root, CopyReading reading, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
+
+        return MarkAsync(root, CopyMark.Complete, reading);
+    }
+
+    /// <summary>
+    /// Creates the copy's root where it is not there and writes its marker: <paramref name="mark"/>, holding
+    /// <paramref name="reading"/> where it is given - and no reading where it is not, since a copy a sync began writing,
+    /// or marked without saying, holds no reading anybody can name.
+    /// </summary>
+    private Task MarkAsync(string root, CopyMark mark, CopyReading? reading)
     {
         // None is not a mark a copy can carry: it says there is no marker at all, and encoding it
         // would write one claiming the copy was both taken over and finished — the most permissive
@@ -97,7 +113,10 @@ public sealed class LocalSyncTransport(
                         before?.CreatedBy ?? Environment.MachineName,
                         Adopted: mark == CopyMark.AdoptionStopped || before is { Adopted: true },
                         Completed: mark != CopyMark.AdoptionStopped,
-                        Unfinished: mark == CopyMark.Unfinished),
+                        Unfinished: mark == CopyMark.Unfinished,
+                        ReadBy: reading?.ReadBy,
+                        Commit: reading?.Commit,
+                        UncommittedChanges: reading?.UncommittedChanges),
                     MarkerOptions));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -117,12 +136,18 @@ public sealed class LocalSyncTransport(
     public async Task<SyncInspectAnswer> InspectAsync(string root, GitHistoryWanted? wanted = null, CancellationToken cancellationToken = default)
     {
         var exists = await RootExistsAsync(root, cancellationToken).ConfigureAwait(false);
+        var marker = Marker(root);
 
         return new(
             exists,
-            await ReadMarkAsync(root, cancellationToken).ConfigureAwait(false),
+            MarkOf(marker),
             exists ? await ConfigurationInAsync(root, cancellationToken).ConfigureAwait(false) : null)
         {
+            // Only where a sync that finished recorded one: a copy marked otherwise holds no reading anybody can name.
+            Reading = marker is { UncommittedChanges: { } changes } && MarkOf(marker) == CopyMark.Complete
+                ? new CopyReading(marker.ReadBy, marker.Commit, changes)
+                : null,
+
             // Of its own repository alone: inside another's work tree, git answers for that one, which is not the copy's.
             Repository = exists && await IsItsOwnRepositoryAsync(root, cancellationToken).ConfigureAwait(false)
                 ? await _gitClient.ReadHistoryAsync(Home(root), wanted, cancellationToken).ConfigureAwait(false)
@@ -161,16 +186,19 @@ public sealed class LocalSyncTransport(
 
     /// <inheritdoc/>
     public Task<CopyMark> ReadMarkAsync(string root, CancellationToken cancellationToken = default)
-        => Task.FromResult(Marker(root) switch
-        {
-            // An unfinished takeover is told apart from a finished copy, because only one of them
-            // still needs somebody to say go ahead; and a copy whose sync has not finished from both,
-            // because it is this tool's own and the next sync puts it right.
-            null => CopyMark.None,
-            { Adopted: true, Completed: false } => CopyMark.AdoptionStopped,
-            { Unfinished: true } => CopyMark.Unfinished,
-            _ => CopyMark.Complete,
-        });
+        => Task.FromResult(MarkOf(Marker(root)));
+
+    /// <summary>What <paramref name="marker"/> says of how the copy came to be, and whether its last sync finished.</summary>
+    private static CopyMark MarkOf(SyncedCopyMarker? marker) => marker switch
+    {
+        // An unfinished takeover is told apart from a finished copy, because only one of them
+        // still needs somebody to say go ahead; and a copy whose sync has not finished from both,
+        // because it is this tool's own and the next sync puts it right.
+        null => CopyMark.None,
+        { Adopted: true, Completed: false } => CopyMark.AdoptionStopped,
+        { Unfinished: true } => CopyMark.Unfinished,
+        _ => CopyMark.Complete,
+    };
 
     /// <inheritdoc/>
     public async Task InitialiseRepositoryAsync(string root, string? objectFormat = null, CancellationToken cancellationToken = default)
@@ -1053,6 +1081,13 @@ public sealed class LocalSyncTransport(
     /// cleared once the copy is verified. Written only where true, so a copy every sync finished carries
     /// the marker a build from before it reads.
     /// </param>
+    /// <param name="ReadBy">The run whose reading a finished sync made the copy, where it kept one.</param>
+    /// <param name="Commit">The commit that reading's tree was at, where it was at one.</param>
+    /// <param name="UncommittedChanges">
+    /// How many of the paths that reading carried git called changed: written with every reading a finished sync
+    /// records, so its presence says the marker holds one. Each of the three spelt as a leg's <c>tree</c> spells it,
+    /// and written only where set, so a copy marked without a reading carries the marker a build from before it reads.
+    /// </param>
     /// <remarks>
     /// Both strings are nullable because deserialising decides that, not this declaration: a file
     /// holding <c>{}</c> parses into a marker with neither, and that is one of the shapes that has
@@ -1063,7 +1098,10 @@ public sealed class LocalSyncTransport(
         string? CreatedBy,
         bool Adopted,
         bool Completed,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Unfinished = false);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool Unfinished = false,
+        [property: JsonPropertyName("readBy"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ReadBy = null,
+        [property: JsonPropertyName("commit"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Commit = null,
+        [property: JsonPropertyName("uncommittedChanges"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? UncommittedChanges = null);
 
     /// <summary>
     /// What the marker at <paramref name="root"/> says, or null where there is none.

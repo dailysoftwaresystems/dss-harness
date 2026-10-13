@@ -6,6 +6,7 @@ using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
@@ -159,8 +160,10 @@ public sealed class LegRunServiceTests
     /// them: the leg on this machine still runs, and the run still names where its records are. Read ahead of the
     /// legs, outside them, its failure ended the whole run, with no ledger and no records named.
     /// </summary>
-    [Fact]
-    public async Task ATreeThatCouldNotBeRead_GivesItsOwnLegsTheirVerdict_AndTheOtherLegsStillRun()
+    [Theory]
+    [InlineData(HarnessExit.CommandFailed, "failed", "git could not list what the tree ignores")]
+    [InlineData(LegExit.InputsMoved, "inputs-moved", "'/src/repo' changed while it was read: 'src/a.c' was written. Let it settle, then run again.")]
+    public async Task ATreeThatCouldNotBeRead_GivesItsOwnLegsTheirVerdict_AndTheOtherLegsStillRun(int exit, string verdict, string why)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -168,7 +171,7 @@ public sealed class LegRunServiceTests
         var ran = new List<string>();
 
         sync.ReadSourceAsync(default!, TestContext.Current.CancellationToken)
-            .ThrowsAsyncForAnyArgs(new HarnessException(HarnessExit.CommandFailed, "git could not list what the tree ignores"));
+            .ThrowsAsyncForAnyArgs(new HarnessException(exit, why));
 
         var outcome = await OutcomeAsync(
             temp,
@@ -182,8 +185,8 @@ public sealed class LegRunServiceTests
         var legs = Verdicts(outcome);
 
         Assert.Equal("passed", legs["native"].Verdict);
-        Assert.Equal("failed", legs["arm"].Verdict);
-        Assert.Equal("git could not list what the tree ignores", legs["arm"].Detail);
+        Assert.Equal(verdict, legs["arm"].Verdict);
+        Assert.Equal(why, legs["arm"].Detail);
         Assert.Equal(["native"], ran);
         Assert.NotEmpty(RunDirectoryOf(outcome, json: true));
     }
@@ -191,22 +194,25 @@ public sealed class LegRunServiceTests
     /// <summary>
     /// A run on what is staged reads, on the machine that would have synced each copy, whether a sync or a takeover began
     /// there and did not finish: where one did, that copy holds part of one tree and part of another, so its legs are
-    /// inputs-moved, naming it and what to do, and its host is never asked to test it; the legs elsewhere run. A host asked
-    /// to run on what it holds was never told by the dispatcher that what it holds is staged, so it could not refuse.
+    /// inputs-moved, naming it and what to do, and its host is never asked to test it; the legs elsewhere run. A copy that
+    /// is not there, or that no sync of this tool marked, holds nothing current either. A host asked to run on what it
+    /// holds was never told by the dispatcher that what it holds is staged, so it could not refuse.
     /// </summary>
     [Theory]
-    [InlineData(CopyMark.Unfinished, "is a copy whose sync began and did not finish", "Run without --use-staged, which syncs it first.")]
-    [InlineData(CopyMark.AdoptionStopped, "was being taken over and the run stopped before it finished", "sync --adopt \"ssh pi\"', and run again.")]
-    [InlineData(CopyMark.Complete, null, null)]
-    [InlineData(CopyMark.None, null, null)]
-    public async Task ARunOnWhatIsStaged_MakesInputsMovedTheLegsOfACopyLeftPartMade(CopyMark mark, string? partMade, string? remedy)
+    [InlineData(CopyMark.Unfinished, true, "is a copy whose sync began and did not finish", "Run without --use-staged, which syncs it first.")]
+    [InlineData(CopyMark.AdoptionStopped, true, "was being taken over and the run stopped before it finished", "sync --adopt \"ssh pi\"', and run again.")]
+    [InlineData(CopyMark.Complete, true, null, null)]
+    [InlineData(CopyMark.None, true, "holds no copy this tool made", "Run without --use-staged, which syncs it first.")]
+    [InlineData(CopyMark.Complete, false, "holds no copy this tool made", "Run without --use-staged, which syncs it first.")]
+    public async Task ARunOnWhatIsStaged_MakesInputsMovedTheLegsOfACopyLeftPartMade(CopyMark mark, bool exists, string? partMade, string? remedy)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var asked = 0;
 
         var copy = Substitute.For<ISyncTransport>();
-        copy.ReadMarkAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(mark);
+        copy.InspectAsync(Arg.Any<string>(), Arg.Any<GitHistoryWanted?>(), Arg.Any<CancellationToken>())
+            .Returns(new SyncInspectAnswer(exists, mark) { Reading = mark == CopyMark.Complete ? Staged : null });
 
         var transports = Substitute.For<ISyncTransportFactory>();
         transports.For(Arg.Any<HostReport>()).Returns(copy);
@@ -231,11 +237,15 @@ public sealed class LegRunServiceTests
         var legs = Verdicts(outcome);
 
         Assert.Equal("passed", legs["native"].Verdict);
-        await copy.Received(1).ReadMarkAsync(HostTree, Arg.Any<CancellationToken>());
+        await copy.Received(1).InspectAsync(HostTree, Arg.Any<GitHistoryWanted?>(), Arg.Any<CancellationToken>());
 
         if (partMade is null)
         {
             Assert.Equal("passed", legs["arm"].Verdict);
+            Assert.Contains(
+                "test: arm: passed (tree staged at 0123456789ab with 2 uncommitted change(s) by run 20260101-000000-0a1b2c3d)",
+                harness.StandardError.ToString() + harness.StandardOutput.ToString(),
+                StringComparison.Ordinal);
             Assert.Equal(1, asked);
         }
         else
@@ -246,6 +256,154 @@ public sealed class LegRunServiceTests
             Assert.EndsWith(remedy!, legs["arm"].Detail, StringComparison.Ordinal);
             Assert.Equal(LegExit.InputsMoved, outcome.ExitCode);
             Assert.Equal(0, asked);
+        }
+    }
+
+    /// <summary>
+    /// A leg that takes its host's copy once its run has synced it, and finds there the reading of another command's
+    /// sync made in between, tests nothing there: it is inputs-moved, naming the copy and the run that synced it again,
+    /// and its host is never asked to run it. A copy that holds this run's reading runs, and the leg's line, its detail and
+    /// its tree say which reading it tested.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("20260101-000000-0a1b2c3d")]
+    public async Task ACopyAnotherRunSyncedAfterThisRunsSync_EndsThisRunsLegInputsMoved_NamingThatRun(string? another)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var run = RunId.New();
+        var asked = 0;
+
+        var copy = Substitute.For<ISyncTransport>();
+        copy.InspectAsync(Arg.Any<string>(), Arg.Any<GitHistoryWanted?>(), Arg.Any<CancellationToken>())
+            .Returns(new SyncInspectAnswer(true, CopyMark.Complete) { Reading = new CopyReading(another ?? run.Value, "0123456789abcdef", 0) });
+
+        var transports = Substitute.For<ISyncTransportFactory>();
+        transports.For(Arg.Any<HostReport>()).Returns(copy);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Interlocked.Increment(ref asked);
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy },
+            hosts: hosts,
+            transports: transports,
+            runId: run);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var arm = document.RootElement.GetProperty("legs").EnumerateArray().Single(leg => leg.GetProperty("leg").GetString() == "arm");
+        var tree = arm.GetProperty("tree");
+
+        Assert.Equal(HostTree, tree.GetProperty("path").GetString());
+        Assert.Equal(temp.Path, tree.GetProperty("copyOf").GetString());
+
+        if (another is null)
+        {
+            Assert.Equal("passed", arm.GetProperty("verdict").GetString());
+            Assert.Equal(string.Empty, arm.GetProperty("detail").GetString());
+            Assert.Contains("test: arm: passed (tree read at 0123456789ab)", harness.StandardError.ToString() + harness.StandardOutput.ToString(), StringComparison.Ordinal);
+            Assert.Equal(run.Value, tree.GetProperty("readBy").GetString());
+            Assert.Equal("0123456789abcdef", tree.GetProperty("commit").GetString());
+            Assert.Equal(0, tree.GetProperty("uncommittedChanges").GetInt32());
+            Assert.Equal(1, asked);
+        }
+        else
+        {
+            Assert.Equal("inputs-moved", arm.GetProperty("verdict").GetString());
+            Assert.Equal(
+                $"'{HostTree}' on ssh {HostName} was synced again by run {another} after this run made it the tree it read, so it no "
+                + "longer holds that tree.",
+                arm.GetProperty("detail").GetString());
+            Assert.False(tree.TryGetProperty("readBy", out _));
+            Assert.Equal(0, asked);
+        }
+
+        var native = document.RootElement.GetProperty("legs").EnumerateArray().Single(leg => leg.GetProperty("leg").GetString() == "native");
+
+        Assert.Equal(temp.Path, native.GetProperty("tree").GetProperty("path").GetString());
+        Assert.False(native.GetProperty("tree").TryGetProperty("copyOf", out _));
+        Assert.False(native.GetProperty("tree").TryGetProperty("commit", out _));
+    }
+
+    /// <summary>
+    /// A run reads the tree its copies are made of once, says so without naming other machines, and then says the commit
+    /// it was read at and how many of the paths it carries git calls changed - a path a sync withholds, never - or that it
+    /// has no commit yet, on one line per tree.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task ARunsReadingOfATree_SaysTheCommitItWasReadAt_AndHowManyOfItsPathsChanged(int changes)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var copy = SyncKit.CopyPath(temp);
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Hosts = new HostsConfig { Ssh = { [HostName] = new SshHostConfig { RepositoryPath = copy } } },
+            Legs = { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = HostName } },
+        };
+
+        config.Sync.Exclude.Add("notes/draft.txt");
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        // Changed, and carried to no copy.
+        temp.WriteFile("notes/draft.txt", "kept here\n");
+
+        for (var change = 0; change < changes; change++)
+        {
+            temp.WriteFile($"src/new{change}.c", "int x;\n");
+        }
+
+        var transports = Substitute.For<ISyncTransportFactory>();
+        transports.For(Arg.Any<HostReport>()).Returns(call => new RecordingTransport(SyncKit.Transport(harness), reports: call.Arg<HostReport>().Host));
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        try
+        {
+            var outcome = await OutcomeAsync(
+                temp,
+                harness,
+                config,
+                SshAndLocal(harness),
+                new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy },
+                sync: SyncKit.Service(harness, loader: HostDoubles.Loader(config, temp.Path, temp.Path), transports: transports),
+                hosts: hosts,
+                transports: transports);
+
+            var commit = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", token))![..12];
+            var uncommitted = changes > 0 ? $" with {changes} uncommitted change(s)" : string.Empty;
+            var lines = (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+
+            Assert.Equal("passed", Verdicts(outcome)["arm"].Verdict);
+            Assert.Contains($"test: reading '{temp.Path}' for its copies", lines);
+            Assert.Contains($"test: '{temp.Path}' was read at commit {commit}{uncommitted}", lines);
+            Assert.Contains($"test: arm: passed (tree read at {commit}{uncommitted})", lines);
+            Assert.DoesNotContain(lines, line => line.Contains("on other machines", StringComparison.Ordinal));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
         }
     }
 
@@ -274,7 +432,8 @@ public sealed class LegRunServiceTests
             SshAndLocal(harness),
             new LegRunRequest(temp.Path, null, Json: true, UseStaged: true) { Workload = LegWorkload.Copy },
             sync: sync,
-            hosts: hosts);
+            hosts: hosts,
+            transports: SyncKit.CopiesHolding(Staged));
 
         var legs = Verdicts(outcome);
 
@@ -2238,6 +2397,9 @@ public sealed class LegRunServiceTests
         }
     }
 
+    /// <summary>What a test's staged copies hold: another run's reading, made before this one began.</summary>
+    private static CopyReading Staged => new("20260101-000000-0a1b2c3d", "0123456789abcdef0123", 2);
+
     /// <summary>A leg that builds and tests nothing but is heavy all the same, as a runner saying so makes it.</summary>
     private static LegWorkload Heavy => new(Build: false, Test: false, []) { DeclaredHeavy = true };
 
@@ -2425,6 +2587,7 @@ public sealed class LegRunServiceTests
         RunId? runId = null)
     {
         var loader = HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
+        var run = runId ?? RunId.New();
 
         var service = new LegRunService(
             loader,
@@ -2433,7 +2596,9 @@ public sealed class LegRunServiceTests
             runLock ?? new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             logs ?? new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
             sync ?? SyncKit.ServiceDouble(),
-            transports ?? Substitute.For<ISyncTransportFactory>(),
+
+            // Each host's copy as this run's sync leaves it, unless the test says what it holds: a sync double writes nothing.
+            transports ?? SyncKit.CopiesHolding(new CopyReading(run.Value, null, 0)),
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
 
             // Never this machine's own record of its heavy legs: a test's slots are its own.
@@ -2450,7 +2615,7 @@ public sealed class LegRunServiceTests
 
         return await service.RunAsync(
             "test",
-            runId ?? RunId.New(),
+            run,
             request,
             (leg, token) =>
             {

@@ -490,6 +490,8 @@ public sealed class PhysicalFileSystem(IFilePermissions filePermissions) : IFile
         throw new FileNotFoundException($"'{path}' is not there to be asked when it was last written.", path);
     }
 
+    public FileStanding? StandingOf(string path) => FileStanding.Of(path);
+
     public DateTime CreationTimeUtc(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);

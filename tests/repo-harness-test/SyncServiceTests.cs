@@ -1272,9 +1272,10 @@ public sealed class SyncServiceTests
     }
 
     /// <summary>
-    /// A preview changes nothing, so there is nothing for either refusal to protect. Until now it hit
-    /// both of them, including the deletion bound whose own message says to run with this flag to see
-    /// the list it was refusing to show.
+    /// A preview of a directory the harness did not create shows the plan that taking it over would carry
+    /// out, and the flag that would do it, and changes nothing: refusing to show it, it hid the list the
+    /// refusal sends a reader to. Whether the sync would be refused is said by the code the command exits
+    /// with, as a sync would exit.
     /// </summary>
     [Fact]
     public async Task ADryRun_ShowsWhatAdoptingWouldDo_RatherThanRefusingToSay()
@@ -3236,8 +3237,10 @@ public sealed class SyncServiceTests
     /// A copy another worktree kept under the same name still holds is refused before anything is written to it:
     /// synced by both, each would replace the tree the other put there. The refusal names that worktree.
     /// </summary>
-    [Fact]
-    public async Task ACopyAnotherWorktreeOfTheNameHolds_IsRefused_BeforeAnythingIsWritten()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACopyAnotherWorktreeOfTheNameHolds_IsRefused_BeforeAnythingIsWritten(bool dryRun)
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -3253,19 +3256,368 @@ public sealed class SyncServiceTests
             var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
             new HostCopyRecord(harness.FileSystem, harness.Platform.PathComparison)
                 .Claim(context.Layout, new HostCopyEntry(HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase), "ssh pi", copy, other));
+            var recorded = Path.Combine(context.Layout.HostCopiesDirectory, HostCopyRecord.FileName);
+            var before = await File.ReadAllBytesAsync(recorded, cancellationToken);
 
             var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.SyncAsync(
-                worktree, new RecordingTransport(SyncKit.Transport(harness), reports: HostId.Ssh("pi")), copy, new SyncOptions(), cancellationToken));
+                worktree, new RecordingTransport(SyncKit.Transport(harness), reports: HostId.Ssh("pi")), copy, new SyncOptions(DryRun: dryRun), cancellationToken));
 
             Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
             Assert.Contains($"is the copy of the worktree at '{other}'", refusal.Message, StringComparison.Ordinal);
             Assert.False(Directory.Exists(copy));
+            Assert.Equal(before, await File.ReadAllBytesAsync(recorded, cancellationToken));
         }
         finally
         {
             SyncKit.DeleteIfPresent(copy);
             SyncKit.DeleteIfPresent(worktree);
         }
+    }
+
+    /// <summary>
+    /// A copy a worktree of the same name held, where that worktree is gone, holds nothing back: the sync takes it, and
+    /// records it as this worktree's; a dry run says what the sync would do, refuses nothing, and records nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACopyAWorktreeThatIsGoneHeld_IsTaken_AndADryRunRefusesNothing(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var worktree = Path.GetFullPath(Path.Combine(temp.Path, "..", "wt-" + Guid.NewGuid().ToString("N")[..8]));
+        var name = HostCopies.NameOf(temp.Combine(".harness-config", "worktrees"), worktree, StringComparison.OrdinalIgnoreCase);
+        var copy = HostCopies.ForWorktree(Path.GetFullPath(SyncKit.CopyPath(temp)), name);
+
+        // Never made: the worktree that kept the copy under this name is gone.
+        var gone = temp.Combine("elsewhere", Path.GetFileName(worktree));
+
+        try
+        {
+            await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", worktree], cancellationToken);
+            var context = await harness.ContextLoader.LoadAsync(temp.Path, cancellationToken);
+            var record = new HostCopyRecord(harness.FileSystem, harness.Platform.PathComparison);
+            record.Claim(context.Layout, new HostCopyEntry(name, "ssh pi", copy, gone));
+            var recorded = Path.Combine(context.Layout.HostCopiesDirectory, HostCopyRecord.FileName);
+            var before = await File.ReadAllBytesAsync(recorded, cancellationToken);
+
+            var result = await service.SyncAsync(
+                worktree, new RecordingTransport(SyncKit.Transport(harness), reports: HostId.Ssh("pi")), copy, new SyncOptions(DryRun: dryRun), cancellationToken);
+
+            Assert.Null(result.OverTheBound);
+            Assert.Equal(!dryRun, Directory.Exists(copy));
+
+            if (dryRun)
+            {
+                Assert.Equal(before, await File.ReadAllBytesAsync(recorded, cancellationToken));
+            }
+            else
+            {
+                Assert.True(record.SameTree(worktree, Assert.Single(record.Of(context.Layout, name)).Tree));
+            }
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+            SyncKit.DeleteIfPresent(worktree);
+        }
+    }
+
+    /// <summary>
+    /// A tree written while it is read - a file rewritten after it was hashed, though to the same length; a file that
+    /// appears; a file that goes - is refused by the reading's second look, naming the path, before any copy is made of
+    /// it: a copy already warm from an earlier sync, which a reading of one pass would have made part one tree and part
+    /// another, is left holding the tree it held.
+    /// </summary>
+    [Theory]
+    [InlineData("was written", "src/a.c")]
+    [InlineData("appeared", "src/c.c")]
+    [InlineData("went", "src/a.c")]
+    public async Task ATreeWrittenWhileItIsRead_IsRefusedByTheSecondLook_NamingThePath_AndAWarmCopyIsLeftAsItWas(string what, string path)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var copy = SyncKit.CopyPath(temp);
+        var file = temp.Combine(path.Split('/'));
+
+        try
+        {
+            await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
+
+            // Once every file is hashed, as the second look begins.
+            var moving = SyncKit.Service(harness, fileSystem: new MovesBeforeTheSecondLook(harness.FileSystem, temp.Path, () =>
+            {
+                switch (what)
+                {
+                    case "was written":
+                        File.WriteAllText(file, "A\n");
+                        File.SetLastWriteTimeUtc(file, File.GetLastWriteTimeUtc(file).AddSeconds(4));
+                        break;
+                    case "appeared":
+                        File.WriteAllText(file, "c\n");
+                        break;
+                    default:
+                        File.Delete(file);
+                        break;
+                }
+            }));
+
+            var moved = await Assert.ThrowsAsync<HarnessException>(() => moving.ReadSourceAsync(temp.Path, cancellationToken));
+
+            Assert.Equal(LegExit.InputsMoved, moved.ExitCode);
+            Assert.Equal($"'{temp.Path}' changed while it was read: '{path}' {what}. Let it settle, then run again.", moved.Message);
+            Assert.Equal("a\n", await File.ReadAllTextAsync(Path.Combine(copy, "src", "a.c"), cancellationToken));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// A tree nothing writes while it is read passes the second look on a file system that dates files coarsely: the
+    /// second look compares how each file stands with how it stood, by equality alone, and equal times stay equal.
+    /// </summary>
+    [Fact]
+    public async Task ATreeNothingWritesWhileItIsRead_PassesTheSecondLook_ThoughItsTimesAreCoarse()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, _) = await PrepareAsync(temp, cancellationToken);
+        var service = SyncKit.Service(harness, fileSystem: new CoarseTimes(harness.FileSystem));
+
+        using var reading = await service.ReadSourceAsync(temp.Path, cancellationToken);
+
+        Assert.Contains("src/a.c", reading.Files.Entries.Keys);
+        Assert.Contains("src/b.c", reading.Files.Entries.Keys);
+    }
+
+    /// <summary>
+    /// A sync that finishes a copy marks it with the reading it now holds - the run that read it, the commit and how
+    /// many of the carried paths git called changed - also where nothing else of the copy changed, so a later sync by
+    /// another run, of a tree that had not moved, still leaves that run's reading there. A copy a sync begins writing
+    /// holds no reading anybody can name, and its marker says none.
+    /// </summary>
+    [Fact]
+    public async Task AFinishedSync_MarksTheCopyWithTheReadingItHolds_AndOneBegunHoldsNone()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var transport = SyncKit.Transport(harness);
+        var copy = SyncKit.CopyPath(temp);
+        var marker = Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.SyncedCopyMarkerName);
+        var first = RunId.New();
+        var second = RunId.New();
+
+        try
+        {
+            var commit = (await harness.GitClient.ResolveCommitAsync(temp.Path, "HEAD", cancellationToken))!;
+
+            await service.SyncAsync(temp.Path, transport, copy, new SyncOptions { Run = first }, cancellationToken);
+
+            Assert.Equal(new CopyReading(first.Value, commit, 0), (await transport.InspectAsync(copy, cancellationToken: cancellationToken)).Reading);
+            Assert.Contains($"\"readBy\": \"{first.Value}\"", await File.ReadAllTextAsync(marker, cancellationToken), StringComparison.Ordinal);
+
+            await service.SyncAsync(temp.Path, transport, copy, new SyncOptions { Run = second }, cancellationToken);
+
+            Assert.Equal(new CopyReading(second.Value, commit, 0), (await transport.InspectAsync(copy, cancellationToken: cancellationToken)).Reading);
+
+            await File.WriteAllTextAsync(Path.Combine(temp.Path, "src", "new.c"), "n\n", cancellationToken);
+            await service.SyncAsync(temp.Path, transport, copy, new SyncOptions(), cancellationToken);
+
+            Assert.Equal(new CopyReading(null, commit, 1), (await transport.InspectAsync(copy, cancellationToken: cancellationToken)).Reading);
+
+            await transport.CreateRootAsync(copy, CopyMark.Unfinished, cancellationToken);
+
+            Assert.Null((await transport.InspectAsync(copy, cancellationToken: cancellationToken)).Reading);
+            Assert.DoesNotContain("commit", await File.ReadAllTextAsync(marker, cancellationToken), StringComparison.Ordinal);
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// The reading a finished copy holds crosses to a host in the request that marks it, and back in the host's answer
+    /// about the copy, as it was recorded: what the machine that dispatches a leg reads to know whose tree it holds.
+    /// </summary>
+    [Fact]
+    public async Task AReading_CrossesToAHostInTheMarkThatRecordsIt_AndBackInItsAnswer()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var transport = SyncKit.AgentHere(harness);
+        var copy = SyncKit.CopyPath(temp);
+        var reading = new CopyReading("20261012-150233-1a2b3c4d", "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b", 2);
+
+        try
+        {
+            await transport.MarkFinishedAsync(copy, reading, cancellationToken);
+
+            var found = await transport.InspectAsync(copy, cancellationToken: cancellationToken);
+
+            Assert.Equal(CopyMark.Complete, found.Mark);
+            Assert.Equal(reading, found.Reading);
+
+            await transport.MarkFinishedAsync(copy, reading with { ReadBy = null, Commit = null }, cancellationToken);
+
+            Assert.Equal(new CopyReading(null, null, 2), (await transport.InspectAsync(copy, cancellationToken: cancellationToken)).Reading);
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// A create request reads the reading it records as it was spelt after the mark, and refuses one that arrived in
+    /// part, with a count that is no number, or beside a mark other than complete: the two ends are different builds.
+    /// </summary>
+    [Fact]
+    public void AReadingACreateRequestRecords_IsReadAsSpelt_AndOneInAnotherShapeIsRefused()
+    {
+        Assert.Null(SyncServe.ReadingIn(["/copy", "Complete"]));
+        Assert.Equal(
+            new CopyReading("20261012-150233-1a2b3c4d", null, 3),
+            SyncServe.ReadingIn(["/copy", "Complete", .. SyncServe.Recording(new CopyReading("20261012-150233-1a2b3c4d", null, 3))]));
+
+        foreach (string[] arguments in new[]
+        {
+            new[] { "/copy", "Complete", "run", "commit" },
+            ["/copy", "Complete", "run", "commit", "three"],
+            ["/copy", "Unfinished", "run", "commit", "3"],
+        })
+        {
+            var refused = Assert.Throws<HarnessException>(() => SyncServe.ReadingIn(arguments));
+
+            Assert.Equal(HarnessExit.UsageError, refused.ExitCode);
+            Assert.Contains("The two ends are different builds.", refused.Message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// A dry run whose plan would delete more of a host's copy than sync.maxDeleteFraction allows prints the plan, as
+    /// the bound's refusal sends a reader to it for, and exits as the sync would: refused, in the bound's own words. With
+    /// the bound raised past it, the same plan, and 0. A directory the harness did not make, over the bound as well, is
+    /// said both ways.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ADryRunOverTheDeleteBound_PrintsThePlan_AndExitsAsTheSyncWould(bool raised, bool unclaimed)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, service) = await PrepareAsync(temp, cancellationToken);
+        var copy = SyncKit.CopyPath(temp);
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Sync = new SyncConfig { MaxDeleteFraction = raised ? 1 : SyncConfig.DefaultMaxDeleteFraction },
+            Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = copy } } },
+            Legs = { ["arm"] = HostDoubles.Leg("linux", "arm64") },
+        };
+
+        var inspector = new RecordingInspector(host => host.Kind == HostKind.Local
+            ? new HostReport { Host = host, Os = "linux", Processor = "x86_64" }
+            : new HostReport
+            {
+                Host = host,
+                Os = "linux",
+                Processor = "arm64",
+                Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness"),
+            });
+
+        var transports = Substitute.For<ISyncTransportFactory>();
+        transports.For(Arg.Any<HostReport>()).Returns(call => new RecordingTransport(SyncKit.Transport(harness), reports: call.Arg<HostReport>().Host));
+
+        try
+        {
+            if (unclaimed)
+            {
+                await MirrorAsync(temp.Path, copy, cancellationToken);
+            }
+            else
+            {
+                await service.SyncAsync(temp.Path, SyncKit.Transport(harness), copy, new SyncOptions(), cancellationToken);
+            }
+
+            Directory.CreateDirectory(Path.Combine(copy, "extra"));
+
+            for (var file = 0; file < 12; file++)
+            {
+                await File.WriteAllTextAsync(Path.Combine(copy, "extra", $"x{file:00}.txt"), "x\n", cancellationToken);
+            }
+
+            var dry = SyncKit.Service(harness, loader: HostDoubles.Loader(config, temp.Path, temp.Path), inspector: inspector, transports: transports);
+            var outcome = await dry.SyncHostsAsync(temp.Path, null, new SyncOptions(DryRun: true), [], cancellationToken);
+
+            Assert.Contains("would delete extra/x00.txt", outcome.Details ?? []);
+            Assert.True(File.Exists(Path.Combine(copy, "extra", "x00.txt")));
+
+            if (raised && !unclaimed)
+            {
+                Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+                return;
+            }
+
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.Contains("ssh pi: This sync would delete 12 of the ", outcome.Message, StringComparison.Ordinal);
+            Assert.Contains("sync.maxDeleteFraction allows", outcome.Message, StringComparison.Ordinal);
+            Assert.EndsWith("Nothing was changed.", outcome.Message, StringComparison.Ordinal);
+            Assert.Equal(unclaimed, outcome.Message.Contains("hold a directory the harness did not create", StringComparison.Ordinal));
+            Assert.Equal(unclaimed, outcome.Message.Contains("directory you meant to take over", StringComparison.Ordinal));
+        }
+        finally
+        {
+            SyncKit.DeleteIfPresent(copy);
+        }
+    }
+
+    /// <summary>
+    /// The real file system, save that <paramref name="move"/> runs once, as the tree's root is listed again after its
+    /// files began to be hashed: as the second look begins, every hash taken.
+    /// </summary>
+    private sealed class MovesBeforeTheSecondLook(Core.FileSystem.IFileSystem inner, string root, Action move) : PassThroughFileSystem(inner)
+    {
+        private bool _hashing;
+        private bool _moved;
+
+        public override Stream OpenRead(string path)
+        {
+            _hashing = true;
+            return base.OpenRead(path);
+        }
+
+        public override IEnumerable<string> EnumerateFiles(string path, bool recursive)
+        {
+            if (_hashing && !_moved && !recursive
+                && string.Equals(Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            {
+                _moved = true;
+                move();
+            }
+
+            return base.EnumerateFiles(path, recursive);
+        }
+    }
+
+    /// <summary>The real file system, dating every file to the even second below its time, as a coarse one does.</summary>
+    private sealed class CoarseTimes(Core.FileSystem.IFileSystem inner) : PassThroughFileSystem(inner)
+    {
+        public override Core.FileSystem.FileStanding? StandingOf(string path)
+            => base.StandingOf(path) is { } standing
+                ? standing with { Written = Coarse(standing.Written), Created = Coarse(standing.Created) }
+                : null;
+
+        private static DateTime? Coarse(DateTime? time)
+            => time is { } at ? new DateTime(at.Ticks - (at.Ticks % (2 * TimeSpan.TicksPerSecond)), at.Kind) : null;
     }
 
     /// <summary>

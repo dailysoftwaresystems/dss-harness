@@ -182,8 +182,38 @@ public sealed record LegEntry
     /// </summary>
     public Results.HarnessException? EndsTheRun { get; init; }
 
+    /// <summary>
+    /// The tree the leg worked in: its path, and for a copy a sync made, the tree it is a copy of and which reading it
+    /// holds. Filled by the run that placed the leg - it made the copy - and never read from a host's answer.
+    /// <see langword="null"/> for a leg that was never placed.
+    /// </summary>
+    public WorkedTree? Tree { get; init; }
+
     /// <summary>What the harness spent outside the leg's own commands.</summary>
     public TimeSpan Overhead => Duration > CommandTime ? Duration - CommandTime : TimeSpan.Zero;
+}
+
+/// <summary>
+/// The tree a leg worked in: its path as its machine spells it, and for a copy a sync made of it, the tree it is a copy
+/// of and the reading it holds.
+/// </summary>
+/// <param name="Path">The tree, as the machine the leg ran on spells it - a host's as the configuration spells it.</param>
+public sealed record WorkedTree(string Path)
+{
+    /// <summary>The tree the copy was made of; <see langword="null"/> for a leg that worked in its tree itself.</summary>
+    public string? CopyOf { get; init; }
+
+    /// <summary>
+    /// The reading the copy holds, where that is known: this run's, or what a run on what is staged found recorded there;
+    /// <see langword="null"/> where neither says.
+    /// </summary>
+    public Sync.CopyReading? Reading { get; init; }
+
+    /// <summary>Whether <see cref="Reading"/> is what a run on what is staged found there, rather than one its own run made.</summary>
+    public bool Staged { get; init; }
+
+    /// <summary>What the leg's line says of the reading it tested, or <see langword="null"/> where none is known.</summary>
+    public string? Said => Reading?.Said(Staged);
 }
 
 /// <summary>
@@ -296,7 +326,7 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
             return;
         }
 
-        var said = LedgerReport.Marked(entry.Detail, [], entry.Compilers, entry.DeveloperEnvironment, entry.Admission, testCountNote: null);
+        var said = LedgerReport.Marked(entry.Detail, entry.Tree, [], entry.Compilers, entry.DeveloperEnvironment, entry.Admission, testCountNote: null);
 
         Transition(entry.Leg, Verdicts.Display(entry.Verdict) + (said.Length > 0 ? $" ({said})" : string.Empty));
     }

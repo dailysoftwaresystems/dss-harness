@@ -194,6 +194,15 @@ public interface IFileSystem
     /// </remarks>
     DateTime LastWriteTimeUtc(string path);
 
+    /// <summary>
+    /// How the file at <paramref name="path"/> stands now - its length, and when it was last written and created - read
+    /// in one look (<see cref="FileStanding.Of"/>); <see langword="null"/> where no file is there.
+    /// </summary>
+    /// <param name="path">The file.</param>
+    /// <exception cref="IOException">It could not be looked up.</exception>
+    /// <exception cref="UnauthorizedAccessException">This process may not look it up.</exception>
+    FileStanding? StandingOf(string path);
+
     /// <summary>When the file at <paramref name="path"/> was created, in UTC.</summary>
     /// <param name="path">The file.</param>
     /// <exception cref="FileNotFoundException">Nothing is there, or what is there is a directory.</exception>

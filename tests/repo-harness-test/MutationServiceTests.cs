@@ -1397,6 +1397,7 @@ public sealed class MutationServiceTests
     {
         var processes = Substitute.For<IProcessRunner>();
         var builds = Substitute.For<IBuildService>();
+        var sync = SyncKit.ServiceDouble();
 
         builds.BuildAsync(Arg.Any<HarnessConfig>(), Arg.Any<BuildRequest>(), Arg.Any<CancellationToken>())
             .Returns(call =>
@@ -1412,8 +1413,10 @@ public sealed class MutationServiceTests
             new LegExecutor(harness.Platform, harness.Output),
             new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
-            SyncKit.ServiceDouble(),
-            Substitute.For<ISyncTransportFactory>(),
+            sync,
+
+            // Each host's copy as the run's sync leaves it: a sync double writes nothing.
+            SyncKit.CopiesSyncedBy(sync),
             new RemoteLegRunner(hosts ?? new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command)), harness.Output),
             AdmissionKit.Admission(harness, temp.Combine("state", "admission.json"), new ScriptedGauge(10), new ManualClock()),
             new ScriptedPageCache(),

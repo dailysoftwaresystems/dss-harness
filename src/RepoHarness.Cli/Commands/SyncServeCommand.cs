@@ -58,8 +58,9 @@ internal static class SyncServeCommand
                         .ConfigureAwait(false));
 
                 case SyncServe.Create:
-                    await transport
-                        .CreateRootAsync(root, SyncServe.MarkIn(arguments), cancellationToken)
+                    await (SyncServe.ReadingIn(arguments) is { } reading
+                            ? transport.MarkFinishedAsync(root, reading, cancellationToken)
+                            : transport.CreateRootAsync(root, SyncServe.MarkIn(arguments), cancellationToken))
                         .ConfigureAwait(false);
 
                     return Done();

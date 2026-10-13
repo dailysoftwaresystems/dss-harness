@@ -764,6 +764,16 @@ internal static class HelpCommand
         builder.AppendLine("A leg whose inputs moved is not reported as failed even when its tests failed,");
         builder.AppendLine("because what failed was a tree that never existed.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A leg on a copy of its tree - a host's - is inputs-moved with nothing of it run where the copy cannot be the tree "
+            + "the run read: a file written, appearing or going while the tree was read, named; a file to carry changed after "
+            + "it was read; another command synced the copy again between this run's sync and the leg taking it, naming that "
+            + "run; or, under --use-staged, the copy is part made, is not there, or holds no copy this tool made. Each leg on "
+            + "a copy says which tree it tested with its verdict - 'tree read at <commit>', with the uncommitted changes the "
+            + "reading carried, or under --use-staged 'tree staged at <commit> by run <id>' as the copy records it - and "
+            + "--json's 'tree' holds its path, the tree it is a copy of, and the commit, the count and the run.");
+        builder.AppendLine();
 
         // The words such a leg's line opens with, read from where the line is made.
         AppendWrapped(

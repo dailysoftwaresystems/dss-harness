@@ -230,10 +230,7 @@ public sealed class LegRunService(
         // another run holds is, and no end to the legs that do not.
         var lockedTrees = new ConcurrentDictionary<string, string>(LegPlan.TreeKeyComparer);
 
-        // What each host's copy is marked, read once per copy, for a run on what is already staged there.
-        var stagedMarks = new ConcurrentDictionary<string, Lazy<Task<CopyMark>>>(LegPlan.TreeKeyComparer);
-
-        // Each tree as it was read for the copies on other machines, where any is.
+        // Each tree as it was read for its copies, where any leg works in one.
         IReadOnlyDictionary<string, Task<SyncSource>>? sources = null;
 
         try
@@ -269,7 +266,7 @@ public sealed class LegRunService(
                             MaxParallelLegsTotal = context.Config.Defaults.MaxParallelLegsTotal,
                             SyncTree = syncTree,
                             RunLeg = (plan, token) => RunLegAsync(
-                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, stagedMarks, token),
+                                context, placed, plan, runId, runDirectory, request, work, commandName, ledger, lockedTrees, token),
                         },
                         ledger,
                         cancellationToken)
@@ -403,22 +400,24 @@ public sealed class LegRunService(
             // A transport that will not start is reported by the runner that starts it, as that host
             // being unavailable. A file that moved since the run began raises as inputs-moved, the
             // verdict of this copy's legs alone, and nothing of them runs.
+            // Marked with this run as the copy is finished, so each leg that takes it afterwards finds whether it still
+            // holds this run's reading.
             await _syncService
-                .SyncAsync(source, _transportFactory.For(leg.Host), leg.HostTreeRoot, new SyncOptions(), cancellationToken)
+                .SyncAsync(source, _transportFactory.For(leg.Host), leg.HostTreeRoot, new SyncOptions { Run = runId }, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
 
     /// <summary>
     /// Reads, once each, the trees the legs among <paramref name="placed"/> that work in a synced copy are synced from, all of them before
-    /// any leg's work, so every host's copy of a tree is made from the one reading (see
-    /// <see cref="ISyncService.ReadSourceAsync"/>).
+    /// any leg's work, so every copy of a tree is made from the one reading (see
+    /// <see cref="ISyncService.ReadSourceAsync"/>), and says which commit each was read at.
     /// </summary>
     /// <returns>Each tree's reading by its root, or what stopped it.</returns>
     /// <remarks>
     /// Read side by side, and waited for whether each was read or not: a tree that could not be read - git would not
-    /// answer in it, a file in it could not be opened - raises nothing here, but in the sync of each copy made from it,
-    /// while the legs on other trees and on this machine still run.
+    /// answer in it, a file in it could not be opened, a file in it moved while it was read - raises nothing here, but in
+    /// the sync of each copy made from it, while the legs on other trees and on this machine still run.
     /// </remarks>
     private async Task<IReadOnlyDictionary<string, Task<SyncSource>>> ReadSourcesAsync(
         IReadOnlyList<PlacedLeg> placed,
@@ -433,7 +432,7 @@ public sealed class LegRunService(
             .ToList();
 
         // Said, because a large tree takes a while to read, and nothing else is said until it is.
-        _output.Info(commandName, $"reading {ReportText.Listed(trees)} for the copies on other machines");
+        _output.Info(commandName, $"reading {ReportText.Listed([.. trees.Select(tree => $"'{tree}'")])} for {(trees.Count == 1 ? "its" : "their")} copies");
 
         var sources = trees.ToDictionary(
             tree => tree,
@@ -441,6 +440,12 @@ public sealed class LegRunService(
             comparer);
 
         await Task.WhenAll(sources.Values.Cast<Task>()).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        // Which tree each copy will hold, as it was read: what each leg on one of them names again with its verdict.
+        foreach (var tree in trees.Where(tree => sources[tree].IsCompletedSuccessfully))
+        {
+            _output.Info(commandName, sources[tree].Result.Read.Said);
+        }
 
         return sources;
     }
@@ -507,39 +512,19 @@ public sealed class LegRunService(
         string commandName,
         LegLedger ledger,
         ConcurrentDictionary<string, string> lockedTrees,
-        ConcurrentDictionary<string, Lazy<Task<CopyMark>>> stagedMarks,
         CancellationToken cancellationToken)
     {
         var leg = placed.First(candidate => candidate.Name == plan.Name);
         var started = Stopwatch.GetTimestamp();
 
+        // Where the leg works, on every line it ends with: its tree, or a copy of it - a host's, which this machine makes.
+        var tree = leg.Synced && request.Here is null
+            ? new WorkedTree(leg.HostTreeRoot) { CopyOf = leg.TreeRoot }
+            : new WorkedTree(leg.HostTreeRoot);
+
         if (lockedTrees.TryGetValue(leg.TreeKey, out var treeHeld))
         {
-            return Ended(leg, LegVerdict.RefusedLocked, treeHeld, started);
-        }
-
-        // A run on what each host already holds tests that copy as it is: one a sync or a takeover of began and did not
-        // finish holds no tree a run began with, and its legs are inputs-moved, as a copy whose tree moved before it was
-        // carried is - before a slot is taken, and nothing of them runs. Read by this machine, which would have synced it,
-        // once per copy: a host is never told a run is on what is staged, since the staging is this machine's decision.
-        if (request.UseStaged && leg.Synced && request.Here is null)
-        {
-            var mark = await stagedMarks
-                .GetOrAdd(leg.TreeKey, _ => new Lazy<Task<CopyMark>>(() => _transportFactory.For(leg.Host).ReadMarkAsync(leg.HostTreeRoot, cancellationToken)))
-                .Value
-                .ConfigureAwait(false);
-
-            if (SyncService.PartMade(mark) is { } partMade)
-            {
-                return Ended(
-                    leg,
-                    LegVerdict.InputsMoved,
-                    $"{leg.Named}: '{leg.HostTreeRoot}' {partMade}: --use-staged has nothing current to run there. "
-                    + (mark == CopyMark.AdoptionStopped
-                        ? $"Finish taking it over with '{ToolPackage.Command} sync --adopt \"{leg.Named}\"', and run again."
-                        : "Run without --use-staged, which syncs it first."),
-                    started);
-            }
+            return Ended(leg, LegVerdict.RefusedLocked, treeHeld, started) with { Tree = tree };
         }
 
         // The tree shared and this variant exclusive: variants build side by side, but never while
@@ -556,7 +541,7 @@ public sealed class LegRunService(
             // The one refusal that is a verdict rather than an end to the run: it is about this leg
             // and this moment, so the other legs still report, and one locked leg never hides them.
             // A lock file nobody can use is raised instead, as the refusal of the run it is.
-            return Ended(leg, LegVerdict.RefusedLocked, attempt.HeldBy!, started);
+            return Ended(leg, LegVerdict.RefusedLocked, attempt.HeldBy!, started) with { Tree = tree };
         }
 
         // Every other refusal is left to propagate. A configuration a leg cannot satisfy — an
@@ -566,6 +551,20 @@ public sealed class LegRunService(
         // a lock was held.
         await using (handle)
         {
+            // The copy, once the leg holds it: what it holds now is what the leg would test. Read by this machine, which
+            // made it - a host is never told whose reading its copy should hold.
+            if (tree.CopyOf is not null)
+            {
+                var (held, moved) = await CopyHeldAsync(leg, runId, request.UseStaged, cancellationToken).ConfigureAwait(false);
+
+                tree = tree with { Reading = held, Staged = request.UseStaged };
+
+                if (moved is not null)
+                {
+                    return Ended(leg, LegVerdict.InputsMoved, moved, started) with { Tree = tree };
+                }
+            }
+
             // A heavy leg waits here, once its tree is synced and its lock taken, until its machine takes it: another run of
             // its variant is refused-locked meanwhile, as it would be while it ran. Its slot is given back when its work
             // ends, and before the lock is.
@@ -573,13 +572,56 @@ public sealed class LegRunService(
 
             if (admitted is { Refusal: { } refusal })
             {
-                return Ended(leg, LegVerdict.NotAdmitted, refusal, started) with { Admission = admitted.Fact };
+                return Ended(leg, LegVerdict.NotAdmitted, refusal, started) with { Admission = admitted.Fact, Tree = tree };
             }
 
             var entry = await RunTakenLegAsync(context, leg, runId, runDirectory, request, work, commandName, ledger, started, cancellationToken).ConfigureAwait(false);
 
-            return admitted is null ? entry : entry with { Admission = admitted.Fact };
+            return (admitted is null ? entry : entry with { Admission = admitted.Fact }) with { Tree = tree };
         }
+    }
+
+    /// <summary>
+    /// What <paramref name="leg"/>'s copy holds now that the leg holds it, and why the leg is to test nothing there; no
+    /// reason where it holds the tree the leg is to test.
+    /// </summary>
+    /// <remarks>
+    /// The copy's sync releases it before its legs take it, and another command's sync of the same copy can run in
+    /// between: the later leg would then test that command's tree under this run's name. So each leg asks the copy, under
+    /// its own lock, whose reading it holds - this run's, or nothing it runs. A run on what is staged synced nothing, and
+    /// tests what the copy holds: one a sync or a takeover of began and did not finish holds no tree a run began with,
+    /// and one that is not there, or that no sync of this tool marked, holds nothing current either. Either way nothing of
+    /// the leg runs.
+    /// </remarks>
+    private async Task<(CopyReading? Held, string? Moved)> CopyHeldAsync(PlacedLeg leg, RunId runId, bool staged, CancellationToken cancellationToken)
+    {
+        var found = await _transportFactory.For(leg.Host).InspectAsync(leg.HostTreeRoot, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var copy = $"{leg.Named}: '{leg.HostTreeRoot}'";
+
+        if (staged)
+        {
+            var mark = found.Exists ? found.Mark : CopyMark.None;
+
+            return (found.Reading, SyncService.PartMade(mark) is { } partMade
+                ? $"{copy} {partMade}: --use-staged has nothing current to run there. "
+                    + (mark == CopyMark.AdoptionStopped
+                        ? $"Finish taking it over with '{ToolPackage.Command} sync --adopt \"{leg.Named}\"', and run again."
+                        : "Run without --use-staged, which syncs it first.")
+                : mark == CopyMark.None
+                    ? $"{copy} holds no copy this tool made: --use-staged has nothing current to run there. Run without --use-staged, which syncs it first."
+                    : null);
+        }
+
+        if (found is { Exists: true, Mark: CopyMark.Complete, Reading: { } held } && held.IsBy(runId))
+        {
+            return (held, null);
+        }
+
+        return (null, found is { Exists: true, Mark: CopyMark.Complete }
+            ? $"'{leg.HostTreeRoot}' on {leg.Named} was synced again{(found.Reading?.ReadBy is { } by ? $" by {RunLine.Message(by)}" : string.Empty)} after "
+                + "this run made it the tree it read, so it no longer holds that tree."
+            : $"'{leg.HostTreeRoot}' on {leg.Named} no longer holds the tree this run read into it: "
+                + (found.Exists && SyncService.PartMade(found.Mark) is { } stopped ? $"it {stopped}." : "it is not there, or no sync of this tool finished it."));
     }
 
     /// <summary>

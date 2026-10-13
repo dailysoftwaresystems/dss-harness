@@ -47,6 +47,41 @@ internal static class SyncKit
         return sync;
     }
 
+    /// <summary>Hosts' copies that each hold <paramref name="reading"/>, finished: what a sync that recorded it leaves.</summary>
+    public static ISyncTransportFactory CopiesHolding(CopyReading reading)
+        => Copies(_ => new SyncInspectAnswer(true, CopyMark.Complete) { Reading = reading });
+
+    /// <summary>
+    /// Hosts' copies as <paramref name="sync"/>, a double that writes nothing, leaves them: each finished and holding the
+    /// reading of the run that last synced it, and one it never synced not there.
+    /// </summary>
+    public static ISyncTransportFactory CopiesSyncedBy(ISyncService sync) => Copies(root =>
+    {
+        var last = sync.ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(ISyncService.SyncAsync) && Equals(call.GetArguments()[2], root))
+            .Select(call => (SyncOptions)call.GetArguments()[3]!)
+            .LastOrDefault();
+
+        return last is null
+            ? new SyncInspectAnswer(false, CopyMark.None)
+            : new SyncInspectAnswer(true, CopyMark.Complete) { Reading = new CopyReading(last.Run?.Value, null, 0) };
+    });
+
+    /// <summary>Hosts' copies, each answering what <paramref name="found"/> says of its root when asked what it holds.</summary>
+    private static ISyncTransportFactory Copies(Func<string, SyncInspectAnswer> found)
+    {
+        var copy = Substitute.For<ISyncTransport>();
+
+        copy.InspectAsync(Arg.Any<string>(), Arg.Any<GitHistoryWanted?>(), Arg.Any<CancellationToken>())
+            .Returns(call => found(call.ArgAt<string>(0)));
+
+        var transports = Substitute.For<ISyncTransportFactory>();
+
+        transports.For(Arg.Any<HostReport>()).Returns(copy);
+
+        return transports;
+    }
+
     /// <summary>
     /// A path beside <paramref name="temp"/>'s tree, never in it, for a copy a test syncs into: a copy inside the tree
     /// would be part of the tree the next reading of it takes.

@@ -20,6 +20,16 @@ namespace RepoHarness.Core.Sync;
 public sealed record SyncOptions(bool DryRun = false, IReadOnlyList<string>? Adopt = null)
 {
     /// <summary>
+    /// The run the copy is made for, which its marker records with the reading as the sync finishes it; <see langword="null"/>
+    /// for a sync that keeps no run - the sync command, a mutation worker's.
+    /// </summary>
+    /// <remarks>
+    /// So a leg that takes the copy once its run has synced it can tell its own run's reading from another's: a sync of
+    /// the same copy by another command, in the moments between, makes it that command's tree.
+    /// </remarks>
+    public RunId? Run { get; init; }
+
+    /// <summary>
     /// The run whose artifacts to carry to each host instead of syncing the tree, or
     /// <see langword="null"/> for an ordinary sync.
     /// </summary>
@@ -191,7 +201,14 @@ public sealed record SyncResult(
     SyncPlan Plan,
     bool Verified,
     bool Created,
-    bool RequiresAdoption = false);
+    bool RequiresAdoption = false)
+{
+    /// <summary>
+    /// Why a real run would refuse the plan for deleting more of the copy than <c>sync.maxDeleteFraction</c> allows, in
+    /// the refusal's own words; <see langword="null"/> where it would not. Only a dry run answers it: a real one raises.
+    /// </summary>
+    public string? OverTheBound { get; init; }
+}
 
 /// <summary>
 /// A tree as a sync carries it, read at one moment: what it is configured to be, what it withholds, every file a
@@ -212,7 +229,8 @@ public sealed class SyncSource : IDisposable
         SyncManifest files,
         byte[] configuration,
         Git.GitHistoryWanted? history,
-        HistoryPacks? packs = null)
+        HistoryPacks? packs = null,
+        int uncommittedChanges = 0)
     {
         if (history?.Commit is not null && packs is null)
         {
@@ -225,7 +243,14 @@ public sealed class SyncSource : IDisposable
         Configuration = configuration;
         History = history;
         Packs = packs;
+        Read = new TreeReading(context.Layout.RepositoryRoot, history?.Commit, uncommittedChanges);
     }
+
+    /// <summary>
+    /// What this reading read: the tree, the commit its HEAD named, and how many of the paths a sync of it carries git
+    /// called changed - what every copy made from it records, and what a leg on one says it tested.
+    /// </summary>
+    public TreeReading Read { get; }
 
     /// <summary>
     /// The packs of that history made for the copies synced from this reading, each once; <see langword="null"/> where
@@ -510,6 +535,7 @@ public sealed class SyncService(
 
         var details = new List<string>();
         var needAdopting = new List<string>();
+        var overTheBound = new List<string>();
 
         // Before any host is reached, so a name that answers to nothing — or to two machines — is
         // refused while nothing has been deleted anywhere.
@@ -637,6 +663,11 @@ public sealed class SyncService(
                 needAdopting.Add(host.Host.ToString());
             }
 
+            if (result.OverTheBound is { } bound)
+            {
+                overTheBound.Add($"{host.Host}: {bound}");
+            }
+
             details.Add($"{host.Host}: {destination}");
             details.AddRange(result.Plan.Describe(options.DryRun ? SyncVerb.Planned : SyncVerb.Done));
         }
@@ -645,15 +676,23 @@ public sealed class SyncService(
         // 'this checkout needs taking over' indistinguishable from 'everything is in step' to
         // anything reading the code, which is what a dry run is for reading. Both halves matter:
         // the list is printed, which is what the refusal sends a reader here for, AND the code says
-        // what a real run would answer.
-        if (needAdopting.Count > 0)
+        // what a real run would answer. A plan over the delete bound is the same: its refusal sends
+        // the reader here for the list, and the list is printed with the code the run would exit with.
+        if (needAdopting.Count > 0 || overTheBound.Count > 0)
         {
-            return CommandOutcome.Failed(
-                HarnessExit.Refused,
-                $"{ReportText.Counted(needAdopting.Count, "host")} hold a directory the harness did not create, so a run "
-                + $"would refuse them: {string.Join(", ", needAdopting)}. What taking each over would "
-                + "cost is listed above. Nothing was changed.",
-                details);
+            var refusals = new List<string>();
+
+            if (needAdopting.Count > 0)
+            {
+                refusals.Add(
+                    $"{ReportText.Counted(needAdopting.Count, "host")} hold a directory the harness did not create, so a run "
+                    + $"would refuse them: {string.Join(", ", needAdopting)}. What taking each over would "
+                    + "cost is listed above.");
+            }
+
+            refusals.AddRange(overTheBound);
+
+            return CommandOutcome.Failed(HarnessExit.Refused, string.Join(" ", refusals) + " Nothing was changed.", details);
         }
 
         // Reaching here means every copy was confirmed: a copy that still differed raised from the
@@ -765,15 +804,17 @@ public sealed class SyncService(
         // Before, not after: a first sync that stops part way has already made a copy, and one recorded only once
         // finished would be one nothing removes. A copy recorded that was never made is found not there when the
         // worktree is deleted, and forgotten.
-        if (!options.DryRun && context.Layout.IsWorktree(_platform) && transport.Host.Kind != Hosts.HostKind.Local)
+        // A dry run asks who holds the copy without recording it: it exits as the sync would, and changes nothing.
+        if (context.Layout.IsWorktree(_platform) && transport.Host.Kind != Hosts.HostKind.Local)
         {
             var name = HostCopies.NameOf(
                 context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root),
                 context.Layout.RepositoryRoot,
                 _platform.PathComparison);
             var claim = new HostCopyEntry(name, transport.Host.ToString(), destinationRoot, Path.GetFullPath(context.Layout.RepositoryRoot));
+            var record = new HostCopyRecord(_fileSystem, _platform.PathComparison);
 
-            if (new HostCopyRecord(_fileSystem, _platform.PathComparison).Claim(context.Layout, claim) is { } holder)
+            if ((options.DryRun ? record.Holder(context.Layout, claim) : record.Claim(context.Layout, claim)) is { } holder)
             {
                 throw new HarnessException(
                     HarnessExit.Refused,
@@ -783,7 +824,7 @@ public sealed class SyncService(
             }
         }
 
-        var (state, placedConfiguration, repository) = await PrepareCopyAsync(transport, destinationRoot, source.History, options.DryRun, cancellationToken)
+        var (state, placedConfiguration, repository, held) = await PrepareCopyAsync(transport, destinationRoot, source.History, options.DryRun, cancellationToken)
             .ConfigureAwait(false);
 
         // What the copy's git repository is to be given, weighed before anything is written.
@@ -845,15 +886,21 @@ public sealed class SyncService(
                 + $"outside '{destinationRoot}' and is not in any list this command can build.");
         }
 
-        // Not on a dry run, which changes nothing there is a bound to protect. The bound's own
-        // message says to run with --dry-run to see the list, and until now that refused in exactly
-        // the same words rather than showing it.
+        // Asked on a dry run too, which answers it rather than raising it: the bound's own message says to run with
+        // --dry-run to see the list, so the dry run shows the list, and exits as the sync would.
         //
         // It does still bound an adoption. A directory that exists and carries no marker is exactly
         // what a mistyped repositoryPath produces, which is the case this bound was written for: the
         // path that was meant to be a checkout is a home directory, and every other project under it
         // is what the source does not have. Two gates for that is the point of having one.
-        if (!options.DryRun)
+        // A dry run of a directory nobody has taken over yet is told what to check as a takeover is: it is one.
+        string? overTheBound = null;
+
+        if (options.DryRun)
+        {
+            overTheBound = plan.OverTheBound(destination, context.Config.Sync.MaxDeleteFraction, adopting: !mine);
+        }
+        else
         {
             plan.RefuseWhenDeletingTooMuch(destination, context.Config.Sync.MaxDeleteFraction, adopting);
         }
@@ -890,7 +937,10 @@ public sealed class SyncService(
                 plan,
                 Verified: false,
                 created,
-                RequiresAdoption: !mine && !adopting);
+                RequiresAdoption: !mine && !adopting)
+            {
+                OverTheBound = overTheBound,
+            };
         }
 
         // Said before it happens, and said whether or not a refusal ever ran. Somebody who reads
@@ -987,17 +1037,21 @@ public sealed class SyncService(
         // the verification and not before it. A takeover whose verification failed never reaches
         // here, so the mark still says it stopped part way and the next run asks again rather than
         // treating a directory whose content nobody could confirm as this tool's own.
+        //
+        // Marked with the reading it now holds, and the run that read it - also where nothing else of the copy changed,
+        // since what it holds is then this run's reading: a leg that takes the copy afterwards finds there whether another
+        // command's sync made it that command's tree in between.
+        var reading = source.Read.By(options.Run);
+
         if (adopting)
         {
-            await transport
-                .CreateRootAsync(destinationRoot, CopyMark.Complete, cancellationToken)
-                .ConfigureAwait(false);
+            await transport.MarkFinishedAsync(destinationRoot, reading, cancellationToken).ConfigureAwait(false);
 
             _output.Info(CommandName, $"{transport.Host}: adopted '{destinationRoot}'");
         }
-        else if (unfinished)
+        else if (unfinished || held != reading)
         {
-            await transport.CreateRootAsync(destinationRoot, CopyMark.Complete, cancellationToken).ConfigureAwait(false);
+            await transport.MarkFinishedAsync(destinationRoot, reading, cancellationToken).ConfigureAwait(false);
         }
 
         return new SyncResult(transport.Host.ToString(), destinationRoot, plan, Verified: true, created);
@@ -1203,8 +1257,9 @@ public sealed class SyncService(
         }
 
         // With the files, so each copy's HEAD is the commit these files were read at, whatever is committed while the
-        // copies are made.
+        // copies are made; and, beside it, how many of the paths the copies are given git calls changed since.
         var history = await _gitClient.DescribeHistoryAsync(root, context.Config.Sync.WholeHistory, cancellationToken).ConfigureAwait(false);
+        var changed = await _gitClient.ReadStatusAsync(root, cancellationToken).ConfigureAwait(false);
 
         var files = await ReadFilesAsync(root, exclusions.IsWithheldFromTransfer, cancellationToken).ConfigureAwait(false);
 
@@ -1213,16 +1268,29 @@ public sealed class SyncService(
             ? null
             : new HistoryPacks(_gitClient, _fileSystem, _identity, root, history, why => _output.Warn(CommandName, why));
 
-        return new SyncSource(context, exclusions, files, configuration, history, packs);
+        return new SyncSource(
+            context,
+            exclusions,
+            files,
+            configuration,
+            history,
+            packs,
+            changed.Count(entry => !exclusions.IsWithheldFromTransfer(entry.Path.Text)));
     }
 
-    /// <summary>Every file under <paramref name="root"/> that <paramref name="isWithheld"/> does not withhold, by size and hash.</summary>
-    /// <exception cref="HarnessException">Something listed was gone when it was opened (<see cref="LegExit.InputsMoved"/>).</exception>
+    /// <summary>
+    /// Every file under <paramref name="root"/> that <paramref name="isWithheld"/> does not withhold, by size and hash, in
+    /// a reading that confirms itself (<see cref="IManifestBuilder.BuildSettledAsync"/>).
+    /// </summary>
+    /// <exception cref="HarnessException">
+    /// Something listed was gone when it was opened, or a file was written, appeared or went before the second look
+    /// reached it (<see cref="LegExit.InputsMoved"/>).
+    /// </exception>
     private async Task<SyncManifest> ReadFilesAsync(string root, Func<string, bool> isWithheld, CancellationToken cancellationToken)
     {
         try
         {
-            return await _manifestBuilder.BuildAsync(root, isWithheld, cancellationToken).ConfigureAwait(false);
+            return await _manifestBuilder.BuildSettledAsync(root, isWithheld, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -1714,7 +1782,7 @@ public sealed class SyncService(
     /// Makes sure there is a copy to write into, and that it is one the harness made.
     /// </summary>
     /// <returns>What was found there.</returns>
-    private async Task<(CopyState State, string? Configuration, Git.GitHistoryHeld? Repository)> PrepareCopyAsync(
+    private async Task<(CopyState State, string? Configuration, Git.GitHistoryHeld? Repository, CopyReading? Reading)> PrepareCopyAsync(
         ISyncTransport transport,
         string destinationRoot,
         Git.GitHistoryWanted? wanted,
@@ -1732,7 +1800,7 @@ public sealed class SyncService(
             if (dryRun)
             {
                 _output.Info(CommandName, $"{transport.Host}: would create '{destinationRoot}'");
-                return (CopyState.Created, null, null);
+                return (CopyState.Created, null, null, null);
             }
 
             // Marked as a sync that has begun, and as finished once the copy is verified: a first sync that stops part way
@@ -1740,10 +1808,10 @@ public sealed class SyncService(
             _output.Info(CommandName, $"{transport.Host}: creating '{destinationRoot}'");
             await transport.CreateRootAsync(destinationRoot, CopyMark.Unfinished, cancellationToken).ConfigureAwait(false);
 
-            return (CopyState.Created, null, null);
+            return (CopyState.Created, null, null, null);
         }
 
-        return (StateOf(found.Mark), found.Configuration, found.Repository);
+        return (StateOf(found.Mark), found.Configuration, found.Repository, found.Reading);
     }
 
     /// <summary>

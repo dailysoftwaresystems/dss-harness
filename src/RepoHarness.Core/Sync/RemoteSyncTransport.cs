@@ -62,6 +62,14 @@ public sealed class RemoteSyncTransport(
         => AskAsync<object>(SyncServe.Create, root, [mark.ToString()], cancellationToken);
 
     /// <inheritdoc/>
+    public Task MarkFinishedAsync(string root, CopyReading reading, CancellationToken cancellationToken = default)
+        => AskAsync<object>(
+            SyncServe.Create,
+            root,
+            [CopyMark.Complete.ToString(), .. SyncServe.Recording(reading).Select(HostArgument.Of)],
+            cancellationToken);
+
+    /// <inheritdoc/>
     public Task InitialiseRepositoryAsync(string root, string? objectFormat = null, CancellationToken cancellationToken = default)
         => AskAsync<object>(SyncServe.InitRepository, root, objectFormat is null ? [] : [objectFormat], cancellationToken);
 

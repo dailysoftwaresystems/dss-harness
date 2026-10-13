@@ -783,6 +783,62 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The verdicts topic says when a leg on a copy is inputs-moved with nothing run - the tree moving while it was read,
+    /// a file to carry changing after, another command's sync of the copy in between, and under --use-staged a copy part
+    /// made, absent or unmarked - and what its line and its --json say of the tree it tested.
+    /// </summary>
+    [Fact]
+    public async Task VerdictsTopic_SaysWhenALegOnACopyIsInputsMoved_AndWhichTreeItTested()
+    {
+        var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "A leg on a copy of its tree - a host's - is inputs-moved with nothing of it run where the copy cannot be the tree "
+                + "the run read: a file written, appearing or going while the tree was read, named; a file to carry changed after "
+                + "it was read; another command synced the copy again between this run's sync and the leg taking it, naming that "
+                + "run; or, under --use-staged, the copy is part made, is not there, or holds no copy this tool made. Each leg on "
+                + "a copy says which tree it tested with its verdict - 'tree read at <commit>', with the uncommitted changes the "
+                + "reading carried, or under --use-staged 'tree staged at <commit> by run <id>' as the copy records it - and "
+                + "--json's 'tree' holds its path, the tree it is a copy of, and the commit, the count and the run.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// --use-staged says, for each command that takes it, which copies end their legs inputs-moved: one part made, one
+    /// that is not there, and one this tool did not make.
+    /// </summary>
+    [Theory]
+    [InlineData("build", "Build")]
+    [InlineData("test", "Test")]
+    [InlineData("run", "Run against")]
+    [InlineData("check-mutations", "Sweep")]
+    public async Task UseStaged_SaysWhichCopiesEndTheirLegsInputsMoved(string command, string verb)
+    {
+        var result = await CliRunner.RunAsync([command, "--help"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            $"{verb} what is already staged on each host, without syncing again. Legs on a copy a sync or a takeover began and did "
+                + "not finish, that is not there, or that holds no copy this tool made are inputs-moved.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>sync's --dry-run says it exits as the sync would, naming each refusal it would make.</summary>
+    [Fact]
+    public async Task SyncsDryRun_SaysItExitsAsTheSyncWould()
+    {
+        var result = await CliRunner.RunAsync(["sync", "--help"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "List what would be written and deleted, change nothing, and exit as the sync would: 13 where it would refuse - a "
+                + "directory it did not make, without --adopt; more deleted than sync.maxDeleteFraction allows; a worktree's copy "
+                + "another worktree of the same name holds.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The runners topic says that a run check whose own runner's inputs cannot be watched was not run, and confirms
     /// nothing: the failure it was to excuse stays genuine.
     /// </summary>

@@ -16,7 +16,7 @@ internal static class SyncCommand
 
     private static readonly Option<bool> DryRunOption = new("--dry-run")
     {
-        Description = "List what would be written and deleted, and change nothing.",
+        Description = "List what would be written and deleted, change nothing, and exit as the sync would: 13 where it would refuse - a directory it did not make, without --adopt; more deleted than sync.maxDeleteFraction allows; a worktree's copy another worktree of the same name holds.",
     };
 
     private static readonly Option<string[]> AdoptOption = new("--adopt")

@@ -2099,8 +2099,10 @@ copies are made of once, as it begins and before any leg's work, and every copy 
 that reading, as [Syncing a tree](#syncing-a-tree) says: an edit put back before a host's
 sync comes round leaves no trace there, and where a file to be carried no longer holds what
 was read - edited, or removed - the legs on that copy are `inputs-moved`, naming it, with
-nothing of them run, while the legs on other copies still report. A file that goes while the
-tree is being read does the same to every copy of it. Measured: an edit a mutation-testing
+nothing of them run, while the legs on other copies still report. A reading confirms itself: a
+file written, appearing or going while the tree is being read does the same to every copy of
+it, naming the path. The run says which commit it read the tree at, and each leg on a copy says
+it again with its verdict. Measured: an edit a mutation-testing
 tool left in the tree for 7.3 seconds of a run, and put back, was built and tested on a Mac
 and reported `failed`, while the tree was the same at the run's start and end. A run with
 `--use-staged` reads nothing, and tests whatever the copies hold. A leg on this machine is
@@ -2592,12 +2594,41 @@ directory here cannot drift apart.
   indexed, given its configuration, verified, marked complete or marked adopted: what it carried
   before stopping stays on the host. `sync` fails, exit 20, saying so, and a run's legs on that copy
   are `inputs-moved`.
+- **A reading confirms itself.** One pass hashes each file at its own moment, so a write that
+  begins and ends while the tree is read gave a reading holding some files as they were before it
+  and some as after - and a warm copy, which already held the earlier files, was carried only the
+  later ones, and verified against a tree that never existed. So the reading notes how each file
+  stands - its length, and when it was last written and created - before hashing it, and once every
+  file is hashed it lists the tree again and looks at each file, reading no byte: the same files,
+  each standing as it did, or the reading is refused, `inputs-moved`, `'<tree>' changed while it was
+  read: '<path>' was written` (or `appeared`, or `went`) `. Let it settle, then run again.` A
+  reading that passes is the tree as it stood the instant the hashing ended. The times are
+  compared for equality alone; what the second look cannot see is a rewrite of the same length
+  that puts the old times back. A host reading its own copy's manifest makes no second look: that
+  copy holds still under the sync that asks.
+- **A finished copy records which reading it holds.** The reading says the commit the tree's HEAD
+  named and how many of the paths it carries git calls changed; the marker a finished sync writes
+  records both, and the run that read the tree, as `commit`, `uncommittedChanges` and `readBy`, the
+  names a leg's `tree` gives them - also where nothing else of the copy changed, since what it holds
+  is then that run's reading. A copy a sync begins writing records none. A run's sync releases the
+  copy before its legs take it, and another command's sync can run in between, so each leg asks the
+  copy, under its own lock, whose reading it holds: another's ends the leg `inputs-moved`, `'<copy>'
+  on <host> was synced again by run <id> after this run made it the tree it read, so it no longer
+  holds that tree.`, with nothing of it run. A build from before this one refuses a marker carrying
+  a reading, as it refuses any member it does not know: a downgrade on one machine.
+  The run says each reading as it is made - `'<tree>' was read at commit <12> with 2 uncommitted
+  change(s)`, or `with no commit yet` - and each leg on a copy says which it tested with its
+  verdict, `tree read at <12>`, or under `--use-staged` what the copy records, `tree staged at
+  <12> by run <id>`. In `--json` each leg's `tree` holds `path`, the tree it worked in as its
+  machine spells it, and for a copy `copyOf` and, where known, `commit`, `uncommittedChanges` and
+  `readBy`: a leg in its tree has `path` alone.
 - **A copy a sync is writing is marked unfinished**, before its first write or deletion - or its
   configuration, where that changes - and complete once it is verified, as a takeover is marked
   begun and finished. A sync that stops part way - a tree that moved, a connection that dropped, a
   verification that failed - leaves part of one tree and part of another, which no run began with.
   Marked so, the legs of a run with `--use-staged` on that copy are `inputs-moved`, read by the
-  machine that would have synced it, and `sync --artifact` carries nothing into it, until a sync
+  machine that would have synced it - as are those on a copy that is not there, or that no sync of
+  this tool marked - and `sync --artifact` carries nothing into it, until a sync
   finishes it. The next ordinary sync, which plans from what the copy holds, puts it right; marking
   a copy again keeps when, and by which machine, it was made. The mark is written into the marker
   only while it holds, so a copy every sync finished carries the marker a build from before it
@@ -2649,10 +2680,13 @@ directory here cannot drift apart.
   behind a linked directory is outside any list a plan can build. Reported rather than guarded
   against: a build directory pointed at another volume is ordinary, and refusing to write through
   one would refuse `--pull build/...` — a path the reader named, inside the tree they named.
-- **`--dry-run` shows the plan instead of refusing,** for a directory the tool did not create and
-  for one whose deletions are over the bound. A preview changes nothing, so there is nothing for
-  either refusal to protect — and the bound's own message says to run with `--dry-run` to see the
-  list it was until now refusing to show.
+- **`--dry-run` shows the plan, and exits as the sync would.** For a directory the tool did not
+  create, for one whose deletions are over the bound, and for a worktree's copy another worktree
+  of the same name still holds, the dry run lists what the sync would do - the bound's own message
+  says to run with `--dry-run` to see the list - and exits 13 with each refusal the sync would
+  make, in its own words: both, for a directory not made here that is over the bound too. Who holds
+  a worktree's copy is read, and nothing recorded. A dry run is the answer to "would this go
+  through": a code of 0 says only that nothing known at that moment stops it.
 - **The copy is created, with its parents,** when the declared `repositoryPath` is not there, so
   the first sync to a fresh host needs no hand-made clone. A path that exists and is not a
   directory, or that cannot be created, is a named failure — never a silent fallback to
@@ -2930,7 +2964,8 @@ from that host's own copy of the tree — the host reads `config.json` and the r
 from it — so the tree is put there whether or not anything is compiled. A runner that skipped the
 sync because it compiles nothing would find no configuration on the host and fail saying so.
 `--use-staged` is how a run says the copy there is already current - which it is not after a sync
-that stopped part way, or failed its verification; a copy so marked makes its legs `inputs-moved`.
+that stopped part way, or failed its verification; a copy so marked makes its legs `inputs-moved`,
+as does one that is not there, or that no sync of this tool marked.
 
 Runners are keyed by name because a name is how one is selected — by `run`, and by the checks
 below. An unnamed entry in a list could not be selected at all.

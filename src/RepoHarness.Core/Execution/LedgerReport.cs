@@ -75,6 +75,9 @@ public sealed record LedgerLine(
     /// <summary>Each mutation arm the leg was asked about, as <see cref="LegEntry.Arms"/> says.</summary>
     public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
 
+    /// <summary>The tree the leg worked in, as <see cref="LegEntry.Tree"/> says.</summary>
+    public WorkedTree? Tree { get; init; }
+
     /// <summary>
     /// The project whose tests the leg counted, as the test that reached its runner recorded it;
     /// <see langword="null"/> where no test counted any, or the leg resolves no project.
@@ -299,6 +302,7 @@ public sealed class LedgerReport
                     Space = entry.Space,
                     KeptOutputs = entry.KeptOutputs,
                     Arms = entry.Arms,
+                    Tree = entry.Tree,
                     Project = entry.Project,
                     TestSet = entry.TestSet,
                     TestCountNote = counts.GetValueOrDefault(entry.Leg),
@@ -364,7 +368,7 @@ public sealed class LedgerReport
             line.Leg,
             Verdicts.Display(line.Verdict),
             FormatDuration(line.Duration),
-            Marked(line.Detail, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.Admission, line.TestCountNote),
+            Marked(line.Detail, line.Tree, line.TimingNotes, line.Compilers, line.DeveloperEnvironment, line.Admission, line.TestCountNote),
             leg,
             verdict,
             duration)));
@@ -643,6 +647,19 @@ public sealed class LedgerReport
                 // Only where a step kept something, each as sync --pull takes it.
                 KeptOutputs = line.KeptOutputs.Count > 0 ? line.KeptOutputs : null,
 
+                // Where the leg worked: its path alone for a leg in its tree, and for a copy the tree it is a copy of and the
+                // reading it holds, where that is known - this run's, or what a run on what is staged found there.
+                Tree = line.Tree is { } tree
+                    ? new
+                    {
+                        Path = show(tree.Path),
+                        CopyOf = tree.CopyOf is { } copyOf ? show(copyOf) : null,
+                        tree.Reading?.Commit,
+                        tree.Reading?.UncommittedChanges,
+                        tree.Reading?.ReadBy,
+                    }
+                    : null,
+
                 // Only for a leg a sweep asked about arms: each arm, whatever it reached, an arm not selected among them, with
                 // what its run measured beside what it declares, and where its records are.
                 Arms = line.Arms.Count > 0 ? line.Arms.Select(arm => ArmDocument(arm, show)) : null,
@@ -844,6 +861,7 @@ public sealed class LedgerReport
     /// line that shows one leg.
     /// </summary>
     /// <param name="detail">What the leg said.</param>
+    /// <param name="tree">The tree it worked in, whose reading it says where it worked in a copy.</param>
     /// <param name="notes">Why its timings are suspect, if they are.</param>
     /// <param name="compilers">The compilers CMake configured its build with.</param>
     /// <param name="developerEnvironment">The developer environment its processes started in, if one was set up.</param>
@@ -855,6 +873,7 @@ public sealed class LedgerReport
     /// </remarks>
     internal static string Marked(
         string detail,
+        WorkedTree? tree,
         IReadOnlyList<string> notes,
         IReadOnlyList<Build.CompilerFact> compilers,
         Hosts.DeveloperEnvironmentFact? developerEnvironment,
@@ -866,6 +885,13 @@ public sealed class LedgerReport
         if (detail.Length > 0)
         {
             parts.Add(detail);
+        }
+
+        // Which tree a leg on a copy tested, as its machine was told it: a run's legs here and on hosts can be read for
+        // the same reading by this alone.
+        if (tree?.Said is { } read)
+        {
+            parts.Add(read);
         }
 
         if (Build.CompilerFacts.Describe(compilers) is { } compiler)
