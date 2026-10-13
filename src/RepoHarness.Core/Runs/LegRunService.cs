@@ -76,6 +76,21 @@ public sealed record LegRunRequest(
     /// where it records none. Said once in its ledger, so a reader of the document knows where what it holds was kept.
     /// </summary>
     public string? MutationRecord { get; init; }
+
+    /// <summary>
+    /// What one dispatched leg is given of its own, asked once for a leg it dispatches and appended after
+    /// <see cref="RemoteArguments"/>: the one way a dispatched leg is given an argument no other leg has - a sweep under
+    /// <c>--pending</c> gives its host what the record holds of that leg's own arms. <see langword="null"/> where the
+    /// command gives a dispatched leg nothing.
+    /// </summary>
+    public Func<PlacedLeg, IReadOnlyList<HostArgument>>? RemoteArgumentsOf { get; init; }
+
+    /// <summary>
+    /// What reads the notes one dispatched leg's host writes while it runs - each whole note, its kind and its text - or
+    /// <see langword="null"/> where the command reads none. Asked once for a leg it dispatches, and only where the
+    /// command's own run keeps what the notes carry: a sweep's notes feed its record of verdicts.
+    /// </summary>
+    public Func<PlacedLeg, Action<string, string>?>? HostNotes { get; init; }
 }
 
 /// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
@@ -834,12 +849,17 @@ public sealed class LegRunService(
         // harness exists to prevent, wearing a green colour.
         if (leg.Dispatched && request.Here is null)
         {
+            // What one dispatched leg is given of its own, after the command's own options, and what reads the notes its
+            // host writes while it runs: asked of it alone, here, once - no other leg is asked for.
+            var own = request.RemoteArgumentsOf?.Invoke(leg) ?? [];
+            var onNote = request.HostNotes?.Invoke(leg);
             var ended = await _remoteLegs
                 .RunAsync(
                     commandName,
                     leg,
-                    [.. request.RemoteArguments ?? []],
+                    [.. request.RemoteArguments ?? [], .. own],
                     runId,
+                    onNote,
                     cancellationToken)
                 .ConfigureAwait(false);
 

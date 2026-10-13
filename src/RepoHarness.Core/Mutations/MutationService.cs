@@ -1,3 +1,4 @@
+using System.Text.Json;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
@@ -37,6 +38,11 @@ namespace RepoHarness.Core.Mutations;
 /// Whether to drive, on each leg, only the arms with no recorded <c>passed</c> that holds: each other is verified on the
 /// leg's machine and left out.
 /// </param>
+/// <param name="Held">
+/// What the record of verdicts holds of this leg's arms, where the machine that dispatched this sweep gave it as bytes -
+/// the hidden <c>--held</c>, which no person types; <see langword="null"/> where none was given, and a sweep under
+/// <c>--pending</c> then holds nothing.
+/// </param>
 public sealed record MutationRequest(
     string Directory,
     IReadOnlyList<string>? LegNames,
@@ -47,7 +53,8 @@ public sealed record MutationRequest(
     HostId? Here = null,
     bool SelfTest = false,
     bool List = false,
-    bool Pending = false);
+    bool Pending = false,
+    RecordedArms? Held = null);
 
 /// <summary>The arms a sweep drives, as the registry declares them and <c>--arms</c> and the S rows select them.</summary>
 /// <param name="Registry">The registry, every arm in it.</param>
@@ -90,6 +97,7 @@ public sealed class MutationService(
     IProcessIdentity identity,
     IHostPlatform platform,
     TimeProvider clock,
+    Hosts.HostNotes notes,
     IHarnessOutput output)
 {
     /// <summary>The command, as it is typed and as it reports.</summary>
@@ -130,6 +138,7 @@ public sealed class MutationService(
     private readonly IProcessIdentity _identity = identity;
     private readonly IHostPlatform _platform = platform;
     private readonly TimeProvider _clock = clock;
+    private readonly Hosts.HostNotes _notes = notes;
     private readonly IHarnessOutput _output = output;
 
     /// <summary>Sweeps every selected leg, and reports the ledger, each arm beneath its leg.</summary>
@@ -181,13 +190,16 @@ public sealed class MutationService(
             CommandName);
 
         // A sweep typed on this machine records each verdict as its arm ends; one a host runs for it keeps no record
-        // there, and nothing of a self-test is kept. Where this one records, it says where, as a listing does.
+        // there - it tells this machine instead, as each arm ends - and nothing of a self-test is kept. Where this one
+        // records, it says where, as a listing does.
         var records = request.Here is null && !request.SelfTest;
 
         if (records && !request.Json)
         {
             _output.Info(CommandName, $"the record is '{new ArmVerdictRecord(_fileSystem, context.Layout).Directory}'");
         }
+
+        var record = new ArmVerdictRecord(_fileSystem, context.Layout);
 
         return await _legRuns
             .RunAsync(
@@ -201,7 +213,7 @@ public sealed class MutationService(
                     request.UseStaged,
                     Time: false,
                     request.Here,
-                    RemoteArguments(request.ArmNames, request.SelfTest))
+                    RemoteArguments(request.ArmNames, request.SelfTest, request.Pending && request.Here is null))
                 {
                     // A self-test takes the leg's own sweep lock, as a sweep of the leg does: its workers are kept in the
                     // leg's tree as a sweep's are, in a family of their own, and a clean of the leg takes both under it.
@@ -213,13 +225,79 @@ public sealed class MutationService(
                     // here work in their trees, wherever the configuration would have a command's legs work.
                     LocalTrees = LocalTrees.InPlace,
                     MutationRecord = records ? context.Layout.MutationRecordDirectory : null,
+
+                    // Under --pending, each leg's host is given what the record holds of that leg's own arms, as bytes it
+                    // reads as their base64 text: held and pending are decided there, by the leg's own reading and worker.
+                    RemoteArgumentsOf = records && request.Pending
+                        ? leg =>
+                        {
+                            var driven = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes).Driven;
+
+                            return ["--held", HostArgument.Carrying(record.ArmsOf(leg.Name, driven.Select(arm => arm.Id)).Carried())];
+                        }
+                        : null,
+
+                    // Each leg swept on a host tells this machine, as each arm ends there, what it judged: the same
+                    // record-writing sink a leg swept here feeds, so a sweep stopped part way keeps what it had judged.
+                    HostNotes = records ? NotesOf(context) : null,
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
-                    : SweepAsync(runner, work, arms, request.ForceLock, records, pending: request.Pending && request.Here is null, token),
+                    : SweepAsync(runner, work, arms, request.ForceLock, records, request.Pending, request.Held, token),
                 cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Reads the notes one dispatched leg's host writes while it sweeps - a table an entry names, an arm's verdict as the
+    /// arm ends, what a sweep under <c>--pending</c> found holding - into that leg's own record-writing sink, which the
+    /// notes of no other leg reach.
+    /// </summary>
+    /// <param name="context">The repository, whose main checkout keeps the record.</param>
+    private Func<PlacedLeg, Action<string, string>?> NotesOf(HarnessContext context) => leg =>
+    {
+        var sink = new RecordSink(new ArmVerdictRecord(_fileSystem, context.Layout), leg.Name, _output, CommandName);
+        var tables = new Dictionary<string, BuiltFromTable>(StringComparer.Ordinal);
+
+        return (kind, text) =>
+        {
+            switch (kind)
+            {
+                case NoteSink.TableKind:
+
+                    if (JsonSerializer.Deserialize<BuiltFromTable>(text, JsonStateFile.LineOptions) is { } table)
+                    {
+                        tables[table.Digest()] = table;
+                    }
+
+                    break;
+
+                case NoteSink.ArmKind:
+
+                    if (JsonSerializer.Deserialize<NotedArm>(text, JsonStateFile.LineOptions) is { } arm)
+                    {
+                        sink.Judged(
+                            arm.Arm,
+                            arm.Verdict,
+                            [.. arm.Verdict.JudgedOn?.Built.Values.Select(digest => tables.GetValueOrDefault(digest)).OfType<BuiltFromTable>() ?? []]);
+                    }
+
+                    break;
+
+                case NoteSink.VerifiedKind:
+
+                    if (JsonSerializer.Deserialize<NotedVerified>(text, JsonStateFile.LineOptions) is { } verified)
+                    {
+                        sink.Verified(verified.Keys, verified.By);
+                    }
+
+                    break;
+
+                default:
+                    break;
+            }
+        };
+    };
 
     /// <summary>
     /// Lists, without sweeping, each selected arm's last verdict on each selected leg its S row names, and whether anything
@@ -324,22 +402,29 @@ public sealed class MutationService(
 
     /// <summary>
     /// The options a host sweeping one of a run's legs is given, so it sweeps what this machine was asked to: a self-test
-    /// where this is one, and each value <c>--arms</c> was given, as it was given - an empty one among them, which the
-    /// host refuses as this machine does - and nothing where it was left out, which is every arm there too.
+    /// where this is one, each value <c>--arms</c> was given, as it was given - an empty one among them, which the host
+    /// refuses as this machine does - and <c>--pending</c> where this machine was asked to sweep only what is pending.
     /// </summary>
     /// <param name="arms">What <c>--arms</c> was given, or <see langword="null"/> where it was left out.</param>
     /// <param name="selfTest">Whether the run is a self-test.</param>
+    /// <param name="pending">Whether the run sweeps only the arms with no passed that holds.</param>
     /// <remarks>
     /// <c>--legs</c> and <c>--json</c> are supplied by the dispatch itself, and the lock and the staging are this
-    /// machine's decisions about its own state.
+    /// machine's decisions about its own state. What the record holds of that leg's own arms - <c>--held</c> - is given to
+    /// the leg alone, beside these, by <see cref="LegRunRequest.RemoteArgumentsOf"/>.
     /// </remarks>
-    public static IReadOnlyList<string> RemoteArguments(IReadOnlyList<string>? arms, bool selfTest)
+    public static IReadOnlyList<string> RemoteArguments(IReadOnlyList<string>? arms, bool selfTest, bool pending = false)
     {
         var options = new List<string>();
 
         if (selfTest)
         {
             options.Add("--self-test");
+        }
+
+        if (pending)
+        {
+            options.Add("--pending");
         }
 
         foreach (var arm in arms ?? [])
@@ -355,9 +440,10 @@ public sealed class MutationService(
     /// machine, as they were listed as the leg's work began here: a tree that never built the leg's variant here is
     /// measured by another's that did. Trees beside the main checkout's that could not be listed are said, with why, and
     /// with what the workers' builds are measured by instead. Each arm's verdict is recorded as it ends where
-    /// <paramref name="records"/>: on the machine the command was typed on, which keeps the record.
+    /// <paramref name="records"/>: on the machine the command was typed on, which keeps the record - and where it does
+    /// not, told to that machine as notes, if a host swept the leg for it.
     /// </summary>
-    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, bool records, bool pending, CancellationToken cancellationToken)
+    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, bool records, bool pending, RecordedArms? held, CancellationToken cancellationToken)
     {
         var beside = work.Leg.Beside ?? throw new InvalidOperationException($"Leg '{work.Leg.Name}' began its work with no trees listed beside it.");
 
@@ -371,7 +457,7 @@ public sealed class MutationService(
                 + $"{measured} alone: {why}");
         }
 
-        var subject = Subject(work, arms, force, beside, records, pending);
+        var subject = Subject(work, arms, force, beside, records, pending, held);
 
         await RefuseUnignoredAsync(subject.Workers, cancellationToken).ConfigureAwait(false);
 
@@ -402,10 +488,13 @@ public sealed class MutationService(
     /// where it declares one, else what its own build directory last recorded, else the most any of
     /// <paramref name="beside"/> - the repository's other trees here - recorded of it (<see cref="LegRoom.ExpectedBuildBytes"/>).
     /// Where it <paramref name="records"/>, each arm's verdict is kept in the record of verdicts in the main checkout,
-    /// whichever tree the leg is swept in, which the record names as a line names it; and where it sweeps only what is
-    /// <paramref name="pending"/>, it is given what that record holds of the arms it drives.
+    /// whichever tree the leg is swept in, which the record names as a line names it; where it does not - a host swept
+    /// the leg for another machine - each verdict is told to that machine as a note instead, and a leg swept by hand on
+    /// the host records nothing. Where it sweeps only what is <paramref name="pending"/>, it is given what the record
+    /// holds of the arms it drives - <paramref name="held"/> where a dispatch gave it that, and nothing held where it
+    /// gave nothing, so every arm is swept.
     /// </summary>
-    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound beside, bool records, bool pending = false)
+    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound beside, bool records, bool pending = false, RecordedArms? held = null)
     {
         ArgumentNullException.ThrowIfNull(beside);
 
@@ -443,8 +532,10 @@ public sealed class MutationService(
 
             // What the leg is swept with, resolved once with it: the variant placed, and the system its host runs.
             SweepSettings = SweepSettings.Of(work.Context.Config, leg.Variant, project, tests, leg.Os, work.Context.Config.Mutations, leg.HostSettings.Env),
-            Sink = records ? new RecordSink(record, leg.Name, _output, CommandName) : null,
-            Recorded = pending ? record.ArmsOf(leg.Name, driven.Driven.Select(arm => arm.Id)) : null,
+            Sink = records ? new RecordSink(record, leg.Name, _output, CommandName) : new NoteSink(_notes),
+            Recorded = pending
+                ? held ?? (records ? record.ArmsOf(leg.Name, driven.Driven.Select(arm => arm.Id)) : new RecordedArms())
+                : null,
             SweptIn = RepositoryTree.Of(work.Context, leg.TreeRoot, _platform.PathComparison),
             ExpectedBuildBytes = expected?.Bytes,
             ExpectedBuildSource = expected?.Source ?? string.Empty,

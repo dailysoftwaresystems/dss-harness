@@ -3682,7 +3682,17 @@ the binary is not green. Not recorded: an arm its machine did not admit, one the
 a refusal of the run ended, one no worker reached, a skipped one - nothing was observed of those, and
 the record keeps what it held; recording wherever `arm.json` is written would let a machine that
 stops admitting arms turn every recorded `passed` into `not-admitted`. Never: a self-test, whose
-subject has no sink. A leg swept on a host is recorded by nothing: the host's copy keeps no record.
+subject has no sink. A leg swept on a host writes no record there - its copy keeps none - but tells
+the machine that dispatched it: each verdict, and the tables it names, as notes on the host's
+standard error (`NoteSink`, `HostNotes`), lines of the form `host-agent: note <nonce> <kind>
+<more|last> <base64>` carrying the text as base64 pieces of at most `CarriedPiece` bytes, which that
+machine reads as they arrive and never relays (`HostAgentLines.Error` hands each whole note to
+`RemoteLegRunner.RunAsync`'s `onNote`, fed from `LegRunRequest.HostNotes`), into the same
+record-writing sink a leg swept here feeds. So each arm is recorded on the dispatcher as it ends on
+the host - a sweep stopped part way, or cut off, keeps what it had judged - and the host's final
+answer carries the arms as today and no record material: it travels one way only. A command typed on
+a host by hand has no machine to tell and records nothing. These shapes are the host-agent protocol's
+rise to 10.
 
 A record that cannot be read - not JSON, a member this build does not know, or a hand's damage: a
 null where entries or tables go, an entry with a key and nothing it was judged on - or one a newer build
@@ -3739,6 +3749,11 @@ its graph read - and every arm's key is read from its build before any arm is mu
 between two arms holds what the last mutation's configure made, and nothing could be said of the
 leg before the sweep was under way. The sweep is given what the record holds of the arms it drives
 (`ArmVerdictRecord.ArmsOf`, `RecordedArms`): every entry of each, and each table the newest names.
+A host sweeping one leg of a run is given the same thing for that leg alone, as bytes in a hidden
+`--held` of its own command line (`LegRunRequest.RemoteArgumentsOf`, the one way a dispatched leg is
+given an argument no other leg has; `--pending` travels among the run's arguments) - refused without
+`--here` - and decides held and pending by the one rule there, from its own reading of its copy and
+its own worker. A host given `--pending` and no `--held` holds nothing and sweeps every selected arm.
 An arm whose key is a recorded `passed`'s is held: it is not driven, its line is
 `skipped-not-selected` - the vocabulary kept, its detail naming the run whose `passed` holds and
 when - with `held` beneath it, and the record is told, in one change for every arm held, that this

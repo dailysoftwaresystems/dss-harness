@@ -81,6 +81,10 @@ internal static class HarnessServices
         services.AddSingleton<IPathBudget, PathBudget>();
         services.AddSingleton<IPublishedToolVersions, NuGetPublishedToolVersions>();
         services.AddSingleton<SyncedCopyToolCheck>();
+
+        // How a command this machine's host agent runs for another machine tells that machine something while it runs:
+        // notes on its standard error, read by the machine that asked and relayed by nobody.
+        services.AddSingleton<HostNotes>();
         services.AddSingleton<IHarnessContextLoader, HarnessContextLoader>();
         services.AddSingleton<IWorktreeService, WorktreeService>();
         services.AddSingleton<IAnchorRegistryLocator, AnchorRegistryLocator>();

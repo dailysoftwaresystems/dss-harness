@@ -1,8 +1,9 @@
 namespace RepoHarness.Core.Hosts;
 
 /// <summary>
-/// Reads the two streams of one request to a host's agent: which lines are the agent's, and the exit code its
-/// completion line carries.
+/// Reads the two streams of one request to a host's agent: which lines are the agent's, the exit code its
+/// completion line carries, and - where the machine that asked reads what the command it asked for says while it runs -
+/// each whole note, handed on and never relayed.
 /// </summary>
 /// <remarks>
 /// A login shell writes to the same streams the agent does, and whatever it writes arrives first: one
@@ -14,13 +15,19 @@ namespace RepoHarness.Core.Hosts;
 /// a line that never arrives is reported as a request that may not have run at all.
 /// </remarks>
 /// <param name="nonce">The request's nonce.</param>
-public sealed class HostAgentLines(string nonce)
+/// <param name="onNote">Told each whole note the command the request ran wrote, as it arrives; <see langword="null"/> where the machine that asked reads none.</param>
+public sealed class HostAgentLines(string nonce, Action<string, string>? onNote = null)
 {
     private readonly string _nonce = nonce;
+    private readonly Action<string, string>? _onNote = onNote;
 
     // Whether the agent has begun answering, on each stream.
     private bool _serving;
     private bool _reporting;
+
+    // The note being read: its kind, and the pieces of its text, whole notes never interleaving on the host that writes them.
+    private string? _note;
+    private readonly System.Collections.Generic.List<byte> _pieces = [];
 
     /// <summary>
     /// The exit code the agent's completion line carried, or <see langword="null"/> while none has arrived: the
@@ -43,7 +50,8 @@ public sealed class HostAgentLines(string nonce)
 
     /// <summary>
     /// Whether <paramref name="line"/>, from standard error, is the agent's to relay; its started and completion
-    /// lines are read here, and are never relayed.
+    /// lines are read here, and are never relayed, and so is each whole note the command the request ran wrote,
+    /// which is handed on instead.
     /// </summary>
     /// <param name="line">A line the host wrote to standard error.</param>
     public bool Error(string line)
@@ -60,6 +68,52 @@ public sealed class HostAgentLines(string nonce)
             return false;
         }
 
-        return _serving || HostAgentProtocol.IsAgentsOwnLine(line);
+        return !ReadNote(line) && (_serving || HostAgentProtocol.IsAgentsOwnLine(line));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="line"/> is a piece of a note of this request: the piece is gathered, and a whole note is
+    /// handed on, never relayed. False where it is none, or another request's.
+    /// </summary>
+    /// <param name="line">A line the host wrote to standard error.</param>
+    private bool ReadNote(string line)
+    {
+        if (_onNote is null
+            || !HostAgentProtocol.TryReadNoteLine(line, out var nonce, out var kind, out var last, out var base64)
+            || !string.Equals(nonce, _nonce, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // A note the reader was not reading, told whole by one line, replaces whatever half-read note went before it.
+        if (_note is null)
+        {
+            _note = kind;
+            _pieces.Clear();
+        }
+
+        try
+        {
+            _pieces.AddRange(Convert.FromBase64String(base64));
+        }
+        catch (FormatException)
+        {
+            // Not this request's note after all, or the transport damaged it: passed over, and the note it belonged to is
+            // dropped - the record the notes feed is then missing an arm, which is pending, never a wrong verdict.
+            _note = null;
+            _pieces.Clear();
+            return true;
+        }
+
+        if (last)
+        {
+            var text = System.Text.Encoding.UTF8.GetString([.. _pieces]);
+
+            _note = null;
+            _pieces.Clear();
+            _onNote(kind, text);
+        }
+
+        return true;
     }
 }

@@ -68,6 +68,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// <c>--legs</c>, <c>--json</c>, <c>--here</c> or <c>--verbose</c>, which this adds.
     /// </param>
     /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
+    /// <param name="onNote">Told each whole note the host's command writes while it runs, as it arrives; never relayed; <see langword="null"/> where this reads none.</param>
     /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
     /// <exception cref="HarnessException">
     /// The host could not be reached - its transport would not start - or never reported how the
@@ -82,6 +83,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         PlacedLeg leg,
         IReadOnlyList<HostArgument> arguments,
         RunId? run = null,
+        Action<string, string>? onNote = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);
@@ -114,7 +116,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         };
 
         var ledger = new System.Text.StringBuilder();
-        var lines = new HostAgentLines(nonce);
+        var lines = new HostAgentLines(nonce, onNote);
         var failure = new List<string>();
 
         // The lines failure was read from, as they would be shown, held until the host has finished: see below.

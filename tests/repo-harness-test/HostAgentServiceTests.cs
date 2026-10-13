@@ -7,8 +7,10 @@ using System.Text.Json;
 using NSubstitute;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -162,7 +164,7 @@ public sealed class HostAgentServiceTests
         {
             Assert.Equal(HarnessExit.Success, exitCode);
             Assert.NotNull(ranFor);
-            Assert.Equal((run, drive), (ranFor.RunId?.ToString(), ranFor.DiskImageDrive));
+            Assert.Equal((run, drive, Nonce), (ranFor.RunId?.ToString(), ranFor.DiskImageDrive, ranFor.Nonce));
             Assert.Equal(["build", "--json"], ranWith!);
         }
         else
@@ -171,6 +173,44 @@ public sealed class HostAgentServiceTests
             Assert.Null(ranWith);
             Assert.Contains(refusal, error.ToString(), StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// A command a host serves for another machine tells it something while it runs by notes on its own standard error:
+    /// each whole note cut into pieces of at most <see cref="HostAgentProtocol.CarriedPiece"/> bytes, each piece one line
+    /// carrying the request's nonce, its kind and whether it is the last, so the machine that asked reads it whole and
+    /// relays none of it. A note of nothing is one line, so no reader is left waiting for a last piece that says nothing;
+    /// and nothing is written where no machine asked, which is a command typed on the host by hand.
+    /// </summary>
+    [Fact]
+    public void ACommandServedForAnotherMachine_WritesItsNotesInPiecesOfOneLineEach_AndNothingWhereNoMachineAsked()
+    {
+        var lines = new StringWriter();
+        var notes = new HostNotes(
+            CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, Arguments = ["check-mutations"], Nonce = Nonce })),
+            new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false));
+
+        notes.Write(NoteSink.ArmKind, new string('t', HostAgentProtocol.CarriedPiece * 2 + 3));
+        notes.Write(NoteSink.VerifiedKind, string.Empty);
+        new HostNotes(CommandOrigin.Typed, new ConsoleHarnessOutput(new StringWriter(), lines, verbose: false)).Write(NoteSink.ArmKind, "typed by hand");
+
+        var written = lines.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r')).ToList();
+
+        Assert.Equal(4, written.Count);
+
+        var gathered = new List<byte>();
+
+        foreach (var (line, last) in written.Take(3).Select((line, at) => (line, at == 2)))
+        {
+            Assert.True(HostAgentProtocol.TryReadNoteLine(line, out var nonce, out var kind, out var readLast, out var base64));
+            Assert.Equal((Nonce, NoteSink.ArmKind, last), (nonce, kind, readLast));
+            gathered.AddRange(Convert.FromBase64String(base64));
+        }
+
+        Assert.Equal(new string('t', HostAgentProtocol.CarriedPiece * 2 + 3), System.Text.Encoding.UTF8.GetString([.. gathered]));
+
+        Assert.True(HostAgentProtocol.TryReadNoteLine(written[3], out var nonceOfNone, out var kindOfNone, out var lastOfNone, out var base64OfNone));
+        Assert.Equal((Nonce, NoteSink.VerifiedKind, true, ""), (nonceOfNone, kindOfNone, lastOfNone, base64OfNone));
     }
 
     [Fact]

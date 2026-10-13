@@ -1,3 +1,5 @@
+using System.Text.Json;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Mutations;
@@ -30,6 +32,46 @@ public sealed record RecordedArms
 
         return new RecordedArms { Unread = unread };
     }
+
+    /// <summary>
+    /// What a dispatch gives the host that sweeps this leg under <c>--pending</c>: each arm's newest entry and every
+    /// recorded <c>passed</c> of it, with the tables they name, as bytes that cross as their base64 text. The host decides
+    /// held and pending by the one rule, from its own reading and its own worker, so it needs no more than that - and no
+    /// less: a pending arm's why is named from the parts and tables of the entry it is read against.
+    /// </summary>
+    public byte[] Carried()
+    {
+        var arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (arm, entries) in Arms)
+        {
+            // The newest entry, and every recorded passed however old: what a sweep reads an arm by, and all it holds it by.
+            var kept = entries.Where(entry => string.Equals(entry.Verdict, Passed, StringComparison.Ordinal) || ReferenceEquals(entry, entries[^1])).Distinct().ToList();
+
+            arms[arm] = kept;
+        }
+
+        var named = arms.Values.SelectMany(entries => entries).SelectMany(entry => entry.JudgedOn?.Built.Values ?? []).ToHashSet(StringComparer.Ordinal);
+
+        return JsonSerializer.SerializeToUtf8Bytes(
+            this with
+            {
+                Arms = arms,
+                Tables = new Dictionary<string, BuiltFromTable>(Tables.Where(pair => named.Contains(pair.Key)), StringComparer.Ordinal),
+                TablesUnread = new Dictionary<string, string>(TablesUnread.Where(pair => named.Contains(pair.Key)), StringComparer.Ordinal),
+            },
+            JsonStateFile.LineOptions);
+    }
+
+    /// <summary>What <paramref name="carried"/> holds, as a host reads what its dispatch gave it.</summary>
+    /// <param name="carried">The bytes the dispatch carried as the host's <c>--held</c>.</param>
+    public static RecordedArms OfCarried(ReadOnlySpan<byte> carried)
+        => carried.IsEmpty
+            ? new RecordedArms()
+            : JsonSerializer.Deserialize<RecordedArms>(carried, JsonStateFile.LineOptions) ?? new RecordedArms();
+
+    /// <summary>The verdict a recorded entry holds where it passed, as the ledger names it.</summary>
+    private static readonly string Passed = Execution.Verdicts.Display(Execution.LegVerdict.Passed);
 }
 
 /// <summary>What a sweep under <c>--pending</c> makes of one arm: held - its key a recorded <c>passed</c>'s - or pending, and why.</summary>

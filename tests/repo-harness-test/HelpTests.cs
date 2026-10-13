@@ -380,7 +380,10 @@ public sealed partial class HelpTests
             + "a skipped one, or anything of a self-test",
             $"The record is {HarnessLayout.MutationRecordDirectoryRelative} in the main checkout, whichever tree swept: <leg>.json "
             + $"for each leg, and the tables its entries name in {ArmVerdictRecord.TablesDirectoryName}/<leg>/",
-            "a host's copy keeps none, so only a leg swept on this machine is recorded.",
+            "a host's copy keeps none, so a leg swept there tells this machine instead - each verdict as a "
+            + "line on the host's standard error that this machine reads as the arm ends there and never relays, a sweep "
+            + "stopped part way or cut off keeping what it had judged - and a sweep typed on a host by hand records "
+            + "nothing.",
             $"an arm keeps {ArmVerdictRecord.KeptPerArm} keys on a leg, the oldest by its place in the file going first, never by its date.",
             "clean, a deleted worktree and a removed host copy leave it as it was; deleting it is the one way to forget it, and "
             + "every arm is then pending.",
@@ -413,7 +416,7 @@ public sealed partial class HelpTests
         foreach (var text in new[]
         {
             "--list sweeps nothing (see 'What holds, and what is pending'), so it is refused with --pending, --self-test, "
-            + $"--force-lock, --use-staged and --here ({HarnessExit.UsageError}), each in one sentence naming both; and --pending "
+            + $"--force-lock, --use-staged, --here and the hidden --held ({HarnessExit.UsageError}), each in one sentence naming both; and --pending "
             + "is refused with --self-test, of which nothing is ever recorded.",
             "check-mutations --list says, without sweeping, each selected arm's last verdict on each selected leg its S row names, "
             + "and whether anything it was judged on that this machine reads has moved since.",
@@ -460,6 +463,10 @@ public sealed partial class HelpTests
             "An arm whose key is a recorded passed's holds: it is not driven, and is skipped-not-selected on that leg, its detail naming the run whose passed holds and when",
             "in as many workers beyond the first as the pending arms need",
             "how a target is built, a file joined or left what it is built from, a file its build makes, the dependency sources it fetched or a file outside the tree it reads moved, its compiler or its developer environment changed, or what it would be judged on cannot be read now.",
+            "A host sweeping one leg of a run under --pending is given what the record holds of that leg's own arms - each arm's newest entry "
+            + "and every recorded passed, as bytes in a hidden option of that leg alone - and decides held and pending "
+            + "there, from its own reading of its copy and its own worker; given --pending and no record it holds nothing "
+            + "and sweeps every selected arm.",
             "With nothing pending no other worker is made and the leg passes on its own verdict, saying nothing is pending",
             $"A sweep under --pending exits as a sweep does - {HarnessExit.Success} where nothing is pending",
             "or --pending leaves it out, its passed holding",

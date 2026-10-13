@@ -195,6 +195,57 @@ public static class HostAgentProtocol
     }
 
     /// <summary>
+    /// One line of a note: what a command a host runs for the machine that asked tells it while it runs, which that
+    /// machine reads and never relays. The note's text crosses as the base64 of pieces of at most
+    /// <see cref="CarriedPiece"/> bytes, each piece one line, <paramref name="last"/> marking the last of them.
+    /// </summary>
+    /// <param name="nonce">The nonce of the request whose command writes the note.</param>
+    /// <param name="kind">The note's kind, which says what its text holds.</param>
+    /// <param name="last">Whether this line carries the note's last piece.</param>
+    /// <param name="base64">The piece, as base64 text.</param>
+    public static string NoteLine(string nonce, string kind, bool last, string base64)
+        => $"{CommandName}: note {nonce} {kind} {(last ? "last" : "more")} {base64}";
+
+    /// <summary>
+    /// Reads <paramref name="line"/> as one line of a note, of whatever request wrote it; <see langword="false"/> where it
+    /// is none. Which request the note belongs to is the reader's to say, by the nonce.
+    /// </summary>
+    /// <param name="line">A line the host wrote to standard error.</param>
+    /// <param name="nonce">The nonce of the request whose command wrote the note.</param>
+    /// <param name="kind">The note's kind.</param>
+    /// <param name="last">Whether the line carries the note's last piece.</param>
+    /// <param name="base64">The piece, as base64 text.</param>
+    public static bool TryReadNoteLine(string line, out string nonce, out string kind, out bool last, out string base64)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+
+        nonce = string.Empty;
+        kind = string.Empty;
+        base64 = string.Empty;
+        last = false;
+
+        var parts = line.TrimEnd('\r').Split(' ');
+
+        if (parts.Length != 6 || parts[0] + " " + parts[1] != CommandName + ": note")
+        {
+            return false;
+        }
+
+        nonce = parts[2];
+        kind = parts[3];
+
+        if (parts[4] is not ("last" or "more"))
+        {
+            return false;
+        }
+
+        last = parts[4] == "last";
+        base64 = parts[5];
+
+        return true;
+    }
+
+    /// <summary>
     /// How many bytes are encoded as base64 at a time, whichever way they cross: an argument carrying bytes to a host
     /// (<see cref="HostArgument.Carrying"/>), and each line a file read there follows its answer back with
     /// (<see cref="Sync.SyncServe.ContentLines"/>). A multiple of three, so each piece is whole base64, and small enough that
@@ -504,10 +555,11 @@ public sealed record HostAgentInfo
 /// </summary>
 public sealed record Dispatch
 {
-    private Dispatch(RunId? runId, string? diskImageDrive)
+    private Dispatch(RunId? runId, string? diskImageDrive, string? nonce)
     {
         RunId = runId;
         DiskImageDrive = diskImageDrive;
+        Nonce = nonce;
     }
 
     /// <summary>The run of that machine the command runs a leg of; <see langword="null"/> where it runs none.</summary>
@@ -518,6 +570,12 @@ public sealed record Dispatch
     /// <see cref="HostAgentRequest.DiskImageDrive"/> - and never a blank one; <see langword="null"/> where none was named.
     /// </summary>
     public string? DiskImageDrive { get; }
+
+    /// <summary>
+    /// The request's nonce, which the command it asked for needs to write a note that machine reads while it runs: what
+    /// one leg of its run judged, told as each arm ends there. <see langword="null"/> where the request carried none.
+    /// </summary>
+    public string? Nonce { get; }
 
     /// <summary>
     /// What <paramref name="request"/> says of the command it asks for, read as strictly as anywhere else: its run as a run
@@ -543,7 +601,7 @@ public sealed record Dispatch
 
         return request.DiskImageDrive is { } drive && string.IsNullOrWhiteSpace(drive)
             ? throw new HarnessException(HarnessExit.UsageError, "the request names a blank drive as where WSL keeps the distribution's disk")
-            : new Dispatch(run, request.DiskImageDrive);
+            : new Dispatch(run, request.DiskImageDrive, request.Nonce);
     }
 }
 

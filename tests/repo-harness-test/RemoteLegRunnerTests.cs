@@ -5,6 +5,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 
@@ -127,6 +128,65 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// A note the host's command writes while it runs is read whole, however many lines its pieces take, and never
+    /// relayed: what its standard error carries beside it is relayed as it came. A piece no base64 holds loses the note
+    /// it belonged to and no other - the record the notes feed then lacks that arm, which is pending, never a wrong
+    /// verdict - and a note told whole by one line is read after it.
+    /// </summary>
+    [Fact]
+    public async Task ANote_IsReadWholeHoweverManyLinesItTakes_AndNeverRelayed()
+    {
+        var harness = new HarnessFactory();
+        var noted = new List<(string Kind, string Text)>();
+
+        // Longer than one piece, so its crossing takes three lines.
+        var whole = new string('t', HostAgentProtocol.CarriedPiece * 2 + 3);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var nonce = Request(command).Nonce!;
+
+            // The note as the host's command writes it: whole, in pieces of at most CarriedPiece bytes.
+            var written = new StringWriter();
+            var notes = new HostNotes(
+                CommandOrigin.Served(Dispatch.Of(new HostAgentRequest { Kind = HostAgentRequestKind.Run, Arguments = [MutationService.CommandName], Nonce = nonce })),
+                new ConsoleHarnessOutput(new StringWriter(), written, verbose: false));
+
+            command.OnErrorLine?.Invoke("check-mutations: wsl-debug: driving arm 'charge'");
+            notes.Write(NoteSink.ArmKind, whole);
+
+            foreach (var line in written.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                command.OnErrorLine?.Invoke(line.TrimEnd('\r'));
+            }
+
+            // A note whose first piece arrives damaged, then one told whole by a line: the first is lost, the second read.
+            command.OnErrorLine?.Invoke(HostAgentProtocol.NoteLine(nonce, NoteSink.TableKind, last: false, "***"));
+            command.OnErrorLine?.Invoke(HostAgentProtocol.NoteLine(nonce, NoteSink.TableKind, last: true, Convert.ToBase64String("a table"u8)));
+            command.OnErrorLine?.Invoke("check-mutations: wsl-debug: 2 arm(s) swept");
+
+            Answer(command, Ledger("passed", "2 arm(s) swept", 2.5, 2.1, 412));
+
+            return HostResults.Finished(command, 0);
+        });
+
+        await Runner(hosts, harness).RunAsync(
+            MutationService.CommandName,
+            Leg(),
+            [],
+            onNote: (kind, text) => noted.Add((kind, text)),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal([(NoteSink.ArmKind, whole), (NoteSink.TableKind, "a table")], noted);
+
+        var shown = harness.StandardError.ToString();
+
+        Assert.Contains("check-mutations: wsl-debug: driving arm 'charge'", shown, StringComparison.Ordinal);
+        Assert.Contains("check-mutations: wsl-debug: 2 arm(s) swept", shown, StringComparison.Ordinal);
+        Assert.DoesNotContain(HostAgentProtocol.CommandName + ": note", shown, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A leg of a run is sent with that run beside its command, never in its arguments: a leg on the host asking its
     /// heavy-leg slots is recorded under it, so the legs of one command wait for each other's slots without that wait
     /// counting. A command that runs no leg of a run sends none.
@@ -144,7 +204,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        await Runner(hosts).RunAsync("build", Leg(), [], run, TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", Leg(), [], run, onNote: null, TestContext.Current.CancellationToken);
         await Runner(hosts).RunAsync("clean", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal([run.Value, null], sent.Select(command => Request(command).RunId));

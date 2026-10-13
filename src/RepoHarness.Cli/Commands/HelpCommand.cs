@@ -951,7 +951,7 @@ internal static class HelpCommand
             + "no arm, and pass having proved nothing. Only a leg built by CMake with the Ninja generator can be swept: "
             + "ninja's own records say which objects a mutation rebuilt. "
             + "--list sweeps nothing (see 'What holds, and what is pending'), so it is refused with --pending, --self-test, "
-            + $"--force-lock, --use-staged and --here ({HarnessExit.UsageError}), each in one sentence naming both; and --pending "
+            + $"--force-lock, --use-staged, --here and the hidden --held ({HarnessExit.UsageError}), each in one sentence naming both; and --pending "
             + "is refused with --self-test, of which nothing is ever recorded.");
         builder.AppendLine();
         builder.AppendLine("Workers");
@@ -1091,7 +1091,10 @@ internal static class HelpCommand
             + $"The record is {HarnessLayout.MutationRecordDirectoryRelative} in the main checkout, whichever tree swept: "
             + $"<leg>.json for each leg, and the tables its entries name in {ArmVerdictRecord.TablesDirectoryName}/<leg>/, each "
             + "written once under its digest and removed with the last entry naming it. It ignores itself, and no sync "
-            + "carries it: a host's copy keeps none, so only a leg swept on this machine is recorded. A later verdict on a "
+            + "carries it: a host's copy keeps none, so a leg swept there tells this machine instead - each verdict as a "
+            + "line on the host's standard error that this machine reads as the arm ends there and never relays, a sweep "
+            + "stopped part way or cut off keeping what it had judged - and a sweep typed on a host by hand records "
+            + "nothing. A later verdict on a "
             + "key replaces the arm's entry on that key, whatever either was, and a verdict with no key the arm's entry with "
             + $"none; an arm keeps {ArmVerdictRecord.KeptPerArm} keys on a leg, the oldest by its place in the file going first, "
             + "never by its date. Two sweeps recording at once lose neither's verdicts. clean, a deleted worktree and a "
@@ -1134,7 +1137,11 @@ internal static class HelpCommand
             + "first as the pending arms need; its progress and --json say the first reason it was pending - a listing's, or "
             + "one only a sweep reads: how a target is built, a file joined or left what it is built from, a file its build "
             + "makes, the dependency sources it fetched or a file outside the tree it reads moved, its compiler or its "
-            + "developer environment changed, or what it would be judged on cannot be read now. The leg's line counts the "
+            + "developer environment changed, or what it would be judged on cannot be read now. A host sweeping one leg "
+            + "of a run under --pending is given what the record holds of that leg's own arms - each arm's newest entry "
+            + "and every recorded passed, as bytes in a hidden option of that leg alone - and decides held and pending "
+            + "there, from its own reading of its copy and its own worker; given --pending and no record it holds nothing "
+            + "and sweeps every selected arm. The leg's line counts the "
             + "arms swept by verdict, those that held, and those not selected. With nothing pending no other worker is made "
             + "and the leg passes on its own verdict, saying nothing is pending: each passed was verified there, and the tree "
             + $"asks nothing more of it. A sweep under --pending exits as a sweep does - {HarnessExit.Success} where nothing is "

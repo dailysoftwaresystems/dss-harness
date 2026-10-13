@@ -255,6 +255,7 @@ public sealed class CheckMutationsCliTests
     [InlineData("--self-test", "--list sweeps nothing, so --self-test has no fixture to sweep: leave one of them out.")]
     [InlineData("--force-lock", "--list sweeps nothing, so --force-lock has no lock to take: leave one of them out.")]
     [InlineData("--use-staged", "--list sweeps nothing, so --use-staged has nothing staged to sweep: leave one of them out.")]
+    [InlineData("--held", "--list sweeps nothing, so --held is given to a host sweeping one leg of a run: leave one of them out.", "QUE=")]
     [InlineData("--here", "--list sweeps nothing, so --here has no leg to sweep for another machine: leave one of them out.", "ssh mac")]
     public async Task ListWithAnOptionOnlyASweepUses_IsAUsageError(string option, string said, string? value = null)
     {
@@ -283,6 +284,23 @@ public sealed class CheckMutationsCliTests
 
         Assert.Equal(HarnessExit.UsageError, result.ExitCode);
         Assert.Contains("A self-test is never recorded, so nothing of it is pending: leave --pending out.", result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("check-mutations: run ", result.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// --held is given by the machine that dispatches a leg's sweep to the host that sweeps it, carried as bytes and
+    /// typed by nobody: without --here it is a usage error, said in one sentence, and no run begins.
+    /// </summary>
+    [Fact]
+    public async Task HeldWithNoHostSweepingForAnotherMachine_IsAUsageError()
+    {
+        using var temp = new TempDirectory();
+        await PrepareListedAsync(temp);
+
+        var result = await CliRunner.RunAsync(["check-mutations", "--pending", "--held", "QUE=", "-C", temp.Path], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+        Assert.Contains("--held is given by the machine that dispatches a leg's sweep to the host that sweeps it, so it needs --here: leave it out.", result.StandardError, StringComparison.Ordinal);
         Assert.DoesNotContain("check-mutations: run ", result.StandardError, StringComparison.Ordinal);
     }
 

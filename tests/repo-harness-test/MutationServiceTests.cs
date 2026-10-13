@@ -1203,11 +1203,12 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
-    /// Nothing of a self-test is recorded: its subject has no sink. Nor is anything recorded by a leg swept for another
-    /// machine, whose copy keeps no record: what it judged is that machine's to keep.
+    /// Nothing of a self-test is recorded: its subject has no sink. A leg swept for another machine keeps no record
+    /// where it runs - the host's copy holds none - so its subject hands each verdict to a sink that tells the machine
+    /// that dispatched the leg, as each arm ends there; a leg swept here hands them to the record-writing sink.
     /// </summary>
     [Fact]
-    public async Task ASelfTest_RecordsNothing_NorDoesALegSweptForAnotherMachine()
+    public async Task ASelfTest_RecordsNothing_ALegSweptForAnotherMachineTellsItsDispatcher_AndALegHereWritesTheRecord()
     {
         using var temp = new TempDirectory();
         var config = Sweepable();
@@ -1228,7 +1229,7 @@ public sealed class MutationServiceTests
 
         Assert.Null(selfTest.Sink);
         Assert.True(selfTest.ComparesKeys);
-        Assert.Null(forAnother.Sink);
+        Assert.IsType<NoteSink>(forAnother.Sink);
         Assert.IsType<RecordSink>(here.Sink);
     }
 
@@ -1266,6 +1267,252 @@ public sealed class MutationServiceTests
         Assert.Equal(["charge"], narrowed.Recorded!.Arms.Keys);
         Assert.Equal(["charge", "depth"], whole.Recorded!.Arms.Keys.Order(StringComparer.Ordinal));
         Assert.Null(plain.Recorded);
+    }
+
+    /// <summary>
+    /// Each arm a host's sweep judges is recorded on the machine that dispatched the leg as the arm ends there: a note
+    /// on the host's standard error, which that machine reads and never relays, feeding the same record-writing sink a
+    /// leg swept here feeds - the tables the entry names written before it. The host's final answer carries the arms as
+    /// today and no record material: it travels one way only.
+    /// </summary>
+    [Fact]
+    public async Task AHostsArm_IsRecordedOnTheDispatcherAsItEnds_BeforeTheHostAnswers()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+        var pi = HostId.Ssh("pi");
+
+        config.Hosts.Ssh["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" };
+        config.Legs["pi"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Toolchain = "gcc", Project = "app", Ssh = "pi" };
+
+        var table = new BuiltFromTable
+        {
+            Target = "fixture_tests",
+            Lines = "lines",
+            Files = new Dictionary<string, string>(StringComparer.Ordinal) { ["src/fixture.cpp"] = "hash" },
+            Fetched = new Dictionary<string, string>(StringComparer.Ordinal),
+            Made = new Dictionary<string, FilesIn>(StringComparer.Ordinal),
+            Outside = new Dictionary<string, FilesIn>(StringComparer.Ordinal),
+        };
+        var verdict = new RecordedVerdict
+        {
+            Verdict = "passed",
+            Run = "20261012-145059-ba433418",
+            At = DateTimeOffset.UnixEpoch,
+            SweptIn = "/home/pi/repo",
+            Key = "k",
+            JudgedOn = new JudgedOn
+            {
+                Judge = ArmJudge.Revision,
+                Rows = new RowDigests("rows"),
+                Texts = new Dictionary<string, string?>(StringComparer.Ordinal),
+                Sites = new Dictionary<string, string?>(StringComparer.Ordinal),
+                Built = new Dictionary<string, string>(StringComparer.Ordinal) { ["fixture_tests"] = table.Digest() },
+                Compilers = [],
+                Settings = new SweepSettings("build", "run", "judge"),
+                RunReads = new Dictionary<string, string>(StringComparer.Ordinal),
+                Host = "ssh pi",
+            },
+        };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var nonce = Request(command).Nonce!;
+
+            foreach (var (kind, text) in new[]
+            {
+                (NoteSink.TableKind, JsonSerializer.Serialize(table, JsonStateFile.LineOptions)),
+                (NoteSink.ArmKind, JsonSerializer.Serialize(new NotedArm("charge", verdict), JsonStateFile.LineOptions)),
+            })
+            {
+                foreach (var line in NoteLines(nonce, kind, text))
+                {
+                    command.OnErrorLine?.Invoke(line);
+                }
+            }
+
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "pi", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+        var inspector = new RecordingInspector(host => host.Kind == HostKind.Local
+            ? new HostReport { Host = host, Os = "windows", Processor = "x86_64" }
+            : new HostReport { Host = host, Os = "linux", Processor = "arm64", Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness") });
+        var (service, context) = Prepare(temp, config, harness: harness, inspector: inspector, hosts: hosts);
+
+        var outcome = await service.RunAsync(new MutationRequest(temp.Path, ["pi"], null, Json: true), RunId.New(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+
+        var record = new ArmVerdictRecord(harness.FileSystem, context.Layout);
+        var entry = Assert.Single(record.Read("pi").Arms["charge"]);
+
+        Assert.Equal(("passed", "20261012-145059-ba433418", "k"), (entry.Verdict, entry.Run, entry.Key));
+        Assert.True(File.Exists(record.TableFile("pi", table.Digest())));
+    }
+
+    /// <summary>
+    /// A host cut off part way - its transport failing before it said how it finished - leaves on the dispatcher what it
+    /// had judged: each note was read and recorded as it arrived, so a sweep stopped part way, or cut off, keeps what it
+    /// had judged.
+    /// </summary>
+    [Fact]
+    public async Task AHostCutOffPartWay_LeavesWhatItHadJudgedRecorded()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+
+        config.Hosts.Ssh["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" };
+        config.Legs["pi"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Toolchain = "gcc", Project = "app", Ssh = "pi" };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var nonce = Request(command).Nonce!;
+            var verdict = new RecordedVerdict { Verdict = "survived", Run = "20261012-145059-ba433418", At = DateTimeOffset.UnixEpoch, SweptIn = "/home/pi/repo" };
+
+            foreach (var line in NoteLines(nonce, NoteSink.ArmKind, JsonSerializer.Serialize(new NotedArm("charge", verdict), JsonStateFile.LineOptions)))
+            {
+                command.OnErrorLine?.Invoke(line);
+            }
+
+            return HostResults.Failed(255, "ssh: connection closed");
+        });
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "arm64", Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness") });
+        var (service, context) = Prepare(temp, config, harness: harness, inspector: inspector, hosts: hosts);
+
+        var cut = await service.RunAsync(new MutationRequest(temp.Path, ["pi"], null, Json: true), RunId.New(), TestContext.Current.CancellationToken);
+
+        // The sweep is no pass: the host never said how it finished, so its leg reached no verdict.
+        Assert.NotEqual(HarnessExit.Success, cut.ExitCode);
+
+        var entry = Assert.Single(new ArmVerdictRecord(harness.FileSystem, context.Layout).Read("pi").Arms["charge"]);
+
+        Assert.Equal(("survived", "20261012-145059-ba433418"), (entry.Verdict, entry.Run));
+    }
+
+    /// <summary>
+    /// Under --pending each dispatched leg's host is given what the record holds of that leg's own arms alone - its
+    /// newest entry and every recorded passed, with the tables they name - as bytes in a hidden option of that leg
+    /// alone, beside the run's own --pending: held and pending are decided there, by the leg's own reading and worker,
+    /// from the one record there is, on the machine that keeps it.
+    /// </summary>
+    [Fact]
+    public async Task ARemoteLeg_IsGivenWhatTheRecordHoldsOfItsOwnArms_AndDecidesThere()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+        var pi = HostId.Ssh("pi");
+        var mac = HostId.Ssh("mac");
+
+        config.Hosts.Ssh["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" };
+        config.Hosts.Ssh["mac"] = new SshHostConfig { RepositoryPath = "/home/mac/repo" };
+        config.Legs["pi"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Toolchain = "gcc", Project = "app", Ssh = "pi" };
+        config.Legs["mac"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Toolchain = "gcc", Project = "app", Ssh = "mac" };
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            var leg = Request(command).Arguments[2].Text;
+
+            ScriptedHostCommands.Answer(command, $$"""{"legs": [{"leg": "{{leg}}", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+        var inspector = new RecordingInspector(host => host.Kind == HostKind.Local
+            ? new HostReport { Host = host, Os = "windows", Processor = "x86_64" }
+            : new HostReport { Host = host, Os = "linux", Processor = "arm64", Session = new HostSession(new HostConnection { Host = host, Address = "192.0.2.10" }, ".dotnet/tools/dssharness") });
+
+        // The charge arm runs on both legs, the depth arm on pi alone.
+        var (service, context) = Prepare(
+            temp,
+            config,
+            [TestRedArm, "C | charge | Fixture.Charge | red", BuildRedArm, "B | depth | mutations/texts/depth.control-before | mutations/texts/depth.control-after | builds", "S | depth | pi | where its site is"],
+            harness: harness,
+            inspector: inspector,
+            hosts: hosts);
+        var record = new ArmVerdictRecord(harness.FileSystem, context.Layout);
+
+        foreach (var (leg, arm) in new[] { ("pi", "charge"), ("mac", "charge"), ("pi", "depth") })
+        {
+            Assert.Null(record.Merge(leg, arm, new RecordedVerdict { Verdict = "passed", Run = "r0", At = DateTimeOffset.UnixEpoch, SweptIn = RepositoryTree.MainCheckout }, []));
+        }
+
+        var outcome = await service.RunAsync(new MutationRequest(temp.Path, ["pi", "mac"], null, Json: true, Pending: true), RunId.New(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+
+        var held = hosts.Calls.ToDictionary(
+            call => call.Connection.Host.ToString(),
+            call => Sent(call.Command));
+
+        Assert.Equal(["--pending", "--held"], held["ssh pi"].Arguments[^3..^1]);
+        Assert.Equal(["charge", "depth"], held["ssh pi"].Held.Arms.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["--pending", "--held"], held["ssh mac"].Arguments[^3..^1]);
+        Assert.Equal(["charge"], held["ssh mac"].Held.Arms.Keys);
+    }
+
+    /// <summary>
+    /// What the record holds is the machine that keeps it's to read: a host given --pending and no --held holds nothing
+    /// and sweeps every selected arm, and what a dispatch gives it stands as given, however unlike the record of any leg
+    /// swept here.
+    /// </summary>
+    [Fact]
+    public async Task AHostGivenNoRecord_SweepsEverySelectedArm()
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable();
+        var (service, context) = Prepare(temp, config);
+        var every = await service.ReadAsync(context, null, TestContext.Current.CancellationToken);
+        var variant = VariantKey.For(config, config.Legs["native"], "linux");
+        var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
+        var work = new LegWork(
+            new PlacedLeg("native", config.Legs["native"], host, config.Projects[0], variant, temp.Path, temp.Path, variant.DirectoryUnder(temp.Path), new LocalHostConfig(), Emulated: false),
+            context,
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+
+        var given = new RecordedArms
+        {
+            Arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["charge"] = [new RecordedVerdict { Verdict = "passed", Run = "r0", At = DateTimeOffset.UnixEpoch, SweptIn = RepositoryTree.MainCheckout, Key = "k" }],
+            },
+        };
+
+        var none = service.Subject(work, every, force: false, new RepositoryTreesFound([]), records: false, pending: true);
+        var held = service.Subject(work, every, force: false, new RepositoryTreesFound([]), records: false, pending: true, held: given);
+
+        Assert.Equal([], none.Recorded!.Arms.Keys.Order());
+        Assert.Null(none.Recorded.Unread);
+        Assert.Equal(["charge"], held.Recorded!.Arms.Keys);
+    }
+
+    /// <summary>The run request a host was sent, read from what its transport carried.</summary>
+    private static HostAgentRequest Request(HostCommand command)
+        => JsonSerializer.Deserialize<HostAgentRequest>(command.StandardInput.Read(), HostAgentProtocol.JsonOptions)!;
+
+    /// <summary>The arguments a host sweeping one leg was given, as it reads them, and what its leg's <c>--held</c> holds.</summary>
+    private static (string[] Arguments, RecordedArms Held) Sent(HostCommand command)
+    {
+        var arguments = Request(command).Arguments.Select(argument => argument.Text).ToArray();
+
+        return (arguments, RecordedArms.OfCarried(Convert.FromBase64String(arguments[Array.IndexOf(arguments, "--held") + 1])));
+    }
+
+    /// <summary>The note carrying <paramref name="text"/> of <paramref name="kind"/>, as the host's command writes it: pieces of at most CarriedPiece bytes, each one line.</summary>
+    private static IEnumerable<string> NoteLines(string nonce, string kind, string text)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+
+        for (var at = 0; at < bytes.Length; at += HostAgentProtocol.CarriedPiece)
+        {
+            var piece = new ReadOnlyMemory<byte>(bytes, at, Math.Min(HostAgentProtocol.CarriedPiece, bytes.Length - at));
+
+            yield return HostAgentProtocol.NoteLine(nonce, kind, at + piece.Length >= bytes.Length, Convert.ToBase64String(piece.Span));
+        }
     }
 
     /// <summary>
@@ -1666,6 +1913,7 @@ public sealed class MutationServiceTests
             harness.Identity,
             harness.Platform,
             TimeProvider.System,
+            new HostNotes(CommandOrigin.Typed, harness.Output),
             harness.Output);
     }
 

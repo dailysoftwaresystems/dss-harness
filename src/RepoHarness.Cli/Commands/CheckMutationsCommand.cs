@@ -48,6 +48,15 @@ internal static class CheckMutationsCommand
         Description = "Drive on each leg only the arms with no recorded passed that still holds: its first worker is made alone, each arm's key read from its build, and an arm whose key is a recorded passed's is left out, skipped-not-selected, saying which run's passed holds. With nothing pending the leg passes, and nothing is swept.",
     };
 
+    /// <summary>
+    /// The hidden option that carries, as bytes read as their base64 text, what the record of verdicts holds of one leg's
+    /// arms: given to a host sweeping one leg of a run under --pending by the machine that asked, and typed by nobody.
+    /// </summary>
+    private static readonly Option<string?> HeldOption = new("--held")
+    {
+        Hidden = true,
+    };
+
     internal static Command Create()
     {
         var command = new Command(
@@ -62,6 +71,7 @@ internal static class CheckMutationsCommand
         command.Options.Add(SelfTestOption);
         command.Options.Add(ListOption);
         command.Options.Add(PendingOption);
+        command.Options.Add(HeldOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
@@ -94,7 +104,8 @@ internal static class CheckMutationsCommand
                 arguments.GetValue(DispatchOptions.Here),
                 selfTest,
                 list,
-                arguments.GetValue(PendingOption));
+                arguments.GetValue(PendingOption),
+                Held(arguments));
             var service = context.Get<MutationService>();
 
             return list
@@ -106,16 +117,31 @@ internal static class CheckMutationsCommand
     }
 
     /// <summary>
+    /// What <paramref name="arguments"/> was given as <c>--held</c>, decoded, or <see langword="null"/> where it was given
+    /// none: bytes the machine that dispatched this sweep carried, read here as their base64 text.
+    /// </summary>
+    private static RecordedArms? Held(ParseResult arguments)
+        => arguments.GetValue(HeldOption) is { } carried
+            ? RecordedArms.OfCarried(Convert.FromBase64String(carried))
+            : null;
+
+    /// <summary>
     /// Why what <paramref name="arguments"/> holds cannot be given together, or <see langword="null"/> where it can: a
-    /// self-test under <c>--pending</c>, which nothing of was ever recorded; and <c>--list</c> with each option only a
-    /// sweep has a use for. Each said in one sentence.
+    /// self-test under <c>--pending</c>, which nothing of was ever recorded; <c>--held</c> where no machine dispatched
+    /// this sweep, since what the record holds is this machine's to read where it was typed; and <c>--list</c> with each
+    /// option only a sweep has a use for. Each said in one sentence.
     /// </summary>
     private static string? Refused(ParseResult arguments)
     {
         if (!arguments.GetValue(ListOption))
         {
-            return arguments.GetValue(PendingOption) && arguments.GetValue(SelfTestOption)
-                ? $"A self-test is never recorded, so nothing of it is pending: leave {PendingOption.Name} out."
+            if (arguments.GetValue(PendingOption) && arguments.GetValue(SelfTestOption))
+            {
+                return $"A self-test is never recorded, so nothing of it is pending: leave {PendingOption.Name} out.";
+            }
+
+            return arguments.GetValue(HeldOption) is not null && arguments.GetValue(DispatchOptions.Here) is null
+                ? $"{HeldOption.Name} is given by the machine that dispatches a leg's sweep to the host that sweeps it, so it needs --here: leave it out."
                 : null;
         }
 
@@ -125,6 +151,7 @@ internal static class CheckMutationsCommand
             (SelfTestOption, arguments.GetValue(SelfTestOption), "has no fixture to sweep"),
             (ForceLockOption, arguments.GetValue(ForceLockOption), "has no lock to take"),
             (UseStagedOption, arguments.GetValue(UseStagedOption), "has nothing staged to sweep"),
+            (HeldOption, arguments.GetValue(HeldOption) is not null, "is given to a host sweeping one leg of a run"),
             (DispatchOptions.Here, arguments.GetValue(DispatchOptions.Here) is not null, "has no leg to sweep for another machine"),
         ];
 
