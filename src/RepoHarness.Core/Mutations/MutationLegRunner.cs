@@ -65,6 +65,16 @@ internal sealed record MutationSubject
     /// <summary>How the sweep runs: its workers, its report arguments, its bound.</summary>
     public required MutationSettings Settings { get; init; }
 
+    /// <summary>What of the configuration the sweep rests on beyond what its builds record: part of what each arm is judged on.</summary>
+    public required SweepSettings SweepSettings { get; init; }
+
+    /// <summary>
+    /// Whether every worker made reads what each arm is judged on from its own build, and the sweep compares them arm by
+    /// arm: a self-test's, which so proves on the leg's own toolchain that two workers come to one key - and puts no key
+    /// on any arm's line, since nothing of a self-test is kept.
+    /// </summary>
+    public bool ComparesKeys { get; init; }
+
     /// <summary>What a worker's build is expected to come to, or <see langword="null"/> where nothing says.</summary>
     public long? ExpectedBuildBytes { get; init; }
 
@@ -218,6 +228,18 @@ internal sealed class MutationLegRunner(
         /// <summary>Where each worker has the sources its own copy of the tree holds, by their dependency's name, relative to the worker.</summary>
         private IReadOnlyDictionary<string, string> _inTree = new Dictionary<string, string>(StringComparer.Ordinal);
 
+        /// <summary>
+        /// What each driven arm is judged on, by its id, read from the build of the first worker made before it drove an
+        /// arm: a worker between two arms holds what the last mutation's configure made.
+        /// </summary>
+        private readonly TaskCompletionSource<IReadOnlyDictionary<string, ArmKey>> _keys = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Whether a worker has taken the reading of <see cref="_keys"/> on itself: 0 until one has.</summary>
+        private int _keyed;
+
+        /// <summary>What each arm is judged on as each worker made read it, by the worker's number: kept where the subject compares them.</summary>
+        private readonly ConcurrentDictionary<int, IReadOnlyDictionary<string, ArmKey>> _workerKeys = new();
+
         private ArmQueue _queue = null!;
         private CancellationTokenSource _unasked = null!;
         private RefusedArm? _refused;
@@ -320,7 +342,192 @@ internal sealed class MutationLegRunner(
                 notes.AddRange(_unmade.OrderBy(pair => pair.Key).Select(pair => $"{pair.Value.Detail.TrimEnd('.')}, so it drove no arm"));
             }
 
+            if (_subject.ComparesKeys && _workerKeys.Count > 0)
+            {
+                var (differ, alone) = Compared(driven);
+
+                if (differ is not null)
+                {
+                    own.Add(differ);
+                }
+
+                if (alone is not null)
+                {
+                    notes.Add(alone);
+                }
+            }
+
             return Line(own, [.. driven.Select(arm => (arm, _entries[arm.Id])), .. unselected], notes) with { EndsTheRun = refusal };
+        }
+
+        /// <summary>
+        /// What comparing every worker's reading of what each arm is judged on says: the first arm a worker read
+        /// otherwise than the first worker did, or could not read at all - which fails the leg as an arm that missed its
+        /// design does, naming the arm, the workers and the part - and that a worker alone had nothing to compare with.
+        /// </summary>
+        private (ReachedVerdict? Differ, string? Alone) Compared(IReadOnlyList<MutationArm> driven)
+        {
+            var workers = _workerKeys.OrderBy(pair => pair.Key).ToList();
+            var (first, keys) = workers[0];
+
+            foreach (var (number, read) in workers)
+            {
+                if (driven.FirstOrDefault(arm => read[arm.Id].Unread is not null) is { } unread)
+                {
+                    return (
+                        ReachedVerdict.Of(
+                            LegVerdict.Violated,
+                            $"the self-test could not read what arm '{unread.Id}' is judged on in worker {number}: {read[unread.Id].Unread}"),
+                        null);
+                }
+            }
+
+            foreach (var (number, read) in workers.Skip(1))
+            {
+                var differing = driven
+                    .Select(arm => (Arm: arm, Reasons: KeyDifference.Between(keys[arm.Id], read[arm.Id])))
+                    .Where(pair => pair.Reasons.Count > 0)
+                    .ToList();
+
+                if (differing.Count > 0)
+                {
+                    var others = differing.Count > 1 ? $"; so do those of {ReportText.Counted(differing.Count - 1, "other arm")}" : string.Empty;
+
+                    return (
+                        ReachedVerdict.Of(
+                            LegVerdict.Violated,
+                            $"the self-test's keys differ between workers: arm '{differing[0].Arm.Id}' on worker {number} against worker {first} - "
+                            + $"{differing[0].Reasons[0].Said}{others}"),
+                        null);
+                }
+            }
+
+            return (null, workers.Count == 1 ? "one worker here, so its keys were compared with no other's" : null);
+        }
+
+        /// <summary>
+        /// Reads what each driven arm is judged on from worker <paramref name="number"/>'s build, as the worker is made and
+        /// before it drives an arm: where it is the first worker made, for every arm's line; and where the subject compares
+        /// every worker's reading, for that comparison.
+        /// </summary>
+        private async Task ReadKeysAsync(int number, IWorkerGraph graph, CancellationToken cancellationToken)
+        {
+            var first = Interlocked.CompareExchange(ref _keyed, 1, 0) == 0;
+
+            if (!first && !_subject.ComparesKeys)
+            {
+                return;
+            }
+
+            IReadOnlyDictionary<string, ArmKey> keys;
+
+            try
+            {
+                keys = await KeysAsync(number, graph, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (first)
+            {
+                // Every other worker's lines wait on what the first reads: they are told it was never read.
+                _keys.TrySetException(ex);
+                throw;
+            }
+
+            if (first)
+            {
+                _keys.TrySetResult(keys);
+            }
+
+            if (_subject.ComparesKeys)
+            {
+                _workerKeys[number] = keys;
+            }
+        }
+
+        /// <summary>
+        /// What each driven arm is judged on, as worker <paramref name="number"/>'s build reads it: the table of each target
+        /// an arm builds, once however many arms build it; the compilers CMake identified there; and of each arm, its rows,
+        /// the texts and sites it names as the sweep's reading of the tree holds them, the leg's developer environment, the
+        /// sweep's settings and the leg's host.
+        /// </summary>
+        private async Task<IReadOnlyDictionary<string, ArmKey>> KeysAsync(int number, IWorkerGraph graph, CancellationToken cancellationToken)
+        {
+            var worker = Worker(number);
+            var buildDirectory = _leg.Variant.DirectoryUnder(worker);
+            var driven = _subject.Arms.Driven;
+
+            _work.Progress($"worker {number}: reading what each arm is judged on from its build");
+
+            var reader = new BuiltFromReader(_runner._fileSystem, _reading.Files, _fetched, worker, buildDirectory, PathCase.In(_runner._fileSystem, _subject.TreeRoot));
+            var tables = new Dictionary<string, (BuiltFromReading Reading, string? Digest)>(StringComparer.Ordinal);
+
+            foreach (var target in driven.SelectMany(ArmJudge.Builds).Distinct(StringComparer.Ordinal))
+            {
+                var read = await reader.ReadAsync(graph.ReadBy(target), cancellationToken).ConfigureAwait(false);
+
+                tables[target] = (read, read.Table?.Digest());
+            }
+
+            var (identified, unidentified) = _runner._toolchains.Identified(buildDirectory);
+            // A compiler the tree holds is in each worker's own copy of it: its path told, as a build line's is.
+            IReadOnlyList<JudgedCompiler> compilers =
+            [
+                .. identified.Select(compiler => new JudgedCompiler(
+                    compiler.Language,
+                    compiler.Id,
+                    compiler.Version,
+                    WorkerPath.Told(compiler.Program, worker),
+                    [.. compiler.Arguments.Select(word => WorkerPath.Told(word, worker))])),
+            ];
+            var compilersUnread = unidentified.Count == 0 ? null : $"the compilers its build identified: {string.Join("; ", unidentified)}";
+
+            string? Held(string path) => _reading.Files.Entries.GetValueOrDefault(path)?.ContentHash;
+
+            return driven.ToDictionary(
+                arm => arm.Id,
+                arm =>
+                {
+                    var built = ArmJudge.Builds(arm).Select(target => tables[target]).ToList();
+
+                    return new ArmKey(
+                        new JudgedOn
+                        {
+                            Judge = ArmJudge.Revision,
+                            Rows = JudgedOn.RowsOf(arm),
+                            Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, Held, StringComparer.Ordinal),
+                            Sites = arm.Sites.ToDictionary(site => site.Site, site => Held(site.Site), StringComparer.Ordinal),
+                            Built = built.Where(table => table.Digest is not null).ToDictionary(table => table.Reading.Target, table => table.Digest!, StringComparer.Ordinal),
+                            Compilers = compilers,
+                            DeveloperEnvironment = _work.DeveloperEnvironment,
+                            Settings = _subject.SweepSettings,
+                            Host = _leg.Named.ToString(),
+                        },
+                        built.Where(table => table.Reading.Table is not null).ToDictionary(table => table.Reading.Target, table => table.Reading.Table!, StringComparer.Ordinal),
+                        built.Select(table => table.Reading.Unread).FirstOrDefault(why => why is not null) ?? compilersUnread);
+                },
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// The key of what <paramref name="arm"/> is judged on, for its line: as the first worker made read it, once it has;
+        /// <see langword="null"/> where a part of it could not be read, where it was never read, and in a sweep whose
+        /// subject compares its workers' readings, which keeps none.
+        /// </summary>
+        private async Task<string?> KeyAsync(MutationArm arm)
+        {
+            if (_subject.ComparesKeys)
+            {
+                return null;
+            }
+
+            try
+            {
+                return (await _keys.Task.ConfigureAwait(false)).GetValueOrDefault(arm.Id)?.Key;
+            }
+            catch (Exception) when (_keys.Task.IsFaulted || _keys.Task.IsCanceled)
+            {
+                // Never read, which the worker that was to read it says as its own failure: the arm's line has no key.
+                return null;
+            }
         }
 
         /// <summary>
@@ -580,6 +787,8 @@ internal sealed class MutationLegRunner(
                     return;
                 }
 
+                await ReadKeysAsync(number, graph, cancellationToken).ConfigureAwait(false);
+
                 while (await _queue.TakeAsync(number, cancellationToken).ConfigureAwait(false) is { } arm)
                 {
                     Driven driven;
@@ -762,7 +971,7 @@ internal sealed class MutationLegRunner(
                 {
                     if (refusal is not null)
                     {
-                        return new Driven(Record(arm, ReachedVerdict.Of(LegVerdict.NotAdmitted, refusal), number, started, null, records));
+                        return new Driven(Record(arm, ReachedVerdict.Of(LegVerdict.NotAdmitted, refusal), number, started, null, records, await KeyAsync(arm).ConfigureAwait(false)));
                     }
 
                     _work.Progress($"arm {arm.Id}, on worker {number}");
@@ -775,7 +984,7 @@ internal sealed class MutationLegRunner(
 
                         if (control.Stops is { } stops)
                         {
-                            return new Driven(Undriven(arm, ReachedVerdict.Of(LegVerdict.Stopped, stops)));
+                            return new Driven(Undriven(arm, ReachedVerdict.Of(LegVerdict.Stopped, stops)) with { Key = await KeyAsync(arm).ConfigureAwait(false) });
                         }
 
                         bound = control.Bound;
@@ -783,14 +992,17 @@ internal sealed class MutationLegRunner(
 
                     var observed = await ObserveAsync(number, arm, graph, records, bound, cancellationToken).ConfigureAwait(false);
 
-                    return new Driven(Record(arm, observed.Verdict, number, started, observed.Report, records), observed.Retired, observed.Refusal);
+                    return new Driven(
+                        Record(arm, observed.Verdict, number, started, observed.Report, records, await KeyAsync(arm).ConfigureAwait(false)),
+                        observed.Retired,
+                        observed.Refusal);
                 }
             }
             catch (Exception ex) when (!Stops(ex, cancellationToken) && !EndsTheRun(ex))
             {
                 var failure = Failure(ex, "the sweep could not drive this arm");
 
-                return new Driven(Record(arm, failure, number, started, null, records), Defect(arm, failure));
+                return new Driven(Record(arm, failure, number, started, null, records, await KeyAsync(arm).ConfigureAwait(false)), Defect(arm, failure));
             }
         }
 
@@ -1323,9 +1535,9 @@ internal sealed class MutationLegRunner(
 
         /// <summary>
         /// <paramref name="arm"/>'s line where it reached <paramref name="verdict"/> driven by worker <paramref name="number"/>,
-        /// its record written beside its logs.
+        /// with the <paramref name="key"/> of what it was judged on, its record written beside its logs.
         /// </summary>
-        private ArmEntry Record(MutationArm arm, ReachedVerdict verdict, int number, long started, JUnitReport? report, string records)
+        private ArmEntry Record(MutationArm arm, ReachedVerdict verdict, int number, long started, JUnitReport? report, string records, string? key)
         {
             var entry = new ArmEntry
             {
@@ -1339,6 +1551,7 @@ internal sealed class MutationLegRunner(
                 Reds = report?.Reds,
                 DeclaredReds = arm.Reds,
                 Records = records,
+                Key = key,
             };
 
             try

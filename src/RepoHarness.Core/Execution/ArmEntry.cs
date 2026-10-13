@@ -54,4 +54,11 @@ public sealed record ArmEntry
     /// binary's control before anything of its own was built or run.
     /// </summary>
     public string? Records { get; init; }
+
+    /// <summary>
+    /// The digest of what it was judged on (<see cref="Mutations.JudgedOn"/>), as its leg's sweep read that from the tree
+    /// and from the build of the first worker made; <see langword="null"/> where no worker was made, where a part of it
+    /// could not be read, where nothing of the arm was judged, and for every arm of a self-test, which nothing keeps.
+    /// </summary>
+    public string? Key { get; init; }
 }

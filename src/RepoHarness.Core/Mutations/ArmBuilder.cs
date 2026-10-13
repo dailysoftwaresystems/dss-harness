@@ -66,6 +66,13 @@ internal interface IWorkerGraph
     /// <summary>The steps a build's <paramref name="lines"/> say failed, as <see cref="Ninja.FailedOutputs"/> names them.</summary>
     /// <param name="lines">The build phase's output, a line at a time.</param>
     IReadOnlyList<string> FailedOutputs(IEnumerable<string> lines);
+
+    /// <summary>
+    /// What <paramref name="target"/>'s build reads: the build lines behind it, and every file they read, each marked as
+    /// made by a build line or not - what an arm building the target is judged on is read from it.
+    /// </summary>
+    /// <param name="target">The target, as <c>--target</c> names it.</param>
+    BuiltFromSource ReadBy(string target);
 }
 
 /// <summary>Builds in a worker's copy, and reads what its builds recorded.</summary>
@@ -218,4 +225,42 @@ internal sealed class NinjaWorkerGraph(NinjaRebuildGraph graph, string? program)
 
     /// <inheritdoc/>
     public IReadOnlyList<string> FailedOutputs(IEnumerable<string> lines) => Ninja.FailedOutputs(lines, _program, _graph.Manifest);
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// What the lines read is each line's own walk (<see cref="NinjaRebuildGraph.ReadBy"/>) over the manifest's closure of
+    /// the target (<see cref="NinjaManifest.Closure"/>), which also follows what a build recorded to the line that makes
+    /// it: the one walk that says which objects a mutation rebuilds, walked no second time. The lines are that closure,
+    /// then each line making a file they read that the closure does not reach - a header a command generates, which a
+    /// compile is only ordered after and found - so how such a file is made is read as what it is made from is.
+    /// </remarks>
+    public BuiltFromSource ReadBy(string target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        var lines = _graph.Manifest.Closure([target]).ToList();
+        var reached = new HashSet<NinjaEdge>(lines, ReferenceEqualityComparer.Instance);
+        var read = new HashSet<string>(_graph.Paths);
+
+        foreach (var line in lines)
+        {
+            read.UnionWith(_graph.ReadBy(line));
+        }
+
+        var paths = new List<BuiltFromPath>();
+
+        foreach (var path in read.Order(StringComparer.Ordinal))
+        {
+            var producer = _graph.Producer(path);
+
+            if (producer is not null && reached.Add(producer))
+            {
+                lines.Add(producer);
+            }
+
+            paths.Add(new BuiltFromPath(path, producer is not null));
+        }
+
+        return new BuiltFromSource(target, lines, paths);
+    }
 }

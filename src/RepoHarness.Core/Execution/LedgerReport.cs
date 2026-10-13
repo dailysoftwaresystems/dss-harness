@@ -685,6 +685,7 @@ public sealed class LedgerReport
         arm.Reds,
         arm.DeclaredReds,
         Records = arm.Records is { } records ? show(records) : null,
+        arm.Key,
     };
 
     /// <summary>

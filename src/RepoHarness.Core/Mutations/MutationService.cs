@@ -269,6 +269,7 @@ public sealed class MutationService(
             Tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project),
             Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = work.Context.Config.Mutations,
+            SweepSettings = SweepSettings.Of(work.Context.Config, leg.Leg, leg.HostSettings),
             ExpectedBuildBytes = expected?.Bytes,
             ExpectedBuildSource = expected?.Source ?? string.Empty,
             Force = force,
@@ -309,8 +310,9 @@ public sealed class MutationService(
     /// <summary>
     /// What a self-test of <paramref name="work"/>'s leg sweeps: the fixture kept in <paramref name="directory"/>, built as
     /// the leg's variant builds, its binary run in its worker with what the leg's host gives it, each worker's paths
-    /// reckoned by the fixture's own build, and each arm held to the verdict it is designed to reach. Nothing says what a
-    /// build of it comes to: a few megabytes, which the copy's own size is planned with.
+    /// reckoned by the fixture's own build, each arm held to the verdict it is designed to reach, and what each arm is
+    /// judged on read by every worker and compared. Nothing says what a build of it comes to: a few megabytes, which the
+    /// copy's own size is planned with.
     /// </summary>
     /// <remarks>
     /// Its workers are copies of the fixture kept beside the leg's own tree, in the self-test's family of that tree's
@@ -324,13 +326,24 @@ public sealed class MutationService(
         ArgumentNullException.ThrowIfNull(work);
         ArgumentNullException.ThrowIfNull(arms);
 
+        var settings = MutationFixture.SettingsFor(work.Context.Config.Mutations);
+
         return new MutationSubject
         {
             TreeRoot = directory,
             Workers = MutationWorkers.Of(work.Leg.HostTreeRoot, work.Leg.Variant, selfTest: true),
             Project = MutationFixture.Project,
             Arms = ArmSelection.For(work.Leg.Name, arms.Registry, arms.Selected, arms.Scopes),
-            Settings = MutationFixture.SettingsFor(work.Context.Config.Mutations),
+            Settings = settings,
+            SweepSettings = SweepSettings.Of(
+                work.Context.Config,
+                work.Leg.Variant,
+                MutationFixture.Project,
+                tests: null,
+                work.Leg.Host.Os ?? work.Leg.Leg.Os,
+                settings,
+                work.Leg.HostSettings.Env),
+            ComparesKeys = true,
             PathReserve = MutationFixture.LongestBuildPath,
             Hold = MutationFixture.Hold,
             Force = force,

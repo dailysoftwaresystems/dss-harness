@@ -924,8 +924,9 @@ public sealed class LedgerReportTests
 
     /// <summary>
     /// Each arm a leg was asked about is in the document beneath it, whatever it reached - one the sweep did not select
-    /// among them - with what its run measured beside what it declares, and where its records are, told as the reader is
-    /// told every path; what an arm no worker drove has none of is left out, and a leg asked about no arm has none.
+    /// among them - with what its run measured beside what it declares, the key of what it was judged on, and where its
+    /// records are, told as the reader is told every path; what an arm no worker drove has none of is left out, and a leg
+    /// asked about no arm has none.
     /// </summary>
     [Fact]
     public void EachArmALegWasAskedAbout_IsInTheDocumentBeneathIt()
@@ -949,6 +950,7 @@ public sealed class LedgerReportTests
                         Reds = [],
                         DeclaredReds = ["Fixture.Charge"],
                         Records = "/home/alice/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound",
+                        Key = "9f2c0e",
                     },
                     new ArmEntry { Arm = "floor", Verdict = LegVerdict.SkippedNotSelected, Detail = "--arms does not name it", DeclaredCases = 3, DeclaredReds = ["Fixture.Floor"] },
                 ],
@@ -976,11 +978,12 @@ public sealed class LedgerReportTests
         Assert.Empty(charge.GetProperty("reds").EnumerateArray());
         Assert.Equal(["Fixture.Charge"], charge.GetProperty("declaredReds").EnumerateArray().Select(red => red.GetString()));
         Assert.Equal("~/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound", charge.GetProperty("records").GetString());
+        Assert.Equal("9f2c0e", charge.GetProperty("key").GetString());
 
         Assert.Equal(("floor", "skipped-not-selected", false), (floor.GetProperty("arm").GetString(), floor.GetProperty("verdict").GetString(), floor.GetProperty("failure").GetBoolean()));
         Assert.Equal(["Fixture.Floor"], floor.GetProperty("declaredReds").EnumerateArray().Select(red => red.GetString()));
 
-        foreach (var absent in new[] { "worker", "cases", "reds", "records" })
+        foreach (var absent in new[] { "worker", "cases", "reds", "records", "key" })
         {
             Assert.False(floor.TryGetProperty(absent, out _), $"an arm no worker drove has no {absent}");
         }
@@ -1002,6 +1005,7 @@ public sealed class LedgerReportTests
             Reds = ["Fixture.Charge"],
             DeclaredReds = ["Fixture.Charge"],
             Records = "/home/alice/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound",
+            Key = "9f2c0e",
         };
 
         using var record = JsonDocument.Parse(LedgerReport.ArmJson(arm));
@@ -1014,6 +1018,7 @@ public sealed class LedgerReportTests
             System.Text.Json.Nodes.JsonNode.DeepEquals(System.Text.Json.Nodes.JsonNode.Parse(beneath.GetRawText()), System.Text.Json.Nodes.JsonNode.Parse(record.RootElement.GetRawText())),
             $"the record holds {record.RootElement.GetRawText()}, and the ledger {beneath.GetRawText()}");
         Assert.Equal("/home/alice/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound", record.RootElement.GetProperty("records").GetString());
+        Assert.Equal("9f2c0e", record.RootElement.GetProperty("key").GetString());
     }
 
     /// <summary>

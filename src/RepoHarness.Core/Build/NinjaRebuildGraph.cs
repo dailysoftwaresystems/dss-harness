@@ -579,8 +579,39 @@ internal sealed partial class NinjaRebuildGraph(
     /// <summary>The manifest the build lines are read from.</summary>
     public NinjaManifest Manifest => manifest;
 
+    /// <summary>How the file system holding the build compares names: how every path this graph holds is compared.</summary>
+    public StringComparer Paths => paths;
+
     /// <inheritdoc cref="NinjaManifest.EdgeFor"/>
     public NinjaEdge? EdgeFor(string output) => manifest.EdgeFor(output);
+
+    /// <summary>
+    /// Every file a change to which rebuilds what <paramref name="edge"/> builds, as <see cref="DependsOn"/> asks of one:
+    /// its inputs and what its build recorded, and those of every build line producing one of them - by its inputs or by
+    /// what its build recorded - however far back. Each is whole, as the build directory resolves it, and the same walk
+    /// <see cref="DependsOn"/> takes, worked out once.
+    /// </summary>
+    /// <param name="edge">The build line.</param>
+    public IReadOnlyCollection<string> ReadBy(NinjaEdge edge)
+    {
+        ArgumentNullException.ThrowIfNull(edge);
+
+        return DependedOn(edge);
+    }
+
+    /// <summary>
+    /// The build line other than a phony one that produces <paramref name="path"/>, read from the build directory as the
+    /// manifest names its outputs, or <see langword="null"/> where none does: what such a line makes is made from what it
+    /// reads, and a phony line makes nothing - CMake names the files its own configure read as phony outputs, so a missing
+    /// one stops no build.
+    /// </summary>
+    /// <param name="path">The file, absolute, or relative to the build directory.</param>
+    public NinjaEdge? Producer(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        return Resolved(path) is { } file && ProducerOf(file) is { Rule: not NinjaManifest.PhonyRule } producer ? producer : null;
+    }
 
     /// <summary>
     /// Whether a change to <paramref name="path"/> rebuilds what <paramref name="edge"/> builds, as ninja rebuilds it: the
@@ -719,8 +750,12 @@ internal sealed partial class NinjaRebuildGraph(
     private IEnumerable<NinjaEdge> RecordedProducers(NinjaEdge edge)
         => edge.Outputs
             .SelectMany(output => records.GetValueOrDefault(NinjaManifest.Normalize(output))?.Dependencies ?? [])
-            .Select(dependency => Resolved(dependency) is { } file ? manifest.EdgeFor(Path.GetRelativePath(buildDirectory, file)) : null)
+            .Select(dependency => Resolved(dependency) is { } file ? ProducerOf(file) : null)
             .OfType<NinjaEdge>();
+
+    /// <summary>The build line that has <paramref name="file"/> among its outputs, the manifest naming them from the build directory.</summary>
+    /// <param name="file">The file, whole.</param>
+    private NinjaEdge? ProducerOf(string file) => manifest.EdgeFor(Path.GetRelativePath(buildDirectory, file));
 
     /// <summary>
     /// The headers ninja keeps that <paramref name="file"/> surely includes in <paramref name="language"/>,

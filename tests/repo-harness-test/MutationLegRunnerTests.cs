@@ -2049,6 +2049,189 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// Every arm's line carries the key of what it was judged on, and its record does too: read once, from the build of
+    /// the first worker made, before that worker drives an arm - one table to each target the arms build, whichever
+    /// arms build it - so arms of other rows have other keys, and an arm whose control stopped it has one as well.
+    /// </summary>
+    [Fact]
+    public async Task EveryArmsLine_CarriesTheKeyOfWhatItWasJudgedOn_ReadOnceFromTheFirstWorkerMadeBeforeItDroveAnArm()
+    {
+        using var sweep = new Sweep();
+        var armsBuiltBefore = new ConcurrentQueue<int>();
+
+        sweep.Builder.Graph.Reads = (worker, _) =>
+        {
+            armsBuiltBefore.Enqueue(sweep.Builder.Builds.Count(build => build.TreeRoot == worker && build.Leg.Contains($"/{MutationRecords.ArmsDirectory}/", StringComparison.Ordinal)));
+            return null;
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
+        var keys = entry.Arms.ToDictionary(arm => arm.Arm, arm => arm.Key);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Single(sweep.Builder.Graph.AskedOfReads.Select(read => read.Worker).Distinct(StringComparer.Ordinal));
+        Assert.Equal(["fixture", "fixture_tests"], sweep.Builder.Graph.AskedOfReads.Select(read => read.Target).Order(StringComparer.Ordinal));
+        Assert.All(armsBuiltBefore, built => Assert.Equal(0, built));
+        Assert.All(keys.Values, key => Assert.Matches("^[0-9a-f]{64}$", key));
+        Assert.Equal(3, keys.Values.Distinct(StringComparer.Ordinal).Count());
+
+        foreach (var arm in entry.Arms)
+        {
+            using var record = JsonDocument.Parse(File.ReadAllText(Path.Combine(sweep.Records(arm.Arm), MutationRecords.ArmRecordFileName)));
+
+            Assert.Equal(arm.Key, record.RootElement.GetProperty("key").GetString());
+        }
+
+        using var stopped = new Sweep { Workers = 1 };
+        stopped.Tests.Answer = request => request.Bound is null ? Tests.Ran(["Fixture.Depth"]) : Tests.Judged(request);
+
+        var control = Assert.Single((await stopped.RunAsync([ChargeBound])).Arms);
+
+        Assert.Equal((LegVerdict.Stopped, keys["charge-bound"]), (control.Verdict, control.Key));
+    }
+
+    /// <summary>
+    /// An arm whose key cannot be read - a file its target's build reads is gone - has none on its line, and is judged as
+    /// it always was: a key is what an arm was judged on, and never a part of how it is judged.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWhoseKeyCannotBeRead_HasNone_AndIsJudgedAsEver()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        var gone = Path.Combine(Path.GetTempPath(), $"gone-{Guid.NewGuid():N}", "budget.hpp");
+
+        sweep.Builder.Graph.Reads = (_, target) => new BuiltFromSource(target, [], [new BuiltFromPath(gone, false)]);
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.All(entry.Arms, arm => Assert.Null(arm.Key));
+    }
+
+    /// <summary>
+    /// A sweep that compares its workers' keys, as a self-test does, has every worker made read what each arm is judged
+    /// on from its own build - each before it drives an arm - and compares them arm by arm: where they agree, the leg
+    /// reaches what its arms reach, and its line says nothing of them.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTest_ComparesEachArmsKeyAcrossItsWorkers()
+    {
+        using var sweep = new Sweep { ComparesKeys = true };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Builder.Graph.AskedOfReads.Select(read => read.Worker).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+        Assert.Equal(4, sweep.Builder.Graph.AskedOfReads.Count);
+        Assert.DoesNotContain("keys", entry.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A self-test whose workers read what an arm is judged on otherwise fails, as one whose arm missed its design does:
+    /// its line names the first arm that differs, the two workers, and the part, in the words that name any difference
+    /// of what an arm was judged on - and how many other arms differ too.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTestWhoseWorkersDisagreeOnAKey_Fails_NamingTheArmTheWorkersAndThePart()
+    {
+        using var sweep = new Sweep { ComparesKeys = true };
+
+        sweep.Builder.Graph.Reads = (worker, target) => worker == sweep.Worker(2) && target == "fixture"
+            ? new BuiltFromSource(target, [new NinjaEdge("CXX_COMPILER__fixture_", [SiteObject], ["src/fixture.cpp"], "src/fixture.cpp", "gcc", "g++ -O2 -c src/fixture.cpp")], [])
+            : null;
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
+
+        Assert.Equal(LegVerdict.Violated, entry.Verdict);
+        Assert.Contains(
+            "the self-test's keys differ between workers: arm 'charge-bound' on worker 2 against worker 1 - how 'fixture' is built changed; "
+            + "so do those of 2 other arm(s)",
+            entry.Detail,
+            StringComparison.Ordinal);
+        Assert.All(entry.Arms, arm => Assert.Equal(LegVerdict.Passed, arm.Verdict));
+    }
+
+    /// <summary>
+    /// A compiler each worker's build identified in its own copy of the tree is one compiler to a self-test's comparison -
+    /// the worker's path told in it, as in a build line - and another program is a compiler that changed, named by the
+    /// least that tells the two apart.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTest_TellsEachWorkersPathInTheCompilersItIdentified_AndNamesAnotherProgram()
+    {
+        async Task<LegEntry> SweptAsync(Func<Sweep, string, string> program)
+        {
+            using var sweep = new Sweep { ComparesKeys = true };
+
+            // As a configure leaves it: an answer naming the CMake that gave it, and that CMake's record of the compiler.
+            sweep.Builder.Before = (request, _) =>
+            {
+                var build = request.Variant.DirectoryUnder(request.TreeRoot);
+                var record = Path.Combine(build, "CMakeFiles", "4.3.2", "CMakeCXXCompiler.cmake");
+
+                Directory.CreateDirectory(Path.Combine(build, ".cmake", "api", "v1", "reply"));
+                Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+                File.WriteAllText(
+                    Path.Combine(build, ".cmake", "api", "v1", "reply", "index-2026-09-22T12-00-00-0000.json"),
+                    """{ "cmake": { "version": { "string": "4.3.2" } }, "reply": {} }""");
+                File.WriteAllText(
+                    record,
+                    $"set(CMAKE_CXX_COMPILER \"{program(sweep, request.TreeRoot).Replace('\\', '/')}\")\nset(CMAKE_CXX_COMPILER_ID \"GNU\")\n"
+                    + "set(CMAKE_CXX_COMPILER_VERSION \"13.3.0\")\n");
+
+                return Task.CompletedTask;
+            };
+
+            return await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]);
+        }
+
+        var agree = await SweptAsync((_, worker) => Path.Combine(worker, "toolchain", "bin", "g++"));
+        var differ = await SweptAsync((sweep, worker) => Path.Combine(worker, "toolchain", "bin", worker == sweep.Worker(2) ? "g++-13" : "g++"));
+
+        Assert.True(agree.Verdict == LegVerdict.Passed, agree.Detail);
+        Assert.Equal(LegVerdict.Violated, differ.Verdict);
+        Assert.Contains(
+            "the self-test's keys differ between workers: arm 'charge-bound' on worker 2 against worker 1 - its compiler changed: "
+            + "CXX GNU 13.3.0 '{tree}/toolchain/bin/g++', now GNU 13.3.0 '{tree}/toolchain/bin/g++-13'; so do those of 2 other arm(s)",
+            differ.Detail,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>A self-test of one worker - as a WSL distribution runs - had no other worker's keys to compare with, and its line says so.</summary>
+    [Fact]
+    public async Task ASelfTestWithOneWorker_SaysItHadNothingToCompare()
+    {
+        using var sweep = new Sweep { ComparesKeys = true, Workers = 1 };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Contains("one worker here, so its keys were compared with no other's", entry.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What a self-test's arms were judged on is never put on their lines nor in their records: it is the fixture's, read
+    /// to be compared between workers, and nothing keeps it.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTestsKeys_AreNeverRecorded()
+    {
+        using var sweep = new Sweep { ComparesKeys = true, Hold = (arm, reached) => ReachedVerdict.Of(LegVerdict.Passed, $"{arm} held: {reached.Detail}") };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.All(entry.Arms, arm =>
+        {
+            Assert.Null(arm.Key);
+
+            using var record = JsonDocument.Parse(File.ReadAllText(Path.Combine(sweep.Records(arm.Arm), MutationRecords.ArmRecordFileName)));
+
+            Assert.False(record.RootElement.TryGetProperty("key", out _));
+        });
+    }
+
+    /// <summary>
     /// The dependency sources the leg's own build fetched are read once, for every worker, and each worker is given its
     /// own copy before it builds, and configured with it: so no build of a worker reads the leg's own build directory,
     /// which a clean of the leg removes and a build of it may fetch again while the sweep runs. Sources the tree's own
@@ -2890,6 +3073,9 @@ public sealed class MutationLegRunnerTests
 
         public Func<string, ReachedVerdict, ReachedVerdict>? Hold { get; init; }
 
+        /// <summary>Whether every worker reads what each arm is judged on and the sweep compares them, as a self-test's does.</summary>
+        public bool ComparesKeys { get; init; }
+
         public Dictionary<string, string> HostEnv { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         public Func<UnitAdmission, Admission?> Admit { get; init; } = _ => null;
@@ -2989,6 +3175,8 @@ public sealed class MutationLegRunnerTests
                     Hold = Hold,
                     Arms = new LegArms(driven, unselected ?? []),
                     Settings = settings,
+                    SweepSettings = SweepSettings.Of(config, Variant, project, Test, os, settings, HostEnv),
+                    ComparesKeys = ComparesKeys,
                     ExpectedBuildBytes = ExpectedBuildBytes,
                     ExpectedBuildSource = ExpectedBuildBytes is null ? string.Empty : "as declared",
                     Force = Force,
@@ -3297,7 +3485,7 @@ public sealed class MutationLegRunnerTests
         public Func<BuildRequest, Exception?> GraphThrows { get; set; } = _ => null;
 
         public Task<IWorkerGraph> ReadGraphAsync(HarnessConfig config, BuildRequest request, CancellationToken cancellationToken)
-            => GraphThrows(request) is { } failure ? Task.FromException<IWorkerGraph>(failure) : Task.FromResult<IWorkerGraph>(Graph);
+            => GraphThrows(request) is { } failure ? Task.FromException<IWorkerGraph>(failure) : Task.FromResult(Graph.In(request.TreeRoot));
 
         public NinjaLog? ReadLog(string buildDirectory)
         {
@@ -3314,10 +3502,44 @@ public sealed class MutationLegRunnerTests
 
     /// <summary>
     /// The fixture's build as its manifest and records would say it: a library target, its test binary, and one object both
-    /// build from the sites - recording the targets each question about what depends on a site was asked of.
+    /// build from the sites - recording the targets each question about what depends on a site was asked of - and what each
+    /// target's build reads in the worker it is asked of: its sources, and a line naming the worker's own path.
     /// </summary>
-    private sealed class Graph : IWorkerGraph
+    private sealed class Graph
     {
+        /// <summary>What a target's build reads in a worker, given the worker's root, where a test says; the fixture's own otherwise.</summary>
+        public Func<string, string, BuiltFromSource?> Reads { get; set; } = (_, _) => null;
+
+        /// <summary>Each worker the reads of a target's build were asked of, with the target, in the order asked.</summary>
+        public ConcurrentQueue<(string Worker, string Target)> AskedOfReads { get; } = new();
+
+        /// <summary>The graph as the build in <paramref name="worker"/> reads it.</summary>
+        public IWorkerGraph In(string worker) => new InWorker(this, worker);
+
+        /// <summary>
+        /// What <paramref name="target"/>'s build reads in <paramref name="worker"/>: the fixture's object compiled from its
+        /// sources, named by the worker's own path, and the library or the test binary made of it.
+        /// </summary>
+        public BuiltFromSource ReadBy(string worker, string target)
+        {
+            AskedOfReads.Enqueue((worker, target));
+
+            if (Reads(worker, target) is { } said)
+            {
+                return said;
+            }
+
+            var source = Path.Combine(worker, "src", "fixture.cpp");
+            var objectFile = Path.Combine(Variant.DirectoryUnder(worker), SiteObject);
+            var compile = new NinjaEdge("CXX_COMPILER__fixture_", [SiteObject], [source], source, "gcc", $"g++ -I{worker}/src -c {source} -o {SiteObject}");
+            var made = new NinjaEdge("CXX_LINKER__" + target + "_", [.. OutputsOf(target)], [SiteObject], SiteObject, null, $"g++ {SiteObject} -o {OutputsOf(target).FirstOrDefault()}");
+
+            return new BuiltFromSource(
+                target,
+                [made, compile],
+                [new BuiltFromPath(source, false), new BuiltFromPath(Path.Combine(worker, "src", "budget.hpp"), false), new BuiltFromPath(objectFile, true)]);
+        }
+
         public ConcurrentQueue<IReadOnlyList<string>> AskedOfTargets { get; } = new();
 
         /// <summary>The sites each question about what depends on them named, in the order asked.</summary>
@@ -3347,6 +3569,20 @@ public sealed class MutationLegRunnerTests
 
         public IReadOnlyList<string> FailedOutputs(IEnumerable<string> lines)
             => [.. lines.Where(line => line.StartsWith("FAILED: ", StringComparison.Ordinal)).Select(line => line["FAILED: ".Length..])];
+
+        /// <summary>The graph a worker's build reads, asking the one graph every worker shares.</summary>
+        private sealed class InWorker(Graph graph, string worker) : IWorkerGraph
+        {
+            public IReadOnlyList<string> OutputsOf(string target) => graph.OutputsOf(target);
+
+            public WorkerProgram ProgramOf(string target) => graph.ProgramOf(target);
+
+            public IReadOnlyList<string> DependentObjects(IReadOnlyList<string> targets, IReadOnlyCollection<string> sites) => graph.DependentObjects(targets, sites);
+
+            public IReadOnlyList<string> FailedOutputs(IEnumerable<string> lines) => graph.FailedOutputs(lines);
+
+            public BuiltFromSource ReadBy(string target) => graph.ReadBy(worker, target);
+        }
     }
 
     /// <summary>Runs the fixture's test binary as it would run: a case red for each mutation its source holds, and its diagnostic said with one.</summary>

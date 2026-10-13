@@ -372,6 +372,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 Reds = arm.Reds,
                 DeclaredReds = [.. arm.DeclaredReds ?? []],
                 Records = arm.Records,
+                Key = arm.Key,
             })],
         };
     }
@@ -427,5 +428,6 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         int DeclaredCases,
         IReadOnlyList<string>? Reds,
         IReadOnlyList<string>? DeclaredReds,
-        string? Records);
+        string? Records,
+        string? Key = null);
 }

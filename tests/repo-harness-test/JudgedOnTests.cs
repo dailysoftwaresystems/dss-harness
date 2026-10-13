@@ -1,0 +1,385 @@
+using System.Text;
+using RepoHarness.Core.Execution;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Mutations;
+
+namespace RepoHarness.Tests;
+
+/// <summary>
+/// What an arm is judged on, and its key: every part of a row the sweep and the judge read moves it, and nothing else of
+/// the registry does; a text or a site that moved moves it and is named; and the judge's revision is held to its rules.
+/// </summary>
+public sealed class JudgedOnTests
+{
+    /// <summary>
+    /// The registry every case starts from: a TEST-RED arm with two C rows, a G row and an M row in another file and one in
+    /// its own, and a BUILD-RED arm with its paired control.
+    /// </summary>
+    private const string Registry = """
+        # the arms
+        A | one | src/a.cpp | texts/a.before | texts/a.after | TEST-RED | lib | lib_tests | 3 | texts/a.diag | why one
+        C | one | Suite.A | red
+        C | one | Suite.B | red
+        G | one | Suite.G | green
+        M | one | src/b.cpp | texts/b.before | texts/b.after | coupled
+        M | one | src/a.cpp | texts/a2.before | texts/a2.after | further
+
+        A | two | src/d.hpp | texts/d.before | texts/d.after | BUILD-RED | lib | - | 0 | PAIRED-CONTROL | why two
+        B | two | texts/d.cb | texts/d.ca | another builds
+        """;
+
+    /// <summary>
+    /// The key moves with every field of every row the sweep and the judge read - one case to each - and with none of
+    /// what they do not: a why, a comment, a line's number, the letter case of the arm's id, and an S row.
+    /// </summary>
+    [Theory]
+    [InlineData("A | one | src/a.cpp |", "A | one | src/a9.cpp |", true)]
+    [InlineData("| texts/a.before | texts/a.after | TEST-RED", "| texts/a9.before | texts/a.after | TEST-RED", true)]
+    [InlineData("| texts/a.before | texts/a.after | TEST-RED", "| texts/a.before | texts/a9.after | TEST-RED", true)]
+    [InlineData("| TEST-RED | lib | lib_tests | 3 |", "| TEST-RED | lib9 | lib_tests | 3 |", true)]
+    [InlineData("| TEST-RED | lib | lib_tests | 3 |", "| TEST-RED | lib | lib9_tests | 3 |", true)]
+    [InlineData("| lib_tests | 3 | texts/a.diag |", "| lib_tests | 4 | texts/a.diag |", true)]
+    [InlineData("| 3 | texts/a.diag |", "| 3 | texts/a9.diag |", true)]
+    [InlineData("C | one | Suite.B | red", "C | one | Suite.Z | red", true)]
+    [InlineData("G | one | Suite.G | green", "G | one | Suite.Z | green", true)]
+    [InlineData("M | one | src/b.cpp |", "M | one | src/c.cpp |", true)]
+    [InlineData("| texts/b.before | texts/b.after |", "| texts/b9.before | texts/b.after |", true)]
+    [InlineData("| texts/b.before | texts/b.after |", "| texts/b.before | texts/b9.after |", true)]
+    [InlineData("| texts/a2.before | texts/a2.after |", "| texts/a2.before | texts/a9.after |", true)]
+    [InlineData("B | two | texts/d.cb | texts/d.ca |", "B | two | texts/d.c9 | texts/d.ca |", true)]
+    [InlineData("B | two | texts/d.cb | texts/d.ca |", "B | two | texts/d.cb | texts/d.c9 |", true)]
+    [InlineData("| why one", "| why else", false)]
+    [InlineData("C | one | Suite.A | red", "C | one | Suite.A | red, for another reason", false)]
+    [InlineData("| coupled", "| coupled, and said so", false)]
+    [InlineData("B | two | texts/d.cb | texts/d.ca | another builds", "B | two | texts/d.cb | texts/d.ca | another reason", false)]
+    [InlineData("# the arms", "# the arms, commented otherwise\n# and at length\n\n", false)]
+    [InlineData("A | one |", "A | ONE |", false)]
+    [InlineData("G | one | Suite.G | green", "G | one | Suite.G | green\nS | one | native | where it runs", false)]
+    public void TheKey_ChangesWithEachRowTheJudgeReads_AndWithNoWhyCommentLineOrSRow(string row, string edited, bool moves)
+    {
+        Assert.Contains(row, Registry, StringComparison.Ordinal);
+
+        var before = Arms(Registry);
+        var after = Arms(Registry.Replace(row, edited, StringComparison.Ordinal));
+
+        foreach (var id in new[] { "one", "two" })
+        {
+            var then = Key(before.Find(id)!);
+            var now = Key(after.Find(id)!);
+
+            if (moves && Changed(row, id))
+            {
+                Assert.NotEqual(then, now);
+            }
+            else
+            {
+                Assert.Equal(then, now);
+            }
+        }
+
+        static bool Changed(string row, string id) => row.Contains($"| {id} |", StringComparison.Ordinal)
+            || (id == "one" && !row.Contains("| two |", StringComparison.Ordinal) && !row.StartsWith("B |", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// C and G rows are read as sets, as the judge compares them, so reordering them moves no key; M rows are read in the
+    /// order declared, as their texts are found in their sites in that order, so reordering them does.
+    /// </summary>
+    [Fact]
+    public void ReorderingCOrGRows_ChangesNoKey_AndReorderingMRowsDoes()
+    {
+        const string Rows = """
+            A | one | src/a.cpp | texts/a.before | texts/a.after | TEST-RED | lib | lib_tests | 3 | texts/a.diag | why
+            C | one | Suite.A | red
+            C | one | Suite.B | red
+            G | one | Suite.G | green
+            G | one | Suite.H | green
+            M | one | src/b.cpp | texts/b.before | texts/b.after | coupled
+            M | one | src/c.cpp | texts/c.before | texts/c.after | coupled
+            """;
+
+        string Swapped(string first, string second)
+            => Rows.Replace(first, "\u0001", StringComparison.Ordinal).Replace(second, first, StringComparison.Ordinal).Replace("\u0001", second, StringComparison.Ordinal);
+
+        var key = Key(Arms(Rows).Find("one")!);
+
+        Assert.Equal(key, Key(Arms(Swapped("C | one | Suite.A | red", "C | one | Suite.B | red")).Find("one")!));
+        Assert.Equal(key, Key(Arms(Swapped("G | one | Suite.G | green", "G | one | Suite.H | green")).Find("one")!));
+        Assert.NotEqual(
+            key,
+            Key(Arms(Swapped("M | one | src/b.cpp | texts/b.before | texts/b.after | coupled", "M | one | src/c.cpp | texts/c.before | texts/c.after | coupled")).Find("one")!));
+    }
+
+    /// <summary>
+    /// A text the arm cites, or a site it mutates, that holds something else - or that the reading no longer holds - moves
+    /// the key, and the difference names it, in the words a line says it in; every text the arm cites is one, each once,
+    /// and its sites are its own and its M rows' files.
+    /// </summary>
+    [Fact]
+    public void ATextOrASiteThatMoved_ChangesTheKey_AndIsNamed()
+    {
+        var arm = Arms(Registry).Find("one")!;
+        var tree = JudgedOn.TextsOf(arm).Concat(arm.Sites.Select(site => site.Site)).ToDictionary(path => path, path => (string?)FileContentHash.Of(Encoding.UTF8.GetBytes(path)), StringComparer.Ordinal);
+
+        Assert.Equal(["texts/a.before", "texts/a.after", "texts/a2.before", "texts/a2.after", "texts/b.before", "texts/b.after", "texts/a.diag"], JudgedOn.TextsOf(arm));
+        Assert.Equal(["src/a.cpp", "src/b.cpp"], arm.Sites.Select(site => site.Site));
+        Assert.Equal(
+            ["texts/d.before", "texts/d.after", "texts/d.cb", "texts/d.ca"],
+            JudgedOn.TextsOf(Arms(Registry).Find("two")!));
+
+        var then = KeyOf(arm, tree);
+        var text = KeyOf(arm, new Dictionary<string, string?>(tree) { ["texts/a2.after"] = "moved" });
+        var gone = KeyOf(arm, new Dictionary<string, string?>(tree) { ["texts/a.diag"] = null });
+        var site = KeyOf(arm, new Dictionary<string, string?>(tree) { ["src/b.cpp"] = "moved" });
+
+        Assert.Equal(3, new[] { text.Key, gone.Key, site.Key }.Distinct().Count());
+        Assert.DoesNotContain(then.Key, new[] { text.Key, gone.Key, site.Key });
+        Assert.Equal([new PendingReason("text-moved", "a text it cites moved: texts/a2.after")], KeyDifference.Between(then, text));
+        Assert.Equal([new PendingReason("text-moved", "a text it cites moved: texts/a.diag")], KeyDifference.Between(then, gone));
+        Assert.Equal([new PendingReason("site-moved", "its site moved: src/b.cpp")], KeyDifference.Between(then, site));
+        Assert.Empty(KeyDifference.Between(then, KeyOf(arm, tree)));
+    }
+
+    /// <summary>
+    /// Every part beyond the rows, the texts and the sites moves the key where it holds something else - the judge's
+    /// revision, each compiler's id, version, program and words, the developer environment, each of the three settings,
+    /// the host, and each part of a table - and the difference is named in the words a line says it in, the compiler by
+    /// the least that tells the two apart. A part that could not be read leaves no key, and is named as that alone.
+    /// </summary>
+    [Theory]
+    [InlineData("judge", "judge-revised", "the judge's rules changed since (revision 1, now 2)")]
+    [InlineData("compiler version", "compiler-changed", "its compiler changed: CXX GNU 13.3.0, now GNU 14.1.0")]
+    [InlineData("compiler program", "compiler-changed", "its compiler changed: CXX GNU 13.3.0 'C:/mingw/bin/g++.exe', now GNU 13.3.0 'C:/other/bin/g++.exe'")]
+    [InlineData("compiler words", "compiler-changed", "its compiler changed: CXX GNU 13.3.0 'C:/mingw/bin/g++.exe', now GNU 13.3.0 'C:/mingw/bin/g++.exe' -m32")]
+    [InlineData("compiler added", "compiler-changed", "its compiler changed: C none, now GNU 13.3.0")]
+    [InlineData("developer environment", "environment-changed", "its developer environment changed")]
+    [InlineData("build settings", "build-environment-changed", "the environment its build is given changed")]
+    [InlineData("run settings", "run-settings-changed", "how its run starts changed")]
+    [InlineData("judge settings", "judge-settings-changed", "what its run is judged by changed")]
+    [InlineData("host", "host-changed", "it was judged on local, and this leg runs on ssh:box")]
+    [InlineData("lines", "lines-changed", "how 'lib' is built changed")]
+    [InlineData("file moved", "files-moved", "what 'lib' is built from moved: src/a.cpp")]
+    [InlineData("file joined", "set-changed", "a file joined or left what 'lib' is built from")]
+    [InlineData("made", "made-moved", "a file its build makes moved, in {build}")]
+    [InlineData("fetched", "fetched-moved", "the sources of 'plumb' its build fetched moved")]
+    [InlineData("outside", "outside-moved", "a file outside the tree its build reads moved, in C:/sys/include")]
+    [InlineData("unread", "key-unreadable", "what it would be judged on cannot be read now: 'C:/sys/include/a.h', which the build of 'lib' reads, is gone")]
+    public void EveryOtherPart_MovesTheKey_AndIsNamedInTheWordsALineSaysItIn(string part, string code, string said)
+    {
+        var then = KeyOf(Arms(Registry).Find("one")!, new Dictionary<string, string?>(StringComparer.Ordinal));
+        var compiler = then.JudgedOn.Compilers[0];
+        var now = part switch
+        {
+            "judge" => Again(then, on => on with { Judge = on.Judge + 1 }),
+            "compiler version" => Again(then, on => on with { Compilers = [compiler with { Version = "14.1.0" }] }),
+            "compiler program" => Again(then, on => on with { Compilers = [compiler with { Program = "C:/other/bin/g++.exe" }] }),
+            "compiler words" => Again(then, on => on with { Compilers = [compiler with { Arguments = ["-m32"] }] }),
+            "compiler added" => Again(then, on => on with { Compilers = [compiler with { Language = "C" }, compiler] }),
+            "developer environment" => Again(then, on => on with { DeveloperEnvironment = new DeveloperEnvironmentFact("vs", "C:/vs", "17.14", "14.44", "amd64") }),
+            "build settings" => Again(then, on => on with { Settings = on.Settings with { Build = "other" } }),
+            "run settings" => Again(then, on => on with { Settings = on.Settings with { Run = "other" } }),
+            "judge settings" => Again(then, on => on with { Settings = on.Settings with { Judge = "other" } }),
+            "host" => Again(then, on => on with { Host = "ssh:box" }),
+            "lines" => Again(then, table: table => table with { Lines = "other" }),
+            "file moved" => Again(then, table: table => table with { Files = new Dictionary<string, string>(table.Files) { ["src/a.cpp"] = "moved" } }),
+            "file joined" => Again(then, table: table => table with { Files = new Dictionary<string, string>(table.Files) { ["src/b.cpp"] = "b" } }),
+            "made" => Again(then, table: table => table with { Made = new Dictionary<string, FilesIn>(table.Made) { [BuiltFromReader.BuildDirectory] = new(1, "moved") } }),
+            "fetched" => Again(then, table: table => table with { Fetched = new Dictionary<string, string>(table.Fetched) { ["plumb"] = "moved" } }),
+            "outside" => Again(then, table: table => table with { Outside = new Dictionary<string, FilesIn>(table.Outside) { ["C:/sys/include"] = new(2, "moved") } }),
+            _ => Again(then, unread: "'C:/sys/include/a.h', which the build of 'lib' reads, is gone"),
+        };
+
+        Assert.NotNull(then.Key);
+        Assert.NotEqual(then.Key, now.Key);
+        Assert.Equal(part == "unread", now.Key is null);
+        Assert.Equal([new PendingReason(code, said)], KeyDifference.Between(then, now));
+        Assert.Empty(KeyDifference.Between(then, Again(then)));
+    }
+
+    /// <summary>
+    /// The judge's revision is held to its rules: a fixed table of observations is judged by the arm's judge and the
+    /// unmutated run's, every verdict and detail digested, and the digest is pinned beside the revision - so a rule that
+    /// changes what either judge reaches fails here until the revision is raised and the new digest pinned with it.
+    /// </summary>
+    [Fact]
+    public void TheJudgesRevision_IsRaisedWithItsRules()
+    {
+        const int PinnedRevision = 1;
+        const string PinnedDigest = "e4f7762baa5ce64023d246a43751248db964d99508ba8daf6ef737b93c467f5b";
+
+        var digest = FileContentHash.Of(Encoding.UTF8.GetBytes(string.Join("\n", Verdicts())));
+
+        Assert.True(
+            (ArmJudge.Revision, digest) == (PinnedRevision, PinnedDigest),
+            $"The judges reach {digest} over the fixed table at revision {ArmJudge.Revision}, and {PinnedDigest} is pinned for revision "
+            + $"{PinnedRevision}: a rule of theirs changed, so raise ArmJudge.Revision and pin the new digest beside it.");
+    }
+
+    /// <summary>
+    /// What both judges reach over a fixed table: each refusal of the pre-flight, each way a build ends, each way a run
+    /// ends, a BUILD-RED arm's mutation and paired control, and each way an unmutated control ends.
+    /// </summary>
+    private static IEnumerable<string> Verdicts()
+    {
+        var registry = Arms(Registry);
+        var testRed = registry.Find("one")!;
+        var buildRed = registry.Find("two")!;
+        const string Object = "CMakeFiles/lib.dir/src/a.cpp.o";
+        var ready = new ArmPreflight { Counts = [new TextCount("texts/a.before", "src/a.cpp", 1)], Dependents = [Object] };
+        var built = new ArmBuild(ReachedVerdict.Of(LegVerdict.Passed, "built"), [], []);
+        var failedAtSite = new ArmBuild(ReachedVerdict.Of(LegVerdict.Failed, "exited 1"), [Object], []);
+        var failedElsewhere = new ArmBuild(ReachedVerdict.Of(LegVerdict.Failed, "exited 1"), ["bin/lib_tests"], []);
+
+        ArmPreflight[] preflights =
+        [
+            ready,
+            ready with { MisspeltSites = [new SiteSpelling("src/A.cpp", "src/a.cpp")] },
+            ready with { MissingSites = ["src/a.cpp"] },
+            ready with { UnreadSites = ["src/a.cpp"] },
+            ready with { TextProblems = ["text 'texts/a.after' is not a file in the worker's copy of the tree"] },
+            ready with { Counts = [new TextCount("texts/a.before", "src/a.cpp", 2)] },
+            ready with { Unchanged = [new UnchangedSite("texts/a.before", "texts/a.after", "src/a.cpp")] },
+            ready with { TargetBuilt = false },
+            ready with { RunnerProblem = "runner 'lib_tests' builds no program" },
+            ready with { Dependents = [] },
+        ];
+
+        ArmBuild[] builds =
+        [
+            built,
+            failedAtSite,
+            failedElsewhere,
+            new(ReachedVerdict.Of(LegVerdict.Stopped, "stopped"), [], []),
+            new(ReachedVerdict.Of(LegVerdict.InputsMoved, "an input moved"), [], []),
+            new(ReachedVerdict.Of(LegVerdict.Passed, "built"), [], [Object]),
+        ];
+
+        ArmRun[] runs =
+        [
+            ArmRun.StoppedAt(new RunBound(TimeSpan.FromSeconds(100), "10x the unmutated run")),
+            ArmRun.Hung(45),
+            ArmRun.Exited(3, RunReport.None),
+            ArmRun.Exited(1, RunReport.NotRead("held")),
+            ArmRun.Exited(1, RunReport.NoReport("no xml")),
+            Ran(1, [], ["Suite.A", "Suite.B", "Suite.G"]),
+            Ran(1, ["Suite.A"], ["Suite.G"], ["Suite.B"]),
+            Ran(0, [], ["Suite.A", "Suite.B", "Suite.G"]),
+            Ran(1, ["Suite.A", "Suite.G"], ["Suite.B"]),
+            Ran(1, ["Suite.A", "Suite.B"], ["Suite.X"], ["Suite.G"]),
+            Ran(1, ["Suite.A", "Suite.B"], ["Suite.G"], said: false),
+            Ran(1, ["Suite.A", "Suite.B"], ["Suite.G"]),
+        ];
+
+        foreach (var preflight in preflights)
+        {
+            yield return Said(ArmJudge.Judge(testRed, new ArmObservation(preflight)));
+        }
+
+        foreach (var build in builds)
+        {
+            yield return Said(ArmJudge.Judge(testRed, new ArmObservation(ready) { Build = build }));
+            yield return Said(ArmJudge.Judge(buildRed, new ArmObservation(ready) { Build = build }));
+            yield return Said(ArmJudge.Judge(buildRed, new ArmObservation(ready) { Build = failedAtSite, Control = build }));
+            yield return ArmJudge.Next(testRed, new ArmObservation(ready) { Build = build }).ToString();
+        }
+
+        foreach (var run in runs)
+        {
+            yield return Said(ArmJudge.Judge(testRed, new ArmObservation(ready) { Build = built, Run = run }));
+
+            // An unmutated run has no bound to run past.
+            if (run.PastBound is null)
+            {
+                yield return Outcome(PristineJudge.Judge("lib_tests", built, run, TimeSpan.FromSeconds(4), 10));
+            }
+        }
+
+        yield return Outcome(PristineJudge.Judge("lib_tests", failedElsewhere, null, TimeSpan.Zero, 10));
+        yield return Outcome(PristineJudge.Judge("lib_tests", built, Ran(0, [], ["Suite.A"]), TimeSpan.FromHours(2), 10));
+        yield return string.Join(",", ArmJudge.Builds(testRed).Concat(ArmJudge.Builds(buildRed)));
+
+        static string Said(ReachedVerdict? reached) => reached is null ? "none" : $"{reached.Verdict}: {reached.Detail}";
+
+        static string Outcome(PristineOutcome outcome) => $"{Said(outcome.Leg)} / {outcome.Stops} / {outcome.Bound}";
+    }
+
+    /// <summary>A run that exited <paramref name="exitCode"/>, its report naming the red, green and unrun cases.</summary>
+    private static ArmRun Ran(int exitCode, string[] reds, string[] greens, string[]? notRun = null, bool said = true)
+    {
+        static string Case(string id, string status, string body)
+            => $"<testcase classname=\"{id[..id.IndexOf('.', StringComparison.Ordinal)]}\" name=\"{id[(id.IndexOf('.', StringComparison.Ordinal) + 1)..]}\" status=\"{status}\">{body}</testcase>";
+
+        var xml = "<testsuites><testsuite name=\"Suite\">"
+            + string.Concat(reds.Select(id => Case(id, "run", "<failure message=\"red\"/>")))
+            + string.Concat(greens.Select(id => Case(id, "run", string.Empty)))
+            + string.Concat((notRun ?? []).Select(id => Case(id, "notrun", string.Empty)))
+            + "</testsuite></testsuites>";
+
+        return ArmRun.Exited(exitCode, RunReport.Of(JUnitReport.Read(xml)!), said);
+    }
+
+    /// <summary>The arms <paramref name="text"/> declares, as a sweep reads them.</summary>
+    private static MutationRegistry Arms(string text)
+    {
+        var reading = MutationRegistryParser.Parse(MutationRegistryParser.Lines(text), texts: null);
+
+        Assert.True(reading.Valid, string.Join("; ", reading.Problems));
+
+        return reading.Registry;
+    }
+
+    /// <summary>The key of <paramref name="arm"/> where everything but its rows is held as one value.</summary>
+    private static string Key(MutationArm arm) => KeyOf(arm, new Dictionary<string, string?>(StringComparer.Ordinal)).Key!;
+
+    /// <summary>
+    /// What <paramref name="arm"/> is judged on where the reading of the tree holds <paramref name="tree"/>, and everything
+    /// else is held as one value: one table of a file of each kind, one compiler, no developer environment, and the same
+    /// settings and host.
+    /// </summary>
+    private static ArmKey KeyOf(MutationArm arm, IReadOnlyDictionary<string, string?> tree)
+    {
+        var table = new BuiltFromTable
+        {
+            Target = arm.Target,
+            Lines = "lines",
+            Files = new Dictionary<string, string>(StringComparer.Ordinal) { ["src/a.cpp"] = "a" },
+            Fetched = new Dictionary<string, string>(StringComparer.Ordinal) { ["plumb"] = "sources" },
+            Made = new Dictionary<string, FilesIn>(StringComparer.Ordinal) { [BuiltFromReader.BuildDirectory] = new(1, "made") },
+            Outside = new Dictionary<string, FilesIn>(StringComparer.Ordinal) { ["C:/sys/include"] = new(2, "headers") },
+        };
+
+        return Again(
+            new ArmKey(
+                new JudgedOn
+                {
+                    Judge = ArmJudge.Revision,
+                    Rows = JudgedOn.RowsOf(arm),
+                    Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, path => tree.GetValueOrDefault(path), StringComparer.Ordinal),
+                    Sites = arm.Sites.ToDictionary(site => site.Site, site => tree.GetValueOrDefault(site.Site), StringComparer.Ordinal),
+                    Built = new Dictionary<string, string>(StringComparer.Ordinal),
+                    Compilers = [new JudgedCompiler("CXX", "GNU", "13.3.0", "C:/mingw/bin/g++.exe", [])],
+                    DeveloperEnvironment = null,
+                    Settings = new SweepSettings("build", "run", "judge"),
+                    Host = "local",
+                },
+                new Dictionary<string, BuiltFromTable>(StringComparer.Ordinal) { [arm.Target] = table },
+                null));
+    }
+
+    /// <summary>
+    /// <paramref name="key"/> with what it is judged on as <paramref name="judged"/> makes it and its table as
+    /// <paramref name="table"/> makes it, the table's digest among what it is judged on, and read or not as
+    /// <paramref name="unread"/> says.
+    /// </summary>
+    private static ArmKey Again(ArmKey key, Func<JudgedOn, JudgedOn>? judged = null, Func<BuiltFromTable, BuiltFromTable>? table = null, string? unread = null)
+    {
+        var tables = key.Tables.ToDictionary(pair => pair.Key, pair => table is null ? pair.Value : table(pair.Value), StringComparer.Ordinal);
+        var on = (judged ?? (on => on))(key.JudgedOn) with
+        {
+            Built = tables.ToDictionary(pair => pair.Key, pair => pair.Value.Digest(), StringComparer.Ordinal),
+        };
+
+        return new ArmKey(on, tables, unread);
+    }
+}

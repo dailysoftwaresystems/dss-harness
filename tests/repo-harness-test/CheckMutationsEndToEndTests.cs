@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
@@ -43,23 +44,7 @@ public sealed class CheckMutationsEndToEndTests
         // that steps, what they do proves nothing here. Watched from before the files they build from are written.
         using var clock = new ClockWatch();
 
-        var repository = temp.Combine("r");
-        Directory.CreateDirectory(repository);
-
-        await harness.InitializeHarnessAsync(repository, token, Config(harness.Platform, MutationFixture.SettingsFor(new MutationSettings())));
-
-        foreach (var (path, bytes) in MutationFixture.Files())
-        {
-            var file = Path.Combine(repository, path.Replace('/', Path.DirectorySeparatorChar));
-
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-            File.WriteAllBytes(file, bytes);
-        }
-
-        // Ignored, as a repository ignores its builds: committed, a build's own files would be inputs it changes.
-        File.AppendAllText(Path.Combine(repository, ".gitignore"), "build/\n");
-        await harness.CommitAllAsync(repository, "the fixture", token);
-
+        var repository = await FixtureRepositoryAsync(harness, temp.Combine("r"), token);
         var context = await harness.ContextLoader.LoadAsync(repository, token);
         var variant = VariantKey.For(context.Config, context.Config.Legs["native"], harness.Platform.PlatformKey);
         var claim = MutationWorkers.PathOf(context.Layout.RepositoryRoot, variant, 1) + MutationWorkers.ClaimSuffix;
@@ -193,6 +178,102 @@ public sealed class CheckMutationsEndToEndTests
     }
 
     /// <summary>
+    /// A self-test whose workers are two reads what each arm is judged on in each of them, from each one's own configure
+    /// and build of the fixture through the leg's toolchain, and finds every arm's key the same in both: the leg passes,
+    /// saying no key differs, and no worker was alone.
+    /// </summary>
+    [Fact]
+    public async Task EveryArmsKey_IsTheSameWhicheverWorkerDroveIt()
+    {
+        var harness = new HarnessFactory();
+
+        SkipUnlessThisMachineBuilds(harness);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        using var clock = new ClockWatch();
+
+        var repository = temp.Combine("r");
+        Directory.CreateDirectory(repository);
+
+        var config = Config(harness.Platform, new MutationSettings { Workers = 2 });
+
+        await harness.InitializeHarnessAsync(repository, token, config);
+        await harness.CommitAllAsync(repository, "a repository declaring no arm", token);
+
+        var (environment, _) = OwnUserData(temp);
+        var variant = VariantKey.For(config, config.Legs["native"], harness.Platform.PlatformKey);
+
+        try
+        {
+            var result = await CliRunner.RunAsync(["check-mutations", "--self-test", "--legs", "native", "--json", "-C", repository], token, environment: environment);
+            var said = result.StandardError + result.StandardOutput;
+
+            Assert.True(result.ExitCode == HarnessExit.Success, said);
+            Assert.True(Directory.Exists(MutationWorkers.Of(repository, variant, selfTest: true).PathOf(2)), said);
+            Assert.DoesNotContain("keys differ", said, StringComparison.Ordinal);
+            Assert.DoesNotContain("could not read what arm", said, StringComparison.Ordinal);
+            Assert.DoesNotContain("one worker here", said, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (clock.Explains(ex))
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Every arm's line carries the key of what it was judged on, and the key is the same after a clean of the leg - its
+    /// workers made, configured and built again - and from another tree of the same content kept elsewhere, whose
+    /// workers' paths are other paths: no part of a key is a run, a worker or a tree.
+    /// </summary>
+    [Fact]
+    public async Task EveryArmsKey_IsTheSameAfterACleanOfTheLeg_AndFromAnotherTreeOfTheSameContent()
+    {
+        var harness = new HarnessFactory();
+
+        SkipUnlessThisMachineBuilds(harness);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        using var clock = new ClockWatch();
+
+        async Task<Dictionary<string, string?>> KeysAsync(string repository)
+        {
+            var swept = await CliRunner.RunAsync(["check-mutations", "--legs", "native", "--json", "-C", repository], token);
+
+            using var document = JsonDocument.Parse(swept.StandardOutput);
+
+            return Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray()).GetProperty("arms").EnumerateArray().ToDictionary(
+                arm => arm.GetProperty("arm").GetString()!,
+                arm => arm.TryGetProperty("key", out var key) ? key.GetString() : null,
+                StringComparer.Ordinal);
+        }
+
+        var repository = await FixtureRepositoryAsync(harness, temp.Combine("r"), token);
+        var another = await FixtureRepositoryAsync(harness, temp.Combine("another"), token);
+
+        try
+        {
+            var keys = await KeysAsync(repository);
+
+            Assert.Equal(MutationFixture.Designed.Keys.Order(StringComparer.Ordinal), keys.Keys.Order(StringComparer.Ordinal));
+            Assert.All(keys, pair => Assert.False(string.IsNullOrEmpty(pair.Value), $"arm '{pair.Key}' has no key"));
+
+            var cleaned = await CliRunner.RunAsync(["clean", "--legs", "native", "--json", "-C", repository], token);
+
+            Assert.True(cleaned.ExitCode == HarnessExit.Success, cleaned.StandardError + cleaned.StandardOutput);
+            Assert.Equal(keys, await KeysAsync(repository));
+            Assert.Equal(keys, await KeysAsync(another));
+        }
+        catch (Exception ex) when (clock.Explains(ex))
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// A leg whose build fetches a dependency has each worker of its sweep given its own copy of what that build
     /// fetched, and configured with it, fetching nothing: so the worker's build reads nothing of the leg's own build
     /// directory, and a sweep after that directory is gone - cleaned from under it - still drives its arm, the worker
@@ -278,8 +359,33 @@ public sealed class CheckMutationsEndToEndTests
     }
 
     /// <summary>Skips the test where this machine lacks a program a real build of the fixture needs.</summary>
-    private static void SkipUnlessThisMachineBuilds(HarnessFactory harness)
+    internal static void SkipUnlessThisMachineBuilds(HarnessFactory harness)
         => BuildTools.Need(harness.ProcessRunner, "a real build of the fixture", "cmake", "ninja", Compilers.C, Compilers.Cxx);
+
+    /// <summary>
+    /// <paramref name="repository"/> made a repository of the fixture, swept as its own project - its list file as
+    /// <paramref name="list"/> makes it, where given - and committed, its builds ignored as a repository ignores them:
+    /// committed, a build's own files would be inputs it changes.
+    /// </summary>
+    internal static async Task<string> FixtureRepositoryAsync(HarnessFactory harness, string repository, CancellationToken token, Func<string, string>? list = null)
+    {
+        Directory.CreateDirectory(repository);
+
+        await harness.InitializeHarnessAsync(repository, token, Config(harness.Platform, MutationFixture.SettingsFor(new MutationSettings())));
+
+        foreach (var (path, bytes) in MutationFixture.Files())
+        {
+            var file = Path.Combine(repository, path.Replace('/', Path.DirectorySeparatorChar));
+
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.WriteAllBytes(file, path == "CMakeLists.txt" && list is not null ? Encoding.UTF8.GetBytes(list(Encoding.UTF8.GetString(bytes))) : bytes);
+        }
+
+        File.AppendAllText(Path.Combine(repository, ".gitignore"), "build/\n");
+        await harness.CommitAllAsync(repository, "the fixture", token);
+
+        return repository;
+    }
 
     /// <summary>The one leg this machine runs, built by its C and C++ compilers with the Ninja generator.</summary>
     private static LegConfig Leg(IHostPlatform platform)
@@ -289,7 +395,7 @@ public sealed class CheckMutationsEndToEndTests
     /// A repository whose one project is built from its root, by one leg this machine runs, its worker paths reckoned by
     /// the fixture's own longest - the default reserve is a large project's - and its mutation testing <paramref name="mutations"/>.
     /// </summary>
-    private static HarnessConfig Config(IHostPlatform platform, MutationSettings mutations) => new()
+    internal static HarnessConfig Config(IHostPlatform platform, MutationSettings mutations) => new()
     {
         Toolchains =
         {

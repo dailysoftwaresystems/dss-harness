@@ -297,6 +297,35 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The mutations topic says each arm carries the key of what it was judged on, what of the registry, the tree, the
+    /// build, the configuration and the host that is and is not, and that a self-test compares its workers' keys - failing
+    /// where two differ or one cannot be read, and saying where a worker had none to compare with.
+    /// </summary>
+    [Fact]
+    public async Task TheMutationsTopic_SaysWhatAnArmsKeyIsMadeOf_AndThatASelfTestComparesItsWorkersKeys()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "mutations"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key.",
+            "An arm's key is the SHA-256 of what it was judged on, read from the first worker made before it drove an arm: the judge's "
+            + "revision; the rows the sweep and the judge read of it - never a why, a comment, a line's number, the letter case of its id "
+            + "or its S row;",
+            "its build lines, every file of the tree they read, the dependency sources the worker was given, what the worker's configure "
+            + "made and what they read outside the tree, the worker's own path told wherever it stands; the compilers CMake identified; "
+            + "the leg's developer environment; what of the configuration the build, the run and the judge are given; and the host.",
+            "An arm a part of whose key could not be read has none.",
+            "a key two workers read otherwise, or one a worker could not read, fails the leg as violated, naming the arm, the workers and "
+            + "the part that differs; a self-test with one worker says it compared its keys with no other's. A self-test's keys are on no "
+            + "arm's line.",
+        })
+        {
+            Assert.Contains(text, said, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// Help says what a command exits with where no selected leg can run, wherever it speaks of it: 1 of a build, a test
     /// and a run, and of a sweep incomplete, whose 1 is an arm violated - each code read from the code.
     /// </summary>

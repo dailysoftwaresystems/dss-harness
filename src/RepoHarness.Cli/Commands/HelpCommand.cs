@@ -1026,7 +1026,19 @@ internal static class HelpCommand
             + $"each worker's whole build in <run>/<leg>/{MutationRecords.WorkersDirectory}/<n>/. A leg's line counts its arms by verdict; "
             + "ARMS, below the table, names each arm selected that did not pass, and why; --json carries every arm beneath "
             + "its leg: "
-            + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds and records.");
+            + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "An arm's key is the SHA-256 of what it was judged on, read from the first worker made before it drove an arm: "
+            + "the judge's revision; the rows the sweep and the judge read of it - never a why, a comment, a line's number, "
+            + "the letter case of its id or its S row; what the sweep's reading of the tree holds of each text it cites "
+            + "and each site it mutates; what each target its build builds is built from - its build lines, every file of "
+            + "the tree they read, the dependency sources the worker was given, what the worker's configure made and what "
+            + "they read outside the tree, the worker's own path told wherever it stands; the compilers CMake identified; "
+            + "the leg's developer environment; what of the configuration the build, the run and the judge are given; "
+            + "and the host. No part is a commit, a date, a run, a worker or a tree: the same content judged again, in "
+            + "another worker or another tree, comes to the same key. An arm a part of whose key could not be read has none.");
         builder.AppendLine();
         builder.AppendLine("Self-test");
         builder.AppendLine();
@@ -1040,6 +1052,14 @@ internal static class HelpCommand
             + "configuration and sanitizer, and each arm is held to the verdict it is designed to reach: one that reaches "
             + "it passed, saying so, and one that reaches another is violated, naming both - a defect of this tool's with "
             + "that compiler, never the fixture's. --arms names the fixture's arms.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Every worker a self-test makes reads each arm's key from its own build, and the self-test compares them arm by "
+            + "arm, so it proves on the leg's own toolchain that two workers come to one key: a key two workers read "
+            + "otherwise, or one a worker could not read, fails the leg as violated, naming the arm, the workers and the "
+            + "part that differs; a self-test with one worker says it compared its keys with no other's. A self-test's "
+            + "keys are on no arm's line.");
         builder.AppendLine();
         AppendWrapped(
             builder,

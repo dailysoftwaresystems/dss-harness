@@ -1,0 +1,174 @@
+using System.Text.Json;
+using RepoHarness.Core.Build;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
+
+namespace RepoHarness.Core.Mutations;
+
+/// <summary>
+/// How a value is digested where two of them must compare by what they say: its JSON written one way - the options every
+/// state file is written with, on one line, each map sorted by its keys as ordinal strings - and the SHA-256 of those
+/// bytes, as <see cref="FileContentHash"/> hashes any bytes.
+/// </summary>
+internal static class CanonicalJson
+{
+    /// <summary>The SHA-256 of <paramref name="value"/>'s canonical JSON.</summary>
+    /// <param name="value">The value, each map in it already sorted (<see cref="Sorted{T}"/>).</param>
+    public static string Digest<T>(T value) => FileContentHash.Of(JsonSerializer.SerializeToUtf8Bytes(value, JsonStateFile.LineOptions));
+
+    /// <summary><paramref name="map"/> sorted by its keys as ordinal strings, as canonical JSON writes a map.</summary>
+    /// <param name="map">The map.</param>
+    public static IReadOnlyDictionary<string, T> Sorted<T>(IEnumerable<KeyValuePair<string, T>> map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+
+        var sorted = new SortedDictionary<string, T>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in map)
+        {
+            sorted[key] = value;
+        }
+
+        return sorted;
+    }
+}
+
+/// <summary>One digest for each kind of row the sweep and the judge read of an arm, or nothing where it has no such row.</summary>
+/// <param name="A">Its A row: the site, the before- and after-texts, the red kind, the target, the runner, the cases and the diagnostic.</param>
+/// <param name="C">Its C rows' cases, sorted.</param>
+/// <param name="G">Its G rows' cases, sorted.</param>
+/// <param name="B">Its B row: the paired control's before- and after-texts.</param>
+/// <param name="M">Its M rows, each its site and its texts, in the order declared.</param>
+public sealed record RowDigests(string A, string? C, string? G, string? B, string? M);
+
+/// <summary>A compiler as an arm's key holds it: what CMake identified in the worker's build.</summary>
+/// <param name="Language">The language, as CMake names it.</param>
+/// <param name="Id">CMake's id for the compiler.</param>
+/// <param name="Version">Its version, as CMake identified it.</param>
+/// <param name="Program">The compiler CMake runs, as its record names it, with the worker's own path told (<see cref="WorkerPath"/>).</param>
+/// <param name="Arguments">The words CMake runs it with before its own, each with the worker's own path told.</param>
+public sealed record JudgedCompiler(string Language, string Id, string Version, string Program, IReadOnlyList<string> Arguments);
+
+/// <summary>
+/// What an arm was judged on, in nine parts: everything a verdict of the judge's on that arm rests on, so that where all
+/// nine are what they were, the same arm on the same leg would reach the same verdict. Its key is the SHA-256 of them.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Effects, never causes: what a target is built from is its build lines and the files they read
+/// (<see cref="BuiltFromTable"/>), never the list files and cache variables they were generated from, so an edit for
+/// another target moves no arm of this one. No part is a commit, a date, a run, a tree or a worker: a worker made again
+/// after a clean configures and builds the same content to the same key, and an arm judged in one tree holds in another
+/// of the same content.
+/// </para>
+/// <para>
+/// Not read of the registry: a row's why, its comments, its line numbers, the letter case of the arm's id, and the S row,
+/// which says where an arm runs - and what an arm is judged on is kept leg by leg.
+/// </para>
+/// </remarks>
+public sealed record JudgedOn
+{
+    /// <summary>The judge's revision (<see cref="ArmJudge.Revision"/>).</summary>
+    public required int Judge { get; init; }
+
+    /// <summary>What the sweep and the judge read of the arm's rows.</summary>
+    public required RowDigests Rows { get; init; }
+
+    /// <summary>Each text the arm cites, by its path as the rows spell it, with what the reading of the tree says it holds; nothing where it holds none.</summary>
+    public required IReadOnlyDictionary<string, string?> Texts { get; init; }
+
+    /// <summary>Each site the arm mutates, by its path as the rows spell it, with what the reading of the tree says it holds; nothing where it holds none.</summary>
+    public required IReadOnlyDictionary<string, string?> Sites { get; init; }
+
+    /// <summary>Each target the arm's build builds (<see cref="ArmJudge.Builds"/>), with its table's digest.</summary>
+    public required IReadOnlyDictionary<string, string> Built { get; init; }
+
+    /// <summary>Each compiler CMake identified in the worker's build.</summary>
+    public required IReadOnlyList<JudgedCompiler> Compilers { get; init; }
+
+    /// <summary>The developer environment the leg's toolchain names, as it was set up; nothing where it names none.</summary>
+    public DeveloperEnvironmentFact? DeveloperEnvironment { get; init; }
+
+    /// <summary>What of the configuration the build, the run and the judge are given (<see cref="SweepSettings"/>).</summary>
+    public required SweepSettings Settings { get; init; }
+
+    /// <summary>The host the leg ran on, as the machine that dispatched it names it.</summary>
+    public required string Host { get; init; }
+
+    /// <summary>The key: the SHA-256 of the nine parts' canonical JSON.</summary>
+    public string Key() => CanonicalJson.Digest(this with
+    {
+        Texts = CanonicalJson.Sorted(Texts),
+        Sites = CanonicalJson.Sorted(Sites),
+        Built = CanonicalJson.Sorted(Built),
+        Compilers = [.. Compilers.OrderBy(compiler => compiler.Language, StringComparer.Ordinal)],
+    });
+
+    /// <summary>
+    /// What the sweep and the judge read of <paramref name="arm"/>'s rows, one digest to a kind: A, its site, texts, red
+    /// kind, target, runner, cases and diagnostic; C and G, their cases sorted, as the judge compares them as sets; B, the
+    /// paired control's texts; M, each row's site and texts in the order declared, as each is found in the site as the
+    /// tree holds it in that order. The id is no part of it: what is judged is kept by arm.
+    /// </summary>
+    /// <param name="arm">The arm.</param>
+    public static RowDigests RowsOf(MutationArm arm)
+    {
+        ArgumentNullException.ThrowIfNull(arm);
+
+        var further = arm.Own.Further
+            .Select(text => (Site: arm.Own.Site, text.Before, text.After, text.Line))
+            .Concat(arm.Coupled.SelectMany(site => site.Texts.Select(text => (site.Site, text.Before, text.After, text.Line))))
+            .OrderBy(row => row.Line)
+            .Select(row => new[] { row.Site, row.Before, row.After })
+            .ToList();
+
+        return new RowDigests(
+            CanonicalJson.Digest(new[]
+            {
+                arm.Own.Site,
+                arm.Own.Before,
+                arm.Own.After,
+                arm.Kind == RedKind.TestRed ? MutationRegistryParser.TestRed : MutationRegistryParser.BuildRed,
+                arm.Target,
+                arm.Runner,
+                arm.Cases.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                arm.Diagnostic,
+            }),
+            arm.Reds.Count == 0 ? null : CanonicalJson.Digest(arm.Reds.Order(StringComparer.Ordinal)),
+            arm.Greens.Count == 0 ? null : CanonicalJson.Digest(arm.Greens.Order(StringComparer.Ordinal)),
+            arm.Control is { } control ? CanonicalJson.Digest(new[] { control.Before, control.After }) : null,
+            further.Count == 0 ? null : CanonicalJson.Digest(further));
+    }
+
+    /// <summary>
+    /// The texts <paramref name="arm"/> cites, each once, as its rows spell them: its A row's and each M row's before- and
+    /// after-texts, a TEST-RED arm's diagnostic, and a BUILD-RED arm's paired control's.
+    /// </summary>
+    /// <param name="arm">The arm.</param>
+    public static IReadOnlyList<string> TextsOf(MutationArm arm)
+    {
+        ArgumentNullException.ThrowIfNull(arm);
+
+        IEnumerable<string> cited =
+        [
+            .. arm.Sites.SelectMany(site => site.Texts.SelectMany(text => new[] { text.Before, text.After })),
+            .. arm.Kind == RedKind.TestRed ? [arm.Diagnostic] : Array.Empty<string>(),
+            .. arm.Control is { } control ? [control.Before, control.After] : Array.Empty<string>(),
+        ];
+
+        return [.. cited.Distinct(StringComparer.Ordinal)];
+    }
+}
+
+/// <summary>
+/// What one arm would be judged on as one worker's build reads it, with the tables of the targets its build builds, and
+/// its key; or, where a part could not be read, why - an arm with no key never holds.
+/// </summary>
+/// <param name="JudgedOn">The nine parts, as far as each could be read: a target whose table could not be made is in none of them.</param>
+/// <param name="Tables">The table of each target its build builds whose table could be made.</param>
+/// <param name="Unread">Why a part could not be read, as what follows "cannot be read now: "; <see langword="null"/> where all nine were.</param>
+internal sealed record ArmKey(JudgedOn JudgedOn, IReadOnlyDictionary<string, BuiltFromTable> Tables, string? Unread)
+{
+    /// <summary>The key, or <see langword="null"/> where a part could not be read.</summary>
+    public string? Key { get; } = Unread is null ? JudgedOn.Key() : null;
+}

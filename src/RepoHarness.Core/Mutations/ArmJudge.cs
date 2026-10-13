@@ -265,6 +265,20 @@ public enum ArmStep
 public static class ArmJudge
 {
     /// <summary>
+    /// The revision of the rules an arm's verdict is reached by: part of what every arm is judged on, so a verdict reached
+    /// under other rules never holds under these.
+    /// </summary>
+    /// <remarks>
+    /// Raised by hand whenever a change could give another verdict for the same inputs - in this judge, in
+    /// <see cref="PristineJudge"/>, in the sweep's pre-flight, in how a site is edited (<see cref="SiteEdit"/>), in how a
+    /// rebuild is witnessed (<see cref="RebuildWitness"/>), in how a report is read (<see cref="JUnitReport"/>), in how a
+    /// diagnostic is looked for (<see cref="DiagWindow"/>) - or changes what an arm's key is made of. A test holds it to a
+    /// digest of the two judges' verdicts over a fixed table of observations, so a rule of theirs cannot change with the
+    /// number left as it was; a change in how the sweep observes is caught by review alone.
+    /// </remarks>
+    public const int Revision = 1;
+
+    /// <summary>
     /// The verdict <paramref name="observation"/> reaches for <paramref name="arm"/>, or <see langword="null"/> where it
     /// reaches none yet, and <see cref="Next"/> says what to observe.
     /// </summary>

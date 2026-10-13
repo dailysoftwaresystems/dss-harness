@@ -95,6 +95,12 @@ public sealed record LegWork(
 
     /// <summary>Says what the leg is doing now, under its own name.</summary>
     public Action<string> Progress { get; init; } = _ => { };
+
+    /// <summary>
+    /// Which developer environment the leg's toolchain names was set up for its work, on the machine running it;
+    /// <see langword="null"/> where it names none.
+    /// </summary>
+    public DeveloperEnvironmentFact? DeveloperEnvironment { get; init; }
 }
 
 /// <summary>
@@ -819,6 +825,7 @@ public sealed class LegRunService(
                 {
                     AdmitUnit = (unit, token) => AskAsync(context, working, request, runId, ledger, $"{working.Name}/{unit.Unit}", unit.Room, unit.Settle, token),
                     Progress = message => ledger.Transition(working.Name, message),
+                    DeveloperEnvironment = setUp?.Fact,
                 },
                 cancellationToken)
             .ConfigureAwait(false);

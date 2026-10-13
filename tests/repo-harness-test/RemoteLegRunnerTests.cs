@@ -296,9 +296,9 @@ public sealed class RemoteLegRunnerTests
 
     /// <summary>
     /// Each arm a host's sweep was asked about travels on its leg's line as the host judged it, read from the very
-    /// document the host writes: what its run measured beside what it declares, and its records as the host names
-    /// them, which stay on that host - its detail naming the host as declared, never by an address its name resolved
-    /// to, and a verdict this build does not know read as poisoned rather than as any it does.
+    /// document the host writes: what its run measured beside what it declares, the key of what it was judged on, and its
+    /// records as the host names them, which stay on that host - its detail naming the host as declared, never by an
+    /// address its name resolved to, and a verdict this build does not know read as poisoned rather than as any it does.
     /// </summary>
     [Fact]
     public async Task EachArmAHostsSweepJudged_IsCarriedOnItsLegsLine()
@@ -324,6 +324,7 @@ public sealed class RemoteLegRunnerTests
                                 Reds = [],
                                 DeclaredReds = ["Fixture.Charge"],
                                 Records = "/home/dev/repo/.harness-config/runs/r1/wsl-debug/arms/charge-bound",
+                                Key = "9f2c0e",
                             },
                             new ArmEntry { Arm = "floor", Verdict = LegVerdict.Passed, Detail = "a verdict of a later build", DeclaredCases = 3, DeclaredReds = ["Fixture.Floor"] },
                         ],
@@ -362,11 +363,12 @@ public sealed class RemoteLegRunnerTests
         Assert.Empty(charge.Reds);
         Assert.Equal(["Fixture.Charge"], charge.DeclaredReds);
         Assert.Equal("/home/dev/repo/.harness-config/runs/r1/wsl-debug/arms/charge-bound", charge.Records);
+        Assert.Equal("9f2c0e", charge.Key);
 
         var floor = entry.Arms[1];
 
         Assert.Equal(LegVerdict.Poisoned, floor.Verdict);
-        Assert.Equal((null, null, null, null), (floor.Worker, floor.Cases, floor.Reds, floor.Records));
+        Assert.Equal((null, null, null, null, null), (floor.Worker, floor.Cases, floor.Reds, floor.Records, floor.Key));
         Assert.Equal(["Fixture.Floor"], floor.DeclaredReds);
     }
 

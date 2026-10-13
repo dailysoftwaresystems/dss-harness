@@ -3291,12 +3291,71 @@ the ledger carries it, beside the logs of its build and its run, and of a paired
 `<run>/<leg>/workers/<n>/`. A leg's line counts its arms by verdict; below the table an ARMS block
 names each selected arm that did not pass, and why; `--json` carries every arm beneath its leg - `arm`,
 `verdict`, `failure`, `detail`, `durationSeconds`, `worker`, `cases`, `declaredCases`, `reds`,
-`declaredReds`, `records` - a skipped one included.
+`declaredReds`, `records`, `key` - a skipped one included.
 
 A leg on a host is swept there, by the DssHarness there, on its own copy - with its own workers,
 its own admission and the arms `--arms` named - and its arms travel back beneath its line, their
 records staying on that host and its home written as `~`, as a leg's are (see "A host's home is
 `~`"); the answer changed shape, which raised the host-agent protocol to 6.
+
+### What an arm is judged on
+
+Each arm's line carries its `key`: the SHA-256 of what it was judged on (`JudgedOn`), nine parts
+written as canonical JSON - the options every state file is written with, on one line, each map
+sorted by its keys as ordinal strings. Where all nine are what they were, the same arm on the same
+leg reaches the same verdict.
+
+- `judge`: `ArmJudge.Revision`, raised by hand whenever a change could give another verdict for the
+  same inputs - in the arm's judge, the unmutated run's, the pre-flight, how a site is edited, how
+  a rebuild is witnessed, how a report is read or a diagnostic looked for - or changes what a key
+  is made of. A test holds it to a digest of both judges' verdicts over a fixed table of
+  observations, so a rule of theirs cannot change with the number left as it was.
+- `rows`: one digest to each kind of row the sweep and the judge read - A; C and G sorted, as the
+  judge compares them as sets; B; M in the order declared, as each text is found in that order.
+  Never a why, a comment, a line's number, the letter case of the id, or the S row, which says
+  where an arm runs, while what it was judged on is kept leg by leg.
+- `texts` and `sites`: what the sweep's one reading of the tree says each text the arm cites and
+  each site it mutates holds, or nothing where it holds none. No file is hashed a second time.
+- `built`: the digest of the table of each target the arm's build builds (below).
+- `compilers`: each compiler CMake identified in the worker's build - its id, version, program and
+  the words it is run with.
+- `developerEnvironment`: the leg's, as it was set up, where its toolchain names one.
+- `settings`: three digests (`SweepSettings`) - what the build is given (the variant's name, the
+  environment its overlay and its host give it), how the run starts (the working directory and
+  the environment the test settings declare for the leg's system, the report arguments), and what
+  the judge is given (`mutations.runTimeFactor`, `defaults.stallSeconds`). Every other value either
+  cannot change a verdict - the workers, the cores, admission, the path limits, the clock's
+  tolerance - or reaches an arm through another part: the cache variables, the build type and the
+  generator through the build lines, `sync.*` through the reading, the tool search directories
+  through the compilers.
+- `host`: the host the leg ran on, as the machine that dispatched it names it.
+
+A target's table (`BuiltFromTable`) is what the build of it read, never what that was generated
+from: its build lines - the manifest's closure of the target, and each line making a file they
+read that the closure does not reach, as a header a command generates, which a compile is only
+ordered after - and every file those lines read as ninja's records say, by the walk that says which
+objects a mutation rebuilds. A file a build line makes is left out: what it is made from is read
+already. A file of the tree is taken as the reading holds it, found as the tree's file system
+compares names and named as the reading spells it. A file of a dependency's sources the worker was
+given stands as the whole dependency, its name and the digest of the sources as the sweep read
+them. A file the worker's configure made, and one outside the worker - a system's header, a library
+a link names - is hashed where it is, once a sweep, and counted and digested with the others of its
+directory. So a list file edited for another target moves nothing of this one, and a source a glob
+finds joins the table once a configure finds it, as a worker's does on each of its builds.
+
+Every worker of every tree of a leg must come to one table for the same content, so the worker's
+own root is told - replaced by `{tree}` - wherever it stands in a build line or in a file its
+configure made: as its machine spells a path, with `/` throughout, with each `\` doubled, and with
+its drive's letter in either case (`WorkerPath`). A file that holds the path another way never
+compares equal across workers, which is the safe direction. No part of a key is a commit, a date, a
+run, a worker or a tree: a worker made again after a `clean`, or a tree of the same content kept
+elsewhere, comes to the same key.
+
+The first worker made reads every arm's key, after its configure and build and before it drives an
+arm, so what an earlier mutation's configure left in a worker never reaches one. A part that cannot
+be read - a file gone or unreadable, a compiler's record unread - leaves the arm no key, and its
+verdict as reached. The key travels back from a host beneath the arm's line, which raised the
+host-agent protocol to 10.
 
 ### Self-test
 
@@ -3328,6 +3387,13 @@ measured where they are planned, and their paths reckoned by the fixture's own l
 the leg's reserve. It takes the leg's sweep lock, as a sweep of the leg does, and its binary runs
 in its worker with what the leg's host gives it, nothing of the leg's tests. A leg on a host is
 self-tested there, with the fixture that host's DssHarness carries.
+
+Every worker a self-test makes reads each arm's key from its own build, and the self-test compares
+them arm by arm, so each leg's own toolchain proves that two workers come to one key: a key two
+workers read otherwise, or one a worker could not read, fails the leg as `violated`, naming the
+arm, the workers and the first part that differs (`KeyDifference`); one worker alone says it
+compared its keys with no other's. A self-test's keys are on no line: nothing of a self-test is
+kept.
 
 ## Reporting
 
