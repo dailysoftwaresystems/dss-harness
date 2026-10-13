@@ -27,7 +27,8 @@ public enum RegistryLineKind
 /// </remarks>
 public sealed class RegistryRow
 {
-    private const char Separator = '|';
+    /// <summary>What stands between a row's fields.</summary>
+    internal const char Separator = '|';
 
     /// <summary>The row's line, trimmed.</summary>
     private readonly string _text;
@@ -99,6 +100,26 @@ public sealed class RegistryLine
 
     /// <summary>The arm the line's row names, or <see langword="null"/> where it is no row or names none.</summary>
     public string? Arm => Row?.Arm;
+
+    /// <summary>
+    /// The line with the arm its row names spelled <paramref name="arm"/> in its place, and the line as it is where it
+    /// names none: two rows that differ only in how each spells its arm are one text once both are spelled one way.
+    /// </summary>
+    /// <param name="arm">How the arm is to be spelled.</param>
+    public string NamedAs(string arm)
+    {
+        ArgumentNullException.ThrowIfNull(arm);
+
+        if (Arm is not { } named)
+        {
+            return Text;
+        }
+
+        // The arm is the row's second field, trimmed: the first thing after the first separator that is not blank.
+        var at = Text.IndexOf(named, Text.IndexOf(RegistryRow.Separator) + 1, StringComparison.Ordinal);
+
+        return string.Concat(Text.AsSpan(0, at), arm, Text.AsSpan(at + named.Length));
+    }
 }
 
 /// <summary>
@@ -142,6 +163,16 @@ public sealed class RegistryText
         ArgumentNullException.ThrowIfNull(text);
 
         return new RegistryText(text, byteOrderMark: false);
+    }
+
+    /// <summary>The text <paramref name="lines"/> spell, one after another, each with the ending it is given.</summary>
+    /// <param name="lines">The lines, in order.</param>
+    /// <param name="byteOrderMark">Whether its bytes open with a UTF-8 byte order mark.</param>
+    public static RegistryText Of(IEnumerable<RegistryLine> lines, bool byteOrderMark = false)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        return new RegistryText(string.Concat(lines.Select(line => line.Text + line.Ending)), byteOrderMark);
     }
 
     /// <summary>

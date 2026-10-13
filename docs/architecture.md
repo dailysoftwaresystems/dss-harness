@@ -2945,6 +2945,48 @@ sentences `check-mutations` refuses a registry in (`RegistryValidation.Refusal`)
 `MutationService.ReadAsync` keeps what is about the file itself - that it is configured, a file,
 readable and carried - before the validation, and weighs `--arms` and the report arguments after it.
 
+A registry two sides both changed is merged by arm, never line against line
+(`MutationRegistryMerge.Merge`): a function of three texts' bytes - what both sides last held, where
+they held one, the main tree's and an agent's - that reads no file, no clock and no configuration.
+Each text is read, through the one reader, as the lines above its first row down to their last blank
+line, its segments - each one row with the comment and blank lines directly above it - and the
+lines below its last row. An arm is the segments naming it, wherever they stand, ids compared
+ignoring case, and two versions of an arm are the same where each line's text is: how a line ends is
+no part of it, so a checkout with other line endings changes nothing. Each arm is taken from the
+side that alone added, removed or changed it, and one both changed alike is one. An arm each changed
+its own way, one a side removed and the other changed, or one both added differently - under ids
+that differ only in case, among them - is a conflict (`ArmConflict`), said with each side's lines
+that the versions do not all hold and each line's number, the three texts called what the caller
+calls them (`MergeSides`). With no text both held, an arm one side has is kept: its removal by the
+other could not be told from its addition. The lines above the first row, and those below the last,
+are each weighed the same way, as one. A text that is not UTF-8, holds a row naming no arm or opens
+with a second byte order mark is not merged at all, and the result says which of the three and why.
+
+The merged text is the main tree's, line for line, changed only where the agent contributed. The
+main tree's segments stay where they stand. An arm taken from the agent in place of the main tree's
+lies over the main tree's segments of it, one for one: where the agent has more, the rest follow the
+last, and where it has fewer, the main tree's remaining places go. A segment of an arm only the
+agent has stands after the nearest segment above it in the agent's text that the merged text holds,
+and past what the main tree alone holds there, so two sides adding at one place come out the main
+tree's addition first, then the agent's; the agent's first segment stands first, past what the main
+tree alone holds there; one above which the merged text holds nothing goes after the last segment;
+and none stands above an earlier segment of its own arm. Each of the main tree's lines is written as
+the main tree holds it, each of the agent's with the ending of the main tree's first line, behind a
+byte order mark where the main tree's text has one and with an ending on the last line where the
+main tree's has one.
+
+So a text merged with itself is itself, one merged with a side that changed nothing is the other,
+and a merge run again with its own result on either side gives that result, each byte for byte -
+what a command needs that wrote the result to one tree and was stopped before the other. The last
+holds because a merge is offered only where its text reads back as it was merged. Where the lines
+above the first row end is a matter of where a blank line stands, so a segment that keeps a blank
+line above its row and would come to stand first is a conflict of its own
+(`ArmConflictKind.WouldOpenTheText`), as lines with a blank one among them are where no row would be
+left above them; an empty last line is ended whatever the main tree's is; and an empty line that
+would follow a lone carriage return is ended by a carriage return and a line feed. What the merge
+offers is a text: whether it is a registry a sweep can read, in the tree it would stand in, is the
+validation's to say.
+
 The whole registry is read, with every text it cites, before any host is touched, and every
 problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once
 its hosts were measured and its slots taken. What a sync withholds is in no copy of the tree, and a

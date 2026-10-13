@@ -169,4 +169,38 @@ public sealed class RegistryTextTests
     {
         Assert.Equal(arm, new RegistryLine(text).Arm);
     }
+
+    /// <summary>
+    /// A row's arm can be spelled another way where it stands, and nothing else of the line changes - not the blanks
+    /// around it, and not the same letters further along the line; a line that names no arm stays as it is.
+    /// </summary>
+    [Theory]
+    [InlineData("  C |  Charge  | Charge.Case | why Charge ", "  C |  charge  | Charge.Case | why Charge ")]
+    [InlineData("A|Charge|src/Charge.cpp", "A|charge|src/Charge.cpp")]
+    [InlineData("Charge | Charge", "Charge | charge")]
+    [InlineData("# C | Charge | commented out", "# C | Charge | commented out")]
+    [InlineData("Z |   | Charge", "Z |   | Charge")]
+    [InlineData("", "")]
+    public void ARowsArm_IsRespelledWhereItStands_AndNothingElseOfTheLine(string text, string respelled)
+    {
+        Assert.Equal(respelled, new RegistryLine(text).NamedAs("charge"));
+    }
+
+    /// <summary>
+    /// Lines given their endings are the text they spell, one after another, behind a byte order mark where one is
+    /// asked for - and read as any text is, so a line given no ending runs into the next.
+    /// </summary>
+    [Fact]
+    public void LinesGivenTheirEndings_AreTheTextTheySpell()
+    {
+        var text = RegistryText.Of([new RegistryLine("# arms", "\r\n"), new RegistryLine("A | a", "\n"), new RegistryLine("C | a | x")], byteOrderMark: true);
+
+        Assert.Equal("# arms\r\nA | a\nC | a | x", text.Text);
+        Assert.Equal([("# arms", "\r\n"), ("A | a", "\n"), ("C | a | x", "")], text.Lines.Select(line => (line.Text, line.Ending)));
+        Assert.Equal([.. Encoding.UTF8.Preamble, .. Encoding.UTF8.GetBytes("# arms\r\nA | a\nC | a | x")], text.ToBytes());
+
+        Assert.False(RegistryText.Of([]).ByteOrderMark);
+        Assert.Equal(string.Empty, Assert.Single(RegistryText.Of([]).Lines).Text);
+        Assert.Equal(["one line"], RegistryText.Of([new RegistryLine("one "), new RegistryLine("line")]).Lines.Select(line => line.Text));
+    }
 }
