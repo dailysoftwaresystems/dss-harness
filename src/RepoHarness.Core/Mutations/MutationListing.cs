@@ -208,7 +208,7 @@ internal static class MutationListing
         }
 
         var moved = entry.JudgedOn is { } on
-            ? KeyDifference.Listed(new ArmKey(on, tables, entry.KeyUnread), here)
+            ? KeyDifference.Listed(on, tables, here)
             : [];
         var unmoved = entry.Key is not null && entry.JudgedOn is not null && tables.Count == entry.JudgedOn.Built.Count && moved.Count == 0;
 

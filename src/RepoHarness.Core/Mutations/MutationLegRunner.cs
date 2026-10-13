@@ -485,14 +485,15 @@ internal sealed class MutationLegRunner(
 
             _work.Progress($"worker {number}: reading what each arm is judged on from its build");
 
-            var reader = new BuiltFromReader(_runner._fileSystem, _reading.Files, _fetched, worker, buildDirectory, PathCase.In(_runner._fileSystem, _subject.TreeRoot));
-            var tables = new Dictionary<string, (BuiltFromReading Reading, string? Digest)>(StringComparer.Ordinal);
+            // One reading of the tree, found as its file system compares names: the files a build reads, and the texts and
+            // sites the rows spell, each found as the build and the sweep find them.
+            var tree = new TreeFiles(_reading.Files, PathCase.In(_runner._fileSystem, _subject.TreeRoot));
+            var reader = new BuiltFromReader(_runner._fileSystem, tree, _fetched, worker, buildDirectory);
+            var tables = new Dictionary<string, BuiltFromReading>(StringComparer.Ordinal);
 
             foreach (var target in driven.SelectMany(ArmJudge.Builds).Distinct(StringComparer.Ordinal))
             {
-                var read = await reader.ReadAsync(graph.ReadBy(target), cancellationToken).ConfigureAwait(false);
-
-                tables[target] = (read, read.Table?.Digest());
+                tables[target] = await reader.ReadAsync(graph.ReadBy(target), cancellationToken).ConfigureAwait(false);
             }
 
             var (identified, unidentified) = _runner._toolchains.Identified(buildDirectory);
@@ -508,34 +509,34 @@ internal sealed class MutationLegRunner(
             ];
             var compilersUnread = unidentified.Count == 0 ? null : $"the compilers its build identified: {string.Join("; ", unidentified)}";
 
-            string? Held(string path) => _reading.Files.Entries.GetValueOrDefault(path)?.ContentHash;
-
             var causes = new JudgedCauses(reader.OfTheTree(graph.GeneratedFrom), JudgedCauses.GenerationOf(_config, _leg.Variant, _subject.Project));
 
             return driven.ToDictionary(
                 arm => arm.Id,
                 arm =>
                 {
-                    var built = ArmJudge.Builds(arm).Select(target => tables[target]).ToList();
+                    var texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, tree.HashOf, StringComparer.Ordinal);
 
-                    return new ArmKey(
+                    // A text it cites that the reading does not hold - which the registry's check found - was not read
+                    // whole: what the arm was judged on is not what the key would say.
+                    var lacking = texts.Where(text => text.Value is null).Select(text => $"'{text.Key}'").ToList();
+
+                    return ArmKey.Of(
                         new JudgedOn
                         {
                             Judge = ArmJudge.Revision,
                             Rows = JudgedOn.RowsOf(arm),
-                            Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, Held, StringComparer.Ordinal),
-                            Sites = arm.Sites.ToDictionary(site => site.Site, site => Held(site.Site), StringComparer.Ordinal),
-                            Built = built.Where(table => table.Digest is not null).ToDictionary(table => table.Reading.Target, table => table.Digest!, StringComparer.Ordinal),
+                            Texts = texts,
+                            Sites = arm.Sites.ToDictionary(site => site.Site, site => tree.HashOf(site.Site), StringComparer.Ordinal),
+                            Built = new Dictionary<string, string>(StringComparer.Ordinal),
                             Compilers = compilers,
                             DeveloperEnvironment = _work.DeveloperEnvironment,
                             Settings = _subject.SweepSettings,
                             Host = _leg.Named.ToString(),
                         },
-                        built.Where(table => table.Reading.Table is not null).ToDictionary(table => table.Reading.Target, table => table.Reading.Table!, StringComparer.Ordinal),
-                        built.Select(table => table.Reading.Unread).FirstOrDefault(why => why is not null) ?? compilersUnread)
-                    {
-                        Causes = causes,
-                    };
+                        [.. ArmJudge.Builds(arm).Select(target => tables[target])],
+                        lacking.Count > 0 ? $"the tree's reading holds no {ReportText.Listed(lacking)}, which it cites" : compilersUnread,
+                        causes);
                 },
                 StringComparer.OrdinalIgnoreCase);
         }
@@ -1544,7 +1545,7 @@ internal sealed class MutationLegRunner(
         /// </summary>
         private ArmRunRequest RunRequest(string named, string worker, string buildDirectory, string program, string records, RunBound? bound, string? diagnostic)
         {
-            var invocation = _subject.Tests is { } settings ? TestInvocationResolver.InvocationFor(settings, _leg.Host.Os ?? _leg.Leg.Os) : null;
+            var invocation = _subject.Tests is { } settings ? TestInvocationResolver.InvocationFor(settings, _leg.Os) : null;
 
             // What the worker's own build identified, where the invocation names a compiler: the worker is what runs.
             var paths = new LegPaths(worker, buildDirectory)

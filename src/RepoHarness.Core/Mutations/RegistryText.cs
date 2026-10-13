@@ -186,14 +186,18 @@ public sealed class RegistryText
     /// <param name="bytes">The bytes, as the tree holds them.</param>
     /// <param name="text">The text read, or <see langword="null"/> where the bytes are not UTF-8, or a line opens with a byte order mark.</param>
     /// <param name="unread">
-    /// Why the bytes could not be read, as what follows the name of the file: <c>is not UTF-8: ...</c>, <c>has a byte
-    /// order mark at the start of line 3, ...</c>; <see langword="null"/> where they were.
+    /// Why the bytes could not be read: of the text as a whole, as what follows the name of the file - <c>is not UTF-8:
+    /// ...</c>; of one line, as what follows the line - <c>opens with a byte order mark, ...</c>. <see langword="null"/>
+    /// where they were read.
     /// </param>
+    /// <param name="line">The line <paramref name="unread"/> is of, or <see langword="null"/> where it is of the text as a whole, or the bytes were read.</param>
     /// <returns>Whether the bytes were read.</returns>
-    public static bool TryRead(ReadOnlySpan<byte> bytes, [NotNullWhen(true)] out RegistryText? text, [NotNullWhen(false)] out string? unread)
+    public static bool TryRead(ReadOnlySpan<byte> bytes, [NotNullWhen(true)] out RegistryText? text, [NotNullWhen(false)] out string? unread, out int? line)
     {
         var marked = Utf8Text.OpensWithByteOrderMark(bytes);
         var start = marked ? Encoding.UTF8.Preamble.Length : 0;
+
+        line = null;
 
         if (!Utf8Text.TryDecode(bytes[start..], out var decoded, out unread, start))
         {
@@ -206,9 +210,8 @@ public sealed class RegistryText
         if (read.Lines.Select((line, index) => (line.Text, Number: index + 1)).FirstOrDefault(line => line.Text.StartsWith(Mark)) is { Text: not null } opened)
         {
             text = null;
-            unread = string.Create(
-                CultureInfo.InvariantCulture,
-                $"has a byte order mark at the start of line {opened.Number}, which no line may open with: standing first, it would be read as the text's own");
+            line = opened.Number;
+            unread = "opens with a byte order mark, which no line may open with: standing first, it would be read as the text's own";
 
             return false;
         }

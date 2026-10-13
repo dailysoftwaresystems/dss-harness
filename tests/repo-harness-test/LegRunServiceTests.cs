@@ -916,6 +916,7 @@ public sealed class LegRunServiceTests
         var harness = new HarnessFactory();
         IReadOnlyDictionary<string, string>? given = null;
         IReadOnlyDictionary<string, string>? built = null;
+        DeveloperEnvironmentFact? handed = null;
 
         var outcome = await OutcomeAsync(
             temp,
@@ -927,11 +928,15 @@ public sealed class LegRunServiceTests
             {
                 given = leg.Leg.Environment;
                 built = leg.Leg.BuildRequestFor(leg.Context.Config, leg.RunDirectory).HostEnvironment;
+                handed = leg.DeveloperEnvironment;
                 return new LegEntry { Leg = leg.Leg.Name, Verdict = LegVerdict.Passed };
             },
             developerEnvironments: visualStudio.Provider());
 
         Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+
+        // The work is handed what was set up, as a sweep's key holds it.
+        Assert.Equal(("vs", visualStudio.InstallationPath, ScriptedVisualStudio.ToolsVersion, "amd64"), (handed?.Name, handed?.InstallationPath, handed?.ToolsVersion, handed?.Architecture));
         Assert.NotNull(given);
         Assert.Equal(visualStudio.BinFor("x64") + Path.PathSeparator + @"D:\tools", given["PATH"]);
         Assert.Equal(visualStudio.Include, given["INCLUDE"]);

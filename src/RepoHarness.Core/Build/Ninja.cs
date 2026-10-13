@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Build;
 
@@ -81,7 +82,7 @@ internal static class Ninja
         {
             // Read from the log a line at a time, each divided however it divides itself, and no further than the line
             // that decides: a build's output can be larger than any text the harness could hold.
-            foreach (var line in phase.Output.Lines().SelectMany(line => Colour.Replace(line, string.Empty).ReplaceLineEndings("\n").Split('\n')))
+            foreach (var line in phase.Output.Lines().SelectMany(line => TextLines.Split(Colour.Replace(line, string.Empty)).Select(part => part.Text)))
             {
                 if (line.StartsWith(FailedStep, StringComparison.Ordinal))
                 {

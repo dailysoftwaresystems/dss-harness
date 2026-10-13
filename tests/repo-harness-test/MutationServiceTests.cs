@@ -8,6 +8,7 @@ using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -1000,6 +1001,73 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// What a sweep's key holds of the settings is what its leg is swept with, resolved once with the leg: the variant
+    /// placed, the environment its host declares, and the test section of the system its host runs, however the leg
+    /// spells its system - so a leg declaring "Linux" is keyed on the test.linux settings its runs start with, as a leg
+    /// declaring "linux" is.
+    /// </summary>
+    [Theory]
+    [InlineData("Linux")]
+    [InlineData("linux")]
+    public async Task ASubjectsSettings_AreThoseItsRunsStartWith_HoweverTheLegSpellsItsSystem(string os)
+    {
+        async Task<SweepSettings> SettingsWith(string mode, string hostMode = "quick")
+        {
+            using var temp = new TempDirectory();
+            var leg = new LegConfig
+            {
+                Os = os,
+                Processor = "x86_64",
+                Config = "debug",
+                Toolchain = "gcc",
+                Project = "app",
+                Test = new TestConfig
+                {
+                    All = new TestInvocation { Runner = "fixture_tests", SuccessPattern = "passed" },
+                    Linux = new TestInvocation { Env = new Dictionary<string, string> { ["MODE"] = mode } },
+                },
+            };
+            var config = Sweepable();
+
+            config.Legs["native"] = leg;
+
+            var (service, context) = Prepare(temp, config);
+            var arms = await service.ReadAsync(context, null, TestContext.Current.CancellationToken);
+            var variant = VariantKey.For(config, leg, PlatformNames.Linux);
+            var host = new HostReport { Host = HostId.Local, Os = PlatformNames.Linux, Processor = "x86_64" };
+            var work = new LegWork(
+                new PlacedLeg(
+                    "native",
+                    leg,
+                    host,
+                    config.Projects[0],
+                    variant,
+                    temp.Path,
+                    temp.Path,
+                    variant.DirectoryUnder(temp.Path),
+                    new LocalHostConfig { Env = { ["HOST_MODE"] = hostMode } },
+                    Emulated: false),
+                context,
+                RunId.New(),
+                temp.Combine("runs", "r1"),
+                Time: false);
+
+            return service.Subject(work, arms, force: false, new RepositoryTreesFound([]), records: false).SweepSettings;
+        }
+
+        var quick = await SettingsWith("quick");
+        var thorough = await SettingsWith("thorough");
+
+        Assert.NotEqual(quick.Run, thorough.Run);
+        Assert.Equal((quick.Build, quick.Judge), (thorough.Build, thorough.Judge));
+
+        var hosted = await SettingsWith("quick", hostMode: "thorough");
+
+        Assert.NotEqual(quick.Build, hosted.Build);
+        Assert.Equal((quick.Run, quick.Judge), (hosted.Run, hosted.Judge));
+    }
+
+    /// <summary>
     /// Nothing of a self-test is recorded: its subject has no sink. Nor is anything recorded by a leg swept for another
     /// machine, whose copy keeps no record: what it judged is that machine's to keep.
     /// </summary>
@@ -1406,16 +1474,6 @@ public sealed class MutationServiceTests
 
     /// <summary>Where the service <see cref="Service"/> builds over <paramref name="temp"/> keeps a self-test's fixture.</summary>
     private static string Fixture(TempDirectory temp) => temp.Combine("state", MutationFixture.DirectoryName);
-
-    /// <summary>
-    /// The real file system, save that it finds <paramref name="root"/> by its name in another case only where
-    /// <paramref name="folds"/> says so: a file system that folds case, or one that does not, whatever this machine's does.
-    /// </summary>
-    private sealed class CaseOf(IFileSystem inner, string root, bool folds) : PassThroughFileSystem(inner)
-    {
-        public override bool DirectoryExists(string path)
-            => path != root && string.Equals(path, root, StringComparison.OrdinalIgnoreCase) ? folds : base.DirectoryExists(path);
-    }
 
     /// <summary>The real file system, save that <paramref name="path"/> is there and every read of it raises <paramref name="raised"/>.</summary>
     private sealed class Unreadable(IFileSystem inner, string path, Exception raised) : PassThroughFileSystem(inner)

@@ -233,6 +233,62 @@ public sealed class BuiltFromReaderTests
     }
 
     /// <summary>
+    /// A directory among what a target's build reads - a command that depends on a directory, in the tree or outside the
+    /// worker - leaves the target with no table, saying it is a directory whose files no build line names: what the build
+    /// reads in it cannot be told, and a directory is never said to be gone.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryABuildReads_LeavesTheTargetNoTable_SayingItIsADirectory()
+    {
+        using var temp = new TempDirectory();
+        var worker = new Worker(temp, "w1");
+        var outside = temp.Combine("sys", "share");
+
+        worker.Tree("assets/a.png", "png");
+        Directory.CreateDirectory(outside);
+
+        foreach (var directory in new[] { worker.Native("assets"), outside })
+        {
+            var read = await worker.Reader().ReadAsync(
+                new BuiltFromSource("lib", [], [new BuiltFromPath(directory, Produced: false)]),
+                TestContext.Current.CancellationToken);
+
+            Assert.Null(read.Table);
+            Assert.Equal($"'{directory}', which the build of 'lib' reads, is a directory, and no build line names the files it reads in it", read.Unread);
+        }
+    }
+
+    /// <summary>
+    /// A file of the tree a phony line names - as CMake names each file its configure read - is read as the tree holds it:
+    /// a phony line makes nothing, so the file is no file a build line makes, and is in the table.
+    /// </summary>
+    [Fact]
+    public async Task AFileOfTheTreeAPhonyLineNames_IsInTheTable_AsTheReadingHoldsIt()
+    {
+        using var temp = new TempDirectory();
+        var worker = new Worker(temp, "w1");
+
+        worker.Tree("src/a.cpp", "#include \"a.hpp\"\n");
+        worker.Tree("src/a.hpp", "int a();\n");
+        worker.Write("build/" + LibObject, "object");
+
+        var graph = worker.Graph(
+            "rule CXX_COMPILER__lib_\n  deps = gcc\n  command = g++ -c $in -o $out\n"
+            + "rule CXX_STATIC_LIBRARY_LINKER__lib_\n  command = ar qc $out $in\n"
+            + $"build {LibObject}: CXX_COMPILER__lib_ {worker.Ninja("src/a.cpp")}\n"
+            + $"build liblib.a: CXX_STATIC_LIBRARY_LINKER__lib_ {LibObject}\n"
+            + "build lib: phony liblib.a\n"
+            + "build ../src/a.hpp: phony\n",
+            $"{LibObject}: #deps 2, deps mtime 1 (VALID)",
+            $"    {worker.Forward("src/a.cpp")}",
+            $"    {worker.Forward("src/a.hpp")}");
+
+        var table = await TableAsync(worker.Reader(), graph.ReadBy("lib"));
+
+        Assert.Equal(["src/a.cpp", "src/a.hpp"], table.Files.Keys.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// A target's build lines are digested with the worker's own path told wherever it stands in them - as its machine
     /// spells a path, with <c>/</c> throughout, with each <c>\</c> doubled, and with its drive's letter in either case -
     /// so two workers' lines agree; a line that says another thing does not.
@@ -432,7 +488,7 @@ public sealed class BuiltFromReaderTests
             .Where(file => !file.StartsWith(build + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !file.StartsWith(git + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             .Select(file => (Path: Path.GetRelativePath(repository, file).Replace('\\', '/'), Bytes: File.ReadAllBytes(file)))
             .ToDictionary(file => file.Path, file => new SyncEntry(file.Path, file.Bytes.Length, FileContentHash.Of(file.Bytes)), StringComparer.Ordinal);
-        var reader = new BuiltFromReader(harness.FileSystem, new SyncManifest(repository, reading), [], repository, build, PathCase.In(harness.FileSystem, repository));
+        var reader = new BuiltFromReader(harness.FileSystem, new TreeFiles(new SyncManifest(repository, reading), PathCase.In(harness.FileSystem, repository)), [], repository, build);
 
         return (graph, reader);
     }
@@ -485,7 +541,7 @@ public sealed class BuiltFromReaderTests
         {
             var fileSystem = new PhysicalFileSystem(FilePermissionsFactory.Create());
 
-            return new BuiltFromReader(fileSystem, new SyncManifest(Root, Reading), fetched ?? [], Root, Build, names ?? PathCase.In(fileSystem, Root));
+            return new BuiltFromReader(fileSystem, new TreeFiles(new SyncManifest(Root, Reading), names ?? PathCase.In(fileSystem, Root)), fetched ?? [], Root, Build);
         }
 
         /// <summary>The worker's graph, its manifest <paramref name="manifest"/> and its records <paramref name="records"/>, as <c>ninja -t deps</c> prints them.</summary>

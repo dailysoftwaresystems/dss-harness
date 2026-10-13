@@ -205,6 +205,55 @@ public sealed class MutationRegistryValidationTests
     }
 
     /// <summary>
+    /// A written path is read once for every caller that asks while it is read or after - each waiting with its own token -
+    /// and a read that failed fails each of them, however it failed; but a read the caller that began it stopped is
+    /// forgotten, and the next caller reads it again with its own token.
+    /// </summary>
+    [Fact]
+    public async Task AWrittenPath_IsReadOnceForEveryCaller_UnlessTheCallerThatBeganItStoppedIt()
+    {
+        using var temp = new TempDirectory();
+        var tree = await TreeAsync(temp, Config());
+        var token = TestContext.Current.CancellationToken;
+        var begun = 0;
+        var thrown = 0;
+        var answer = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var written = new OverlaidRegistryFiles(tree, new Dictionary<string, Func<CancellationToken, Task<byte[]>>?>
+        {
+            ["mutations/texts/slow.diag"] = async stop =>
+            {
+                Interlocked.Increment(ref begun);
+                return await answer.Task.WaitAsync(stop);
+            },
+            ["mutations/texts/broken.diag"] = _ =>
+            {
+                Interlocked.Increment(ref thrown);
+                throw new IOException("the disk is gone");
+            },
+        });
+
+        using (var stopping = new CancellationTokenSource())
+        {
+            var stopped = written.ReadAsync("mutations/texts/slow.diag", stopping.Token);
+
+            await stopping.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopped);
+        }
+
+        var first = written.ReadAsync("mutations/texts/slow.diag", token);
+        var second = written.ReadAsync("mutations/texts/slow.diag", token);
+
+        answer.SetResult("charge exceeded"u8.ToArray());
+
+        Assert.Equal(["charge exceeded"u8.ToArray(), "charge exceeded"u8.ToArray()], await Task.WhenAll(first, second));
+        Assert.Equal(2, begun);
+
+        await Assert.ThrowsAsync<IOException>(() => written.ReadAsync("mutations/texts/broken.diag", token));
+        await Assert.ThrowsAsync<IOException>(() => written.ReadAsync("mutations/texts/broken.diag", token));
+        Assert.Equal(1, thrown);
+    }
+
+    /// <summary>
     /// A written path is read once however often the validation asks for it - a before-text is asked for to tell whether
     /// it holds nothing, and again where its file holds a further text of its arm - since reading one may cost a process.
     /// </summary>
@@ -544,16 +593,6 @@ public sealed class MutationRegistryValidationTests
     private static string Text(string[] rows) => string.Join("\n", rows) + "\n";
 
     private static Func<CancellationToken, Task<byte[]>> Holding(string text) => _ => Task.FromResult(Encoding.UTF8.GetBytes(text));
-
-    /// <summary>
-    /// The real file system, save that it finds <paramref name="root"/> by its name in another case only where
-    /// <paramref name="folds"/> says so: a file system that folds case, or one that does not, whatever this machine's does.
-    /// </summary>
-    private sealed class CaseOf(IFileSystem inner, string root, bool folds) : PassThroughFileSystem(inner)
-    {
-        public override bool DirectoryExists(string path)
-            => path != root && string.Equals(path, root, StringComparison.OrdinalIgnoreCase) ? folds : base.DirectoryExists(path);
-    }
 
     /// <summary>The real file system, save that the files of <paramref name="directory"/> cannot be listed.</summary>
     private sealed class CannotListFiles(IFileSystem inner, string directory) : PassThroughFileSystem(inner)

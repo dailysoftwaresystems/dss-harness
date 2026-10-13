@@ -68,7 +68,7 @@ public sealed class RegistryTextTests
     {
         byte[] bytes = [.. byteOrderMark ? Encoding.UTF8.Preamble : [], .. Encoding.UTF8.GetBytes(text)];
 
-        Assert.True(RegistryText.TryRead(bytes, out var read, out var unread), unread);
+        Assert.True(RegistryText.TryRead(bytes, out var read, out var unread, out _), unread);
 
         Assert.Equal(byteOrderMark, read.ByteOrderMark);
         Assert.Equal(text, read.Text);
@@ -90,7 +90,7 @@ public sealed class RegistryTextTests
         byte[] bytes = [.. byteOrderMark ? Encoding.UTF8.Preamble : [], .. Encoding.UTF8.GetBytes("# arms \x00E9\r\nA | a\n")];
         File.WriteAllBytes(path, bytes);
 
-        Assert.True(RegistryText.TryRead(bytes, out var read, out var unread), unread);
+        Assert.True(RegistryText.TryRead(bytes, out var read, out var unread, out _), unread);
 
         Assert.Equal(new HarnessFactory().FileSystem.ReadAllText(path), read.Text);
         Assert.Equal(MutationRegistryParser.Lines(read.Text), read.Lines.Select(line => line.Text));
@@ -107,16 +107,16 @@ public sealed class RegistryTextTests
     [InlineData(new byte[] { 0x41, 0xC3 }, "is not UTF-8: the byte at offset 1 (0xC3) does not form a UTF-8 character")]
     public void BytesThatAreNotUtf8_AreNotRead_AndWhyNamesTheByte(byte[] bytes, string why)
     {
-        Assert.False(RegistryText.TryRead(bytes, out var read, out var unread));
+        Assert.False(RegistryText.TryRead(bytes, out var read, out var unread, out var line));
 
         Assert.Null(read);
-        Assert.Equal(why, unread);
+        Assert.Equal((why, null), (unread, line));
     }
 
     /// <summary>
     /// A line that opens with a byte order mark - a second one behind the text's own, or one on a later line - is not
-    /// read, and why names the line: standing first, as it would once the lines above it were gone, the mark would be
-    /// read as the text's own, and the text written back would read as another.
+    /// read, and the line is given as a value beside why: standing first, as it would once the lines above it were gone,
+    /// the mark would be read as the text's own, and the text written back would read as another.
     /// </summary>
     [Theory]
     [InlineData(new byte[] { 0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, 0x41, 0x0A }, 1)]
@@ -124,10 +124,10 @@ public sealed class RegistryTextTests
     [InlineData(new byte[] { 0xEF, 0xBB, 0xBF, 0x41, 0x0D, 0xEF, 0xBB, 0xBF }, 2)]
     public void ALineOpeningWithAByteOrderMark_IsNotRead_AndWhyNamesTheLine(byte[] bytes, int line)
     {
-        Assert.False(RegistryText.TryRead(bytes, out var read, out var unread));
+        Assert.False(RegistryText.TryRead(bytes, out var read, out var unread, out var at));
 
         Assert.Null(read);
-        Assert.Equal($"has a byte order mark at the start of line {line}, which no line may open with: standing first, it would be read as the text's own", unread);
+        Assert.Equal((line, "opens with a byte order mark, which no line may open with: standing first, it would be read as the text's own"), (at, unread));
     }
 
     /// <summary>

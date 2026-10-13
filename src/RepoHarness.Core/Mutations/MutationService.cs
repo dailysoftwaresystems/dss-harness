@@ -384,6 +384,7 @@ public sealed class MutationService(
             BuildRecord.BytesIn(_fileSystem, leg.BuildDirectory),
             beside.Trees.Select(tree => (tree.Name, BuildRecord.BytesIn(_fileSystem, leg.Variant.DirectoryUnder(tree.Root)))));
         var project = leg.BuildableProject();
+        var tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project);
 
         return new MutationSubject
         {
@@ -391,10 +392,12 @@ public sealed class MutationService(
             Workers = MutationWorkers.Of(leg.HostTreeRoot, leg.Variant),
             Project = project,
             Fetched = FetchedSources.Of(_buildDirectoryGuard.Read(leg.BuildDirectory), _fileSystem),
-            Tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project),
+            Tests = tests,
             Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = work.Context.Config.Mutations,
-            SweepSettings = SweepSettings.Of(work.Context.Config, leg.Leg, leg.HostSettings),
+
+            // What the leg is swept with, resolved once with it: the variant placed, and the system its host runs.
+            SweepSettings = SweepSettings.Of(work.Context.Config, leg.Variant, project, tests, leg.Os, work.Context.Config.Mutations, leg.HostSettings.Env),
             Sink = records ? new RecordSink(new ArmVerdictRecord(_fileSystem, work.Context.Layout), leg.Name, _output, CommandName) : null,
             SweptIn = RepositoryTree.Of(work.Context, leg.TreeRoot, _platform.PathComparison),
             ExpectedBuildBytes = expected?.Bytes,
@@ -472,7 +475,7 @@ public sealed class MutationService(
                 work.Leg.Variant,
                 MutationFixture.Project,
                 tests: null,
-                work.Leg.Host.Os ?? work.Leg.Leg.Os,
+                work.Leg.Os,
                 settings,
                 work.Leg.HostSettings.Env),
             ComparesKeys = true,

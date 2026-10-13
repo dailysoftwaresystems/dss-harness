@@ -104,11 +104,43 @@ public sealed record TableIndex(
     string Made,
     string Outside);
 
-/// <summary>A target's table as a worker's build read it, or why it could not be made.</summary>
-/// <param name="Target">The target.</param>
-/// <param name="Table">The table, or <see langword="null"/> where a file its build reads could not be read.</param>
-/// <param name="Unread">Why there is no table, as what follows "cannot be read now: "; <see langword="null"/> where there is one.</param>
-internal sealed record BuiltFromReading(string Target, BuiltFromTable? Table, string? Unread);
+/// <summary>A target's table as a worker's build read it, with its digest, or why it could not be made: one or the other.</summary>
+internal sealed class BuiltFromReading
+{
+    private BuiltFromReading(string target, BuiltFromTable? table, string? unread)
+    {
+        Target = target;
+        Table = table;
+        Digest = table?.Digest();
+        Unread = unread;
+    }
+
+    /// <summary>The target.</summary>
+    public string Target { get; }
+
+    /// <summary>The table, or <see langword="null"/> where a file its build reads could not be read.</summary>
+    public BuiltFromTable? Table { get; }
+
+    /// <summary>The table's digest (<see cref="BuiltFromTable.Digest"/>), computed once; <see langword="null"/> where there is no table.</summary>
+    public string? Digest { get; }
+
+    /// <summary>Why there is no table, as what follows "cannot be read now: "; <see langword="null"/> where there is one.</summary>
+    public string? Unread { get; }
+
+    /// <summary>The table of <paramref name="table"/>'s target, as read.</summary>
+    /// <param name="table">The table.</param>
+    public static BuiltFromReading Read(BuiltFromTable table)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+
+        return new BuiltFromReading(table.Target, table, null);
+    }
+
+    /// <summary><paramref name="target"/> with no table, for <paramref name="why"/>.</summary>
+    /// <param name="target">The target.</param>
+    /// <param name="why">Why, as what follows "cannot be read now: ".</param>
+    public static BuiltFromReading NotRead(string target, string why) => new(target, null, why);
+}
 
 /// <summary>
 /// Turns what a worker's records say each target's build reads into what the target is built from: each file sorted into
@@ -131,7 +163,6 @@ internal sealed class BuiltFromReader
     private readonly IFileSystem _fileSystem;
     private readonly string _worker;
     private readonly string _build;
-    private readonly StringComparer _names;
     private readonly TreeFiles _tree;
     private readonly IReadOnlyList<(string Directory, string Name, string Digest)> _fetched;
 
@@ -140,30 +171,26 @@ internal sealed class BuiltFromReader
 
     /// <summary>A reader of the tables of one worker's build.</summary>
     /// <param name="fileSystem">Reads the files no reading holds.</param>
-    /// <param name="reading">The sweep's one reading of the tree: every file a sync carries, by size and hash.</param>
+    /// <param name="tree">The sweep's one reading of the tree, found as the tree's file system compares names.</param>
     /// <param name="fetched">The dependency sources the worker was given, as the sweep read them.</param>
     /// <param name="worker">The worker's root.</param>
     /// <param name="buildDirectory">The worker's build directory.</param>
-    /// <param name="names">How the tree's file system compares names.</param>
     public BuiltFromReader(
         IFileSystem fileSystem,
-        SyncManifest reading,
+        TreeFiles tree,
         IReadOnlyList<FetchedReading> fetched,
         string worker,
-        string buildDirectory,
-        StringComparer names)
+        string buildDirectory)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
-        ArgumentNullException.ThrowIfNull(reading);
+        ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(fetched);
-        ArgumentNullException.ThrowIfNull(names);
 
         _fileSystem = fileSystem;
         _worker = Whole(worker);
         _build = Whole(buildDirectory);
-        _names = names;
-        _hashed = new(names);
-        _tree = new TreeFiles(reading, names);
+        _hashed = new(tree.Names);
+        _tree = tree;
 
         _fetched = [.. fetched.Select(read => (Whole(FetchedSources.KeptIn(_worker, read.Source.Name)), read.Source.Name, ManifestDigest(read.Files)))];
     }
@@ -218,13 +245,12 @@ internal sealed class BuiltFromReader
             }
 
             var within = Under(path, _build) ? (BuildDirectory, _build) : (TreeDirectory, _worker);
-            var directory = Path.GetRelativePath(within.Item2, Path.GetDirectoryName(path)!).Replace('\\', '/');
+            var directory = ManifestBuilder.Relative(within.Item2, Path.GetDirectoryName(path)!);
 
             Add(made, directory == "." ? within.Item1 : $"{within.Item1}/{directory}", path, configured);
         }
 
-        return new BuiltFromReading(
-            source.Target,
+        return BuiltFromReading.Read(
             new BuiltFromTable
             {
                 Target = source.Target,
@@ -239,8 +265,7 @@ internal sealed class BuiltFromReader
                 Fetched = CanonicalJson.Sorted(fetched),
                 Made = Grouped(made),
                 Outside = Grouped(outside),
-            },
-            null);
+            });
     }
 
     /// <summary>
@@ -271,7 +296,7 @@ internal sealed class BuiltFromReader
     /// </summary>
     /// <param name="path">A file, whole.</param>
     private SyncEntry? OfTheTree(string path)
-        => Under(path, _worker) ? _tree.Find(Path.GetRelativePath(_worker, path).Replace('\\', '/')) : null;
+        => Under(path, _worker) ? _tree.Find(ManifestBuilder.Relative(_worker, path)) : null;
 
     /// <summary>The digest of every file of a dependency's sources as read: each path with its size and what it holds, sorted by path.</summary>
     private static string ManifestDigest(SyncManifest files)
@@ -309,13 +334,10 @@ internal sealed class BuiltFromReader
 
     /// <summary><paramref name="source"/>'s target with no table, because <paramref name="path"/> could not be read.</summary>
     private BuiltFromReading Unread(BuiltFromSource source, string path)
-        => new(source.Target, null, $"'{path}', which the build of '{source.Target}' reads, {_hashed[path].Unread}");
+        => BuiltFromReading.NotRead(source.Target, $"'{path}', which the build of '{source.Target}' reads, {_hashed[path].Unread}");
 
     /// <summary>Whether <paramref name="path"/> is below <paramref name="directory"/>, as the tree's file system compares names.</summary>
-    private bool Under(string path, string directory)
-        => path.Length > directory.Length
-            && path[directory.Length] is '/' or '\\'
-            && _names.Equals(path[..directory.Length], directory);
+    private bool Under(string path, string directory) => PathContainment.IsStrictlyInside(directory, path, _tree.Comparison);
 
     /// <summary>A build line's word with the worker's own path told.</summary>
     private string Told(string text) => WorkerPath.Told(text, _worker);
@@ -333,6 +355,13 @@ internal sealed class BuiltFromReader
 
         try
         {
+            if (_fileSystem.DirectoryExists(path))
+            {
+                // A command that depends on a directory reads what it finds there, which no build line names.
+                _hashed[path] = (null, "is a directory, and no build line names the files it reads in it");
+                return null;
+            }
+
             if (!_fileSystem.FileExists(path))
             {
                 _hashed[path] = (null, "is gone");

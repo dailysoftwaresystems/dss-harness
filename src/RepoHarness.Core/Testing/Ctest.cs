@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Testing;
 
@@ -139,7 +140,7 @@ internal static class Ctest
 
         try
         {
-            foreach (var line in output.Lines().SelectMany(line => line.ReplaceLineEndings("\n").Split('\n')).Select(line => line.Trim()))
+            foreach (var line in output.Lines().SelectMany(line => TextLines.Split(line).Select(part => part.Text.Trim())))
             {
                 if (Summary.IsMatch(line))
                 {

@@ -2262,6 +2262,82 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// An arm's key, as a sweep builds it, moves with each part read where the sweep runs - a text it cites edited in the
+    /// tree, the environment its host declares, a value of the environment its test settings give its runs, and the host
+    /// its leg is named on - each to a key of its own; and stays where nothing moved, in another tree of the same content.
+    /// </summary>
+    [Fact]
+    public async Task AnArmsKey_MovesWithAText_TheHostsEnvironment_ATestEnvironmentValue_AndTheHost()
+    {
+        static TestConfig Tested(string mode) => new() { All = new TestInvocation { Runner = "ctest", Env = new() { ["FIXTURE_MODE"] = mode } } };
+
+        static async Task<string> KeyAsync(Action<Sweep>? change = null, string mode = "strict", HostId? named = null)
+        {
+            var kept = new Kept();
+
+            using var sweep = new Sweep { Workers = 1, Sink = kept, Test = Tested(mode), Named = named };
+
+            change?.Invoke(sweep);
+            await sweep.RunAsync([ChargeBound]);
+
+            return Assert.Single(kept.Judgements).Verdict.Key ?? throw new InvalidOperationException("the arm has no key");
+        }
+
+        var key = await KeyAsync();
+
+        Assert.Equal(key, await KeyAsync());
+
+        string[] moved =
+        [
+            await KeyAsync(sweep => File.WriteAllText(Path.Combine(sweep.Tree, "texts", "charge.diag"), "the charge was exceeded")),
+            await KeyAsync(sweep => sweep.HostEnv["HOST_SETTING"] = "1"),
+            await KeyAsync(mode: "loose"),
+            await KeyAsync(named: HostId.Ssh("example-pi")),
+        ];
+
+        Assert.DoesNotContain(key, moved);
+        Assert.Equal(moved.Length, moved.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    /// <summary>
+    /// What an arm is judged on finds each text it cites as the tree's own file system compares names: a text the tree's
+    /// reading spells in another case is, where that file system folds case, the file the reading holds, and what it holds
+    /// is in the key - so editing it moves the key. A text the reading does not hold at all leaves the arm with no key,
+    /// saying which: what the arm was judged on was not read whole.
+    /// </summary>
+    [Fact]
+    public async Task ATextAnArmCites_IsFoundAsTheTreesFileSystemComparesNames_AndOneTheReadingLacksLeavesNoKey()
+    {
+        var kept = new Kept();
+
+        using (var sweep = new Sweep { Workers = 1, Sink = kept, ReadingSpells = path => path.StartsWith("texts/", StringComparison.Ordinal) ? path.ToUpperInvariant() : path })
+        {
+            sweep.Files = new CaseOf(sweep.Harness.FileSystem, sweep.Tree, folds: true);
+
+            Assert.Equal(LegVerdict.Passed, (await sweep.RunAsync([ChargeBound])).Verdict);
+
+            var (_, verdict, _) = Assert.Single(kept.Judgements);
+
+            Assert.NotNull(verdict.Key);
+            Assert.Equal(
+                JudgedOn.TextsOf(ChargeBound).Select(path => (path, (string?)FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes(TreeFiles[path])))),
+                verdict.JudgedOn!.Texts.Select(pair => (pair.Key, pair.Value)));
+        }
+
+        var lacking = new Kept();
+
+        using (var sweep = new Sweep { Workers = 1, Sink = lacking, ReadingSpells = path => path == "texts/charge.diag" ? null : path })
+        {
+            await sweep.RunAsync([ChargeBound]);
+
+            var (_, verdict, _) = Assert.Single(lacking.Judgements);
+
+            Assert.Null(verdict.Key);
+            Assert.Equal("the tree's reading holds no 'texts/charge.diag', which it cites", verdict.KeyUnread);
+        }
+    }
+
+    /// <summary>
     /// What was not observed is not kept, and the record holds what it held of it: an arm its machine did not admit, and
     /// each after it the sweep asked nothing; an arm the sweep's stop ended while it was driven, and one no worker reached;
     /// and an arm a refusal of the run ended. The arms judged beside them are kept.
@@ -3244,6 +3320,12 @@ public sealed class MutationLegRunnerTests
         /// <summary>Each line of progress the sweep said of its leg, in the order said.</summary>
         public ConcurrentQueue<string> Said { get; } = new();
 
+        /// <summary>
+        /// How the tree's one reading spells each file of the tree, given as written - <see langword="null"/> leaving it
+        /// out of the reading - where a test says; otherwise as written.
+        /// </summary>
+        public Func<string, string?> ReadingSpells { get; init; } = path => path;
+
         /// <summary>The dependency sources the leg's own build fetched; none unless a test says.</summary>
         public FetchedSet Fetched { get; set; } = FetchedSet.None;
 
@@ -3367,8 +3449,11 @@ public sealed class MutationLegRunnerTests
 
             foreach (var path in TreeFiles.Keys)
             {
-                var bytes = File.ReadAllBytes(Path.Combine(Tree, path));
-                entries[path] = new SyncEntry(path, bytes.Length, FileContentHash.Of(bytes));
+                if (ReadingSpells(path) is { } spelt)
+                {
+                    var bytes = File.ReadAllBytes(Path.Combine(Tree, path));
+                    entries[spelt] = new SyncEntry(spelt, bytes.Length, FileContentHash.Of(bytes));
+                }
             }
 
             return new SyncSource(context, new SyncExclusions(new SyncConfig(), ".worktrees"), new SyncManifest(Tree, entries), [], history: null);

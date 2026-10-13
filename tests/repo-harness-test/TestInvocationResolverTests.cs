@@ -44,6 +44,26 @@ public sealed class TestInvocationResolverTests
         Assert.Equal("tests passed", invocation.SuccessPattern);
     }
 
+    /// <summary>
+    /// A system's own section is found however a leg spells its system, as a leg's os is compared everywhere else and as
+    /// the configuration is checked: ignoring case.
+    /// </summary>
+    [Theory]
+    [InlineData("Windows")]
+    [InlineData("WINDOWS")]
+    [InlineData("windows")]
+    public void ASystemsOwnSection_IsFoundHoweverALegSpellsItsSystem(string os)
+    {
+        var settings = new TestConfig
+        {
+            All = new TestInvocation { Runner = "ctest", SuccessPattern = "tests passed" },
+            Windows = new TestInvocation { Runner = "ctest.exe" },
+        };
+
+        Assert.Equal("ctest.exe", TestInvocationResolver.InvocationFor(settings, os).Runner);
+        Assert.Equal("ctest.exe", TestInvocationResolver.Resolve(settings, os).Runner);
+    }
+
     [Fact]
     public void AMergedInvocationWithNoRunner_IsRefused()
     {

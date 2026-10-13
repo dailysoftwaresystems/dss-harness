@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Sync;
@@ -136,7 +137,9 @@ public sealed class TreeRegistryFiles : IRegistryFiles
 /// Each written path is given as what reads its new bytes when they are asked for, never as the bytes: a command that
 /// writes hundreds of paths has a registry cite a few of them, and some - a blob only git reads - cost a process to
 /// read. Nothing of a written path is read until the validation asks for that path, and nothing of it twice: the read
-/// begun the first time it is asked for is the answer every time after.
+/// begun the first time it is asked for is the answer every time after, each caller waiting with its own token, and a
+/// read that failed fails each. Only a read the caller that began it stopped is forgotten, so the next caller reads the
+/// path again with its own token.
 /// </para>
 /// <para>
 /// A written path is there, read as written, listed in its directory, and not withheld: it is what the command puts in
@@ -150,7 +153,7 @@ public sealed class OverlaidRegistryFiles : IRegistryFiles
     private readonly Dictionary<string, Func<CancellationToken, Task<byte[]>>?> _written;
 
     /// <summary>The read of each written path asked for so far, by its path: begun once, and answering each ask after.</summary>
-    private readonly Dictionary<string, Task<byte[]>> _read;
+    private readonly ConcurrentDictionary<string, Lazy<Task<byte[]>>> _read;
 
     /// <summary>The tree <paramref name="under"/> as it would be with <paramref name="written"/> applied.</summary>
     /// <param name="under">The tree as it stands.</param>
@@ -168,7 +171,7 @@ public sealed class OverlaidRegistryFiles : IRegistryFiles
 
         _under = under;
         _written = new Dictionary<string, Func<CancellationToken, Task<byte[]>>?>(written, under.Names);
-        _read = new Dictionary<string, Task<byte[]>>(under.Names);
+        _read = new ConcurrentDictionary<string, Lazy<Task<byte[]>>>(under.Names);
     }
 
     /// <inheritdoc/>
@@ -178,26 +181,34 @@ public sealed class OverlaidRegistryFiles : IRegistryFiles
     public bool Exists(string path) => _written.TryGetValue(path, out var read) ? read is not null : _under.Exists(path);
 
     /// <inheritdoc/>
-    public Task<byte[]> ReadAsync(string path, CancellationToken cancellationToken)
+    public async Task<byte[]> ReadAsync(string path, CancellationToken cancellationToken)
     {
         if (!_written.TryGetValue(path, out var read))
         {
-            return _under.ReadAsync(path, cancellationToken);
+            return await _under.ReadAsync(path, cancellationToken).ConfigureAwait(false);
         }
 
         if (read is null)
         {
-            return Task.FromException<byte[]>(new FileNotFoundException($"'{path}' is removed from the tree.", path));
+            throw new FileNotFoundException($"'{path}' is removed from the tree.", path);
         }
 
-        lock (_read)
+        while (true)
         {
-            if (!_read.TryGetValue(path, out var begun))
-            {
-                _read[path] = begun = read(cancellationToken);
-            }
+            // Begun outside any lock, once: a read that throws before it returns is kept as its answer as much as one
+            // whose task fails.
+            var begun = _read.GetOrAdd(path, _ => new Lazy<Task<byte[]>>(() => read(cancellationToken)));
 
-            return begun.WaitAsync(cancellationToken);
+            try
+            {
+                return await begun.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Stopped by the caller that began it, not by this one, which still wants it: that read is forgotten -
+                // only if it is still the one kept - and this caller begins its own.
+                _read.TryRemove(new KeyValuePair<string, Lazy<Task<byte[]>>>(path, begun));
+            }
         }
     }
 

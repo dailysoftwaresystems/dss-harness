@@ -10,12 +10,22 @@ namespace RepoHarness.Core.Mutations;
 /// reader asks - the record and the leg first, then what the judge and the registry say, then the tree, the settings and
 /// the host, then what only a build in a worker reads - and the first that applies is the one a line names.
 /// </summary>
-/// <param name="Code">The reason, as data names it: <c>files-moved</c>.</param>
-/// <param name="Said">The reason, as a line says it: <c>what 'lex_tests' is built from moved: tests/lex/a_test.cpp</c>.</param>
-public sealed record PendingReason(string Code, string Said)
+public sealed class PendingReason
 {
+    private PendingReason(string code, string said)
+    {
+        Code = code;
+        Said = said;
+    }
+
+    /// <summary>The reason, as data names it: <c>files-moved</c>.</summary>
+    public string Code { get; }
+
+    /// <summary>The reason, as a line says it: <c>what 'lex_tests' is built from moved: tests/lex/a_test.cpp</c>.</summary>
+    public string Said { get; }
+
     /// <summary>The words a leg's count of its pending arms groups an arm pending for this reason by: <c>20 never swept</c>.</summary>
-    public string Counted { get; init; } = string.Empty;
+    public string Counted { get; private init; } = string.Empty;
 
     /// <summary>
     /// The reason as an arm's row in a table says it: as a line says it, but for a reason said once above the table, which
@@ -24,14 +34,14 @@ public sealed record PendingReason(string Code, string Said)
     public string Row
     {
         get => field ?? Said;
-        init;
+        private init;
     }
 
     /// <summary>The target the reason names, where it names one.</summary>
-    public string? Target { get; init; }
+    public string? Target { get; private init; }
 
     /// <summary>The paths of the tree the reason names, where it names any, as the record spells them.</summary>
-    public IReadOnlyList<string> Paths { get; init; } = [];
+    public IReadOnlyList<string> Paths { get; private init; } = [];
 
     /// <summary>The leg's record of verdicts cannot be read.</summary>
     public static PendingReason RecordUnreadable(string why)
@@ -237,24 +247,25 @@ internal static class KeyDifference
     }
 
     /// <summary>
-    /// Every reason what a listing reads here (<paramref name="now"/>) is not what <paramref name="then"/> was judged on, in
+    /// Every reason what a listing reads here (<paramref name="now"/>) is not what the arm <paramref name="was"/> judged on, in
     /// the order a line names them: the parts a listing reads, each by the rule a sweep compares it by, and of each table
     /// the files of the tree it names, as the reading holds them now - a file the reading no longer holds is gone, and
     /// moved. None where nothing read here moved, which is never to say the arm holds.
     /// </summary>
-    /// <param name="then">What the arm was judged on, with the tables its key names.</param>
+    /// <param name="was">What the arm was judged on, as recorded.</param>
+    /// <param name="tables">The tables of it the record could give, by target.</param>
     /// <param name="now">What the listing read here.</param>
-    public static IReadOnlyList<PendingReason> Listed(ArmKey then, ReadHere now)
+    public static IReadOnlyList<PendingReason> Listed(JudgedOn was, IReadOnlyDictionary<string, BuiltFromTable> tables, ReadHere now)
     {
-        ArgumentNullException.ThrowIfNull(then);
+        ArgumentNullException.ThrowIfNull(was);
+        ArgumentNullException.ThrowIfNull(tables);
         ArgumentNullException.ThrowIfNull(now);
 
-        var was = then.JudgedOn;
         var reasons = new List<PendingReason>();
 
         Read(was, now.Judge, now.Rows, now.Texts, now.Sites, reasons);
 
-        foreach (var (target, table) in then.Tables.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        foreach (var (target, table) in tables.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
             var moved = table.Files
                 .Where(file => !string.Equals(now.Tree.HashOf(file.Key), file.Value, StringComparison.Ordinal))

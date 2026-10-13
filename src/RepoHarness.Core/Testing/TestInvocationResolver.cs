@@ -669,8 +669,11 @@ public static class TestInvocationResolver
         return Merge(settings.All, SectionFor(settings, platformKey));
     }
 
-    /// <summary>The section of <paramref name="settings"/> for one operating system, if it has one.</summary>
-    private static TestInvocation? SectionFor(TestConfig settings, string platformKey) => platformKey switch
+    /// <summary>
+    /// The section of <paramref name="settings"/> for one operating system, if it has one: found ignoring case, as a leg's
+    /// os is checked and compared everywhere else.
+    /// </summary>
+    private static TestInvocation? SectionFor(TestConfig settings, string platformKey) => platformKey.ToLowerInvariant() switch
     {
         PlatformNames.Windows => settings.Windows,
         PlatformNames.Linux => settings.Linux,

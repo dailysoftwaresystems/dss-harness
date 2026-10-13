@@ -3124,8 +3124,11 @@ lies over the main tree's segments of it, one for one, each below the blank line
 it from what stands above it with: where the agent has more, the rest follow the last, and where it
 has fewer, the main tree's remaining places go. A segment of an arm only the agent has stands after
 the nearest segment above it in the agent's text that the merged text holds - a segment of an arm
-kept from the main tree is held only where the main tree's version holds one like it, and stands as
-that one, or as the arm's last where no later segment of the arm is held - and past what the main
+kept from the main tree stands as the main tree's like it, or as the arm's last where no later
+segment of the arm is held; where the main tree's version holds none like it, it stands as the main
+tree's segment in its place among the arm's - the arm's last for the agent's last - since the main
+tree reworded it, unless that version holds fewer segments of the arm, having dropped it, and then
+it is not held - and past what the main
 tree alone holds there, so two sides adding at one place come out the main tree's addition first,
 then the agent's; the agent's first segment stands first, past what the main tree alone holds there;
 one above which the merged text holds nothing goes after the last segment; and none stands above an
@@ -3386,7 +3389,9 @@ leg reaches the same verdict.
   Never a why, a comment, a line's number, the letter case of the id, or the S row, which says
   where an arm runs, while what it was judged on is kept leg by leg.
 - `texts` and `sites`: what the sweep's one reading of the tree says each text the arm cites and
-  each site it mutates holds, or nothing where it holds none. No file is hashed a second time.
+  each site it mutates holds, found as the tree's file system compares names, or nothing where it
+  holds none - a text the arm cites that the reading does not hold leaves it no key, since what it
+  was judged on was not read whole. No file is hashed a second time.
 - `built`: the digest of the table of each target the arm's build builds (below).
 - `compilers`: each compiler CMake identified in the worker's build - its id, version, program and
   the words it is run with.
@@ -3424,8 +3429,10 @@ elsewhere, comes to the same key.
 
 The first worker made reads every arm's key, after its configure and build and before it drives an
 arm, so what an earlier mutation's configure left in a worker never reaches one. A part that cannot
-be read - a file gone or unreadable, a compiler's record unread - leaves the arm no key, and its
-verdict as reached. The key travels back from a host beneath the arm's line, which raised the
+be read - a file gone or unreadable, a directory a build line depends on, whose files no line names,
+a text it cites that the reading does not hold, a compiler's record unread - leaves the arm no key,
+and its verdict as reached. A key is made one way (`ArmKey.Of`): what each target is built from is
+the digest of the table read of it, so the key and the tables it names never disagree. The key travels back from a host beneath the arm's line, which raised the
 host-agent protocol to 10.
 
 ### What holds, and what is pending

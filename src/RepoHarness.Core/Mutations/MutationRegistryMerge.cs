@@ -52,15 +52,39 @@ public sealed record MergeCounts(int Added, int Removed, int Changed)
     }
 }
 
-/// <summary>Why one of the three texts could not be read as a registry.</summary>
-/// <param name="Side">Which of the three.</param>
-/// <param name="Line">The line, or <see langword="null"/> where it is the text as a whole.</param>
-/// <param name="Why">
-/// What is wrong: of the text as a whole, as what follows its name - <c>is not UTF-8: ...</c>; of a line, as what follows
-/// the line - <c>a row names no arm</c>.
-/// </param>
-public sealed record UnreadVersion(MergeSide Side, int? Line, string Why)
+/// <summary>Why one of the three texts could not be read as a registry: the text as a whole, or one line of it.</summary>
+public sealed record UnreadVersion
 {
+    private UnreadVersion(MergeSide side, int? line, string why)
+    {
+        Side = side;
+        Line = line;
+        Why = why;
+    }
+
+    /// <summary>Which of the three.</summary>
+    public MergeSide Side { get; }
+
+    /// <summary>The line, or <see langword="null"/> where it is the text as a whole.</summary>
+    public int? Line { get; }
+
+    /// <summary>
+    /// What is wrong: of the text as a whole, as what follows its name - <c>is not UTF-8: ...</c>; of a line, as what follows
+    /// the line - <c>a row names no arm</c>.
+    /// </summary>
+    public string Why { get; }
+
+    /// <summary>The text of <paramref name="side"/> as a whole cannot be read, for <paramref name="why"/>, said as what follows its name.</summary>
+    /// <param name="side">Which of the three.</param>
+    /// <param name="why">What is wrong: <c>is not UTF-8: ...</c>.</param>
+    public static UnreadVersion OfText(MergeSide side, string why) => new(side, null, why);
+
+    /// <summary>Line <paramref name="line"/> of the text of <paramref name="side"/> cannot be read, for <paramref name="why"/>, said as what follows the line.</summary>
+    /// <param name="side">Which of the three.</param>
+    /// <param name="line">The line, from 1.</param>
+    /// <param name="why">What is wrong: <c>a row names no arm</c>.</param>
+    public static UnreadVersion OfLine(MergeSide side, int line, string why) => new(side, line, why);
+
     /// <summary>
     /// The problem as a line says it, the text called what the caller calls it: <c>the text of the agent is not UTF-8:
     /// ...</c>, <c>line 14 of the text of the main tree: a row names no arm</c>.
@@ -492,7 +516,7 @@ public static class MutationRegistryMerge
 
         // What is offered is merged again whenever a command that wrote part of it is run again, and gives itself only
         // where it reads back as it was merged: a text that does not is this tool's defect, and is never offered.
-        return RegistryText.TryRead(text.ToBytes(), out var read, out _)
+        return RegistryText.TryRead(text.ToBytes(), out var read, out _, out _)
             && read.ByteOrderMark == mains.ByteOrderMark
             && Reading.Ended(read).Select(line => line.Text).SequenceEqual(lines.Select(line => line.Text), StringComparer.Ordinal)
                 ? text
@@ -615,16 +639,25 @@ public static class MutationRegistryMerge
         // Whether the main tree's version of the arm of the agent's segment holds one like it.
         bool Kept(Segment ours) => mains.Arm(ours.Arm)!.Any(theirs => Same(theirs.Content, ours.Content));
 
-        // Where the agent's segment of an arm kept from the main tree stands in the result: nowhere, where the main tree's
-        // version holds none like it; its last, where no later segment of the arm in the agent's text is kept, so that a
-        // row only the main tree's version holds stays with its arm; and otherwise the one like it.
+        // Where the agent's segment of an arm kept from the main tree stands in the result. Where the main tree's version
+        // holds none like it: nowhere, where that version holds fewer segments of the arm - it dropped this one - and
+        // otherwise the main tree's segment in its place, the arm's last for the agent's last, since the main tree reworded
+        // it. Where the main tree's version holds one like it: the arm's last, where no later segment of the arm in the
+        // agent's text is kept, so that a row only the main tree's version holds stays with its arm; otherwise that one.
         Segment? KeptAs(Segment ours)
         {
             var theirs = mains.Arm(ours.Arm)!;
+            var all = agents.Arm(ours.Arm)!;
 
-            return !Kept(ours) ? null
-                : agents.Arm(ours.Arm)!.Skip(ours.Within + 1).Any(Kept)
-                    ? theirs.Where(kept => Same(kept.Content, ours.Content)).MinBy(kept => Math.Abs(kept.Within - ours.Within))
+            if (!Kept(ours))
+            {
+                return theirs.Count < all.Count ? null
+                    : ours.Within == all.Count - 1 ? theirs[^1]
+                    : theirs[Math.Min(ours.Within, theirs.Count - 1)];
+            }
+
+            return all.Skip(ours.Within + 1).Any(Kept)
+                ? theirs.Where(kept => Same(kept.Content, ours.Content)).MinBy(kept => Math.Abs(kept.Within - ours.Within))
                 : theirs[^1];
         }
 
@@ -834,7 +867,7 @@ public static class MutationRegistryMerge
 
                 if (line.Read.Arm is null)
                 {
-                    unread.Add(new UnreadVersion(side, line.Number, NamesNoArm));
+                    unread.Add(UnreadVersion.OfLine(side, line.Number, NamesNoArm));
                 }
 
                 rows.Add(above);
@@ -894,12 +927,12 @@ public static class MutationRegistryMerge
         /// </summary>
         public static Reading? Of(MergeSide side, ReadOnlySpan<byte> bytes, List<UnreadVersion> unread)
         {
-            if (RegistryText.TryRead(bytes, out var text, out var why))
+            if (RegistryText.TryRead(bytes, out var text, out var why, out var line))
             {
                 return new Reading(side, text, unread);
             }
 
-            unread.Add(new UnreadVersion(side, null, why));
+            unread.Add(line is { } at ? UnreadVersion.OfLine(side, at, why) : UnreadVersion.OfText(side, why));
 
             return null;
         }

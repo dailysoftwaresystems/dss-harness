@@ -207,16 +207,56 @@ public sealed record JudgedCauses(IReadOnlyDictionary<string, string> GeneratedF
 
 /// <summary>
 /// What one arm would be judged on as one worker's build reads it, with the tables of the targets its build builds, and
-/// its key; or, where a part could not be read, why - an arm with no key never holds.
+/// its key; or, where a part could not be read, why - an arm with no key never holds. Made one way (<see cref="Of"/>), so
+/// what each target is built from and its table are one, and its key is of what it holds.
 /// </summary>
-/// <param name="JudgedOn">The nine parts, as far as each could be read: a target whose table could not be made is in none of them.</param>
-/// <param name="Tables">The table of each target its build builds whose table could be made.</param>
-/// <param name="Unread">Why a part could not be read, as what follows "cannot be read now: "; <see langword="null"/> where all nine were.</param>
-internal sealed record ArmKey(JudgedOn JudgedOn, IReadOnlyDictionary<string, BuiltFromTable> Tables, string? Unread)
+internal sealed class ArmKey
 {
+    private ArmKey(JudgedOn judgedOn, IReadOnlyDictionary<string, BuiltFromTable> tables, string? unread, JudgedCauses? causes)
+    {
+        JudgedOn = judgedOn;
+        Tables = tables;
+        Unread = unread;
+        Causes = causes;
+        Key = unread is null ? judgedOn.Key() : null;
+    }
+
+    /// <summary>The nine parts, as far as each could be read: a target whose table could not be made is in none of them.</summary>
+    public JudgedOn JudgedOn { get; }
+
+    /// <summary>The table of each target its build builds whose table could be made.</summary>
+    public IReadOnlyDictionary<string, BuiltFromTable> Tables { get; }
+
+    /// <summary>Why a part could not be read, as what follows "cannot be read now: "; <see langword="null"/> where all nine were.</summary>
+    public string? Unread { get; }
+
     /// <summary>The key, or <see langword="null"/> where a part could not be read.</summary>
-    public string? Key { get; } = Unread is null ? JudgedOn.Key() : null;
+    public string? Key { get; }
 
     /// <summary>What made the leg's build lines what they are, as the same worker's build read them; kept beside the key.</summary>
-    public JudgedCauses? Causes { get; init; }
+    public JudgedCauses? Causes { get; }
+
+    /// <summary>
+    /// What an arm is judged on: <paramref name="parts"/>, but for what each target its build builds is built from, which
+    /// <paramref name="built"/> gives - each target whose table could be made, by its digest, whatever
+    /// <paramref name="parts"/> holds of it - read whole unless a reading made no table, or <paramref name="unread"/> says
+    /// why another part could not be read.
+    /// </summary>
+    /// <param name="parts">The other eight parts.</param>
+    /// <param name="built">The reading of each target its build builds.</param>
+    /// <param name="unread">Why a part other than a table could not be read, or <see langword="null"/>.</param>
+    /// <param name="causes">What made the leg's build lines what they are, kept beside the key.</param>
+    public static ArmKey Of(JudgedOn parts, IReadOnlyList<BuiltFromReading> built, string? unread = null, JudgedCauses? causes = null)
+    {
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentNullException.ThrowIfNull(built);
+
+        var read = built.Where(reading => reading.Table is not null).ToList();
+
+        return new ArmKey(
+            parts with { Built = read.ToDictionary(reading => reading.Target, reading => reading.Digest!, StringComparer.Ordinal) },
+            read.ToDictionary(reading => reading.Target, reading => reading.Table!, StringComparer.Ordinal),
+            built.Select(reading => reading.Unread).FirstOrDefault(why => why is not null) ?? unread,
+            causes);
+    }
 }

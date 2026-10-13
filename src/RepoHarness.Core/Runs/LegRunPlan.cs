@@ -48,6 +48,9 @@ public sealed record PlacedLeg(
     HostSettings HostSettings,
     bool Emulated)
 {
+    /// <summary>The operating system the leg runs on: its host's, as measured, else the one the leg declares.</summary>
+    public string Os => Host.Os ?? Leg.Os;
+
     /// <summary>The host and tree this leg shares a sync with, so a tree is synced once, not once per leg.</summary>
     /// <remarks>
     /// Keyed by the tree on the host, never by the tree here. Each tree has a copy of its own on a
@@ -181,7 +184,7 @@ public sealed record PlacedLeg(
     /// declare either. A run refuses such a leg it would build before any host is measured.
     /// </exception>
     public ProjectConfig BuildableProject()
-        => Variant.CanBuild(Name, Project, Host.Os ?? Leg.Os, out var why)
+        => Variant.CanBuild(Name, Project, Os, out var why)
             ? Project
             : throw new HarnessException(HarnessExit.ConfigInvalid, why);
 
@@ -196,7 +199,7 @@ public sealed record PlacedLeg(
     /// </remarks>
     public Execution.LegIdentity IdentityFor(string runId) => new(
         Leg: Name,
-        Os: Host.Os ?? Leg.Os,
+        Os: Os,
         Processor: Variant.Processor,
         Toolchain: Variant.Toolchain,
         Config: Variant.Config,
@@ -224,7 +227,7 @@ public sealed record PlacedLeg(
             return (null, $"leg '{Name}' builds nothing, so it has no product");
         }
 
-        var (product, problem) = Project.Product(Host.Os ?? Leg.Os);
+        var (product, problem) = Project.Product(Os);
 
         return product is null ? (null, problem) : (Path.Combine(buildDirectory, product), null);
     }

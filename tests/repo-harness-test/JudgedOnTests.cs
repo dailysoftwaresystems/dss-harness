@@ -329,6 +329,37 @@ public sealed class JudgedOnTests
         return reading.Registry;
     }
 
+    /// <summary>
+    /// A key is made one way: what each target is built from is what its readings say, whatever the parts given hold, so
+    /// the key and its tables cannot disagree; the first reading that made no table leaves no key, saying why; and nothing
+    /// copies a key with another part under it. A reading, a key and a reason are each made only by their own factories.
+    /// </summary>
+    [Fact]
+    public void AKey_IsMadeOneWay_ItsBuiltFromItsReadings_AndNoneIsCopiedWithAnotherPart()
+    {
+        var then = KeyOf(Arms(Registry).Find("one")!, new Dictionary<string, string?>(StringComparer.Ordinal));
+        var table = then.Tables.Values.Single();
+        var claimed = ArmKey.Of(then.JudgedOn with { Built = new Dictionary<string, string>(StringComparer.Ordinal) { ["lib"] = "another" } }, [BuiltFromReading.Read(table)]);
+
+        Assert.Equal(then.Key, claimed.Key);
+        Assert.Equal(table.Digest(), claimed.JudgedOn.Built[table.Target]);
+
+        var unread = ArmKey.Of(then.JudgedOn, [BuiltFromReading.Read(table), BuiltFromReading.NotRead("tests", "'a.h' is gone")], "its compilers");
+
+        Assert.Null(unread.Key);
+        Assert.Equal("'a.h' is gone", unread.Unread);
+        Assert.Equal([table.Target], unread.JudgedOn.Built.Keys);
+        Assert.Equal(table.Digest(), BuiltFromReading.Read(table).Digest);
+
+        foreach (var type in new[] { typeof(ArmKey), typeof(BuiltFromReading), typeof(PendingReason) })
+        {
+            Assert.Null(type.GetMethod("<Clone>$"));
+            Assert.All(
+                type.GetConstructors(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic),
+                constructor => Assert.True(constructor.IsPrivate, $"{type.Name}: {constructor} is not private"));
+        }
+    }
+
     /// <summary>The key of <paramref name="arm"/> where everything but its rows is held as one value.</summary>
     private static string Key(MutationArm arm) => KeyOf(arm, new Dictionary<string, string?>(StringComparer.Ordinal)).Key!;
 
@@ -349,39 +380,31 @@ public sealed class JudgedOnTests
             Outside = new Dictionary<string, FilesIn>(StringComparer.Ordinal) { ["C:/sys/include"] = new(2, "headers") },
         };
 
-        return Again(
-            new ArmKey(
-                new JudgedOn
-                {
-                    Judge = ArmJudge.Revision,
-                    Rows = JudgedOn.RowsOf(arm),
-                    Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, path => tree.GetValueOrDefault(path), StringComparer.Ordinal),
-                    Sites = arm.Sites.ToDictionary(site => site.Site, site => tree.GetValueOrDefault(site.Site), StringComparer.Ordinal),
-                    Built = new Dictionary<string, string>(StringComparer.Ordinal),
-                    Compilers = [new JudgedCompiler("CXX", "GNU", "13.3.0", "C:/mingw/bin/g++.exe", [])],
-                    DeveloperEnvironment = null,
-                    Settings = new SweepSettings("build", "run", "judge"),
-                    Host = "local",
-                },
-                new Dictionary<string, BuiltFromTable>(StringComparer.Ordinal) { [arm.Target] = table },
-                null));
+        return ArmKey.Of(
+            new JudgedOn
+            {
+                Judge = ArmJudge.Revision,
+                Rows = JudgedOn.RowsOf(arm),
+                Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, path => tree.GetValueOrDefault(path), StringComparer.Ordinal),
+                Sites = arm.Sites.ToDictionary(site => site.Site, site => tree.GetValueOrDefault(site.Site), StringComparer.Ordinal),
+                Built = new Dictionary<string, string>(StringComparer.Ordinal),
+                Compilers = [new JudgedCompiler("CXX", "GNU", "13.3.0", "C:/mingw/bin/g++.exe", [])],
+                DeveloperEnvironment = null,
+                Settings = new SweepSettings("build", "run", "judge"),
+                Host = "local",
+            },
+            [BuiltFromReading.Read(table)]);
     }
 
     /// <summary>
     /// <paramref name="key"/> with what it is judged on as <paramref name="judged"/> makes it and its table as
-    /// <paramref name="table"/> makes it, the table's digest among what it is judged on, and read or not as
-    /// <paramref name="unread"/> says.
+    /// <paramref name="table"/> makes it, and read or not as <paramref name="unread"/> says.
     /// </summary>
     private static ArmKey Again(ArmKey key, Func<JudgedOn, JudgedOn>? judged = null, Func<BuiltFromTable, BuiltFromTable>? table = null, string? unread = null)
-    {
-        var tables = key.Tables.ToDictionary(pair => pair.Key, pair => table is null ? pair.Value : table(pair.Value), StringComparer.Ordinal);
-        var on = (judged ?? (on => on))(key.JudgedOn) with
-        {
-            Built = tables.ToDictionary(pair => pair.Key, pair => pair.Value.Digest(), StringComparer.Ordinal),
-        };
-
-        return new ArmKey(on, tables, unread);
-    }
+        => ArmKey.Of(
+            (judged ?? (on => on))(key.JudgedOn),
+            [.. key.Tables.Values.Select(each => BuiltFromReading.Read(table is null ? each : table(each)))],
+            unread);
 
     /// <summary>Each reason by its code and the words a line says it in.</summary>
     private static List<(string Code, string Said)> Said(IReadOnlyList<PendingReason> reasons) => [.. reasons.Select(reason => (reason.Code, reason.Said))];

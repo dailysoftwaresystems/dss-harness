@@ -35,7 +35,7 @@ public sealed class MutationRegistryMergeTests
         var unreadable = Assert.IsType<RegistryMerge.Unreadable>(Merge(held, main, Text(A("one"), C("one"), "Z", A("two"), C("two"), "words and no field |")));
 
         Assert.Equal(
-            [new UnreadVersion(MergeSide.Agent, 3, "a row names no arm"), new UnreadVersion(MergeSide.Agent, 6, "a row names no arm")],
+            [UnreadVersion.OfLine(MergeSide.Agent, 3, "a row names no arm"), UnreadVersion.OfLine(MergeSide.Agent, 6, "a row names no arm")],
             unreadable.Versions);
     }
 
@@ -527,6 +527,64 @@ public sealed class MutationRegistryMergeTests
     }
 
     /// <summary>
+    /// An arm only the agent added stays after the arm it follows in the agent's text where the main tree reworded every
+    /// row of that arm: the main tree's version holds no segment like the agent's, and the agent's stands as the main
+    /// tree's in its place - whether the arm stands first or after another.
+    /// </summary>
+    [Fact]
+    public void AnArmOnlyTheAgentAdded_StaysAfterTheArmItFollows_ThoughTheMainTreeRewordedEveryRowOfIt()
+    {
+        var held = Text(A("zero"), C("zero"), A("one"), C("one"), A("two"), C("two"));
+        var main = Text(A("zero"), C("zero"), A("one", "one, reworded"), C("one", "Reworded"), A("two"), C("two"));
+        var agent = Text(A("zero"), C("zero"), A("one"), C("one"), A("new"), C("new"), A("two"), C("two"));
+
+        var merged = Assert.IsType<RegistryMerge.Merged>(Merge(held, main, agent));
+
+        Assert.Equal(Text(A("zero"), C("zero"), A("one", "one, reworded"), C("one", "Reworded"), A("new"), C("new"), A("two"), C("two")), merged.Text);
+
+        var first = Assert.IsType<RegistryMerge.Merged>(Merge(
+            Text(A("one"), C("one"), A("two"), C("two")),
+            Text(A("one", "one, reworded"), C("one", "Reworded"), A("two"), C("two")),
+            Text(A("one"), C("one"), A("new"), C("new"), A("two"), C("two"))));
+
+        Assert.Equal(Text(A("one", "one, reworded"), C("one", "Reworded"), A("new"), C("new"), A("two"), C("two")), first.Text);
+    }
+
+    /// <summary>
+    /// An arm only the agent added after the last row of an arm the main tree reworded there, and gave a further row
+    /// below, follows that arm's last row - as it would were the row it follows kept as it was - never a row in the middle
+    /// of the arm.
+    /// </summary>
+    [Fact]
+    public void AnArmOnlyTheAgentAdded_AfterAnArmsLastRow_FollowsItsLast_WhereTheMainTreeRewordedThatRowAndAddedOne()
+    {
+        var held = Text(A("one"), C("one", "X"), A("two"), C("two"), C("one", "Y"), A("three"), C("three"));
+        var main = Text(A("one"), C("one", "X"), A("two"), C("two"), C("one", "Reworded"), A("three"), C("three"), C("one", "Z"));
+        var agent = Text(A("one"), C("one", "X"), A("two"), C("two"), C("one", "Y"), A("new"), C("new"), A("three"), C("three"));
+
+        var merged = Assert.IsType<RegistryMerge.Merged>(Merge(held, main, agent));
+
+        Assert.Equal(
+            Text(A("one"), C("one", "X"), A("two"), C("two"), C("one", "Reworded"), A("three"), C("three"), C("one", "Z"), A("new"), C("new")),
+            merged.Text);
+    }
+
+    /// <summary>
+    /// An arm only the agent added stays directly after an arm taken from the agent that it follows, as that arm stands in
+    /// the merged text - below the blank lines the main tree parts it with - never at the top.
+    /// </summary>
+    [Fact]
+    public void AnArmOnlyTheAgentAdded_StaysAfterAnArmTakenFromTheAgent_ThatItFollows()
+    {
+        var held = Text(A("one"), C("one"), "", A("two"), C("two"));
+        var agent = Text(A("one", "one, reworded"), C("one"), A("new"), C("new"), "", A("two"), C("two"));
+
+        var merged = Assert.IsType<RegistryMerge.Merged>(Merge(held, held, agent));
+
+        Assert.Equal(Text(A("one", "one, reworded"), C("one"), A("new"), C("new"), "", A("two"), C("two")), merged.Text);
+    }
+
+    /// <summary>
     /// With no text both held, the lines above the first row that one side alone has are that side's: a side with none
     /// holds none, which is no version of them.
     /// </summary>
@@ -745,7 +803,10 @@ public sealed class MutationRegistryMergeTests
 
         var agents = Assert.IsType<RegistryMerge.Unreadable>(MutationRegistryMerge.Merge(sound, sound, latin));
 
-        Assert.Equal([new UnreadVersion(MergeSide.Agent, null, $"is not UTF-8: the byte at offset {sound.Length} (0xE9) does not form a UTF-8 character")], agents.Versions);
+        Assert.Equal([UnreadVersion.OfText(MergeSide.Agent, $"is not UTF-8: the byte at offset {sound.Length} (0xE9) does not form a UTF-8 character")], agents.Versions);
+        Assert.All(
+            typeof(UnreadVersion).GetConstructors(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic),
+            constructor => Assert.False(constructor.IsPublic, $"{constructor} is public"));
         Assert.Equal([$"the text of the agent is not UTF-8: the byte at offset {sound.Length} (0xE9) does not form a UTF-8 character"], agents.Said(Sides));
 
         var all = Assert.IsType<RegistryMerge.Unreadable>(MutationRegistryMerge.Merge(latin, stray, stray));
@@ -772,10 +833,10 @@ public sealed class MutationRegistryMergeTests
 
         Assert.IsType<RegistryMerge.Merged>(MutationRegistryMerge.Merge(sound, marked, marked));
         Assert.Equal(
-            ["the text of the agent has a byte order mark at the start of line 1, which no line may open with: standing first, it would be read as the text's own"],
+            ["line 1 of the text of the agent: opens with a byte order mark, which no line may open with: standing first, it would be read as the text's own"],
             Assert.IsType<RegistryMerge.Unreadable>(MutationRegistryMerge.Merge(sound, sound, twice)).Said(Sides));
         Assert.Equal(
-            ["the text of what both held has a byte order mark at the start of line 3, which no line may open with: standing first, it would be read as the text's own"],
+            ["line 3 of the text of what both held: opens with a byte order mark, which no line may open with: standing first, it would be read as the text's own"],
             Assert.IsType<RegistryMerge.Unreadable>(MutationRegistryMerge.Merge(later, Bytes("A | x | 1\n\uFEFFA | y | 3\n"), Bytes("A | w | 2\n\uFEFFA | y | 3\n"))).Said(Sides).Take(1));
         Assert.Equal(
             [MergeSide.Main],
@@ -845,7 +906,7 @@ public sealed class MutationRegistryMergeTests
             conflict.Said(new MergeSides("the old base", "the new base", "the worktree")));
         Assert.Equal(
             "line 14 of the text of the new base: a row names no arm",
-            new UnreadVersion(MergeSide.Main, 14, "a row names no arm").Said(new MergeSides("the old base", "the new base", "the worktree")));
+            UnreadVersion.OfLine(MergeSide.Main, 14, "a row names no arm").Said(new MergeSides("the old base", "the new base", "the worktree")));
     }
 
     /// <summary>
@@ -983,7 +1044,7 @@ public sealed class MutationRegistryMergeTests
 
         static string Escaped(byte[] bytes) => Encoding.UTF8.GetString(bytes).Replace("\r", "<CR>", StringComparison.Ordinal).Replace("\n", "<LF>\n", StringComparison.Ordinal);
 
-        static bool Readable(byte[] bytes) => RegistryText.TryRead(bytes, out _, out _);
+        static bool Readable(byte[] bytes) => RegistryText.TryRead(bytes, out _, out _, out _);
     }
 
     /// <summary>How many texts <see cref="WhateverThreeTextsHold_AMergeThatIsOffered_GivesItselfAgain"/> merges.</summary>

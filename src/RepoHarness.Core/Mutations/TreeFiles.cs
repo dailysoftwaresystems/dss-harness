@@ -23,6 +23,10 @@ internal sealed class TreeFiles
         ArgumentNullException.ThrowIfNull(reading);
         ArgumentNullException.ThrowIfNull(names);
 
+        Names = names;
+        Comparison = StringComparer.IsWellKnownOrdinalComparer(names, out var ignoreCase) && ignoreCase
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
         _entries = new(names);
 
         foreach (var entry in reading.Entries.Values.OrderBy(entry => entry.Path, StringComparer.Ordinal))
@@ -30,6 +34,12 @@ internal sealed class TreeFiles
             _entries.TryAdd(entry.Path, entry);
         }
     }
+
+    /// <summary>How the tree's file system compares names (<see cref="FileSystem.PathCase.In"/>).</summary>
+    public StringComparer Names { get; }
+
+    /// <summary>How the tree's file system compares names, as a comparison of two paths.</summary>
+    public StringComparison Comparison { get; }
 
     /// <summary>How many files the reading holds.</summary>
     public int Count => _entries.Count;
