@@ -447,19 +447,19 @@ internal sealed class MutationLegRunner(
         private PathBudgetResult Budget(int number)
         {
             var worker = Worker(number);
-            var settings = _config.Worktrees;
 
-            return _runner._pathBudget.Check(worker, Math.Max(BuildBelow(worker), GivenBelow(worker)), settings.PathBudgetMargin, settings.PathLimit);
+            return CopyPathBudget.Check(_runner._pathBudget, _config.Worktrees, worker, _leg.Variant, Reserve, GivenBelow(worker));
         }
+
+        /// <summary>The longest path a build of the subject's project makes below its build directory: the subject's own, or <c>worktrees.pathBudgetReserve</c>.</summary>
+        private int Reserve => _subject.PathReserve ?? _config.Worktrees.PathBudgetReserve;
 
         /// <summary>
         /// The longest path <paramref name="worker"/>'s build makes below it: its build directory, the separator before it
         /// counted - what a worktree's check counts for the longest variant this machine builds - and below that the
         /// longest path a build of the project makes.
         /// </summary>
-        private int BuildBelow(string worker)
-            => _leg.Variant.DirectoryUnder(worker).Length - Path.TrimEndingDirectorySeparator(worker).Length
-                + (_subject.PathReserve ?? _config.Worktrees.PathBudgetReserve);
+        private int BuildBelow(string worker) => CopyPathBudget.BuildBelow(worker, _leg.Variant, Reserve);
 
         /// <summary>
         /// The longest path below <paramref name="worker"/> among the dependency sources it is given, the separator

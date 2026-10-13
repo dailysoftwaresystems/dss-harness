@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Platform;
 
@@ -35,6 +37,39 @@ public sealed record VariantKey(string Processor, string Toolchain, string Confi
     public string DirectoryName => Sanitizer is null
         ? $"{Processor}-{Toolchain}-{Config}"
         : $"{Processor}-{Toolchain}-{Config}-{Sanitizer}";
+
+    /// <summary>How many characters a variant's copy key is.</summary>
+    public const int CopyKeyLength = 7;
+
+    /// <summary>The digits a copy key is written in.</summary>
+    private const string CopyKeyDigits = "0123456789abcdef";
+
+    /// <summary>
+    /// The key the copies of a tree kept beside it for this variant are named by - a sweep's mutation workers: the first
+    /// <see cref="CopyKeyLength"/> hexadecimal digits, in lower case, of the SHA-256 of <see cref="DirectoryName"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A key, never the variant's name: a copy is a second tree, built as deep as the first, so on a machine whose paths
+    /// are bounded every character its name adds is one the tree's own path must leave free. Spelt out, a variant's name
+    /// stood in a copy's path twice - in its name, and in the build directory within it. A key adds the same few
+    /// characters whatever the variant is called.
+    /// </para>
+    /// <para>
+    /// Derived from the name alone, so the machine that dispatches a leg and the host that works in its copies name them
+    /// alike. Two variants of one tree whose names come to one key - a chance in hundreds of millions for a pair - share
+    /// their workers and their lock, and neither is judged on the other's: each sweep syncs a worker again by content
+    /// and builds in its own variant's directory within it, and a sweep of one holds off the other's, saying whose it is.
+    /// </para>
+    /// </remarks>
+    public string CopyKey => FileContentHash.Of(Encoding.UTF8.GetBytes(DirectoryName))[..CopyKeyLength];
+
+    /// <summary>
+    /// Whether <paramref name="key"/> is spelt as a copy key is: <see cref="CopyKeyLength"/> hexadecimal digits, in lower
+    /// case, and nothing else, so a copy's name is read back one way.
+    /// </summary>
+    /// <param name="key">What stands where a key would in a copy's name.</param>
+    public static bool IsCopyKey(ReadOnlySpan<char> key) => key.Length == CopyKeyLength && key.IndexOfAnyExcept(CopyKeyDigits) < 0;
 
     /// <summary>The build directory itself, always derived from the leg's own tree root.</summary>
     /// <param name="treeRoot">The root of the tree this leg acts on.</param>

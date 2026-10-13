@@ -359,7 +359,7 @@ public sealed class OrchestratorService(
     {
         try
         {
-            return MutationWorkers.TreesWithWorkersIn(_fileSystem, group);
+            return Sync.HostCopies.TreesWithCopiesBesideIn(_fileSystem, group);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -987,7 +987,7 @@ public sealed class MutationServiceTests
 
         Assert.Equal(fixture, subject.TreeRoot);
         Assert.Equal(MutationWorkers.Of(temp.Path, variant, selfTest: true), subject.Workers);
-        Assert.Equal(temp.Path + ".mutation-" + MutationWorkers.KeyOf(variant) + "s-1", subject.Workers.PathOf(1));
+        Assert.Equal(temp.Path + ".mutation-" + variant.CopyKey + "s-1", subject.Workers.PathOf(1));
 
         var elsewhere = temp.Combine("another", "repository");
         var theirs = MutationService.SelfTestSubject(
@@ -1002,7 +1002,7 @@ public sealed class MutationServiceTests
             fixture);
 
         Assert.Equal(fixture, theirs.TreeRoot);
-        Assert.Equal(elsewhere + ".mutation-" + MutationWorkers.KeyOf(variant) + "s-1", theirs.Workers.PathOf(1));
+        Assert.Equal(elsewhere + ".mutation-" + variant.CopyKey + "s-1", theirs.Workers.PathOf(1));
         Assert.Equal((MutationFixture.DirectoryName, "cmake", "."), (subject.Project.Name, subject.Project.Type, subject.Project.Path));
         Assert.Equal(MutationFixture.Project.BuildOutputs, subject.Project.BuildOutputs);
         Assert.Null(subject.Tests);

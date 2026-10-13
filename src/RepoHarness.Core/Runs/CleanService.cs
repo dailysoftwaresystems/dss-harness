@@ -334,7 +334,7 @@ public sealed class CleanService(
     /// </summary>
     private async Task<WorkersCleaned?> CleanWorkersAsync(HarnessContext context, PlacedLeg leg, bool dryRun, CancellationToken cancellationToken)
     {
-        var own = MutationWorkers.KeyOf(leg.Variant);
+        var own = leg.Variant.CopyKey;
         var others = OtherLegsKeys(context.Config, leg);
 
         // Its own, and those nothing else would ever remove: another leg's are left for that leg's clean.
@@ -345,7 +345,7 @@ public sealed class CleanService(
 
         try
         {
-            asides = _localTransport.WorkersAside(leg.HostTreeRoot, name => MutationWorkers.Named(name) is { } worker && Cleaned(worker.Family));
+            asides = _localTransport.AsidesBeside(leg.HostTreeRoot, HostCopies.MutationSuffix, name => MutationWorkers.Named(name) is { } worker && Cleaned(worker.Family));
             workers = await _workers.ListBesideAsync(leg.HostTreeRoot, Cleaned, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -499,8 +499,8 @@ public sealed class CleanService(
             .Where(other => string.Equals(other.Wsl, leg.Leg.Wsl, StringComparison.Ordinal)
                 && string.Equals(other.Ssh, leg.Leg.Ssh, StringComparison.Ordinal)
                 && string.Equals(other.Worktree, leg.Leg.Worktree, StringComparison.Ordinal))
-            .Select(other => MutationWorkers.KeyOf(VariantKey.For(config, other, other.Os)))
-            .Where(key => !string.Equals(key, MutationWorkers.KeyOf(leg.Variant), StringComparison.Ordinal))
+            .Select(other => VariantKey.For(config, other, other.Os).CopyKey)
+            .Where(key => !string.Equals(key, leg.Variant.CopyKey, StringComparison.Ordinal))
             .ToHashSet(StringComparer.Ordinal);
 
     /// <summary>What a dry run says of the leg's workers: what each holds, and what an earlier removal left aside.</summary>

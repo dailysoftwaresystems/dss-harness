@@ -53,8 +53,8 @@ public sealed class MutationWorkersTests
     [InlineData("arm64", "none", "debug", null, "aa1fa54")]
     public void AVariantsKey_IsSevenDigitsOfItsNamesHash(string processor, string toolchain, string config, string? sanitizer, string key)
     {
-        Assert.Equal(7, WorkerFamily.KeyLength);
-        Assert.Equal(key, MutationWorkers.KeyOf(new VariantKey(processor, toolchain, config, sanitizer)));
+        Assert.Equal(7, VariantKey.CopyKeyLength);
+        Assert.Equal(key, new VariantKey(processor, toolchain, config, sanitizer).CopyKey);
         Assert.Equal(key, MutationWorkers.Of("/home/pi/repo", new VariantKey(processor, toolchain, config, sanitizer)).Key);
     }
 
@@ -217,7 +217,7 @@ public sealed class MutationWorkersTests
     [InlineData("alpha.worktree-357e24cw-1", null)]
     [InlineData("alpha", null)]
     public void ADirectoryNamedAsAWorker_NamesTheTreeItCopies(string name, string? tree)
-        => Assert.Equal(tree, MutationWorkers.TreeNamed(name));
+        => Assert.Equal(tree, HostCopies.TreeOfBesideCopy(name));
 
     /// <summary>
     /// The trees with a worker in a directory are named once each, however many workers each has, in order - whether
@@ -234,11 +234,42 @@ public sealed class MutationWorkersTests
             Directory.CreateDirectory(temp.Combine("group", name));
         }
 
-        Assert.Equal(["alpha", "beta"], MutationWorkers.TreesWithWorkersIn(harness.FileSystem, temp.Combine("group")));
-        Assert.Empty(MutationWorkers.TreesWithWorkersIn(harness.FileSystem, temp.Combine("nowhere")));
+        Assert.Equal(["alpha", "beta"], HostCopies.TreesWithCopiesBesideIn(harness.FileSystem, temp.Combine("group")));
+        Assert.Empty(HostCopies.TreesWithCopiesBesideIn(harness.FileSystem, temp.Combine("nowhere")));
 
         // In order whatever order the disk lists them in: one that lists by name hides a listing nobody ordered.
-        Assert.Equal(["alpha", "beta"], MutationWorkers.TreesWithWorkersIn(new ListsBackwards(harness.FileSystem), temp.Combine("group")));
+        Assert.Equal(["alpha", "beta"], HostCopies.TreesWithCopiesBesideIn(new ListsBackwards(harness.FileSystem), temp.Combine("group")));
+    }
+
+    /// <summary>
+    /// A key is spelt one way - seven hexadecimal digits, in lower case - so a copy's name is read back to its variant's
+    /// key or to nothing: no longer or shorter run of digits, no capital, and no other letter is one.
+    /// </summary>
+    [Theory]
+    [InlineData("357e24c", true)]
+    [InlineData("0000000", true)]
+    [InlineData("357e24", false)]
+    [InlineData("357e24c0", false)]
+    [InlineData("357E24C", false)]
+    [InlineData("357e24g", false)]
+    [InlineData("357e24-", false)]
+    [InlineData("", false)]
+    public void AKeyIsSpeltOneWay(string key, bool spelt)
+        => Assert.Equal(spelt, VariantKey.IsCopyKey(key));
+
+    /// <summary>
+    /// What a line calls a worker, and how it says a sweep still running holds one, are the claims' own words: whatever
+    /// removes the copies of a family says them as the family's claims do.
+    /// </summary>
+    [Fact]
+    public void TheClaimsOnWorkers_SayWhatAWorkerIsCalled_AndHowOneIsSaidToBeHeld()
+    {
+        var harness = new HarnessFactory();
+        var claims = MutationWorkers.CopyClaims(harness.FileSystem, harness.Output, harness.Identity);
+
+        Assert.Equal("mutation worker", claims.Member);
+        Assert.Equal("a sweep still running holds it: pid 7, run r", claims.SaidHeld("pid 7, run r"));
+        Assert.Equal((MutationWorkers.Member, MutationWorkers.SaidHeld("pid 7, run r")), (claims.Member, claims.SaidHeld("pid 7, run r")));
     }
 
     /// <summary>A disk that lists what a directory holds last name first.</summary>

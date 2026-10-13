@@ -463,8 +463,24 @@ public sealed class LocalSyncTransport(
     /// worker gone is one nothing else would say went.
     /// </para>
     /// </remarks>
-    public async Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
+    public Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
+        => RemoveBesideAsync(root, HostCopies.MutationSuffix, _claims, measureOnly, cancellationToken);
+
+    /// <summary>
+    /// Removes the copies of <paramref name="family"/> kept beside the tree at <paramref name="root"/>, with what an
+    /// unfinished removal of one left aside - or, asked only to measure, says what it would remove and what it would
+    /// leave, and removes nothing. The one removal there is of copies kept beside a tree, whichever family they are of:
+    /// <see cref="RemoveWorkersAsync"/> is this, of the mutation workers, by the claims the transport was built with.
+    /// </summary>
+    /// <param name="root">The tree the copies are of.</param>
+    /// <param name="family">The family's suffix (<see cref="HostCopies.BesideFamilies"/>).</param>
+    /// <param name="claims">The family's claims: what a copy of it is named, which run holds one, and how that is said.</param>
+    /// <param name="measureOnly">Whether to say what would be removed, and what left, and remove nothing.</param>
+    /// <param name="cancellationToken">Stops the removal between copies.</param>
+    public async Task<WorkersRemoval> RemoveBesideAsync(string root, string family, ICopyClaims claims, bool measureOnly = false, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(claims);
+
         var removed = new List<WorkerRemoved>();
         var left = new List<WorkerLeft>();
 
@@ -475,12 +491,12 @@ public sealed class LocalSyncTransport(
 
             try
             {
-                copies = await ListCopiesAsync(root, HostCopies.MutationSuffix, cancellationToken).ConfigureAwait(false);
-                asides = WorkersAside(root, _claims.Names);
+                copies = await ListCopiesAsync(root, family, cancellationToken).ConfigureAwait(false);
+                asides = AsidesBeside(root, family, claims.Names);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                throw WorktreeInspector.CouldNotBeLookedIn(Beside(root, HostCopies.MutationSuffix)?.Parent ?? root, ex);
+                throw WorktreeInspector.CouldNotBeLookedIn(Beside(root, family)?.Parent ?? root, ex);
             }
 
             foreach (var copy in copies)
@@ -502,9 +518,9 @@ public sealed class LocalSyncTransport(
                 // path the caller spelt may start from a home only this machine expands, and names another file as it stands.
                 var kept = Home(copy.Path);
 
-                if (_claims.HeldBy(kept) is { } holder)
+                if (claims.HeldBy(kept) is { } holder)
                 {
-                    left.Add(new WorkerLeft(copy.Path, $"a sweep still running holds it: {holder}", WorkerLeftAs.Held));
+                    left.Add(new WorkerLeft(copy.Path, claims.SaidHeld(holder), WorkerLeftAs.Held));
                     continue;
                 }
 
@@ -544,11 +560,11 @@ public sealed class LocalSyncTransport(
 
                     // Gone by now: another command took it meanwhile, and says so. This one took nothing of it.
                     case CopyRemoval.Absent:
-                        _claims.Forget(kept);
+                        claims.Forget(kept);
                         break;
 
                     default:
-                        _claims.Forget(kept);
+                        claims.Forget(kept);
                         removed.Add(new WorkerRemoved(copy.Path, copy.Bytes));
                         break;
                 }
@@ -587,18 +603,20 @@ public sealed class LocalSyncTransport(
     }
 
     /// <summary>
-    /// What an unfinished removal of the workers beside <paramref name="root"/> left aside: each directory beside it
-    /// named as the aside (<see cref="RemovalAside"/>) of a worker of its mutation family whose name
+    /// What an unfinished removal of the copies of <paramref name="family"/> beside <paramref name="root"/> left aside:
+    /// each directory beside it named as the aside (<see cref="RemovalAside"/>) of a copy of that family whose name
     /// <paramref name="named"/> takes, in the order of their names. Told by name alone, as nothing else is left to tell
-    /// one by: so only what is spelt as a worker is one, and a directory named any other way is nobody's to remove.
+    /// one by: so only what is spelt as a copy of the family is one, and a directory named any other way is nobody's to
+    /// remove.
     /// </summary>
-    /// <param name="root">The tree the workers copy.</param>
-    /// <param name="named">Whether what follows the family's suffix is the name of a worker the caller removes.</param>
-    public IReadOnlyList<string> WorkersAside(string root, Func<string, bool> named)
+    /// <param name="root">The tree the copies are of.</param>
+    /// <param name="family">The family's suffix.</param>
+    /// <param name="named">Whether what follows the family's suffix is the name of a copy the caller removes.</param>
+    public IReadOnlyList<string> AsidesBeside(string root, string family, Func<string, bool> named)
     {
         ArgumentNullException.ThrowIfNull(named);
 
-        if (Beside(root, HostCopies.MutationSuffix) is not var (parent, prefix))
+        if (Beside(root, family) is not var (parent, prefix))
         {
             return [];
         }

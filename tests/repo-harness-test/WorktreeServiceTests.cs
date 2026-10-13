@@ -523,6 +523,10 @@ public sealed class WorktreeServiceTests
         {
         }
 
+        public string Member => MutationWorkers.Member;
+
+        public string SaidHeld(string holder) => MutationWorkers.SaidHeld(holder);
+
         public bool Names(string name) => MutationWorkers.Named(name) is not null;
     }
 
@@ -1075,6 +1079,10 @@ public sealed class WorktreeServiceTests
         public void Forget(string copy)
         {
         }
+
+        public string Member => MutationWorkers.Member;
+
+        public string SaidHeld(string holder) => MutationWorkers.SaidHeld(holder);
 
         public bool Names(string name) => MutationWorkers.Named(name) is not null;
     }

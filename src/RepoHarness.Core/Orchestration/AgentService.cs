@@ -1728,7 +1728,7 @@ public sealed class AgentService(
         try
         {
             return Path.GetDirectoryName(path) is { Length: > 0 } beside
-                && MutationWorkers.TreesWithWorkersIn(_fileSystem, beside).Contains(Path.GetFileName(path), StringComparer.Ordinal);
+                && HostCopies.TreesWithCopiesBesideIn(_fileSystem, beside).Contains(Path.GetFileName(path), StringComparer.Ordinal);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

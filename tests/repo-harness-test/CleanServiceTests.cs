@@ -418,7 +418,7 @@ public sealed class CleanServiceTests
                 + string.Join(", ", Sorted(own, selfTest).Select(path => $"'{path}'")),
                 said,
                 StringComparison.Ordinal);
-            Assert.Contains($"the mutation workers keyed '{MutationWorkers.KeyOf(renamed)}', of a variant no leg here builds, were left, as a sweep holds them: ", said, StringComparison.Ordinal);
+            Assert.Contains($"the mutation workers keyed '{renamed.CopyKey}', of a variant no leg here builds, were left, as a sweep holds them: ", said, StringComparison.Ordinal);
             Assert.Contains(sweep.Value, said, StringComparison.Ordinal);
             Assert.All(new[] { own, selfTest, orphanAside }, path => Assert.False(Directory.Exists(path), path));
             Assert.All(new[] { orphan, orphanSelfTest }, path => Assert.True(Directory.Exists(path), path));

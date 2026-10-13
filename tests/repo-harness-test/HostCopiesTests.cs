@@ -1549,6 +1549,59 @@ public sealed class HostCopiesTests
     }
 
     /// <summary>
+    /// The removal of the copies kept beside a tree is one, for whichever family it is given: it takes the family's
+    /// suffix and the family's own claims, removes each copy of that family a sync made with what an earlier removal of
+    /// one left aside, leaves one a run holds in the claims' own words and a directory nothing says a sync made as
+    /// somebody's, and touches no copy of another family - a mutation worker beside the same tree stays, whatever the
+    /// claims the transport was built with say - nor what was left aside under a name the family's claims do not take.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TheRemovalOfAFamilysCopies_TakesTheFamilysSuffixAndItsClaims_AndNoOtherFamilysCopy(bool measureOnly)
+    {
+        using var hosts = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var tree = hosts.Combine("repo");
+        var (free, held, worker, somebodys) = (tree + ".spare-1", tree + ".spare-2", tree + ".mutation-357e24cw-1", tree + ".spare-3");
+        var (aside, notOnes, workers) = (RemovalAside.Of(tree + ".spare-4"), RemovalAside.Of(tree + ".spare-notes"), RemovalAside.Of(tree + ".mutation-357e24cw-2"));
+        var ofWorkers = new Claims { Held = { [free] = "pid 9, run w" } };
+        var spares = new SpareClaims { Held = { [held] = "pid 1, run r" } };
+        var local = Local(harness, claims: ofWorkers);
+
+        foreach (var copy in new[] { free, held, worker })
+        {
+            await local.CreateRootAsync(copy, CopyMark.Complete, cancellationToken);
+        }
+
+        foreach (var directory in new[] { somebodys, aside, notOnes, workers })
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, "left.txt"), "seven-7");
+        }
+
+        var removal = await local.RemoveBesideAsync(tree, ".spare-", spares, measureOnly, cancellationToken);
+
+        Assert.Equal([free, aside], removal.Removed.Select(copy => copy.Path));
+        Assert.Equal(7, removal.Removed[1].Bytes);
+        Assert.Equal(
+            [(held, "a run still running holds it: pid 1, run r", WorkerLeftAs.Held), (somebodys, removal.Left[^1].Why, WorkerLeftAs.Somebodys)],
+            removal.Left.Select(left => (left.Path, left.Why, left.As)));
+        Assert.False(removal.Interrupted);
+
+        // Measured, nothing goes; removed, the family's own go, and its claims alone are told so.
+        Assert.Equal(measureOnly, Directory.Exists(free));
+        Assert.Equal(measureOnly, Directory.Exists(aside));
+        Assert.Equal(measureOnly ? [] : [Path.GetFullPath(free)], spares.Forgotten);
+        Assert.Empty(ofWorkers.Forgotten);
+
+        // The copy a run holds, somebody's directory, the worker of the other family and what a removal of one left
+        // aside, and an aside spelt as no copy of this family, all stay.
+        Assert.All(new[] { held, somebodys, worker, workers, notOnes }, kept => Assert.True(Directory.Exists(kept)));
+    }
+
+    /// <summary>
     /// A worker whose removal stops at something held is left as not removed, saying what stopped it, and keeps no
     /// other worker from going; asking again, once nothing holds it, removes the rest of it.
     /// </summary>
@@ -2379,6 +2432,31 @@ public sealed class HostCopiesTests
         public void Forget(string copy) => Forgotten.Add(Path.GetFullPath(copy));
 
         public bool Names(string name) => MutationWorkers.Named(name) is not null;
+
+        public string Member => MutationWorkers.Member;
+
+        public string SaidHeld(string holder) => MutationWorkers.SaidHeld(holder);
+    }
+
+    /// <summary>
+    /// The claims of another family of copies kept beside a tree - each named by a number alone, called a spare, and
+    /// held by a run - so what the one removal takes from the family it is given is told from what it takes for workers.
+    /// </summary>
+    private sealed class SpareClaims : ICopyClaims
+    {
+        public Dictionary<string, string> Held { get; } = new(StringComparer.Ordinal);
+
+        public List<string> Forgotten { get; } = [];
+
+        public string? HeldBy(string copy) => Held.GetValueOrDefault(Path.GetFullPath(copy));
+
+        public void Forget(string copy) => Forgotten.Add(Path.GetFullPath(copy));
+
+        public bool Names(string name) => name.Length > 0 && name.All(char.IsAsciiDigit);
+
+        public string Member => "spare";
+
+        public string SaidHeld(string holder) => $"a run still running holds it: {holder}";
     }
 
     /// <summary>

@@ -132,6 +132,12 @@ internal sealed class WorkerClaims(IFileSystem fileSystem, IHarnessOutput output
     public bool Names(string name) => MutationWorkers.Named(name) is not null;
 
     /// <inheritdoc/>
+    public string Member => MutationWorkers.Member;
+
+    /// <inheritdoc/>
+    public string SaidHeld(string holder) => MutationWorkers.SaidHeld(holder);
+
+    /// <inheritdoc/>
     public string? HeldBy(string copy)
     {
         try
@@ -176,7 +182,7 @@ internal sealed class WorkerClaims(IFileSystem fileSystem, IHarnessOutput output
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Its copy is gone, so it claims nothing: said, and never the failure of the removal that went through.
-            _output.Warn(_commandName, $"The claim file '{file}' of a mutation worker that was removed could not be removed, and is yours to remove: {ex.Message}");
+            _output.Warn(_commandName, $"The claim file '{file}' of a {Member} that was removed could not be removed, and is yours to remove: {ex.Message}");
         }
     }
 

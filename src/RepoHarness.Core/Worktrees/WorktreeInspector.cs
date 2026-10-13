@@ -1,9 +1,9 @@
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
-using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Core.Worktrees;
 
@@ -225,7 +225,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
                 throw CouldNotBeLookedIn(path, ex);
             }
 
-            foreach (var child in children.Where(child => HoldsOwnGit(_fileSystem, child) && !IsMutationWorker(child)))
+            foreach (var child in children.Where(child => HoldsOwnGit(_fileSystem, child) && !IsCopyBeside(child)))
             {
                 found.Add(AddressOf(worktreesDirectory, child));
             }
@@ -260,10 +260,13 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
         return new HarnessException(HarnessExit.CommandFailed, $"'{directory}' could not be looked in: {why.Message.TrimEnd('.')}");
     }
 
-    /// <summary>Whether <paramref name="directory"/> is named as a mutation worker kept beside a tree is: a copy of it, never a worktree.</summary>
+    /// <summary>
+    /// Whether <paramref name="directory"/> is named as a copy kept beside a tree is - a mutation worker: a copy of the
+    /// tree, never a worktree.
+    /// </summary>
     /// <param name="directory">The directory.</param>
-    public static bool IsMutationWorker(string directory)
-        => MutationWorkers.TreeNamed(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))) is not null;
+    public static bool IsCopyBeside(string directory)
+        => HostCopies.TreeOfBesideCopy(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))) is not null;
 
     /// <summary>The worktree among <paramref name="worktrees"/> recorded at <paramref name="resolvedPath"/>, never the main one.</summary>
     /// <param name="worktrees">git's list.</param>

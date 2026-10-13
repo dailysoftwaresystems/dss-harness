@@ -908,7 +908,7 @@ internal static class HelpCommand
             builder,
             $"Each leg is swept in worker copies of its tree, kept beside it as <tree>{HostCopies.MutationSuffix}<key>{WorkerFamily.OwnMark}-<n>, numbered "
             + "from 1: as many as workers, never more than the leg has arms to drive, and one in a WSL distribution. The key "
-            + $"is the first {WorkerFamily.KeyLength} hexadecimal digits of the SHA-256 of the leg's variant, as its build "
+            + $"is the first {VariantKey.CopyKeyLength} hexadecimal digits of the SHA-256 of the leg's variant, as its build "
             + "directory is named: a worker's name adds twenty characters to its tree's path whatever the variant is "
             + "called, since a worker is built as deep as the tree and a machine whose paths are bounded has no more to "
             + "spare, and the lines of a sweep and of a clean say which leg a worker is. Before every "

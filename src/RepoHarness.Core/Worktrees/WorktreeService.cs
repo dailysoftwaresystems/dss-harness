@@ -5,7 +5,6 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
-using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
@@ -911,7 +910,7 @@ public sealed class WorktreeService(
             // A mutation worker kept beside a worktree: a copy of it with a repository of its own, which git records
             // nowhere and which goes with its worktree. One whose worktree is gone has nothing left to take it with, and
             // is said, with what removes it.
-            if (MutationWorkers.TreeNamed(name) is { } copied)
+            if (HostCopies.TreeOfBesideCopy(name) is { } copied)
             {
                 if (!_fileSystem.DirectoryExists(Path.Combine(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(directory))!, copied)))
                 {
