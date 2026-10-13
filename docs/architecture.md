@@ -3374,10 +3374,12 @@ records staying on that host and its home written as `~`, as a leg's are (see "A
 
 ### What an arm is judged on
 
-Each arm's line carries its `key`: the SHA-256 of what it was judged on (`JudgedOn`), nine parts
+Each arm's line carries its `key`: the SHA-256 of what it was judged on (`JudgedOn`), ten parts
 written as canonical JSON - the options every state file is written with, on one line, each map
-sorted by its keys as ordinal strings. Where all nine are what they were, the same arm on the same
-leg reaches the same verdict.
+sorted by its keys as ordinal strings. Where all ten are what they were, nothing this tool reads
+that the verdict rests on has moved. That is not to say nothing it rests on has: what a test binary
+reads at run time that `mutations.runReads` does not name - a data file, a plugin it opens - is
+read by no part, so editing it moves no key, and a recorded `passed` it would change still holds.
 
 - `judge`: `ArmJudge.Revision`, raised by hand whenever a change could give another verdict for the
   same inputs - in the arm's judge, the unmutated run's, the pre-flight, how a site is edited, how
@@ -3403,7 +3405,15 @@ leg reaches the same verdict.
   cannot change a verdict - the workers, the cores, admission, the path limits, the clock's
   tolerance - or reaches an arm through another part: the cache variables, the build type and the
   generator through the build lines, `sync.*` through the reading, the tool search directories
-  through the compilers.
+  through the compilers, `mutations.runReads` through the files it names.
+- `runReads`: each file of the tree the arm's runner reads at run time, as `mutations.runReads`
+  names them for that runner - a path, everything below a directory, or `**/name` at any depth, as
+  every list of paths reads them (`PathPatterns`) - with what the sweep's reading holds of each;
+  nothing for a BUILD-RED arm, which runs nothing. Declared, never found: what a binary opens at run
+  time is said by no record a build keeps, and every file of the tree in every key would make every
+  arm pending after every edit. A file that joins or leaves what the entries cover moves the key, as
+  one that holds something else does. A runner no arm names is no error; one given no file, or an
+  entry outside the tree, is refused when the configuration is read.
 - `host`: the host the leg ran on, as the machine that dispatched it names it.
 
 A target's table (`BuiltFromTable`) is what the build of it read, never what that was generated
@@ -3511,8 +3521,8 @@ reading, as the tree compares names. An arm is pending for a closed list of reas
 cannot be read, or a newer build wrote it; its leg cannot be swept; it was never swept on the leg;
 the verdict shown is no `passed`; it was swept with no key; or the judge's revision, its rows, a
 text it cites, a site it mutates, a file of the tree its targets are built from (one gone said as
-gone), what of the configuration its build, run or judge is given, or the host its leg names
-changed. Every other arm is *unmoved here*, never said to hold: a listing reads the rows, the texts,
+gone), a file its runner reads at run time, what of the configuration its build, run or judge is
+given, or the host its leg names changed. Every other arm is *unmoved here*, never said to hold: a listing reads the rows, the texts,
 the tree's files and the settings, and never how a target is built, a file the build makes, the
 dependency sources it fetched, a file outside the tree it reads, the compilers or the developer
 environment - only a sweep on the leg's machine reads those, and eight reasons are a sweep's alone

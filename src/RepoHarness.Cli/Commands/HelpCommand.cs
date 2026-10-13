@@ -851,7 +851,11 @@ internal static class HelpCommand
             + $"carrying - a worker is a copy a sync makes, and a host sweeps its own. reportArgs makes a test binary write a JUnit XML report to {{{MutationReport.Placeholder}}}, "
             + "a new file for every run: [\"--reporter\", \"JUnit::out={report}\"] for Catch2, [\"--reporters=junit\", "
             + "\"--out={report}\"] for doctest, [\"--logger=JUNIT,all,{report}\"] for Boost.Test. It is required where an arm runs "
-            + "its binary, and only {report} may stand in braces.");
+            + "its binary, and only {report} may stand in braces. "
+            + "runReads names, for each runner as the A rows name it, the files of the tree its runs read at run time - a data "
+            + "file, a golden output, a plugin it opens - each a path, everything below a directory, or **/name at any depth: what "
+            + "the sweep's reading of the tree holds of each is part of the key of every arm that runner runs. A runner given no "
+            + "file, or an entry outside the tree, is refused; a runner no arm names is no error.");
         builder.AppendLine();
         builder.AppendLine("The registry");
         builder.AppendLine();
@@ -1045,8 +1049,10 @@ internal static class HelpCommand
             + "the tree they read, the dependency sources the worker was given, what the worker's configure made and what "
             + "they read outside the tree, the worker's own path told wherever it stands; the compilers CMake identified; "
             + "the leg's developer environment; what of the configuration the build, the run and the judge are given; "
-            + "and the host. No part is a commit, a date, a run, a worker or a tree: the same content judged again, in "
-            + "another worker or another tree, comes to the same key. An arm a part of whose key could not be read has none.");
+            + "what its runner reads at run time, as runReads names it; and the host. No part is a commit, a date, a run, a "
+            + "worker or a tree: the same content judged again, in another worker or another tree, comes to the same key. An "
+            + "arm a part of whose key could not be read has none. A file a test binary reads at run time that runReads does "
+            + "not name is read by no part of a key: editing it moves none, and a passed it changes the verdict of still holds.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1076,7 +1082,8 @@ internal static class HelpCommand
             + "here moved for, else the newest - its run, when, and what the arm is now. It is pending where its record "
             + $"cannot be read or a newer {ToolPackage.Id} wrote it, its leg cannot be swept, it was never swept on the leg, the "
             + "verdict shown is no passed, it was swept with no key, or the judge's revision, its rows, a text it cites, a site "
-            + "it mutates, a file of the tree its targets are built from, what of the configuration its build, its run or its "
+            + "it mutates, a file of the tree its targets are built from, a file its runner reads at run time, what of the "
+            + "configuration its build, its run or its "
             + "judge is given, or the host its leg names changed: the row says the first that applies, in that order, and "
             + "--json every one. Every other arm is unmoved here, which is never to say it holds: a listing reads the rows, "
             + "the texts, the tree's files and the settings, never how a target is built, a file its build makes, the "
@@ -2501,7 +2508,8 @@ internal static class HelpCommand
         builder.AppendLine("  worktrees      naming, path budget and path limit");
         builder.AppendLine("  anchors        the pending and done anchor registries, and how new ids are spelled");
         builder.AppendLine("  mutations      the mutation arms registry, its texts, the workers a leg sweeps");
-        builder.AppendLine("                 with and its test binaries' report ('help mutations')");
+        builder.AppendLine("                 with, its test binaries' report, and what each runner reads at");
+        builder.AppendLine("                 run time, part of each arm's key ('help mutations')");
         builder.AppendLine();
         builder.AppendLine("A list whose absence means every one of what it names, or a set the tool chooses, is");
         builder.AppendLine("refused given empty, as --legs given no name is: a runner's legs and steps; a tool's");

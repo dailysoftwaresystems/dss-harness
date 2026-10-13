@@ -252,6 +252,7 @@ public sealed class MutationService(
                 files,
                 named?.ToString(),
                 SweepSettings.Of(config, leg.Leg, config.Hosts.SettingsFor(named ?? HostId.Local)),
+                config.Mutations,
                 project is null ? null : JudgedCauses.GenerationOf(config, VariantKey.For(config, leg.Leg, leg.Leg.Os), project))));
         }
 

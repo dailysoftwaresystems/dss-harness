@@ -344,6 +344,7 @@ public sealed class ArmVerdictRecordTests : IDisposable
             Built = tables.ToDictionary(table => table.Target, table => table.Digest(), StringComparer.Ordinal),
             Compilers = [new JudgedCompiler("CXX", "GNU", "13.3.0", "/usr/bin/c++", [])],
             Settings = new SweepSettings("build", "run", "judge"),
+            RunReads = new Dictionary<string, string>(StringComparer.Ordinal) { ["tests/data/golden.txt"] = FileContentHash.Of([4]) },
             Host = "local",
         },
         Causes = new JudgedCauses(new Dictionary<string, string>(StringComparer.Ordinal) { ["CMakeLists.txt"] = FileContentHash.Of([3]) }, "generation"),

@@ -56,4 +56,18 @@ internal sealed class TreeFiles
     /// <summary>What the reading says <paramref name="path"/> holds, or <see langword="null"/> where it holds no such file.</summary>
     /// <param name="path">A path relative to the tree, with forward separators.</param>
     public string? HashOf(string path) => Find(path)?.ContentHash;
+
+    /// <summary>
+    /// Each file of the reading <paramref name="patterns"/> covers (<see cref="Repository.PathPatterns.Matches"/>), by its
+    /// path as the reading spells it, with what the reading says it holds, sorted by path.
+    /// </summary>
+    /// <param name="patterns">Paths and patterns relative to the tree, as a configuration writes them.</param>
+    public IReadOnlyDictionary<string, string> Matching(IReadOnlyList<string> patterns)
+    {
+        ArgumentNullException.ThrowIfNull(patterns);
+
+        return CanonicalJson.Sorted(_entries.Values
+            .Where(entry => Repository.PathPatterns.Matches(patterns, entry.Path))
+            .ToDictionary(entry => entry.Path, entry => entry.ContentHash, StringComparer.Ordinal));
+    }
 }

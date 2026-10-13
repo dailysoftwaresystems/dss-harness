@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
@@ -148,7 +149,7 @@ public sealed class JudgedOnTests
     /// the least that tells the two apart. A part that could not be read leaves no key, and is named as that alone.
     /// </summary>
     [Theory]
-    [InlineData("judge", "judge-revised", "the judge's rules changed since (revision 1, now 2)")]
+    [InlineData("judge", "judge-revised", "the judge's rules changed since (revision {revision}, now {next})")]
     [InlineData("compiler version", "compiler-changed", "its compiler changed: CXX GNU 13.3.0, now GNU 14.1.0")]
     [InlineData("compiler program", "compiler-changed", "its compiler changed: CXX GNU 13.3.0 'C:/mingw/bin/g++.exe', now GNU 13.3.0 'C:/other/bin/g++.exe'")]
     [InlineData("compiler words", "compiler-changed", "its compiler changed: CXX GNU 13.3.0 'C:/mingw/bin/g++.exe', now GNU 13.3.0 'C:/mingw/bin/g++.exe' -m32")]
@@ -160,6 +161,8 @@ public sealed class JudgedOnTests
     [InlineData("host", "host-changed", "it was judged on local, and this leg runs on ssh:box")]
     [InlineData("lines", "lines-changed", "how 'lib' is built changed")]
     [InlineData("file moved", "files-moved", "what 'lib' is built from moved: src/a.cpp")]
+    [InlineData("run reads", "run-reads-moved", "what its runner reads at run time moved: data/golden.txt")]
+    [InlineData("run read joined", "run-reads-moved", "what its runner reads at run time moved: data/silver.txt")]
     [InlineData("file joined", "set-changed", "a file joined or left what 'lib' is built from")]
     [InlineData("made", "made-moved", "a file its build makes moved, in {build}")]
     [InlineData("fetched", "fetched-moved", "the sources of 'plumb' its build fetched moved")]
@@ -167,6 +170,10 @@ public sealed class JudgedOnTests
     [InlineData("unread", "key-unreadable", "what it would be judged on cannot be read now: 'C:/sys/include/a.h', which the build of 'lib' reads, is gone")]
     public void EveryOtherPart_MovesTheKey_AndIsNamedInTheWordsALineSaysItIn(string part, string code, string said)
     {
+        said = said
+            .Replace("{revision}", ArmJudge.Revision.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("{next}", (ArmJudge.Revision + 1).ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
         var then = KeyOf(Arms(Registry).Find("one")!, new Dictionary<string, string?>(StringComparer.Ordinal));
         var compiler = then.JudgedOn.Compilers[0];
         var now = part switch
@@ -183,6 +190,8 @@ public sealed class JudgedOnTests
             "host" => Again(then, on => on with { Host = "ssh:box" }),
             "lines" => Again(then, table: table => table with { Lines = "other" }),
             "file moved" => Again(then, table: table => table with { Files = new Dictionary<string, string>(table.Files) { ["src/a.cpp"] = "moved" } }),
+            "run reads" => Again(then, on => on with { RunReads = new Dictionary<string, string>(on.RunReads) { ["data/golden.txt"] = "moved" } }),
+            "run read joined" => Again(then, on => on with { RunReads = new Dictionary<string, string>(on.RunReads) { ["data/silver.txt"] = "silver" } }),
             "file joined" => Again(then, table: table => table with { Files = new Dictionary<string, string>(table.Files) { ["src/b.cpp"] = "b" } }),
             "made" => Again(then, table: table => table with { Made = new Dictionary<string, FilesIn>(table.Made) { [BuiltFromReader.BuildDirectory] = new(1, "moved") } }),
             "fetched" => Again(then, table: table => table with { Fetched = new Dictionary<string, string>(table.Fetched) { ["plumb"] = "moved" } }),
@@ -205,7 +214,7 @@ public sealed class JudgedOnTests
     [Fact]
     public void TheJudgesRevision_IsRaisedWithItsRules()
     {
-        const int PinnedRevision = 1;
+        const int PinnedRevision = 2;
         const string PinnedDigest = "e4f7762baa5ce64023d246a43751248db964d99508ba8daf6ef737b93c467f5b";
 
         var digest = FileContentHash.Of(Encoding.UTF8.GetBytes(string.Join("\n", Verdicts())));
@@ -391,6 +400,7 @@ public sealed class JudgedOnTests
                 Compilers = [new JudgedCompiler("CXX", "GNU", "13.3.0", "C:/mingw/bin/g++.exe", [])],
                 DeveloperEnvironment = null,
                 Settings = new SweepSettings("build", "run", "judge"),
+                RunReads = new Dictionary<string, string>(StringComparer.Ordinal) { ["data/golden.txt"] = "golden" },
                 Host = "local",
             },
             [BuiltFromReading.Read(table)]);

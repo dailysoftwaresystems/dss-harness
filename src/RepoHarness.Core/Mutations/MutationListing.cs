@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.Output;
 
@@ -68,6 +69,7 @@ public sealed record ListedLeg(string Leg, string? Unsweepable, RecordUnread? Re
 /// <param name="Tree">The one reading of the tree it acts on here.</param>
 /// <param name="Host">The host it names, as a dispatcher names it; <see langword="null"/> where it names none.</param>
 /// <param name="Settings">The settings it would be swept with, on the host it names or on this machine.</param>
+/// <param name="Mutations">The mutation settings a sweep of it runs by: what each runner reads at run time among them.</param>
 /// <param name="Generation">The digest of what its configure would be given (<see cref="JudgedCauses.GenerationOf"/>); <see langword="null"/> where it builds nothing.</param>
 internal sealed record ListingInput(
     string Leg,
@@ -78,6 +80,7 @@ internal sealed record ListingInput(
     TreeFiles Tree,
     string? Host,
     SweepSettings Settings,
+    MutationSettings Mutations,
     string? Generation);
 
 /// <summary>
@@ -146,6 +149,7 @@ internal static class MutationListing
             texts.ToDictionary(path => path, input.Tree.HashOf, StringComparer.Ordinal),
             arm.Sites.ToDictionary(site => site.Site, site => input.Tree.HashOf(site.Site), StringComparer.Ordinal),
             input.Tree,
+            JudgedOn.RunReadsOf(arm, input.Mutations, input.Tree),
             input.Settings,
             input.Host);
         var read = entries.Reverse().Select(entry => Read(input, entry, here)).ToList();

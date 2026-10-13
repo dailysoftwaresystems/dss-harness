@@ -2262,6 +2262,45 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// What a test binary reads at run time, as <c>mutations.runReads</c> names it for the arm's runner, is part of the
+    /// arm's key: each file of the tree's reading a pattern covers, with what it holds - so editing one moves the key of
+    /// an arm that runner runs, and not a BUILD-RED arm's, which runs nothing. A file no pattern covers moves no key.
+    /// </summary>
+    [Fact]
+    public async Task WhatARunnerReadsAtRunTime_AsRunReadsNamesIt_IsInTheKeyOfEachArmItRuns()
+    {
+        static async Task<Dictionary<string, RecordedVerdict>> SweptAsync(string golden, string unnamed)
+        {
+            var kept = new Kept();
+
+            // A BUILD-RED arm runs nothing, so holds nothing of this - even where an entry names the token its row has for a runner.
+            using var sweep = new Sweep { Workers = 1, Sink = kept, RunReads = new() { ["fixture_tests"] = ["data/golden"], [MutationRegistryParser.NoRunner] = ["data"] } };
+
+            sweep.More["data/golden/expected.txt"] = golden;
+            sweep.More["data/other.txt"] = unnamed;
+            await sweep.RunAsync([ChargeBound, DepthType]);
+
+            return kept.Judgements.ToDictionary(judged => judged.Arm, judged => judged.Verdict, StringComparer.Ordinal);
+        }
+
+        var then = await SweptAsync("3 passed", "anything");
+
+        Assert.Equal(
+            [("data/golden/expected.txt", FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes("3 passed")))],
+            then["charge-bound"].JudgedOn!.RunReads.Select(pair => (pair.Key, pair.Value)));
+        Assert.Empty(then["depth-type"].JudgedOn!.RunReads);
+
+        var unnamed = await SweptAsync("3 passed", "something else");
+
+        Assert.Equal(then["charge-bound"].Key, unnamed["charge-bound"].Key);
+
+        var edited = await SweptAsync("2 passed", "anything");
+
+        Assert.NotEqual(then["charge-bound"].Key, edited["charge-bound"].Key);
+        Assert.Equal(then["depth-type"].Key, edited["depth-type"].Key);
+    }
+
+    /// <summary>
     /// An arm's key, as a sweep builds it, moves with each part read where the sweep runs - a text it cites edited in the
     /// tree, the environment its host declares, a value of the environment its test settings give its runs, and the host
     /// its leg is named on - each to a key of its own; and stays where nothing moved, in another tree of the same content.
@@ -3320,6 +3359,12 @@ public sealed class MutationLegRunnerTests
         /// <summary>Each line of progress the sweep said of its leg, in the order said.</summary>
         public ConcurrentQueue<string> Said { get; } = new();
 
+        /// <summary>Files of the tree beyond those every sweep's tree holds, by path, with what each holds; none unless a test says.</summary>
+        public Dictionary<string, string> More { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>What each runner's runs read at run time, as <c>mutations.runReads</c> names it; nothing unless a test says.</summary>
+        public Dictionary<string, List<string>>? RunReads { get; init; }
+
         /// <summary>
         /// How the tree's one reading spells each file of the tree, given as written - <see langword="null"/> leaving it
         /// out of the reading - where a test says; otherwise as written.
@@ -3350,7 +3395,7 @@ public sealed class MutationLegRunnerTests
         public async Task<LegEntry> RunAsync(IReadOnlyList<MutationArm> driven, IReadOnlyList<UnselectedArm>? unselected = null, CancellationToken? cancellationToken = null)
         {
             var os = Harness.Platform.PlatformKey;
-            var settings = new MutationSettings { Workers = Workers, ReportArgs = ["--gtest_output=xml:{report}"], RunTimeFactor = 10 };
+            var settings = new MutationSettings { Workers = Workers, ReportArgs = ["--gtest_output=xml:{report}"], RunTimeFactor = 10, RunReads = RunReads };
             var config = new HarnessConfig { Worktrees = Worktrees, Mutations = settings, Defaults = Defaults };
             var context = new HarnessContext(new HarnessLayout(Tree, Tree), config);
             var project = new ProjectConfig { Name = "app", Type = "cmake", Test = Test };
@@ -3378,6 +3423,12 @@ public sealed class MutationLegRunnerTests
             }
 
             leg = leg with { Floor = Floor };
+
+            foreach (var (path, text) in More)
+            {
+                _temp.WriteFile(Path.Combine("tree", path), text);
+            }
+
             Reader = new Source(Read(context));
 
             Run = RunId.New();
@@ -3447,7 +3498,7 @@ public sealed class MutationLegRunnerTests
         {
             var entries = new Dictionary<string, SyncEntry>(StringComparer.Ordinal);
 
-            foreach (var path in TreeFiles.Keys)
+            foreach (var path in TreeFiles.Keys.Concat(More.Keys))
             {
                 if (ReadingSpells(path) is { } spelt)
                 {

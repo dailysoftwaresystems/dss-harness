@@ -355,6 +355,22 @@ public static partial class HarnessConfigValidator
                 $"mutations.runTimeFactor must be above 1, found {Number(mutations.RunTimeFactor)}: a bound at or below the "
                 + "unmutated run's own duration stops a mutated run that is merely as slow");
         }
+
+        // A runner no arm names is no error - the registry is the repository's own, read only by a sweep - but each entry
+        // must name files of the tree, as every other list of paths does, and a runner given none says nothing.
+        foreach (var (runner, patterns) in mutations.RunReads ?? [])
+        {
+            var setting = $"mutations.runReads.{runner}";
+
+            if (patterns is not { Count: > 0 })
+            {
+                problems.Add($"{setting} names no file: name what its runs read at run time, or leave the runner out");
+                continue;
+            }
+
+            RequireRelativePaths(patterns, setting, problems);
+            CheckPathPatterns(patterns, setting, problems);
+        }
     }
 
     /// <summary>

@@ -1016,7 +1016,8 @@ public sealed class ConfigStoreTests
                 "textDirectory": ".harness-config/runner/actions/sweep/texts",
                 "workers": 3,
                 "reportArgs": ["--reporters=junit", "--out={report}"],
-                "runTimeFactor": 4.5
+                "runTimeFactor": 4.5,
+                "runReads": { "fixture_tests": ["tests/data", "**/golden.txt"], "nobody_runs_this": ["x"] }
               }
             }
             """).Mutations;
@@ -1025,6 +1026,9 @@ public sealed class ConfigStoreTests
         Assert.Equal((2, 10.0), (MutationSettings.DefaultWorkers, MutationSettings.DefaultRunTimeFactor));
         Assert.Equal(("tests/mutations/arms.registry", ".harness-config/runner/actions/sweep/texts", 3, 4.5), (named.Registry, named.TextDirectory, named.Workers, named.RunTimeFactor));
         Assert.Equal(["--reporters=junit", "--out={report}"], named.ReportArgs);
+        Assert.Null(defaults.RunReads);
+        Assert.Equal(["tests/data", "**/golden.txt"], named.RunReads!["fixture_tests"]);
+        Assert.Equal(["x"], named.RunReads["nobody_runs_this"]);
     }
 
     /// <summary>
@@ -1055,6 +1059,10 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "mutations": { "reportArgs": ["--gtest_output=xml"] } }""", "mutations.reportArgs never names {report}, so a test binary would write its report where no arm reads it")]
     [InlineData("""{ "mutations": { "runTimeFactor": 1 } }""", "mutations.runTimeFactor must be above 1, found 1")]
     [InlineData("""{ "mutations": { "runTimeFactor": 0.5 } }""", "mutations.runTimeFactor must be above 1, found 0.5")]
+    [InlineData("""{ "mutations": { "runReads": { "fixture_tests": [] } } }""", "mutations.runReads.fixture_tests names no file: name what its runs read at run time, or leave the runner out")]
+    [InlineData("""{ "mutations": { "runReads": { "fixture_tests": ["../data"] } } }""", "mutations.runReads.fixture_tests entry '../data' must be a relative path inside the tree")]
+    [InlineData("""{ "mutations": { "runReads": { "fixture_tests": ["/data"] } } }""", "mutations.runReads.fixture_tests entry '/data' must be a relative path inside the tree")]
+    [InlineData("""{ "mutations": { "runReads": { "fixture_tests": ["data/*.txt"] } } }""", "mutations.runReads.fixture_tests names 'data/*.txt', which holds '*'")]
     public void Load_RejectsMutationSettingsThatCannotWork(string json, string expected)
     {
         var exception = LoadInvalid(json);

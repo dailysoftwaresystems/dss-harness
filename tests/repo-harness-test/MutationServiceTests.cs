@@ -978,6 +978,7 @@ public sealed class MutationServiceTests
             Built = new Dictionary<string, string>(StringComparer.Ordinal) { ["fixture"] = table.Digest() },
             Compilers = [],
             Settings = SweepSettings.Of(config, config.Legs["native"], config.Hosts.SettingsFor(HostId.Local)),
+            RunReads = new Dictionary<string, string>(StringComparer.Ordinal),
             Host = HostId.Local.ToString(),
         };
 

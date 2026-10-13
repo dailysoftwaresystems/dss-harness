@@ -195,7 +195,7 @@ public sealed partial class HelpTests
         var keys = ConfigKeys.Of<MutationSettings>();
 
         Assert.Equal(HarnessExit.Success, result.ExitCode);
-        Assert.Equal(["registry", "textDirectory", "workers", "reportArgs", "runTimeFactor"], keys.Select(key => key.Name));
+        Assert.Equal(["registry", "textDirectory", "workers", "reportArgs", "runTimeFactor", "runReads"], keys.Select(key => key.Name));
         Assert.All(keys, key => Assert.Contains($"  {key.Name}", result.StandardOutput, StringComparison.Ordinal));
         Assert.Contains(
             string.Create(CultureInfo.InvariantCulture, $"workers is {MutationSettings.DefaultWorkers} and runTimeFactor {MutationSettings.DefaultRunTimeFactor} where left out."),
@@ -310,13 +310,17 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The mutations topic says each arm carries the key of what it was judged on, what of the registry, the tree, the
-    /// build, the configuration and the host that is and is not, and that a self-test compares its workers' keys - failing
-    /// where two differ or one cannot be read, and saying where a worker had none to compare with.
+    /// build, the configuration, what a runner reads at run time and the host that is and is not - and that a file read at
+    /// run time and named nowhere moves no key - and that a self-test compares its workers' keys, failing where two differ
+    /// or one cannot be read, and saying where a worker had none to compare with; the config topic names what runReads is.
     /// </summary>
     [Fact]
     public async Task TheMutationsTopic_SaysWhatAnArmsKeyIsMadeOf_AndThatASelfTestComparesItsWorkersKeys()
     {
         var said = Words((await CliRunner.RunAsync(["help", "mutations"], TestContext.Current.CancellationToken)).StandardOutput);
+        var config = Words((await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains("its test binaries' report, and what each runner reads at run time, part of each arm's key ('help mutations')", config, StringComparison.Ordinal);
 
         foreach (var text in new[]
         {
@@ -327,9 +331,15 @@ public sealed partial class HelpTests
             "what the sweep's reading of the tree holds of each text it cites and each site it mutates, found as the tree's file system "
             + "compares names;",
             "its build lines, every file of the tree they read, the dependency sources the worker was given, what the worker's configure "
-            + "made and what they read outside the tree, the worker's own path told wherever it stands; the compilers CMake identified; "
-            + "the leg's developer environment; what of the configuration the build, the run and the judge are given; and the host.",
+            + "made and what they read outside the tree, the worker's own path told wherever it stands; the compilers CMake identified; ",
             "An arm a part of whose key could not be read has none.",
+            "the leg's developer environment; what of the configuration the build, the run and the judge are given; what its runner "
+            + "reads at run time, as runReads names it; and the host.",
+            "runReads names, for each runner as the A rows name it, the files of the tree its runs read at run time - a data file, a "
+            + "golden output, a plugin it opens - each a path, everything below a directory, or **/name at any depth: what the "
+            + "sweep's reading of the tree holds of each is part of the key of every arm that runner runs.",
+            "A file a test binary reads at run time that runReads does not name is read by no part of a key: editing it moves "
+            + "none, and a passed it changes the verdict of still holds.",
             "a key two workers read otherwise, or one a worker could not read, fails the leg as violated, naming the arm, the workers and "
             + "the part that differs; a self-test with one worker says it compared its keys with no other's. A self-test's keys are on no "
             + "arm's line.",

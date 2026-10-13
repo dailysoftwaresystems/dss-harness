@@ -532,6 +532,7 @@ internal sealed class MutationLegRunner(
                             Compilers = compilers,
                             DeveloperEnvironment = _work.DeveloperEnvironment,
                             Settings = _subject.SweepSettings,
+                            RunReads = JudgedOn.RunReadsOf(arm, _subject.Settings, tree),
                             Host = _leg.Named.ToString(),
                         },
                         [.. ArmJudge.Builds(arm).Select(target => tables[target])],

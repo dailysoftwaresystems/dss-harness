@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Mutations;
@@ -92,22 +94,27 @@ public sealed class MutationListingTests
     [InlineData("never-swept", "never swept on this leg")]
     [InlineData("last-not-passed", "its last verdict is violated, not passed")]
     [InlineData("not-keyed", "what it was judged on could not be read when it was swept: a file it reads is gone")]
-    [InlineData("judge-revised", "the judge's rules changed since (revision 0, now 1)")]
+    [InlineData("judge-revised", "the judge's rules changed since (revision {before}, now {revision})")]
     [InlineData("rows-changed", "its A rows changed")]
     [InlineData("text-moved", "a text it cites moved: texts/a.before")]
     [InlineData("site-moved", "its site moved: src/a.cpp")]
     [InlineData("files-moved", "what 'lib_tests' is built from moved: src/lib.cpp (gone)")]
+    [InlineData("run-reads-moved", "what its runner reads at run time moved: data/golden.txt")]
     [InlineData("build-environment-changed", "the environment its build is given changed")]
     [InlineData("run-settings-changed", "how its run starts changed")]
     [InlineData("judge-settings-changed", "what its run is judged by changed")]
     [InlineData("host-changed", "it was judged on local, and this leg runs on wsl:Ubuntu")]
     public void EachPendingReason_IsSaidInItsOwnWords_TheFirstThatAppliesInOrder(string code, string said)
     {
+        said = said
+            .Replace("{before}", (ArmJudge.Revision - 1).ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("{revision}", ArmJudge.Revision.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
         var listing = new Listing();
         var order = new[]
         {
             "record-unreadable", "record-newer", "leg-unsweepable", "never-swept", "last-not-passed", "not-keyed", "judge-revised",
-            "rows-changed", "text-moved", "site-moved", "files-moved", "build-environment-changed", "run-settings-changed",
+            "rows-changed", "text-moved", "site-moved", "files-moved", "run-reads-moved", "build-environment-changed", "run-settings-changed",
             "judge-settings-changed", "host-changed",
         };
 
@@ -302,6 +309,7 @@ public sealed class MutationListingTests
                 ["texts/a.after"] = "after",
                 ["texts/a.diag"] = "diag",
                 ["CMakeLists.txt"] = "list",
+                ["data/golden.txt"] = "golden",
             };
 
             var on = new JudgedOn
@@ -313,6 +321,7 @@ public sealed class MutationListingTests
                 Built = new Dictionary<string, string>(StringComparer.Ordinal) { ["lib"] = _lib.Digest(), ["lib_tests"] = _tests.Digest() },
                 Compilers = [new JudgedCompiler("CXX", "GNU", "13.3.0", "/usr/bin/c++", [])],
                 Settings = Settings,
+                RunReads = new Dictionary<string, string>(StringComparer.Ordinal) { ["data/golden.txt"] = "golden" },
                 Host = "local",
             };
 
@@ -365,6 +374,7 @@ public sealed class MutationListingTests
                 case "text-moved": Tree["texts/a.before"] = "moved"; break;
                 case "site-moved": Tree["src/a.cpp"] = "moved"; break;
                 case "files-moved": Tree.Remove("src/lib.cpp"); break;
+                case "run-reads-moved": Tree["data/golden.txt"] = "moved"; break;
                 case "build-environment-changed": Now = Now with { Build = "another" }; break;
                 case "run-settings-changed": Now = Now with { Run = "another" }; break;
                 case "judge-settings-changed": Now = Now with { Judge = "another" }; break;
@@ -396,6 +406,7 @@ public sealed class MutationListingTests
                 new TreeFiles(reading, StringComparer.Ordinal),
                 Host,
                 Now,
+                new MutationSettings { RunReads = new() { ["lib_tests"] = ["data"] } },
                 "generation");
         }
 

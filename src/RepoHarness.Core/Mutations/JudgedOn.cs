@@ -52,8 +52,9 @@ public sealed record RowDigests(string A, string? C = null, string? G = null, st
 public sealed record JudgedCompiler(string Language, string Id, string Version, string Program, IReadOnlyList<string> Arguments);
 
 /// <summary>
-/// What an arm was judged on, in nine parts: everything a verdict of the judge's on that arm rests on, so that where all
-/// nine are what they were, the same arm on the same leg would reach the same verdict. Its key is the SHA-256 of them.
+/// What an arm was judged on, in ten parts: everything this tool reads that a verdict of the judge's on that arm rests on.
+/// Its key is the SHA-256 of them. Where all ten are what they were, nothing it reads has moved; what a test binary reads
+/// at run time that <see cref="MutationSettings.RunReads"/> does not name is read by no part, so editing it moves no key.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -94,17 +95,44 @@ public sealed record JudgedOn
     /// <summary>What of the configuration the build, the run and the judge are given (<see cref="SweepSettings"/>).</summary>
     public required SweepSettings Settings { get; init; }
 
+    /// <summary>
+    /// Each file of the tree the arm's runner reads at run time, as <see cref="MutationSettings.RunReads"/> names them for
+    /// it, by its path as the reading of the tree spells it, with what the reading says it holds; nothing for a BUILD-RED
+    /// arm, which runs nothing (<see cref="RunReadsOf"/>).
+    /// </summary>
+    public required IReadOnlyDictionary<string, string> RunReads { get; init; }
+
     /// <summary>The host the leg ran on, as the machine that dispatched it names it.</summary>
     public required string Host { get; init; }
 
-    /// <summary>The key: the SHA-256 of the nine parts' canonical JSON.</summary>
+    /// <summary>The key: the SHA-256 of the ten parts' canonical JSON.</summary>
     public string Key() => CanonicalJson.Digest(this with
     {
         Texts = CanonicalJson.Sorted(Texts),
         Sites = CanonicalJson.Sorted(Sites),
         Built = CanonicalJson.Sorted(Built),
         Compilers = [.. Compilers.OrderBy(compiler => compiler.Language, StringComparer.Ordinal)],
+        RunReads = CanonicalJson.Sorted(RunReads),
     });
+
+    /// <summary>
+    /// What <paramref name="arm"/>'s runner reads at run time, of <paramref name="tree"/>: each file
+    /// <paramref name="settings"/>' <c>runReads</c> names for that runner covers, with what the reading says it holds; nothing
+    /// for a BUILD-RED arm, which runs nothing, or a runner it names nothing for.
+    /// </summary>
+    /// <param name="arm">The arm.</param>
+    /// <param name="settings">The mutation settings the sweep runs by.</param>
+    /// <param name="tree">The tree's one reading.</param>
+    internal static IReadOnlyDictionary<string, string> RunReadsOf(MutationArm arm, MutationSettings settings, TreeFiles tree)
+    {
+        ArgumentNullException.ThrowIfNull(arm);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(tree);
+
+        return arm.Kind == RedKind.TestRed && settings.RunReads?.GetValueOrDefault(arm.Runner) is { Count: > 0 } patterns
+            ? tree.Matching(patterns)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+    }
 
     /// <summary>
     /// What the sweep and the judge read of <paramref name="arm"/>'s rows, one digest to a kind: A, its site, texts, red
@@ -221,13 +249,13 @@ internal sealed class ArmKey
         Key = unread is null ? judgedOn.Key() : null;
     }
 
-    /// <summary>The nine parts, as far as each could be read: a target whose table could not be made is in none of them.</summary>
+    /// <summary>The ten parts, as far as each could be read: a target whose table could not be made is in none of them.</summary>
     public JudgedOn JudgedOn { get; }
 
     /// <summary>The table of each target its build builds whose table could be made.</summary>
     public IReadOnlyDictionary<string, BuiltFromTable> Tables { get; }
 
-    /// <summary>Why a part could not be read, as what follows "cannot be read now: "; <see langword="null"/> where all nine were.</summary>
+    /// <summary>Why a part could not be read, as what follows "cannot be read now: "; <see langword="null"/> where all ten were.</summary>
     public string? Unread { get; }
 
     /// <summary>The key, or <see langword="null"/> where a part could not be read.</summary>
@@ -242,7 +270,7 @@ internal sealed class ArmKey
     /// <paramref name="parts"/> holds of it - read whole unless a reading made no table, or <paramref name="unread"/> says
     /// why another part could not be read.
     /// </summary>
-    /// <param name="parts">The other eight parts.</param>
+    /// <param name="parts">The other nine parts.</param>
     /// <param name="built">The reading of each target its build builds.</param>
     /// <param name="unread">Why a part other than a table could not be read, or <see langword="null"/>.</param>
     /// <param name="causes">What made the leg's build lines what they are, kept beside the key.</param>

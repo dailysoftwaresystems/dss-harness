@@ -98,6 +98,10 @@ public sealed class PendingReason
             Paths = paths,
         };
 
+    /// <summary>A file the arm's runner reads at run time holds something else, joined or left what it reads, or is gone.</summary>
+    public static PendingReason RunReadsMoved(IReadOnlyList<string> paths)
+        => new("run-reads-moved", $"what its runner reads at run time moved: {ReportText.Listed(paths)}") { Counted = "whose run-time reads moved", Paths = paths };
+
     /// <summary>The environment the build is given changed.</summary>
     public static PendingReason BuildEnvironmentChanged { get; } = new("build-environment-changed", "the environment its build is given changed")
     {
@@ -160,6 +164,7 @@ public sealed class PendingReason
 /// <param name="Texts">Each text the arm cites, as its rows spell it, with what the reading holds of it; nothing where it holds none.</param>
 /// <param name="Sites">Each site the arm mutates, as its rows spell it, with what the reading holds of it; nothing where it holds none.</param>
 /// <param name="Tree">The tree's one reading.</param>
+/// <param name="RunReads">Each file the arm's runner reads at run time, as the reading holds it (<see cref="JudgedOn.RunReadsOf"/>).</param>
 /// <param name="Settings">What of the configuration the build, the run and the judge would be given.</param>
 /// <param name="Host">The host the leg names, as a dispatcher names it; <see langword="null"/> where it names none.</param>
 internal sealed record ReadHere(
@@ -168,6 +173,7 @@ internal sealed record ReadHere(
     IReadOnlyDictionary<string, string?> Texts,
     IReadOnlyDictionary<string, string?> Sites,
     TreeFiles Tree,
+    IReadOnlyDictionary<string, string> RunReads,
     SweepSettings Settings,
     string? Host);
 
@@ -207,6 +213,7 @@ internal static class KeyDifference
             }
         }
 
+        RunRead(was.RunReads, @is.RunReads, StringComparer.Ordinal, reasons);
         Configured(was, @is.Settings, @is.Host, reasons);
 
         foreach (var (target, before, after) in tables)
@@ -279,6 +286,7 @@ internal static class KeyDifference
             }
         }
 
+        RunRead(was.RunReads, now.RunReads, now.Tree.Names, reasons);
         Configured(was, now.Settings, now.Host ?? was.Host, reasons);
 
         return reasons;
@@ -324,6 +332,18 @@ internal static class KeyDifference
         }
     }
 
+    /// <summary>
+    /// The reason of what the runner reads at run time: each file that holds something else, or that joined or left what
+    /// it reads, its paths compared as <paramref name="names"/> compares them.
+    /// </summary>
+    private static void RunRead(IReadOnlyDictionary<string, string> was, IReadOnlyDictionary<string, string> now, StringComparer names, List<PendingReason> reasons)
+    {
+        if (Moved(new Dictionary<string, string>(was, names), new Dictionary<string, string>(now, names), names) is { Count: > 0 } moved)
+        {
+            reasons.Add(PendingReason.RunReadsMoved(moved));
+        }
+    }
+
     /// <summary>The reasons of the parts the configuration says: the build's, the run's and the judge's settings, and the host.</summary>
     private static void Configured(JudgedOn was, SweepSettings settings, string host, List<PendingReason> reasons)
     {
@@ -355,10 +375,13 @@ internal static class KeyDifference
             .Order(StringComparer.Ordinal)
             .Select(target => (target, then.Tables[target], now.Tables[target]))];
 
-    /// <summary>Each key of the two maps whose value differs, or that only one holds, in ordinal order.</summary>
-    private static List<string> Moved<T>(IReadOnlyDictionary<string, T> before, IReadOnlyDictionary<string, T> after)
+    /// <summary>
+    /// Each key of the two maps whose value differs, or that only one holds, in ordinal order - keys compared as
+    /// <paramref name="names"/> compares them, the maps being keyed so; ordinally where it is left out.
+    /// </summary>
+    private static List<string> Moved<T>(IReadOnlyDictionary<string, T> before, IReadOnlyDictionary<string, T> after, StringComparer? names = null)
         => [.. before.Keys
-            .Union(after.Keys, StringComparer.Ordinal)
+            .Union(after.Keys, names ?? StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .Where(key => !(before.TryGetValue(key, out var was) && after.TryGetValue(key, out var @is) && Equals(was, @is)))];
 

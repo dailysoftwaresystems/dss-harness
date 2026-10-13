@@ -14,7 +14,8 @@ namespace RepoHarness.Core.Mutations;
 /// admission of heavy legs, the path limits, the tolerance of a clock's step, which only adds a note - or reaches the
 /// arm only through something else an arm is judged on: the cache variables, the build type, the generator, the
 /// project's path and targets through the build lines; what a sync carries through the reading of the tree; where tools
-/// are looked for through the compilers identified.
+/// are looked for through the compilers identified; what a runner reads at run time through the files
+/// <c>mutations.runReads</c> names (<see cref="JudgedOn.RunReads"/>).
 /// </para>
 /// <para>
 /// Read through the owners every command reads them through - the variant, its overlay, the test settings and their

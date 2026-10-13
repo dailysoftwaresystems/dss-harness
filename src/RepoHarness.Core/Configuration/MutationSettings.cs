@@ -76,4 +76,19 @@ public sealed class MutationSettings
     /// </remarks>
     [Description("how many times the unmutated run a mutated run may take, above 1 (10)")]
     public double RunTimeFactor { get; init; } = DefaultRunTimeFactor;
+
+    /// <summary>
+    /// Each test runner's files of the tree its runs read at run time - a data file, a golden output, a plugin it opens -
+    /// by the runner's name as the registry's A rows name it, each entry a path relative to the repository root as
+    /// <see cref="Repository.PathPatterns"/> reads one: the path, everything below a directory, or <c>**/name</c> at any
+    /// depth. What the sweep's reading of the tree holds of each file an entry covers is part of the key of every arm that
+    /// runner runs, so editing one moves those keys and no other. A runner no arm names is no error.
+    /// </summary>
+    /// <remarks>
+    /// Declared, never found: what a binary opens at run time is said by nothing a build records, and a test that read
+    /// every file of the tree into every key would make every arm pending after every edit. A file a binary reads that no
+    /// entry covers is read by no part of a key.
+    /// </remarks>
+    [Description("each runner's files of the tree its runs read at run time, by the runner as the A rows name it; part of the key of every arm it runs")]
+    public Dictionary<string, List<string>>? RunReads { get; init; }
 }
