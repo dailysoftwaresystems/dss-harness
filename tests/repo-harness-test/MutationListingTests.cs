@@ -84,6 +84,26 @@ public sealed class MutationListingTests
     }
 
     /// <summary>
+    /// A run-read file that leaves what its runner's entry covers - moved out of the directory it names, so the file is
+    /// still in the tree and only what covers it is gone - moves the key as one whose content changed does.
+    /// </summary>
+    [Fact]
+    public void AFileThatLeavesWhatItsRunnerCovers_MovesTheKeyAsOneThatMoved()
+    {
+        var listing = new Listing();
+
+        Assert.False(MutationListing.Of(listing.Input()).Arms[0].Pending);
+
+        listing.Tree.Remove("data/golden.txt");
+        listing.Tree["elsewhere/golden.txt"] = "golden";
+
+        var moved = Assert.Single(MutationListing.Of(listing.Input()).Arms);
+
+        Assert.True(moved.Pending);
+        Assert.Equal(("run-reads-moved", "what its runner reads at run time moved: data/golden.txt"), (moved.Why[0].Code, moved.Why[0].Said));
+    }
+
+    /// <summary>
     /// Each reason a listing gives is said in its own words, and the first that applies is the one an arm's row names:
     /// one case to each code a listing reads, each made to apply over every reason after it in the order.
     /// </summary>
