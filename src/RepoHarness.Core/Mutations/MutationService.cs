@@ -78,6 +78,7 @@ public sealed class MutationService(
     IFileSystem fileSystem,
     MutationFixtureStore fixtures,
     IProcessIdentity identity,
+    IHostPlatform platform,
     TimeProvider clock,
     IHarnessOutput output)
 {
@@ -117,6 +118,7 @@ public sealed class MutationService(
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly MutationFixtureStore _fixtures = fixtures;
     private readonly IProcessIdentity _identity = identity;
+    private readonly IHostPlatform _platform = platform;
     private readonly TimeProvider _clock = clock;
     private readonly IHarnessOutput _output = output;
 
@@ -165,6 +167,7 @@ public sealed class MutationService(
             _pathBudget,
             _fileSystem,
             _output,
+            _clock,
             CommandName);
 
         return await _legRuns
@@ -189,7 +192,7 @@ public sealed class MutationService(
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
-                    : SweepAsync(runner, work, arms, request.ForceLock, token),
+                    : SweepAsync(runner, work, arms, request.ForceLock, records: request.Here is null, token),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -226,9 +229,10 @@ public sealed class MutationService(
     /// Sweeps <paramref name="work"/>'s leg, its workers' builds measured against every tree of the repository on this
     /// machine, as they were listed as the leg's work began here: a tree that never built the leg's variant here is
     /// measured by another's that did. Trees beside the main checkout's that could not be listed are said, with why, and
-    /// with what the workers' builds are measured by instead.
+    /// with what the workers' builds are measured by instead. Each arm's verdict is recorded as it ends where
+    /// <paramref name="records"/>: on the machine the command was typed on, which keeps the record.
     /// </summary>
-    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, CancellationToken cancellationToken)
+    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, bool records, CancellationToken cancellationToken)
     {
         var beside = work.Leg.Beside ?? throw new InvalidOperationException($"Leg '{work.Leg.Name}' began its work with no trees listed beside it.");
 
@@ -242,7 +246,7 @@ public sealed class MutationService(
                 + $"{measured} alone: {why}");
         }
 
-        var subject = Subject(work, arms, force, beside);
+        var subject = Subject(work, arms, force, beside, records);
 
         await RefuseUnignoredAsync(subject.Workers, cancellationToken).ConfigureAwait(false);
 
@@ -272,8 +276,10 @@ public sealed class MutationService(
     /// settings its tests start by; and what a build of its variant is expected to come to - its <c>buildSpaceGiB</c>
     /// where it declares one, else what its own build directory last recorded, else the most any of
     /// <paramref name="beside"/> - the repository's other trees here - recorded of it (<see cref="LegRoom.ExpectedBuildBytes"/>).
+    /// Where it <paramref name="records"/>, each arm's verdict is kept in the record of verdicts in the main checkout,
+    /// whichever tree the leg is swept in, which the record names as a line names it.
     /// </summary>
-    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound beside)
+    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound beside, bool records)
     {
         ArgumentNullException.ThrowIfNull(beside);
 
@@ -294,6 +300,8 @@ public sealed class MutationService(
             Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = work.Context.Config.Mutations,
             SweepSettings = SweepSettings.Of(work.Context.Config, leg.Leg, leg.HostSettings),
+            Sink = records ? new RecordSink(new ArmVerdictRecord(_fileSystem, work.Context.Layout), leg.Name, _output, CommandName) : null,
+            SweptIn = RepositoryTree.Of(work.Context, leg.TreeRoot, _platform.PathComparison),
             ExpectedBuildBytes = expected?.Bytes,
             ExpectedBuildSource = expected?.Source ?? string.Empty,
             Force = force,

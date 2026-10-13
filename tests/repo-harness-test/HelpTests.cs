@@ -10,6 +10,7 @@ using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Platform;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
 using RepoHarness.Core.Sync;
@@ -334,6 +335,45 @@ public sealed partial class HelpTests
         {
             Assert.Contains(text, said, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The mutations topic says what holds and what is pending, and of the record of verdicts: what is recorded and what
+    /// is not, where it is and what it keeps, that clean and the deletion of a worktree or a host's copy leave it, and
+    /// what a sweep does with one it cannot read; the layout topic names its directory.
+    /// </summary>
+    [Fact]
+    public async Task TheMutationsTopic_SaysWhatIsRecorded_WhereTheRecordIs_AndWhatLeavesIt()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var said = Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+        var layout = Words((await CliRunner.RunAsync(["help", "layout"], cancellationToken)).StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "What holds, and what is pending A sweep records each arm's verdict on each leg with what it was judged on. A recorded "
+            + "passed holds where what the arm would be judged on now, computed in full on the leg's machine, is what the record "
+            + "says; every other arm is pending.",
+            "Never an arm its machine did not admit, one the sweep's own stop or a refusal of the run ended, one no worker reached, "
+            + "a skipped one, or anything of a self-test",
+            $"The record is {HarnessLayout.MutationRecordDirectoryRelative} in the main checkout, whichever tree swept: <leg>.json "
+            + $"for each leg, and the tables its entries name in {ArmVerdictRecord.TablesDirectoryName}/<leg>/",
+            "a host's copy keeps none, so only a leg swept on this machine is recorded.",
+            $"an arm keeps {ArmVerdictRecord.KeptPerArm} keys on a leg, the oldest by its place in the file going first, never by its date.",
+            "clean, a deleted worktree and a removed host copy leave it as it was; deleting it is the one way to forget it, and "
+            + "every arm is then pending.",
+            $"A record that cannot be read, or that a newer {ToolPackage.Id} wrote, is never written: a sweep of that leg says so "
+            + "once, as a warning naming the file and on the leg's line, and records none.",
+        })
+        {
+            Assert.Contains(text, said, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            $"{HarnessLayout.MutationRecordDirectoryRelative}/ ignores itself; each leg's verdicts of its mutation arms, with what "
+            + "each was judged on, in the main checkout ('help mutations')",
+            layout,
+            StringComparison.Ordinal);
     }
 
     /// <summary>

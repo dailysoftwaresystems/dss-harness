@@ -204,6 +204,7 @@ in `config.json`.
 .legs/                                       contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree
 .harness-config/runs/                        ignored; one directory of logs per run
 .harness-config/lock.json                    ignored; records in-progress runs
+.harness-config/mutation-record/             ignores itself; each leg's verdicts of its mutation arms, with what each was judged on
 .plans/_deferred-anchor-registry.md          tracked; live anchors
 .plans/_deferred-anchor-registry-done.md     tracked; closed anchors
 ```

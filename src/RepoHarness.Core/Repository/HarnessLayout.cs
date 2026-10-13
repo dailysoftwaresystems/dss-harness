@@ -79,6 +79,9 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// <summary>Name of the directory holding the record of which hosts hold a copy of which worktree.</summary>
     public const string HostCopiesDirectoryName = "host-copies";
 
+    /// <summary>Name of the directory holding each leg's recorded verdicts of its mutation arms.</summary>
+    public const string MutationRecordDirectoryName = "mutation-record";
+
     /// <summary>
     /// Name of the directory a mutation worker keeps the dependency sources its leg's own build fetched in, one
     /// directory to each: never carried by a sync, nor deleted by one, nor removed by a build from clean.
@@ -348,6 +351,9 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     /// <summary>The host copies' record directory, relative to the main checkout's root, with forward separators.</summary>
     public const string HostCopiesDirectoryRelative = DirectoryName + "/" + HostCopiesDirectoryName;
 
+    /// <summary>The record of mutation verdicts, relative to the main checkout's root, with forward separators.</summary>
+    public const string MutationRecordDirectoryRelative = DirectoryName + "/" + MutationRecordDirectoryName;
+
     /// <summary>A mutation worker's dependency sources directory, relative to the worker's root, with forward separators.</summary>
     public const string DependencySourcesDirectoryRelative = DirectoryName + "/" + DependencySourcesDirectoryName;
 
@@ -391,8 +397,9 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public string RunsIgnoreFile => Path.Combine(RunsDirectory, ".gitignore");
 
     /// <summary>
-    /// What a directory of the harness's own state holds in its ignore file - <see cref="RunsIgnoreFile"/>, or
-    /// <see cref="HostCopiesIgnoreFile"/> - so that it keeps itself, and all it holds, out of git.
+    /// What a directory of the harness's own state holds in its ignore file - <see cref="RunsIgnoreFile"/>,
+    /// <see cref="HostCopiesIgnoreFile"/> or <see cref="MutationRecordIgnoreFile"/> - so that it keeps itself, and all it
+    /// holds, out of git.
     /// </summary>
     public const string SelfIgnoreRule = "*\n";
 
@@ -420,6 +427,21 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
 
     /// <summary>The ignore file <see cref="HostCopiesDirectory"/> holds for itself: <see cref="SelfIgnoreRule"/>.</summary>
     public string HostCopiesIgnoreFile => Path.Combine(HostCopiesDirectory, ".gitignore");
+
+    /// <summary>
+    /// Where each leg's verdicts of its mutation arms are recorded, with what each was judged on: in the main checkout, as
+    /// the lock is, whichever tree swept.
+    /// </summary>
+    /// <remarks>
+    /// One record for every tree of the repository, so an agent's sweep of its own worktree counts for the main checkout
+    /// wherever nothing an arm was judged on differs, and a deleted worktree takes none of its verdicts with it. Outside
+    /// every build directory, worker and host copy, so a clean, a deleted worktree and a removed copy leave it as it was.
+    /// It ignores itself (<see cref="MutationRecordIgnoreFile"/>), as the runs directory does, and no sync carries it.
+    /// </remarks>
+    public string MutationRecordDirectory => Path.Combine(MainHarnessDirectory, MutationRecordDirectoryName);
+
+    /// <summary>The ignore file <see cref="MutationRecordDirectory"/> holds for itself: <see cref="SelfIgnoreRule"/>.</summary>
+    public string MutationRecordIgnoreFile => Path.Combine(MutationRecordDirectory, ".gitignore");
 
     /// <summary>
     /// Directory of one named worktree under the default root. Callers validate the name first; the

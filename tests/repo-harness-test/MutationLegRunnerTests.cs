@@ -13,6 +13,7 @@ using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -44,6 +45,7 @@ public sealed class MutationLegRunnerTests
     {
         ["src/fixture.cpp"] = "bool within(int c, int b) { return c <= b; }\nbool positive(int c) { return c > 0; }\n",
         ["src/budget.hpp"] = "constexpr int depth = 3;\n",
+        ["CMakeLists.txt"] = "add_library(fixture src/fixture.cpp)\n",
         ["texts/charge.before"] = "c <= b",
         ["texts/charge.after"] = "c < b",
         ["texts/charge.diag"] = "charge exceeded",
@@ -2212,6 +2214,149 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// Each arm's verdict is kept as the arm ends, before the next arm is built: what it reached, by which run, when, in
+    /// which tree, its key and every part of it, the tables its key names, and the causes of the leg's build lines - each
+    /// file of the tree the manifest is generated from, and none outside it.
+    /// </summary>
+    [Fact]
+    public async Task AVerdict_IsRecordedAsItsArmEnds_WithWhatItWasJudgedOn()
+    {
+        var kept = new Kept();
+        var keptBefore = new ConcurrentQueue<int>();
+
+        using var sweep = new Sweep { Workers = 1, Sink = kept, SweptIn = "worktree o1/xa" };
+        kept.Clock = () => sweep.Now;
+        sweep.Builder.Before = (request, _) =>
+        {
+            if (request.Leg.Contains($"/{MutationRecords.ArmsDirectory}/", StringComparison.Ordinal))
+            {
+                keptBefore.Enqueue(kept.Judgements.Count);
+            }
+
+            return Task.CompletedTask;
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Equal([0, 1], keptBefore);
+        Assert.Equal(entry.Arms.Select(arm => arm.Arm).Order(StringComparer.Ordinal), kept.Judgements.Select(judged => judged.Arm).Order(StringComparer.Ordinal));
+
+        foreach (var arm in entry.Arms)
+        {
+            var (_, verdict, tables) = kept.Judgements.Single(judged => judged.Arm == arm.Arm);
+            var now = kept.HandedAt[arm.Arm];
+
+            Assert.Equal(
+                ("passed", arm.Detail, sweep.Run!.Value, "worktree o1/xa", arm.Key, (string?)null),
+                (verdict.Verdict, verdict.Detail, verdict.Run, verdict.SweptIn, verdict.Key, verdict.KeyUnread));
+            Assert.Equal(new DateTimeOffset(now.Ticks - (now.Ticks % TimeSpan.TicksPerSecond), TimeSpan.Zero), verdict.At);
+            Assert.Equal(arm.Key, verdict.JudgedOn!.Key());
+            Assert.Equal(verdict.JudgedOn.Built.Values.Order(StringComparer.Ordinal), tables.Select(table => table.Digest()).Order(StringComparer.Ordinal));
+            Assert.Equal(
+                [("CMakeLists.txt", FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes(TreeFiles["CMakeLists.txt"])))],
+                verdict.Causes!.GeneratedFrom.Select(pair => (pair.Key, pair.Value)));
+            Assert.Matches("^[0-9a-f]{64}$", verdict.Causes.Generation);
+            Assert.Null(verdict.Verified);
+        }
+    }
+
+    /// <summary>
+    /// What was not observed is not kept, and the record holds what it held of it: an arm its machine did not admit, and
+    /// each after it the sweep asked nothing; an arm the sweep's stop ended while it was driven, and one no worker reached;
+    /// and an arm a refusal of the run ended. The arms judged beside them are kept.
+    /// </summary>
+    [Fact]
+    public async Task AnArmNotAdmitted_OrEndedByTheSweepsStop_LeavesTheRecordAsItWas()
+    {
+        var refused = new Kept();
+
+        using (var sweep = new Sweep
+        {
+            Workers = 1,
+            Sink = refused,
+            Admit = unit => unit.Unit == "charge-bound" ? Admission.Refused(new AdmissionFact(false, 3600), "not admitted after 1h0m") : null,
+        })
+        {
+            var entry = await sweep.RunAsync([DepthType, ChargeBound, ChargeFloor]);
+
+            Assert.Equal(LegVerdict.NotAdmitted, entry.Verdict);
+        }
+
+        var stopped = new Kept();
+
+        using (var sweep = new Sweep { Workers = 1, Sink = stopped })
+        {
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            sweep.Tests.Before = async (request, token) =>
+            {
+                if (request.Bound is not null)
+                {
+                    await stop.CancelAsync();
+                    token.ThrowIfCancellationRequested();
+                }
+            };
+
+            var entry = await sweep.RunAsync([DepthType, ChargeBound, ChargeFloor], cancellationToken: stop.Token);
+
+            Assert.Equal(LegVerdict.Stopped, entry.Verdict);
+        }
+
+        var ended = new Kept();
+
+        using (var sweep = new Sweep { Workers = 1, Sink = ended })
+        {
+            sweep.Builder.Throws = request => request.Leg == "native/arms/charge-bound"
+                ? new HarnessException(HarnessExit.ConfigInvalid, "a setting is wrong.")
+                : null;
+
+            var entry = await sweep.RunAsync([DepthType, ChargeBound, ChargeFloor]);
+
+            Assert.NotNull(entry.EndsTheRun);
+        }
+
+        Assert.All(
+            new[] { refused, stopped, ended },
+            sink => Assert.Equal([("depth-type", "passed")], sink.Judgements.Select(judged => (judged.Arm, judged.Verdict.Verdict))));
+    }
+
+    /// <summary>
+    /// An arm stopped because its runner's unmutated control did not pass is kept, with its key: the newest evidence on
+    /// what it is judged on is that its binary is not green unmutated.
+    /// </summary>
+    [Fact]
+    public async Task AnArmStoppedForItsRunnersControl_IsRecorded()
+    {
+        var kept = new Kept();
+
+        using var sweep = new Sweep { Workers = 1, Sink = kept };
+        sweep.Tests.Answer = request => request.Bound is null ? Tests.Ran(["Fixture.Depth"]) : Tests.Judged(request);
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
+
+        Assert.Equal(
+            entry.Arms.Select(arm => (arm.Arm, "stopped", arm.Detail, arm.Key)).Order(),
+            kept.Judgements.Select(judged => (judged.Arm, judged.Verdict.Verdict, judged.Verdict.Detail, judged.Verdict.Key)).Order());
+        Assert.All(entry.Arms, arm => Assert.NotNull(arm.Key));
+    }
+
+    /// <summary>
+    /// Where the sweep's verdicts were not all kept - the leg's record cannot be read, or could not be written - its line
+    /// says so, once, beside its counts.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseVerdictsWereNotAllRecorded_SaysSoOnItsLine()
+    {
+        const string Unrecorded = "none of its verdicts was recorded: 'native.json' cannot be read";
+
+        using var sweep = new Sweep { Workers = 1, Sink = new Kept { Unrecorded = Unrecorded } };
+
+        var entry = await sweep.RunAsync([ChargeBound]);
+
+        Assert.Equal($"1 arm(s): 1 passed; {Unrecorded}", entry.Detail);
+    }
+
+    /// <summary>
     /// What a self-test's arms were judged on is never put on their lines nor in their records: it is the fixture's, read
     /// to be compared between workers, and nothing keeps it.
     /// </summary>
@@ -3078,6 +3223,15 @@ public sealed class MutationLegRunnerTests
         /// <summary>Whether every worker reads what each arm is judged on and the sweep compares them, as a self-test's does.</summary>
         public bool ComparesKeys { get; init; }
 
+        /// <summary>Where each arm's verdict is kept as it ends, where a test gives one.</summary>
+        public IArmRecordSink? Sink { get; init; }
+
+        /// <summary>What a line calls the tree swept.</summary>
+        public string SweptIn { get; init; } = RepositoryTree.MainCheckout;
+
+        /// <summary>The run the sweep was last run under.</summary>
+        public RunId? Run { get; private set; }
+
         public Dictionary<string, string> HostEnv { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         public Func<UnitAdmission, Admission?> Admit { get; init; } = _ => null;
@@ -3144,7 +3298,9 @@ public sealed class MutationLegRunnerTests
             leg = leg with { Floor = Floor };
             Reader = new Source(Read(context));
 
-            var work = new LegWork(leg, context, RunId.New(), RunDirectory, Time: false)
+            Run = RunId.New();
+
+            var work = new LegWork(leg, context, Run, RunDirectory, Time: false)
             {
                 AdmitUnit = (unit, token) =>
                 {
@@ -3163,6 +3319,7 @@ public sealed class MutationLegRunnerTests
                 Budget,
                 Files ?? Harness.FileSystem,
                 Harness.Output,
+                _clock,
                 MutationService.CommandName);
 
             return await runner.RunAsync(
@@ -3179,6 +3336,8 @@ public sealed class MutationLegRunnerTests
                     Settings = settings,
                     SweepSettings = SweepSettings.Of(config, Variant, project, Test, os, settings, HostEnv),
                     ComparesKeys = ComparesKeys,
+                    Sink = Sink,
+                    SweptIn = SweptIn,
                     ExpectedBuildBytes = ExpectedBuildBytes,
                     ExpectedBuildSource = ExpectedBuildBytes is null ? string.Empty : "as declared",
                     Force = Force,
@@ -3542,6 +3701,10 @@ public sealed class MutationLegRunnerTests
                 [new BuiltFromPath(source, false), new BuiltFromPath(Path.Combine(worker, "src", "budget.hpp"), false), new BuiltFromPath(objectFile, true)]);
         }
 
+        /// <summary>What the build's manifest is generated from in <paramref name="worker"/>: the fixture's list file, and a module outside it.</summary>
+        public IReadOnlyCollection<string> GeneratedFrom(string worker)
+            => [Path.Combine(worker, "CMakeLists.txt"), Path.Combine(Path.GetTempPath(), "cmake", "Modules", "CMakeCXXInformation.cmake")];
+
         public ConcurrentQueue<IReadOnlyList<string>> AskedOfTargets { get; } = new();
 
         /// <summary>The sites each question about what depends on them named, in the order asked.</summary>
@@ -3584,10 +3747,32 @@ public sealed class MutationLegRunnerTests
             public IReadOnlyList<string> FailedOutputs(IEnumerable<string> lines) => graph.FailedOutputs(lines);
 
             public BuiltFromSource ReadBy(string target) => graph.ReadBy(worker, target);
+
+            public IReadOnlyCollection<string> GeneratedFrom => graph.GeneratedFrom(worker);
         }
     }
 
     /// <summary>Runs the fixture's test binary as it would run: a case red for each mutation its source holds, and its diagnostic said with one.</summary>
+    /// <summary>Each verdict a sweep hands it, in the order handed, and what the leg's line is to say of those not kept.</summary>
+    private sealed class Kept : IArmRecordSink
+    {
+        public ConcurrentQueue<(string Arm, RecordedVerdict Verdict, IReadOnlyList<BuiltFromTable> Tables)> Judgements { get; } = new();
+
+        /// <summary>What the sweep's clock said as each verdict was handed, by arm.</summary>
+        public ConcurrentDictionary<string, DateTime> HandedAt { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The sweep's clock, where a test reads it as each verdict is handed.</summary>
+        public Func<DateTime>? Clock { get; set; }
+
+        public string? Unrecorded { get; init; }
+
+        public void Judged(string arm, RecordedVerdict verdict, IReadOnlyList<BuiltFromTable> tables)
+        {
+            HandedAt[arm] = Clock?.Invoke() ?? default;
+            Judgements.Enqueue((arm, verdict, tables));
+        }
+    }
+
     private sealed class Tests : IArmTestRunner
     {
         /// <summary>How long every run takes.</summary>

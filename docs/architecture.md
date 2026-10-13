@@ -2693,9 +2693,9 @@ directory here cannot drift apart.
   20,000-directory budget before it reached most of the tree, and said so on every sync. The
   harness's own directory is searched all the same, though git ignores most of it by design,
   because a `.secrets` there is what the search was written to find - save what the harness writes
-  there as it works, each run's records, the record of host copies and each action's own `build`
-  and `artifacts`: the run state of whichever machine made it, which no sync carries and no one
-  edits by hand, where a name neither counts nor is looked for below. Counted, a fresh worktree's
+  there as it works, each run's records, the record of host copies, the record of mutation verdicts
+  and each action's own `build` and `artifacts`: the run state of whichever machine made it, which no
+  sync carries and no one edits by hand, where a name neither counts nor is looked for below. Counted, a fresh worktree's
   first run, its own `build` not made yet, was told the `build` entry `init` writes protected
   nothing, having found an action's working space, and to write `**/build`, which would withhold
   every source directory of that name too. A search that still runs out says so; it never reads as
@@ -3427,6 +3427,62 @@ arm, so what an earlier mutation's configure left in a worker never reaches one.
 be read - a file gone or unreadable, a compiler's record unread - leaves the arm no key, and its
 verdict as reached. The key travels back from a host beneath the arm's line, which raised the
 host-agent protocol to 10.
+
+### What holds, and what is pending
+
+A sweep records each arm's verdict on each leg together with what it was judged on. A recorded
+`passed` holds where what the arm would be judged on now, computed in full on the leg's machine, is
+what the record says; every other arm is pending.
+
+Beside the key, never in it, each verdict keeps the causes of the leg's build lines (`JudgedCauses`):
+each file of the tree the manifest is generated from - the inputs of the build line that makes
+`build.ninja` the reading holds, with what each holds - and a digest of what the configuration gives
+the configure: the generator, the build type, the cache variables and the project's path. In the key,
+every arm of a leg would be pending after every edit of any list file, which in a round of several
+agents is every fold: the coarseness a consumer rejected for a commit id. The key holds their effects
+on each target instead, and the causes are kept so what moved can be named.
+
+The record is `.harness-config/mutation-record/` in the main checkout (`ArmVerdictRecord`, resolved
+from `HarnessLayout.MainHarnessDirectory`), whichever tree swept: so an agent's sweep of its own
+worktree counts for the main checkout wherever nothing an arm was judged on differs, and a deleted
+worktree takes none of its verdicts with it. Kept in each tree, that would not hold; kept per user,
+it would need a name for the repository, which only its path gives. It ignores itself, and
+`HarnessDirectorySync.IsRunState` names it, so no sync carries or deletes it. One file to a leg,
+`<leg>.json` - a sweep of one leg never rewrites another's verdicts, and a file that cannot be read
+loses one leg - and beside them `built/<leg>/<digest>.json`, each table an entry names, written once
+under its digest. An entry holds the verdict and its detail, the run, when, which tree swept it
+(`sweptIn`, as a line names a tree: told, never compared), the key and its parts - or no key and
+why - the causes, and the last sweep that found it holding (`verified`); the file indexes each table
+by the digests of its parts, so which part differs can be named without opening it.
+
+An arm keeps one entry to a key on a leg. A later verdict on a key replaces the entry, whatever
+either was: a `passed` followed by anything else on the same key is no longer a `passed`. A verdict
+with no key replaces the arm's entry with none. At most eight are kept (`ArmVerdictRecord.KeptPerArm`),
+the oldest by its place in the file going first, never by its date: this tool serves hosts whose
+clocks step. Each change is one read, merge and write under the file's machine-wide mutex: the
+tables the entry names are written where absent, the entry merged, those beyond the bound dropped,
+the file written whole, and each table no entry names any more removed - so a table is never written
+ahead of an entry naming it, and two sweeps of one leg from two trees lose neither's verdicts and
+remove neither's tables.
+
+The sweep hands each verdict to its sink (`IArmRecordSink`) as the arm ends, so a sweep stopped part
+way keeps what it had judged. Recorded: every verdict reached by observing the arm, and an arm
+stopped because its runner's unmutated control did not pass - the newest evidence on that key says
+the binary is not green. Not recorded: an arm its machine did not admit, one the sweep's own stop or
+a refusal of the run ended, one no worker reached, a skipped one - nothing was observed of those, and
+the record keeps what it held; recording wherever `arm.json` is written would let a machine that
+stops admitting arms turn every recorded `passed` into `not-admitted`. Never: a self-test, whose
+subject has no sink. A leg swept on a host is recorded by nothing: the host's copy keeps no record.
+
+A record that cannot be read - not JSON, a member this build does not know - or one a newer build
+wrote (its `format` above this build's) is never written: every arm of its leg is pending, a sweep
+of that leg says so once as a warning naming the file - delete it to start again, or update the tool
+- and once on the leg's line, and records none; so is a record that cannot be written. Either is the
+record's, never the arm's: its verdict stands as reached. `clean`, a deleted worktree and a removed
+host copy leave the record as it was: it is outside every build directory, worker and copy, and no
+part of a key names a tree, a worker or a build directory, so a worker made again after a `clean`
+comes to the same key and the recorded `passed` holds. Deleting the record is the one way to forget
+it, and `git clean -x` in the main checkout does, as it deletes every ignored file.
 
 ### Self-test
 

@@ -3,6 +3,7 @@ using RepoHarness.Core.Build;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
 
@@ -347,6 +348,40 @@ public sealed class BuiltFromReaderTests
         }
     }
 
+    /// <summary>
+    /// What a build's manifest is generated from is what the build line making it reads - the list files and the modules
+    /// the configure read - and of those, the files of the tree are taken as the reading holds them, and no other.
+    /// </summary>
+    [Fact]
+    public async Task WhatTheManifestIsGeneratedFrom_IsWhatItsLineReads_TheTreesFilesAsTheReadingHoldsThem()
+    {
+        var harness = new HarnessFactory();
+
+        CheckMutationsEndToEndTests.SkipUnlessThisMachineBuilds(harness);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        using var clock = new ClockWatch();
+
+        var repository = await CheckMutationsEndToEndTests.FixtureRepositoryAsync(harness, temp.Combine("r"), token);
+
+        try
+        {
+            var (graph, reader) = await BuiltAsync(harness, temp, repository, token);
+            var causes = reader.OfTheTree(graph.GeneratedFrom);
+
+            Assert.Contains(graph.GeneratedFrom, path => !path.StartsWith(repository, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(Hash(File.ReadAllText(Path.Combine(repository, "CMakeLists.txt"))), causes["CMakeLists.txt"]);
+            Assert.All(causes.Keys, path => Assert.True(File.Exists(Path.Combine(repository, path)), path));
+            Assert.DoesNotContain(causes.Keys, path => path.StartsWith(HarnessLayout.DirectoryName, StringComparison.Ordinal));
+        }
+        catch (Exception ex) when (clock.Explains(ex))
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
     /// <summary>The SHA-256 of <paramref name="text"/> as UTF-8.</summary>
     private static string Hash(string text) => FileContentHash.Of(Encoding.UTF8.GetBytes(text));
 
@@ -365,6 +400,17 @@ public sealed class BuiltFromReaderTests
     /// the records of that build as a worker's are, with a reading of every file of the tree.
     /// </summary>
     private static async Task<BuiltFromTable> BuiltTableAsync(HarnessFactory harness, TempDirectory temp, string repository, string target, CancellationToken token)
+    {
+        var (graph, reader) = await BuiltAsync(harness, temp, repository, token);
+
+        return await TableAsync(reader, graph.ReadBy(target));
+    }
+
+    /// <summary>
+    /// The graph of the repository's leg once the CLI builds it - configuring, then building - read from the records of
+    /// that build as a worker's are, and a reader of its tables over a reading of every file of the tree.
+    /// </summary>
+    private static async Task<(IWorkerGraph Graph, BuiltFromReader Reader)> BuiltAsync(HarnessFactory harness, TempDirectory temp, string repository, CancellationToken token)
     {
         var built = await CliRunner.RunAsync(["build", "--legs", "native", "--json", "-C", repository], token);
 
@@ -388,7 +434,7 @@ public sealed class BuiltFromReaderTests
             .ToDictionary(file => file.Path, file => new SyncEntry(file.Path, file.Bytes.Length, FileContentHash.Of(file.Bytes)), StringComparer.Ordinal);
         var reader = new BuiltFromReader(harness.FileSystem, new SyncManifest(repository, reading), [], repository, build, PathCase.In(harness.FileSystem, repository));
 
-        return await TableAsync(reader, graph.ReadBy(target));
+        return (graph, reader);
     }
 
     /// <summary>A worker's copy of a tree: its root, its build directory, and the sweep's reading of the tree.</summary>

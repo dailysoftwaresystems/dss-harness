@@ -399,6 +399,29 @@ public sealed class CleanServiceTests
     }
 
     /// <summary>
+    /// A clean of a leg removes its build directory and its workers, and leaves the record of its verdicts as it was: it
+    /// is in the main checkout's harness directory, outside every build directory and worker, and a worker made again
+    /// after a clean comes to the same keys.
+    /// </summary>
+    [Fact]
+    public async Task ACleanOfTheLeg_LeavesTheRecordAsItWas()
+    {
+        using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var worker = workers.Made(variant, 1, 1000);
+        var recorded = ArmVerdictRecordTests.Recorded(harness.FileSystem, new HarnessLayout(temp.Path, temp.Path));
+
+        var (outcome, _) = await CleanAsync(temp, harness, config, legs: ["native"]);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.False(Directory.Exists(worker));
+        Assert.Equal(recorded, ArmVerdictRecordTests.Snapshot(new HarnessLayout(temp.Path, temp.Path)));
+    }
+
+    /// <summary>
     /// A clean of a leg takes its self-test's workers with its own, and those of a variant no leg of its host and tree
     /// builds any more - which nothing else would ever remove - each family under the lock a sweep of its variant takes,
     /// with what an earlier removal of them left aside.

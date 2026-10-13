@@ -75,7 +75,34 @@ public sealed record BuiltFromTable
         Made = CanonicalJson.Sorted(Made),
         Outside = CanonicalJson.Sorted(Outside),
     });
+
+    /// <summary>The table by the digests of its parts (<see cref="TableIndex"/>).</summary>
+    public TableIndex Index() => new(
+        Target,
+        Lines,
+        CanonicalJson.Digest(CanonicalJson.Sorted(Files)),
+        CanonicalJson.Sorted(Fetched),
+        CanonicalJson.Digest(CanonicalJson.Sorted(Made)),
+        CanonicalJson.Digest(CanonicalJson.Sorted(Outside)));
 }
+
+/// <summary>
+/// A table by the digests of its parts, which the record of verdicts keeps for each table an entry names, so which part of
+/// a table differs can be named without reading the table.
+/// </summary>
+/// <param name="Target">The target.</param>
+/// <param name="Lines">The digest of its build lines, as the table holds it.</param>
+/// <param name="Files">The digest of the files of the tree its build reads.</param>
+/// <param name="Fetched">Each dependency whose sources its build reads, with the digest of those sources, as the table holds them.</param>
+/// <param name="Made">The digest of what its build reads that the worker's configure made.</param>
+/// <param name="Outside">The digest of what its build reads outside the worker.</param>
+public sealed record TableIndex(
+    string Target,
+    string Lines,
+    string Files,
+    IReadOnlyDictionary<string, string> Fetched,
+    string Made,
+    string Outside);
 
 /// <summary>A target's table as a worker's build read it, or why it could not be made.</summary>
 /// <param name="Target">The target.</param>
@@ -184,7 +211,7 @@ internal sealed class BuiltFromReader
                 continue;
             }
 
-            if (_tree.TryGetValue(Path.GetRelativePath(_worker, path).Replace('\\', '/'), out var entry))
+            if (OfTheTree(path) is { } entry)
             {
                 files[entry.Path] = entry.ContentHash;
                 continue;
@@ -220,6 +247,36 @@ internal sealed class BuiltFromReader
             },
             null);
     }
+
+    /// <summary>
+    /// Each of <paramref name="paths"/> that is a file of the tree - in the worker, and held by the sweep's reading - by its
+    /// path as the reading spells it, with what the reading says it holds; every other path left out.
+    /// </summary>
+    /// <param name="paths">Files, whole, as the build directory resolves them.</param>
+    public IReadOnlyDictionary<string, string> OfTheTree(IEnumerable<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var held = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var path in paths)
+        {
+            if (OfTheTree(Whole(path)) is { } entry)
+            {
+                held[entry.Path] = entry.ContentHash;
+            }
+        }
+
+        return CanonicalJson.Sorted(held);
+    }
+
+    /// <summary>
+    /// The reading's entry for <paramref name="path"/>, where it is in the worker and the reading holds it, found as the
+    /// tree's file system compares names; otherwise <see langword="null"/>.
+    /// </summary>
+    /// <param name="path">A file, whole.</param>
+    private SyncEntry? OfTheTree(string path)
+        => Under(path, _worker) && _tree.TryGetValue(Path.GetRelativePath(_worker, path).Replace('\\', '/'), out var entry) ? entry : null;
 
     /// <summary>The digest of every file of a dependency's sources as read: each path with its size and what it holds, sorted by path.</summary>
     private static string ManifestDigest(SyncManifest files)

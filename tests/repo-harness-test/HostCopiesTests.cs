@@ -388,6 +388,34 @@ public sealed class HostCopiesTests
     }
 
     /// <summary>
+    /// Deleting a worktree, and with it its copy on a host, leaves the record of verdicts as it was: it is in the main
+    /// checkout, whichever tree swept, so a worktree's verdicts outlive it.
+    /// </summary>
+    [Fact]
+    public async Task ADeletedWorktree_AndARemovedHostCopy_LeaveTheRecordAsItWas()
+    {
+        using var temp = new TempDirectory();
+        using var hosts = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var layout = await LayoutAsync(harness, temp);
+        var onPi = hosts.Combine("pi", "repo.worktree-feature");
+        await Local(harness).CreateRootAsync(onPi, CopyMark.Complete, cancellationToken);
+
+        var created = await harness.WorktreeService.CreateAsync(temp.Path, "feature", useRandomName: false, cancellationToken);
+        Assert.True(created.Succeeded, created.Outcome.Message);
+        Record(harness).Claim(layout, Entry(onPi, created.Path));
+
+        var recorded = ArmVerdictRecordTests.Recorded(harness.FileSystem, new HarnessLayout(created.Path, temp.Path));
+        var deleted = await Service(harness, new HashSet<HostId> { Pi }).DeleteAsync(temp.Path, "feature", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
+
+        Assert.True(deleted.Succeeded, deleted.Outcome.Message);
+        Assert.False(Directory.Exists(created.Path));
+        Assert.False(Directory.Exists(onPi));
+        Assert.Equal(recorded, ArmVerdictRecordTests.Snapshot(layout));
+    }
+
+    /// <summary>
     /// The mutation workers a host keeps in a worktree's copy go with the copy, and its line says so - a directory under
     /// a worker's name that nothing says the harness made went with it as the rest of the copy; while a sweep still
     /// running there holds one, the copy stays and is still recorded, with nothing in it removed - they are asked about

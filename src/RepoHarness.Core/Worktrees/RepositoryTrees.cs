@@ -20,6 +20,32 @@ public sealed record RepositoryTree(string Root, string Name)
     /// <summary>What a line calls the worktree whose copies are kept under <paramref name="copyName"/>: <c>worktree o1/xa</c>.</summary>
     /// <param name="copyName">The name its copies are kept under (<see cref="HostCopies.NameOf"/>).</param>
     public static string Worktree(string copyName) => $"worktree {WorktreeAddress.OfCopyName(copyName)}";
+
+    /// <summary>What a line calls the worktree at <paramref name="treeRoot"/>, by the name its copies are kept under.</summary>
+    /// <param name="worktreesDirectory">The worktrees root, as configured.</param>
+    /// <param name="treeRoot">The worktree, as written or with its links resolved, as git names one.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    public static string WorktreeAt(string worktreesDirectory, string treeRoot, StringComparison comparison)
+        => Worktree(HostCopies.NameOf(worktreesDirectory, treeRoot, comparison));
+
+    /// <summary>
+    /// What a line calls <paramref name="treeRoot"/>, a tree of <paramref name="context"/>'s repository on this machine:
+    /// <see cref="MainCheckout"/>, or the worktree it is.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="treeRoot">The tree.</param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    public static string Of(HarnessContext context, string treeRoot, StringComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeRoot);
+
+        return string.Equals(Whole(treeRoot), Whole(context.Layout.MainCheckoutRoot), comparison)
+            ? MainCheckout
+            : WorktreeAt(context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root), treeRoot, comparison);
+    }
+
+    private static string Whole(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 }
 
 /// <summary>
@@ -147,7 +173,7 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
                 .Select(worktree => Path.GetFullPath(worktree.Path))
                 .Select(path => new RepositoryTree(
                     HostCopies.AddressOf(worktreesDirectory, path, comparison)?.PathUnder(worktreesDirectory) ?? path,
-                    RepositoryTree.Worktree(HostCopies.NameOf(worktreesDirectory, path, comparison)))),
+                    RepositoryTree.WorktreeAt(worktreesDirectory, path, comparison))),
         ]);
     }
 

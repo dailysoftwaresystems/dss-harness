@@ -1,5 +1,6 @@
 using System.Text.Json;
 using RepoHarness.Core.Build;
+using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
 
@@ -34,12 +35,13 @@ internal static class CanonicalJson
 }
 
 /// <summary>One digest for each kind of row the sweep and the judge read of an arm, or nothing where it has no such row.</summary>
+/// <remarks>A kind the arm has no row of is left out where the digests are written, and read back as nothing.</remarks>
 /// <param name="A">Its A row: the site, the before- and after-texts, the red kind, the target, the runner, the cases and the diagnostic.</param>
 /// <param name="C">Its C rows' cases, sorted.</param>
 /// <param name="G">Its G rows' cases, sorted.</param>
 /// <param name="B">Its B row: the paired control's before- and after-texts.</param>
 /// <param name="M">Its M rows, each its site and its texts, in the order declared.</param>
-public sealed record RowDigests(string A, string? C, string? G, string? B, string? M);
+public sealed record RowDigests(string A, string? C = null, string? G = null, string? B = null, string? M = null);
 
 /// <summary>A compiler as an arm's key holds it: what CMake identified in the worker's build.</summary>
 /// <param name="Language">The language, as CMake names it.</param>
@@ -161,6 +163,49 @@ public sealed record JudgedOn
 }
 
 /// <summary>
+/// What made a leg's build lines what they are, as a worker's build of it read them: kept beside each arm's key and never
+/// in it, so that what moved can be said of an arm whose key holds nothing of it.
+/// </summary>
+/// <remarks>
+/// Causes, never effects: an arm's key holds what the build of each of its targets read, so a list file edited for
+/// another target moves nothing of it. Kept in the key, every arm of a leg would be pending after every edit of any list
+/// file.
+/// </remarks>
+/// <param name="GeneratedFrom">
+/// Each file of the tree the leg's build manifest is generated from - an input of the build line that makes
+/// <c>build.ninja</c>, which the sweep's reading of the tree holds - by its path as the reading spells it, with what it holds.
+/// </param>
+/// <param name="Generation">The digest of what the configuration gives the configure (<see cref="GenerationOf"/>).</param>
+public sealed record JudgedCauses(IReadOnlyDictionary<string, string> GeneratedFrom, string Generation)
+{
+    /// <summary>The build line that makes the manifest, by the file it makes, relative to the build directory.</summary>
+    public const string Manifest = "build.ninja";
+
+    /// <summary>
+    /// The digest of what <paramref name="config"/> gives the configure of <paramref name="project"/> as
+    /// <paramref name="variant"/> builds it: the generator its toolchain declares, the build type its configuration
+    /// declares, the cache variables its overlay sets, and the project's path.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="variant">The leg's variant.</param>
+    /// <param name="project">The project its workers build.</param>
+    public static string GenerationOf(HarnessConfig config, VariantKey variant, ProjectConfig project)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(variant);
+        ArgumentNullException.ThrowIfNull(project);
+
+        return CanonicalJson.Digest(new
+        {
+            Generator = config.Toolchains.GetValueOrDefault(variant.Toolchain)?.Generator,
+            BuildType = config.BuildConfigs.GetValueOrDefault(variant.Config)?.CmakeBuildType,
+            CacheVars = CanonicalJson.Sorted(variant.Overlay(config, project).CacheVars),
+            project.Path,
+        });
+    }
+}
+
+/// <summary>
 /// What one arm would be judged on as one worker's build reads it, with the tables of the targets its build builds, and
 /// its key; or, where a part could not be read, why - an arm with no key never holds.
 /// </summary>
@@ -171,4 +216,7 @@ internal sealed record ArmKey(JudgedOn JudgedOn, IReadOnlyDictionary<string, Bui
 {
     /// <summary>The key, or <see langword="null"/> where a part could not be read.</summary>
     public string? Key { get; } = Unread is null ? JudgedOn.Key() : null;
+
+    /// <summary>What made the leg's build lines what they are, as the same worker's build read them; kept beside the key.</summary>
+    public JudgedCauses? Causes { get; init; }
 }

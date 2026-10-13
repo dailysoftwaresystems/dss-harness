@@ -1025,17 +1025,13 @@ internal static class HelpCommand
             + "refused-locked, and never holds off a build, test or sync of the leg. --force-lock takes it, and a worker "
             + "another live sweep claims.");
         builder.AppendLine();
-        builder.AppendLine("Records");
+        builder.AppendLine("What holds, and what is pending");
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"Each arm's records are in <run>/<leg>/{MutationRecords.ArmsDirectory}/<arm>/: {MutationRecords.ArmRecordFileName}, its verdict as "
-            + "the ledger carries it, beside the logs of its build and its run, and of a paired control's build in "
-            + $"{MutationRecords.PairedControlDirectory}/. Each control's are in <run>/<leg>/{MutationRecords.ControlsDirectory}/<runner>/, and "
-            + $"each worker's whole build in <run>/<leg>/{MutationRecords.WorkersDirectory}/<n>/. A leg's line counts its arms by verdict; "
-            + "ARMS, below the table, names each arm selected that did not pass, and why; --json carries every arm beneath "
-            + "its leg: "
-            + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key.");
+            "A sweep records each arm's verdict on each leg with what it was judged on. A recorded passed holds where what "
+            + "the arm would be judged on now, computed in full on the leg's machine, is what the record says; every other "
+            + "arm is pending.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1048,6 +1044,35 @@ internal static class HelpCommand
             + "the leg's developer environment; what of the configuration the build, the run and the judge are given; "
             + "and the host. No part is a commit, a date, a run, a worker or a tree: the same content judged again, in "
             + "another worker or another tree, comes to the same key. An arm a part of whose key could not be read has none.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Each verdict is recorded as its arm ends - one reached by observing the arm, and an arm stopped because its "
+            + "runner's unmutated control did not pass - so a sweep stopped part way keeps what it had judged. Never an arm "
+            + "its machine did not admit, one the sweep's own stop or a refusal of the run ended, one no worker reached, a "
+            + "skipped one, or anything of a self-test: nothing was observed of those, and the record keeps what it held. "
+            + $"The record is {HarnessLayout.MutationRecordDirectoryRelative} in the main checkout, whichever tree swept: "
+            + $"<leg>.json for each leg, and the tables its entries name in {ArmVerdictRecord.TablesDirectoryName}/<leg>/, each "
+            + "written once under its digest and removed with the last entry naming it. It ignores itself, and no sync "
+            + "carries it: a host's copy keeps none, so only a leg swept on this machine is recorded. A later verdict on a "
+            + "key replaces the arm's entry on that key, whatever either was, and a verdict with no key the arm's entry with "
+            + $"none; an arm keeps {ArmVerdictRecord.KeptPerArm} keys on a leg, the oldest by its place in the file going first, "
+            + "never by its date. Two sweeps recording at once lose neither's verdicts. clean, a deleted worktree and a "
+            + "removed host copy leave it as it was; deleting it is the one way to forget it, and every arm is then pending. "
+            + $"A record that cannot be read, or that a newer {ToolPackage.Id} wrote, is never written: a sweep of that leg "
+            + "says so once, as a warning naming the file and on the leg's line, and records none.");
+        builder.AppendLine();
+        builder.AppendLine("Records");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            $"Each arm's records are in <run>/<leg>/{MutationRecords.ArmsDirectory}/<arm>/: {MutationRecords.ArmRecordFileName}, its verdict as "
+            + "the ledger carries it, beside the logs of its build and its run, and of a paired control's build in "
+            + $"{MutationRecords.PairedControlDirectory}/. Each control's are in <run>/<leg>/{MutationRecords.ControlsDirectory}/<runner>/, and "
+            + $"each worker's whole build in <run>/<leg>/{MutationRecords.WorkersDirectory}/<n>/. A leg's line counts its arms by verdict; "
+            + "ARMS, below the table, names each arm selected that did not pass, and why; --json carries every arm beneath "
+            + "its leg: "
+            + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key.");
         builder.AppendLine();
         builder.AppendLine("Self-test");
         builder.AppendLine();
@@ -2358,6 +2383,9 @@ internal static class HelpCommand
         builder.AppendLine("  .harness-config/lock.json          ignored; records in-progress runs");
         builder.AppendLine($"  {HarnessLayout.HostCopiesDirectoryRelative}/       ignores itself; which hosts hold a copy of");
         builder.AppendLine("                                     which worktree, in the main checkout");
+        builder.AppendLine($"  {HarnessLayout.MutationRecordDirectoryRelative}/   ignores itself; each leg's verdicts of its");
+        builder.AppendLine("                                     mutation arms, with what each was judged on,");
+        builder.AppendLine("                                     in the main checkout ('help mutations')");
         builder.AppendLine($"  {AnchorSettings.DefaultPendingAnchorsPath}");
         builder.AppendLine("                                     tracked; live anchors (anchors.pendingAnchorsPath)");
         builder.AppendLine($"  {AnchorSettings.DefaultDoneAnchorsPath}");

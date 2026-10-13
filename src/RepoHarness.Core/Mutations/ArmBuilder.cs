@@ -73,6 +73,12 @@ internal interface IWorkerGraph
     /// </summary>
     /// <param name="target">The target, as <c>--target</c> names it.</param>
     BuiltFromSource ReadBy(string target);
+
+    /// <summary>
+    /// The files the build's manifest is generated from, whole: what the build line making <c>build.ninja</c> reads - the
+    /// list files and modules the configure read - or none where no build line makes it.
+    /// </summary>
+    IReadOnlyCollection<string> GeneratedFrom { get; }
 }
 
 /// <summary>Builds in a worker's copy, and reads what its builds recorded.</summary>
@@ -263,4 +269,8 @@ internal sealed class NinjaWorkerGraph(NinjaRebuildGraph graph, string? program)
 
         return new BuiltFromSource(target, lines, paths);
     }
+
+    /// <inheritdoc/>
+    public IReadOnlyCollection<string> GeneratedFrom
+        => _graph.EdgeFor(JudgedCauses.Manifest) is { } regenerates ? _graph.ReadBy(regenerates) : [];
 }

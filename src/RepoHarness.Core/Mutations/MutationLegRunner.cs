@@ -76,6 +76,15 @@ internal sealed record MutationSubject
     /// </summary>
     public bool ComparesKeys { get; init; }
 
+    /// <summary>
+    /// Where each arm's verdict is kept as the arm ends, with what it was judged on; <see langword="null"/> where nothing of
+    /// the sweep is kept: a self-test's.
+    /// </summary>
+    public IArmRecordSink? Sink { get; init; }
+
+    /// <summary>What a line calls the tree swept, as each verdict kept says which tree's sweep reached it.</summary>
+    public string SweptIn { get; init; } = string.Empty;
+
     /// <summary>What a worker's build is expected to come to, or <see langword="null"/> where nothing says.</summary>
     public long? ExpectedBuildBytes { get; init; }
 
@@ -128,6 +137,7 @@ internal sealed class MutationLegRunner(
     IPathBudget pathBudget,
     IFileSystem fileSystem,
     IHarnessOutput output,
+    TimeProvider clock,
     string commandName)
 {
     private readonly IMutationSource _source = source;
@@ -138,6 +148,9 @@ internal sealed class MutationLegRunner(
     private readonly IPathBudget _pathBudget = pathBudget;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
+
+    /// <summary>Says when each verdict kept was reached.</summary>
+    private readonly TimeProvider _clock = clock;
     private readonly string _commandName = commandName;
 
     /// <summary>Reads which compilers a worker's build identified, for a test invocation that names one.</summary>
@@ -198,7 +211,16 @@ internal sealed class MutationLegRunner(
     /// <param name="Report">The report its run wrote, where it ran and wrote one.</param>
     /// <param name="Retired">Why its worker drives no other arm, or <see langword="null"/> where it goes on.</param>
     /// <param name="Refusal">The refusal of the run that ended the arm; otherwise <see langword="null"/>.</param>
-    private sealed record Observed(ReachedVerdict Verdict, JUnitReport? Report = null, string? Retired = null, HarnessException? Refusal = null);
+    /// <param name="Ended">
+    /// Whether the sweep's own stop, or a refusal of the run, ended the arm while it was driven: then nothing of it was
+    /// observed, and nothing of it is kept.
+    /// </param>
+    private sealed record Observed(ReachedVerdict Verdict, JUnitReport? Report = null, string? Retired = null, HarnessException? Refusal = null, bool Ended = false);
+
+    /// <summary>What an arm was judged on, as its line and its record are given it.</summary>
+    /// <param name="Key">What it was judged on as a worker's build read it, or <see langword="null"/> where it was never read.</param>
+    /// <param name="Unread">Why it has no key; <see langword="null"/> where it has one, and where nothing is kept of the sweep.</param>
+    private sealed record Judging(ArmKey? Key, string? Unread);
 
     /// <summary>One leg's sweep, while it runs.</summary>
     private sealed class Sweep(MutationLegRunner runner, MutationSubject subject, LegWork work)
@@ -343,6 +365,11 @@ internal sealed class MutationLegRunner(
                 notes.AddRange(_unmade.OrderBy(pair => pair.Key).Select(pair => $"{pair.Value.Detail.TrimEnd('.')}, so it drove no arm"));
             }
 
+            if (_subject.Sink?.Unrecorded is { } unrecorded)
+            {
+                notes.Add(unrecorded);
+            }
+
             if (_subject.ComparesKeys && _workerKeys.Count > 0)
             {
                 var (differ, alone) = Compared(driven);
@@ -483,6 +510,8 @@ internal sealed class MutationLegRunner(
 
             string? Held(string path) => _reading.Files.Entries.GetValueOrDefault(path)?.ContentHash;
 
+            var causes = new JudgedCauses(reader.OfTheTree(graph.GeneratedFrom), JudgedCauses.GenerationOf(_config, _leg.Variant, _subject.Project));
+
             return driven.ToDictionary(
                 arm => arm.Id,
                 arm =>
@@ -503,31 +532,36 @@ internal sealed class MutationLegRunner(
                             Host = _leg.Named.ToString(),
                         },
                         built.Where(table => table.Reading.Table is not null).ToDictionary(table => table.Reading.Target, table => table.Reading.Table!, StringComparer.Ordinal),
-                        built.Select(table => table.Reading.Unread).FirstOrDefault(why => why is not null) ?? compilersUnread);
+                        built.Select(table => table.Reading.Unread).FirstOrDefault(why => why is not null) ?? compilersUnread)
+                    {
+                        Causes = causes,
+                    };
                 },
                 StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
-        /// The key of what <paramref name="arm"/> is judged on, for its line: as the first worker made read it, once it has;
-        /// <see langword="null"/> where a part of it could not be read, where it was never read, and in a sweep whose
-        /// subject compares its workers' readings, which keeps none.
+        /// What <paramref name="arm"/> is judged on, for its line and its record: as the first worker made read it, once it
+        /// has, with why it has no key where a part of it could not be read; nothing, and why, where it was never read; and
+        /// nothing in a sweep whose subject compares its workers' readings, which keeps none.
         /// </summary>
-        private async Task<string?> KeyAsync(MutationArm arm)
+        private async Task<Judging> JudgingAsync(MutationArm arm)
         {
             if (_subject.ComparesKeys)
             {
-                return null;
+                return new Judging(null, null);
             }
 
             try
             {
-                return (await _keys.Task.ConfigureAwait(false)).GetValueOrDefault(arm.Id)?.Key;
+                return (await _keys.Task.ConfigureAwait(false)).GetValueOrDefault(arm.Id) is { } key
+                    ? new Judging(key, key.Unread)
+                    : new Judging(null, "it was read of no worker's build");
             }
-            catch (Exception) when (_keys.Task.IsFaulted || _keys.Task.IsCanceled)
+            catch (Exception ex) when (_keys.Task.IsFaulted || _keys.Task.IsCanceled)
             {
                 // Never read, which the worker that was to read it says as its own failure: the arm's line has no key.
-                return null;
+                return new Judging(null, $"it was never read: {ex.Message.TrimEnd('.')}");
             }
         }
 
@@ -975,7 +1009,8 @@ internal sealed class MutationLegRunner(
                 {
                     if (refusal is not null)
                     {
-                        return new Driven(Record(arm, ReachedVerdict.Of(LegVerdict.NotAdmitted, refusal), number, started, null, records, await KeyAsync(arm).ConfigureAwait(false)));
+                        // Nothing of it was observed: what the record holds of it stands.
+                        return new Driven(Record(arm, ReachedVerdict.Of(LegVerdict.NotAdmitted, refusal), number, started, null, records, await JudgingAsync(arm).ConfigureAwait(false), observed: false));
                     }
 
                     _work.Progress($"arm {arm.Id}, on worker {number}");
@@ -988,7 +1023,13 @@ internal sealed class MutationLegRunner(
 
                         if (control.Stops is { } stops)
                         {
-                            return new Driven(Undriven(arm, ReachedVerdict.Of(LegVerdict.Stopped, stops)) with { Key = await KeyAsync(arm).ConfigureAwait(false) });
+                            // Kept: the newest evidence on what it is judged on is that its binary is not green unmutated.
+                            var stopped = ReachedVerdict.Of(LegVerdict.Stopped, stops);
+                            var judging = await JudgingAsync(arm).ConfigureAwait(false);
+
+                            Kept(arm, stopped, judging);
+
+                            return new Driven(Undriven(arm, stopped) with { Key = judging.Key?.Key });
                         }
 
                         bound = control.Bound;
@@ -997,7 +1038,7 @@ internal sealed class MutationLegRunner(
                     var observed = await ObserveAsync(number, arm, graph, records, bound, cancellationToken).ConfigureAwait(false);
 
                     return new Driven(
-                        Record(arm, observed.Verdict, number, started, observed.Report, records, await KeyAsync(arm).ConfigureAwait(false)),
+                        Record(arm, observed.Verdict, number, started, observed.Report, records, await JudgingAsync(arm).ConfigureAwait(false), observed: !observed.Ended),
                         observed.Retired,
                         observed.Refusal);
                 }
@@ -1006,7 +1047,7 @@ internal sealed class MutationLegRunner(
             {
                 var failure = Failure(ex, "the sweep could not drive this arm");
 
-                return new Driven(Record(arm, failure, number, started, null, records, await KeyAsync(arm).ConfigureAwait(false)), Defect(arm, failure));
+                return new Driven(Record(arm, failure, number, started, null, records, await JudgingAsync(arm).ConfigureAwait(false), observed: true), Defect(arm, failure));
             }
         }
 
@@ -1059,6 +1100,7 @@ internal sealed class MutationLegRunner(
             ReachedVerdict? failure = null;
             HarnessException? refusal = null;
             JUnitReport? report = null;
+            var ended = false;
             string? restored;
 
             try
@@ -1112,11 +1154,13 @@ internal sealed class MutationLegRunner(
             }
             catch (Exception ex) when (Stops(ex, cancellationToken))
             {
+                ended = true;
                 failure = ReachedVerdict.Of(LegVerdict.Stopped, "the sweep was stopped while it was driven, and each site was put back as it was");
             }
             catch (HarnessException ex) when (EndsTheRun(ex))
             {
                 // Ends the sweep, as it ends the run, once the arm's sites are back and its line is kept.
+                ended = true;
                 refusal = ex;
                 failure = ReachedVerdict.Of(
                     LegVerdict.Stopped,
@@ -1140,12 +1184,13 @@ internal sealed class MutationLegRunner(
                     ReachedVerdict.Of(LegVerdict.Poisoned, $"a site could not be put back as it was, so its worker drives no other arm: {restored}"),
                     report,
                     $"a site of arm '{arm.Id}' could not be put back as it was: {restored}",
-                    refusal);
+                    refusal,
+                    ended);
             }
 
             if (failure is not null)
             {
-                return new Observed(failure, report, Defect(arm, failure), refusal);
+                return new Observed(failure, report, Defect(arm, failure), refusal, ended);
             }
 
             return new Observed(
@@ -1539,10 +1584,16 @@ internal sealed class MutationLegRunner(
 
         /// <summary>
         /// <paramref name="arm"/>'s line where it reached <paramref name="verdict"/> driven by worker <paramref name="number"/>,
-        /// with the <paramref name="key"/> of what it was judged on, its record written beside its logs.
+        /// with the key of what it was judged on, its record written beside its logs - and, where the verdict was
+        /// <paramref name="observed"/>, kept with what it was judged on.
         /// </summary>
-        private ArmEntry Record(MutationArm arm, ReachedVerdict verdict, int number, long started, JUnitReport? report, string records, string? key)
+        private ArmEntry Record(MutationArm arm, ReachedVerdict verdict, int number, long started, JUnitReport? report, string records, Judging judging, bool observed)
         {
+            if (observed)
+            {
+                Kept(arm, verdict, judging);
+            }
+
             var entry = new ArmEntry
             {
                 Arm = arm.Id,
@@ -1555,7 +1606,7 @@ internal sealed class MutationLegRunner(
                 Reds = report?.Reds,
                 DeclaredReds = arm.Reds,
                 Records = records,
-                Key = key,
+                Key = judging.Key?.Key,
             };
 
             try
@@ -1569,6 +1620,36 @@ internal sealed class MutationLegRunner(
             }
 
             return entry;
+        }
+
+        /// <summary>
+        /// Hands <paramref name="verdict"/> of <paramref name="arm"/> to the subject's sink, where it has one, with what the arm
+        /// was judged on: when it was reached, by which run and in which tree, and the tables its key names.
+        /// </summary>
+        private void Kept(MutationArm arm, ReachedVerdict verdict, Judging judging)
+        {
+            if (_subject.Sink is not { } sink)
+            {
+                return;
+            }
+
+            var now = _runner._clock.GetUtcNow();
+
+            sink.Judged(
+                arm.Id,
+                new RecordedVerdict
+                {
+                    Verdict = Verdicts.Display(verdict.Verdict),
+                    Detail = verdict.Detail,
+                    Run = _work.RunId.Value,
+                    At = new DateTimeOffset(now.Ticks - (now.Ticks % TimeSpan.TicksPerSecond), TimeSpan.Zero),
+                    SweptIn = _subject.SweptIn,
+                    Key = judging.Key?.Key,
+                    KeyUnread = judging.Key?.Key is null ? judging.Unread : null,
+                    JudgedOn = judging.Key?.JudgedOn,
+                    Causes = judging.Key?.Causes,
+                },
+                [.. judging.Key?.Tables.Values ?? []]);
         }
 
         /// <summary>The leg's line: the worst of its own verdicts and its arms', with how many arms reached what.</summary>

@@ -783,7 +783,7 @@ public sealed class MutationServiceTests
             temp.Combine("runs", "r1"),
             Time: false);
 
-        var unbuilt = service.Subject(work, arms, force: false, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]));
+        var unbuilt = service.Subject(work, arms, force: false, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]), records: true);
 
         Assert.Equal([("FOO", "1")], unbuilt.Project.CacheVars.Select(pair => (pair.Key, pair.Value)));
         Assert.Same(FetchedSet.None, unbuilt.Fetched);
@@ -803,7 +803,7 @@ public sealed class MutationServiceTests
             Path.Combine(build, BuildRecord.FileName),
             new BuildRecord(null, variant.DirectoryName, null, new Dictionary<string, string>(), new Dictionary<string, DateTime>()) { Bytes = 4096 }.Write());
 
-        var built = service.Subject(work, arms, force: true, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]));
+        var built = service.Subject(work, arms, force: true, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]), records: true);
 
         Assert.Equal(temp.Path, built.TreeRoot);
         Assert.Equal(MutationWorkers.Of(temp.Path, variant), built.Workers);
@@ -889,12 +889,82 @@ public sealed class MutationServiceTests
             temp.Combine("runs", "r1"),
             Time: false);
 
-        var subject = service.Subject(work, arms, force: false, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]));
+        var subject = service.Subject(work, arms, force: false, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]), records: true);
         var selfTest = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, temp.Combine("data", MutationFixture.DirectoryName));
 
         Assert.Equal(works, subject.TreeRoot);
         Assert.Equal(MutationWorkers.Of(works, variant), subject.Workers);
         Assert.Equal(MutationWorkers.Of(works, variant, selfTest: true), selfTest.Workers);
+    }
+
+    /// <summary>
+    /// A leg's sweep records each verdict in the record of verdicts in the main checkout, whichever tree it sweeps - an
+    /// agent's worktree's, so its verdicts count for the main checkout - naming that tree as a line names it.
+    /// </summary>
+    [Fact]
+    public async Task AVerdict_IsRecordedInTheMainCheckout_WhicheverTreeSwept()
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable();
+        var (service, main) = Prepare(temp, config);
+        var arms = await service.ReadAsync(main, null, TestContext.Current.CancellationToken);
+        var worktree = Path.Combine(main.Layout.WorktreesDirectoryUnder(config.Worktrees.Root), "xa");
+        var context = new HarnessContext(new HarnessLayout(worktree, temp.Path), config);
+        var variant = VariantKey.For(config, config.Legs["native"], "linux");
+        var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
+
+        LegWork In(HarnessContext of, string tree) => new(
+            new PlacedLeg("native", config.Legs["native"], host, config.Projects[0], variant, tree, tree, variant.DirectoryUnder(tree), new LocalHostConfig(), Emulated: false),
+            of,
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+
+        var inWorktree = service.Subject(In(context, worktree), arms, force: false, new RepositoryTreesFound([]), records: true);
+        var inMain = service.Subject(In(main, temp.Path), arms, force: false, new RepositoryTreesFound([]), records: true);
+        var record = new ArmVerdictRecord(new HarnessFactory().FileSystem, main.Layout);
+
+        Assert.Equal(("worktree xa", RepositoryTree.MainCheckout), (inWorktree.SweptIn, inMain.SweptIn));
+
+        inWorktree.Sink!.Judged(
+            "charge",
+            new RecordedVerdict { Verdict = "passed", Run = "20261012-145059-ba433418", At = DateTimeOffset.UnixEpoch, SweptIn = inWorktree.SweptIn, Key = "k" },
+            []);
+
+        Assert.Null(inWorktree.Sink.Unrecorded);
+        Assert.True(File.Exists(Path.Combine(temp.Path, HarnessLayout.DirectoryName, HarnessLayout.MutationRecordDirectoryName, "native.json")));
+        Assert.Equal("worktree xa", Assert.Single(record.Read("native").Arms["charge"]).SweptIn);
+        Assert.False(Directory.Exists(Path.Combine(worktree, HarnessLayout.DirectoryName)));
+    }
+
+    /// <summary>
+    /// Nothing of a self-test is recorded: its subject has no sink. Nor is anything recorded by a leg swept for another
+    /// machine, whose copy keeps no record: what it judged is that machine's to keep.
+    /// </summary>
+    [Fact]
+    public async Task ASelfTest_RecordsNothing_NorDoesALegSweptForAnotherMachine()
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable();
+        var (service, context) = Prepare(temp, config);
+        var arms = await service.ReadAsync(context, null, TestContext.Current.CancellationToken);
+        var variant = VariantKey.For(config, config.Legs["native"], "linux");
+        var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
+        var work = new LegWork(
+            new PlacedLeg("native", config.Legs["native"], host, config.Projects[0], variant, temp.Path, temp.Path, variant.DirectoryUnder(temp.Path), new LocalHostConfig(), Emulated: false),
+            context,
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+
+        var selfTest = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, temp.Combine("data", MutationFixture.DirectoryName));
+        var forAnother = service.Subject(work, arms, force: false, new RepositoryTreesFound([]), records: false);
+        var here = service.Subject(work, arms, force: false, new RepositoryTreesFound([]), records: true);
+
+        Assert.Null(selfTest.Sink);
+        Assert.True(selfTest.ComparesKeys);
+        Assert.Null(forAnother.Sink);
+        Assert.IsType<RecordSink>(here.Sink);
     }
 
     /// <summary>
@@ -936,7 +1006,8 @@ public sealed class MutationServiceTests
                 new RepositoryTree(temp.Path, RepositoryTree.MainCheckout),
                 new RepositoryTree(temp.Combine("plain"), "worktree plain"),
                 new RepositoryTree(temp.Combine("xa"), "worktree o1/xa"),
-            ]));
+            ]),
+            records: true);
 
         Assert.Equal((8192L, "what worktree o1/xa's copy of the same variant came to there"), (subject.ExpectedBuildBytes, subject.ExpectedBuildSource));
     }
@@ -1237,6 +1308,7 @@ public sealed class MutationServiceTests
             files ?? harness.FileSystem,
             new MutationFixtureStore(harness.FileSystem, Fixture(temp)),
             harness.Identity,
+            harness.Platform,
             TimeProvider.System,
             harness.Output);
     }
