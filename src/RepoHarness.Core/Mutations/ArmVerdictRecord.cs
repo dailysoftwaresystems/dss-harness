@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Hosts;
@@ -53,6 +55,10 @@ public sealed record RecordedVerdict
 
     /// <summary>The last sweep that found its key holding on the leg's machine, where one has.</summary>
     public RecordedRun? Verified { get; init; }
+
+    /// <summary>When its arm ended, as a line says it: <c>2026-10-12 14:58Z</c>.</summary>
+    [JsonIgnore]
+    public string When => At.UtcDateTime.ToString("yyyy-MM-dd HH:mm'Z'", CultureInfo.InvariantCulture);
 }
 
 /// <summary>Why a leg's record of verdicts cannot be read: what reading it said, or the newer format it was written in.</summary>
@@ -211,6 +217,116 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
     }
 
     /// <summary>
+    /// What the record holds of <paramref name="arms"/> on <paramref name="leg"/>, as a sweep under <c>--pending</c> weighs
+    /// them: every entry of each, and each table the newest of them names - or why that table, or the whole record,
+    /// cannot be read.
+    /// </summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="arms">The arms the sweep would drive on it, as the registry names them.</param>
+    /// <exception cref="Results.HarnessException">Another process held the leg's record past the window.</exception>
+    public RecordedArms ArmsOf(string leg, IEnumerable<string> arms)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+        ArgumentNullException.ThrowIfNull(arms);
+
+        var read = Read(leg);
+
+        if (read.Unread is { } unread)
+        {
+            return RecordedArms.Unreadable(unread);
+        }
+
+        var entries = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase);
+        var tables = new SortedDictionary<string, BuiltFromTable>(StringComparer.Ordinal);
+        var unreadTables = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var arm in arms)
+        {
+            if (entries.ContainsKey(arm) || read.Arms.GetValueOrDefault(arm) is not { Count: > 0 } kept)
+            {
+                continue;
+            }
+
+            entries[arm] = kept;
+
+            // Only the newest is ever compared part by part: an older entry is weighed by its key alone.
+            foreach (var digest in kept[^1].JudgedOn?.Built.Values ?? [])
+            {
+                if (tables.ContainsKey(digest) || unreadTables.ContainsKey(digest))
+                {
+                    continue;
+                }
+
+                var (table, why) = Table(leg, digest);
+
+                if (table is not null)
+                {
+                    tables[digest] = table;
+                }
+                else
+                {
+                    unreadTables[digest] = why!;
+                }
+            }
+        }
+
+        return new RecordedArms { Arms = entries, Tables = tables, TablesUnread = unreadTables };
+    }
+
+    /// <summary>
+    /// Marks each entry of <paramref name="leg"/> whose arm and key <paramref name="keys"/> names as verified by
+    /// <paramref name="by"/>, in one change of the record: the last sweep that found it holding on the leg's machine. An
+    /// entry no longer there - another sweep replaced it meanwhile - is passed over. Nothing is written where the record
+    /// cannot be read, which is said instead.
+    /// </summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="keys">The key that held of each arm, by the arm's id.</param>
+    /// <param name="by">The sweep that found them holding, and when.</param>
+    /// <returns>Why the record could not be read, and nothing was written; <see langword="null"/> otherwise.</returns>
+    /// <exception cref="IOException">The record could not be written.</exception>
+    /// <exception cref="UnauthorizedAccessException">The record could not be written.</exception>
+    /// <exception cref="Results.HarnessException">Another process held the leg's record past the window.</exception>
+    public RecordUnread? Verified(string leg, IReadOnlyDictionary<string, string> keys, RecordedRun by)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leg);
+        ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(by);
+
+        return Held(leg, () =>
+        {
+            var read = ReadHeld(leg);
+
+            if (read.Unread is { } unread)
+            {
+                return unread;
+            }
+
+            var arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(read.Arms, StringComparer.OrdinalIgnoreCase);
+            var marked = false;
+
+            foreach (var (arm, key) in keys)
+            {
+                if (arms.GetValueOrDefault(arm) is not { } entries)
+                {
+                    continue;
+                }
+
+                var verified = entries.Select(entry => string.Equals(entry.Key, key, StringComparison.Ordinal) ? entry with { Verified = by } : entry).ToList();
+
+                marked |= !verified.SequenceEqual(entries);
+                arms[arm] = verified;
+            }
+
+            if (marked)
+            {
+                Write(leg, arms, read.Tables);
+            }
+
+            return null;
+        });
+    }
+
+    /// <summary>
     /// Records <paramref name="verdict"/> of <paramref name="arm"/> on <paramref name="leg"/>: the tables it names written
     /// where absent, the entry merged - replacing the arm's entry on the same key, or with no key where it has none - the
     /// entries beyond <see cref="KeptPerArm"/> dropped oldest first, the leg's file written whole, and every table no entry
@@ -293,25 +409,28 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
                 index[digest] = table.Index();
             }
 
-            _fileSystem.WriteAllTextAtomic(
-                FileOf(leg),
-                JsonSerializer.Serialize(
-                    new Document
-                    {
-                        Format = Format,
-                        Leg = leg,
-                        Arms = new SortedDictionary<string, List<RecordedVerdict>>(
-                            arms.ToDictionary(pair => pair.Key, pair => pair.Value.ToList(), StringComparer.Ordinal),
-                            StringComparer.Ordinal),
-                        Tables = index,
-                    },
-                    JsonStateFile.Options));
-
+            Write(leg, arms, index);
             Prune(leg, named);
 
             return null;
         });
     }
+
+    /// <summary>Writes <paramref name="leg"/>'s record whole, holding <paramref name="arms"/> and <paramref name="tables"/>, while its mutex is held.</summary>
+    private void Write(string leg, IReadOnlyDictionary<string, IReadOnlyList<RecordedVerdict>> arms, IReadOnlyDictionary<string, TableIndex> tables)
+        => _fileSystem.WriteAllTextAtomic(
+            FileOf(leg),
+            JsonSerializer.Serialize(
+                new Document
+                {
+                    Format = Format,
+                    Leg = leg,
+                    Arms = new SortedDictionary<string, List<RecordedVerdict>>(
+                        arms.ToDictionary(pair => pair.Key, pair => pair.Value.ToList(), StringComparer.Ordinal),
+                        StringComparer.Ordinal),
+                    Tables = new SortedDictionary<string, TableIndex>(tables.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal),
+                },
+                JsonStateFile.Options));
 
     /// <summary>The digests of the tables <paramref name="verdict"/> names.</summary>
     private static IEnumerable<string> Names(RecordedVerdict verdict) => verdict.JudgedOn?.Built.Values ?? [];

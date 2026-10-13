@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.ExceptionServices;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
@@ -81,6 +82,13 @@ internal sealed record MutationSubject
     /// the sweep is kept: a self-test's.
     /// </summary>
     public IArmRecordSink? Sink { get; init; }
+
+    /// <summary>
+    /// What the record of verdicts holds of the arms the leg drives, where the sweep is <c>--pending</c>: then its first
+    /// worker is made alone, every arm whose key is a recorded <c>passed</c>'s is held and left out, and only the rest are
+    /// swept. <see langword="null"/> where every arm is driven.
+    /// </summary>
+    public RecordedArms? Recorded { get; init; }
 
     /// <summary>What a line calls the tree swept, as each verdict kept says which tree's sweep reached it.</summary>
     public string SweptIn { get; init; } = string.Empty;
@@ -260,6 +268,9 @@ internal sealed class MutationLegRunner(
         /// <summary>Whether a worker has taken the reading of <see cref="_keys"/> on itself: 0 until one has.</summary>
         private int _keyed;
 
+        /// <summary>Why <c>--pending</c> found each arm it sweeps pending - the first reason that applies - by the arm's id.</summary>
+        private readonly ConcurrentDictionary<string, PendingReason> _why = new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>What each arm is judged on as each worker made read it, by the worker's number: kept where the subject compares them.</summary>
         private readonly ConcurrentDictionary<int, IReadOnlyDictionary<string, ArmKey>> _workerKeys = new();
 
@@ -298,7 +309,11 @@ internal sealed class MutationLegRunner(
             _reading = await _runner._source.ReadAsync(_subject.TreeRoot, cancellationToken).ConfigureAwait(false);
 
             var unlinked = await ReadFetchedAsync(cancellationToken).ConfigureAwait(false);
-            var (plan, needs) = await PlanAsync(driven.Count, cancellationToken).ConfigureAwait(false);
+
+            await RemoveBeyondCapAsync(cancellationToken).ConfigureAwait(false);
+
+            // Under --pending the first worker is made alone, to read what each arm is judged on before any is driven.
+            var (plan, needs) = await PlanAsync(_subject.Recorded is null ? driven.Count : 1, cancellationToken).ConfigureAwait(false);
 
             if (plan.RunsNone)
             {
@@ -315,24 +330,50 @@ internal sealed class MutationLegRunner(
                 _runner._output.Warn(_runner._commandName, $"{_leg.Name}: {note}");
             }
 
-            if (plan.Fewer is { } fewer)
-            {
-                notes.Add(fewer);
-            }
+            Planned(plan, notes);
 
-            if (plan.Unchecked is { } unchecked_)
-            {
-                _runner._output.Warn(_runner._commandName, $"{_leg.Name}: {unchecked_}");
-                notes.Add(unchecked_);
-            }
-
-            _queue = new ArmQueue(driven, plan.Count);
+            var ran = plan;
+            var own = new List<ReachedVerdict>();
+            PendingSweep? pending = null;
 
             using (var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             using (_unasked = new CancellationTokenSource())
             {
-                await Task.WhenAll(Enumerable.Range(1, plan.Count).Select(number => Task.Run(() => WorkerAsync(number, needs[number - 1], stop), CancellationToken.None)))
-                    .ConfigureAwait(false);
+                _queue = new ArmQueue(driven, plan.Count);
+
+                if (_subject.Recorded is not { } recorded)
+                {
+                    await WorkersAsync(plan, needs, first: null, stop).ConfigureAwait(false);
+                }
+                else if (await FirstAsync(needs[0], stop).ConfigureAwait(false) is { } first)
+                {
+                    try
+                    {
+                        var swept = await HoldAsync(recorded, driven, stop).ConfigureAwait(false);
+
+                        // What is still to be driven is what was found pending: an arm held has its line already.
+                        pending = new PendingSweep(driven.Count - swept.Count, swept.Count);
+                        _queue = new ArmQueue(swept, 1);
+
+                        if (swept.Count == 0)
+                        {
+                            // Every arm verified here holds its passed, and the leg asks nothing more: its verdict is its own.
+                            own.Add(ReachedVerdict.Of(LegVerdict.Passed));
+                        }
+                        else
+                        {
+                            ran = await SweepPendingAsync(swept, first, notes, own, stop).ConfigureAwait(false) ?? ran;
+                        }
+                    }
+                    finally
+                    {
+                        _runner._copies.Release(Worker(1), _work.RunId);
+                    }
+                }
+                else
+                {
+                    notes.Add("nothing of it was verified, since its first worker was not made");
+                }
 
                 // Every worker has put its sites back and stopped asking, whatever ended the sweep: what none of them drove
                 // is said, never passed over - by a sweep stopped part way, or ended by a refusal, as by one that ran out
@@ -345,7 +386,7 @@ internal sealed class MutationLegRunner(
 
             // A worker that could not be made is the leg's own failure only where no worker was made: another made drove
             // the arms, and the leg says the sweep ran with fewer.
-            var own = _own.ToList();
+            own.AddRange(_own);
 
             // What ended the sweep from outside any arm's or worker's own handling: a refusal of the run, which the line
             // carries to be raised once it is recorded; or a failure nobody named, which is the leg's own.
@@ -356,7 +397,7 @@ internal sealed class MutationLegRunner(
                 own.Add(Failure(escaped, "the sweep ended in a failure nobody named"));
             }
 
-            if (_unmade.Count == plan.Count)
+            if (_unmade.Count == ran.Count)
             {
                 own.AddRange(_unmade.OrderBy(pair => pair.Key).Select(pair => pair.Value));
             }
@@ -385,7 +426,152 @@ internal sealed class MutationLegRunner(
                 }
             }
 
-            return Line(own, [.. driven.Select(arm => (arm, _entries[arm.Id])), .. unselected], notes) with { EndsTheRun = refusal };
+            return Line(own, [.. driven.Select(arm => (arm, Swept(arm, _entries[arm.Id]))), .. unselected], notes, pending) with { EndsTheRun = refusal };
+        }
+
+        /// <summary>Adds what <paramref name="plan"/> says of the workers it runs to the leg's <paramref name="notes"/>, warning where the room went unmeasured.</summary>
+        private void Planned(WorkerPlan plan, List<string> notes)
+        {
+            if (plan.Fewer is { } fewer)
+            {
+                notes.Add(fewer);
+            }
+
+            if (plan.Unchecked is { } unchecked_ && !notes.Contains(unchecked_, StringComparer.Ordinal))
+            {
+                _runner._output.Warn(_runner._commandName, $"{_leg.Name}: {unchecked_}");
+                notes.Add(unchecked_);
+            }
+        }
+
+        /// <summary>
+        /// Runs the workers <paramref name="plan"/> runs, each draining the queue: <paramref name="first"/>, where given,
+        /// is worker 1 made already and claimed by the sweep, which drives with the graph it read; every other is claimed,
+        /// made and released by itself.
+        /// </summary>
+        private Task WorkersAsync(WorkerPlan plan, IReadOnlyList<long> needs, IWorkerGraph? first, CancellationTokenSource stop)
+            => Task.WhenAll(Enumerable.Range(1, plan.Count).Select(number => Task.Run(
+                () => GuardedAsync(
+                    token => first is not null && number == 1 ? DrainAsync(number, first, token) : DriveWorkerAsync(number, needs[number - 1], token),
+                    stop),
+                CancellationToken.None)));
+
+        /// <summary>
+        /// Makes worker 1 alone, under <c>--pending</c>, and reads what each arm is judged on from its build: the worker's
+        /// graph, with the worker claimed until the sweep releases it; <see langword="null"/> where it was not made, saying
+        /// why, or the sweep was stopped or ended meanwhile.
+        /// </summary>
+        private async Task<IWorkerGraph?> FirstAsync(long need, CancellationTokenSource stop)
+        {
+            IWorkerGraph? first = null;
+
+            await GuardedAsync(async token => first = await ClaimAndMakeAsync(1, need, token).ConfigureAwait(false), stop).ConfigureAwait(false);
+
+            return first;
+        }
+
+        /// <summary>
+        /// Holds each of <paramref name="driven"/> whose key, as worker 1 read it, is a recorded <c>passed</c>'s - its line
+        /// said, and the record told it was verified - and returns the rest, each pending for the reasons kept for its line.
+        /// </summary>
+        private async Task<IReadOnlyList<MutationArm>> HoldAsync(RecordedArms recorded, IReadOnlyList<MutationArm> driven, CancellationTokenSource stop)
+        {
+            var keys = await _keys.Task.WaitAsync(stop.Token).ConfigureAwait(false);
+            var passed = driven.Count(arm => recorded.Arms.GetValueOrDefault(arm.Id)?.Any(entry => entry.Key is not null && entry.Verdict == Verdicts.Display(LegVerdict.Passed)) == true);
+
+            _work.Progress($"verifying {ReportText.Counted(passed, "arm")} with a recorded passed against the tree as read and worker 1's build");
+
+            var swept = new List<MutationArm>();
+            var verified = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var arm in driven)
+            {
+                var key = keys[arm.Id];
+                var standing = ArmHolding.Of(recorded, arm.Id, key);
+
+                if (standing.Held is { } held)
+                {
+                    _entries[arm.Id] = Undriven(arm, ReachedVerdict.Of(LegVerdict.SkippedNotSelected, standing.Said)) with
+                    {
+                        Key = key.Key,
+                        Held = new ArmHeld(held.Run, held.At),
+                    };
+                    verified[arm.Id] = key.Key!;
+                }
+                else
+                {
+                    _why[arm.Id] = standing.Why[0];
+                    swept.Add(arm);
+                }
+            }
+
+            if (verified.Count > 0)
+            {
+                _subject.Sink?.Verified(verified, new RecordedRun(_work.RunId.Value, Now()));
+            }
+
+            _work.Progress(swept.Count == 0
+                ? $"nothing is pending: {ReportText.Counted(verified.Count, "arm")} hold a passed, each verified here"
+                : $"{ReportText.Counted(swept.Count, "arm")} pending: {PendingReason.Grouped(swept.Select(arm => _why[arm.Id]))}; "
+                    + $"{verified.Count.ToString(CultureInfo.InvariantCulture)} hold a passed");
+
+            return swept;
+        }
+
+        /// <summary>
+        /// Sweeps the arms <paramref name="swept"/> holds - those <c>--pending</c> found pending - in as many workers as they
+        /// need: worker 1, made already, and those made beside it that fit. What it ran, or <see langword="null"/> where no
+        /// worker could be run for them, which turns each away; or where the sweep was stopped or ended while it planned.
+        /// </summary>
+        private async Task<WorkerPlan?> SweepPendingAsync(
+            IReadOnlyList<MutationArm> swept,
+            IWorkerGraph first,
+            List<string> notes,
+            List<ReachedVerdict> own,
+            CancellationTokenSource stop)
+        {
+            (WorkerPlan Plan, IReadOnlyList<long> Needs)? planned = null;
+
+            await GuardedAsync(async token => planned = await PlanAsync(swept.Count, token).ConfigureAwait(false), stop).ConfigureAwait(false);
+
+            if (planned is not var (plan, needs))
+            {
+                return null;
+            }
+
+            if (plan.RunsNone)
+            {
+                var turned = ReachedVerdict.Of(LegVerdict.SkippedUnavailable, plan.Fewer);
+
+                own.Add(turned);
+
+                foreach (var arm in swept)
+                {
+                    _entries[arm.Id] = Undriven(arm, turned);
+                }
+
+                _queue = new ArmQueue([], 1);
+
+                return null;
+            }
+
+            Planned(plan, notes);
+            _queue = new ArmQueue(swept, plan.Count);
+            await WorkersAsync(plan, needs, first, stop).ConfigureAwait(false);
+
+            return plan;
+        }
+
+        /// <summary><paramref name="entry"/>, <paramref name="arm"/>'s line, saying why <c>--pending</c> swept it where it did.</summary>
+        private ArmEntry Swept(MutationArm arm, ArmEntry entry)
+            => _why.TryGetValue(arm.Id, out var why) ? entry with { Pending = new ArmPending(why.Code, why.Said) } : entry;
+
+        /// <summary>What the sweep's clock says now, to the second, as a verdict kept says when.</summary>
+        private DateTimeOffset Now()
+        {
+            var now = _runner._clock.GetUtcNow();
+
+            return new DateTimeOffset(now.Ticks - (now.Ticks % TimeSpan.TicksPerSecond), TimeSpan.Zero);
         }
 
         /// <summary>
@@ -627,21 +813,27 @@ internal sealed class MutationLegRunner(
                 : FetchedSources.KeptIn(worker, source.Name);
 
         /// <summary>
-        /// How many workers the sweep runs, and what each still needs of the room: removing first each worker an earlier
-        /// sweep left beyond <c>mutations.workers</c>, so lowering it frees the room they held; and running none whose build
-        /// would pass this machine's path limit.
+        /// Removes each worker an earlier sweep left beyond <c>mutations.workers</c>, before the sweep plans its own, so
+        /// lowering it frees the room they held.
         /// </summary>
-        private async Task<(WorkerPlan Plan, IReadOnlyList<long> Needs)> PlanAsync(int arms, CancellationToken cancellationToken)
+        private async Task RemoveBeyondCapAsync(CancellationToken cancellationToken)
         {
-            var wsl = _leg.Named.Kind == HostKind.Wsl;
-            var cap = WorkerRoom.Wanted(_subject.Settings.Workers, int.MaxValue, wsl);
-            var wanted = WorkerRoom.Wanted(_subject.Settings.Workers, arms, wsl);
+            var cap = WorkerRoom.Wanted(_subject.Settings.Workers, int.MaxValue, _leg.Named.Kind == HostKind.Wsl);
 
             foreach (var beyond in (await _runner._copies.ListAsync(_subject.Workers, cancellationToken).ConfigureAwait(false))
                 .Where(copy => copy.Number > cap))
             {
                 await RemoveBeyondAsync(beyond, cap, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        /// <summary>
+        /// How many workers the sweep runs for <paramref name="arms"/> arms, and what each still needs of the room: running
+        /// none whose build would pass this machine's path limit.
+        /// </summary>
+        private async Task<(WorkerPlan Plan, IReadOnlyList<long> Needs)> PlanAsync(int arms, CancellationToken cancellationToken)
+        {
+            var wanted = WorkerRoom.Wanted(_subject.Settings.Workers, arms, _leg.Named.Kind == HostKind.Wsl);
 
             // Within this machine's path limit, as a worktree is kept: a worker whose build passes it fails as compile errors
             // in files nobody touched. A worker's path grows only with its number, so the workers that fit come first.
@@ -790,12 +982,15 @@ internal sealed class MutationLegRunner(
             }
         }
 
-        /// <summary>One worker: claimed, made, and draining the queue until no arm is left for it.</summary>
-        private async Task WorkerAsync(int number, long need, CancellationTokenSource stop)
+        /// <summary>
+        /// Runs <paramref name="work"/> - a worker's, or what the sweep does between its workers - as one part of the sweep:
+        /// a stop ends it quietly, and anything else escaping it ends the sweep, kept for the leg's line.
+        /// </summary>
+        private async Task GuardedAsync(Func<CancellationToken, Task> work, CancellationTokenSource stop)
         {
             try
             {
-                await DriveWorkerAsync(number, need, stop.Token).ConfigureAwait(false);
+                await work(stop.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stop.IsCancellationRequested)
             {
@@ -810,7 +1005,30 @@ internal sealed class MutationLegRunner(
             }
         }
 
+        /// <summary>One worker: claimed, made, and draining the queue until no arm is left for it; released as it ends.</summary>
         private async Task DriveWorkerAsync(int number, long need, CancellationToken cancellationToken)
+        {
+            if (await ClaimAndMakeAsync(number, need, cancellationToken).ConfigureAwait(false) is not { } graph)
+            {
+                return;
+            }
+
+            try
+            {
+                await DrainAsync(number, graph, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _runner._copies.Release(Worker(number), _work.RunId);
+            }
+        }
+
+        /// <summary>
+        /// Claims worker <paramref name="number"/>, makes it and reads what each arm is judged on from its build: its graph,
+        /// the worker held until whoever asked releases it; or <see langword="null"/> where it was not made - another sweep
+        /// holds it, or making it failed - which retires it saying why, and leaves it released.
+        /// </summary>
+        private async Task<IWorkerGraph?> ClaimAndMakeAsync(int number, long need, CancellationToken cancellationToken)
         {
             var worker = Worker(number);
 
@@ -821,57 +1039,69 @@ internal sealed class MutationLegRunner(
             if (!claim.Taken)
             {
                 Unmade(number, LegVerdict.RefusedLocked, $"'{worker}' is held by another sweep: {claim.HeldBy}");
-                return;
+                return null;
             }
+
+            var made = false;
 
             try
             {
                 if (await MakeAsync(number, need, worker, cancellationToken).ConfigureAwait(false) is not { } graph)
                 {
-                    return;
+                    return null;
                 }
 
                 await ReadKeysAsync(number, graph, cancellationToken).ConfigureAwait(false);
+                made = true;
 
-                while (await _queue.TakeAsync(number, cancellationToken).ConfigureAwait(false) is { } arm)
-                {
-                    Driven driven;
-
-                    try
-                    {
-                        driven = await DriveArmAsync(number, arm, graph, cancellationToken).ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        // Taken and not driven: the sweep was stopped, or a refusal of the run ended it, while the arm
-                        // waited for its machine or for its binary's control. Given back, so it is said stopped with the
-                        // arms no worker drove.
-                        _queue.GiveBack(number);
-                        throw;
-                    }
-
-                    _entries[arm.Id] = driven.Entry;
-
-                    // A worker retired is dealt no other arm, and so ends here.
-                    if (driven.Retired is { } retired)
-                    {
-                        _queue.Retire(number, retired, requeue: false);
-                    }
-                    else
-                    {
-                        _queue.Done(number);
-                    }
-
-                    if (driven.Refusal is { } refusal)
-                    {
-                        // Raised once the arm's line is kept and its sites are back: it ends the sweep, as it ends the run.
-                        ExceptionDispatchInfo.Throw(refusal);
-                    }
-                }
+                return graph;
             }
             finally
             {
-                _runner._copies.Release(worker, _work.RunId);
+                if (!made)
+                {
+                    _runner._copies.Release(worker, _work.RunId);
+                }
+            }
+        }
+
+        /// <summary>Worker <paramref name="number"/>, made, draining the queue until no arm is left for it.</summary>
+        private async Task DrainAsync(int number, IWorkerGraph graph, CancellationToken cancellationToken)
+        {
+            while (await _queue.TakeAsync(number, cancellationToken).ConfigureAwait(false) is { } arm)
+            {
+                Driven driven;
+
+                try
+                {
+                    driven = await DriveArmAsync(number, arm, graph, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Taken and not driven: the sweep was stopped, or a refusal of the run ended it, while the arm
+                    // waited for its machine or for its binary's control. Given back, so it is said stopped with the
+                    // arms no worker drove.
+                    _queue.GiveBack(number);
+                    throw;
+                }
+
+                _entries[arm.Id] = driven.Entry;
+
+                // A worker retired is dealt no other arm, and so ends here.
+                if (driven.Retired is { } retired)
+                {
+                    _queue.Retire(number, retired, requeue: false);
+                }
+                else
+                {
+                    _queue.Done(number);
+                }
+
+                if (driven.Refusal is { } refusal)
+                {
+                    // Raised once the arm's line is kept and its sites are back: it ends the sweep, as it ends the run.
+                    ExceptionDispatchInfo.Throw(refusal);
+                }
             }
         }
 
@@ -1019,7 +1249,7 @@ internal sealed class MutationLegRunner(
                         return new Driven(Record(arm, ReachedVerdict.Of(LegVerdict.NotAdmitted, refusal), number, started, null, records, await JudgingAsync(arm).ConfigureAwait(false), observed: false));
                     }
 
-                    _work.Progress($"arm {arm.Id}, on worker {number}");
+                    _work.Progress($"arm {arm.Id}, on worker {number}" + (_why.TryGetValue(arm.Id, out var why) ? $": pending, {why.Said}" : string.Empty));
 
                     RunBound? bound = null;
 
@@ -1600,7 +1830,7 @@ internal sealed class MutationLegRunner(
                 Kept(arm, verdict, judging);
             }
 
-            var entry = new ArmEntry
+            var entry = Swept(arm, new ArmEntry
             {
                 Arm = arm.Id,
                 Verdict = verdict.Verdict,
@@ -1613,7 +1843,7 @@ internal sealed class MutationLegRunner(
                 DeclaredReds = arm.Reds,
                 Records = records,
                 Key = judging.Key?.Key,
-            };
+            });
 
             try
             {
@@ -1639,8 +1869,6 @@ internal sealed class MutationLegRunner(
                 return;
             }
 
-            var now = _runner._clock.GetUtcNow();
-
             sink.Judged(
                 arm.Id,
                 new RecordedVerdict
@@ -1648,7 +1876,7 @@ internal sealed class MutationLegRunner(
                     Verdict = Verdicts.Display(verdict.Verdict),
                     Detail = verdict.Detail,
                     Run = _work.RunId.Value,
-                    At = new DateTimeOffset(now.Ticks - (now.Ticks % TimeSpan.TicksPerSecond), TimeSpan.Zero),
+                    At = Now(),
                     SweptIn = _subject.SweptIn,
                     Key = judging.Key?.Key,
                     KeyUnread = judging.Key?.Key is null ? judging.Unread : null,
@@ -1658,24 +1886,48 @@ internal sealed class MutationLegRunner(
                 [.. judging.Key?.Tables.Values ?? []]);
         }
 
-        /// <summary>The leg's line: the worst of its own verdicts and its arms', with how many arms reached what.</summary>
-        private LegEntry Line(IReadOnlyList<ReachedVerdict> own, IReadOnlyList<(MutationArm Arm, ArmEntry Entry)> arms, IReadOnlyList<string> notes)
+        /// <summary>
+        /// The leg's line: the worst of its own verdicts and its arms', with how many arms reached what - under
+        /// <c>--pending</c>, how many it swept and reached what, how many held a passed, and how many were not selected.
+        /// </summary>
+        private LegEntry Line(IReadOnlyList<ReachedVerdict> own, IReadOnlyList<(MutationArm Arm, ArmEntry Entry)> arms, IReadOnlyList<string> notes, PendingSweep? pending = null)
         {
+            static string Counts(IEnumerable<ArmEntry> entries) => string.Join(
+                ", ",
+                entries
+                    .GroupBy(arm => arm.Verdict)
+                    .OrderBy(group => Verdicts.Rank(group.Key))
+                    .Select(group => $"{group.Count()} {Verdicts.Display(group.Key)}"));
+
             var ordered = arms.OrderBy(pair => pair.Arm.Line).Select(pair => pair.Entry).ToList();
             var verdict = Verdicts.Worst([.. own.Select(reached => reached.Verdict), .. ordered.Select(arm => arm.Verdict)]);
-            var counts = ordered
-                .GroupBy(arm => arm.Verdict)
-                .OrderBy(group => Verdicts.Rank(group.Key))
-                .Select(group => $"{group.Count()} {Verdicts.Display(group.Key)}");
-            var detail = new List<string>(own.Where(reached => reached.Detail.Length > 0).Select(reached => reached.Detail))
+            var detail = new List<string>(own.Where(reached => reached.Detail.Length > 0).Select(reached => reached.Detail));
+
+            if (pending is null)
             {
-                $"{ReportText.Counted(ordered.Count, "arm")}: {string.Join(", ", counts)}",
-            };
+                detail.Add($"{ReportText.Counted(ordered.Count, "arm")}: {Counts(ordered)}");
+            }
+            else
+            {
+                var swept = ordered.Where(arm => arm.Pending is not null).ToList();
+                var unselected = ordered.Count - pending.Held - pending.Swept;
+
+                detail.Add(
+                    (pending.Swept == 0
+                        ? $"nothing is pending: {ReportText.Counted(pending.Held, "arm")} hold a passed, each verified here"
+                        : $"{ReportText.Counted(pending.Swept, "arm")} swept: {Counts(swept)}; {pending.Held.ToString(CultureInfo.InvariantCulture)} hold a passed")
+                    + (unselected > 0 ? $"; {unselected.ToString(CultureInfo.InvariantCulture)} not selected" : string.Empty));
+            }
 
             detail.AddRange(notes);
 
             // Beside the verdict and never in it, as a build's and a test's are; in one order, whichever worker met each.
-            return _leg.Entry(verdict, string.Join("; ", detail)) with { Arms = ordered, TimingNotes = [.. _timing.Order(StringComparer.Ordinal)] };
+            return _leg.Entry(verdict, string.Join("; ", detail)) with
+            {
+                Arms = ordered,
+                TimingNotes = [.. _timing.Order(StringComparer.Ordinal)],
+                PendingSweep = pending,
+            };
         }
 
         /// <summary>

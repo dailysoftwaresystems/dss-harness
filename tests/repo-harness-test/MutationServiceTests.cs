@@ -1135,6 +1135,42 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A leg swept under --pending is given what the main checkout's record holds of the arms it drives and of no other -
+    /// those --arms leaves out are not weighed - and a leg swept without it is given nothing, and drives every arm.
+    /// </summary>
+    [Fact]
+    public async Task UnderPending_ALegIsGivenWhatTheRecordHoldsOfTheArmsItDrives_AndOfNoOther()
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable();
+        var (service, context) = Prepare(temp, config);
+        var every = await service.ReadAsync(context, null, TestContext.Current.CancellationToken);
+        var charge = await service.ReadAsync(context, ["charge"], TestContext.Current.CancellationToken);
+        var variant = VariantKey.For(config, config.Legs["native"], "linux");
+        var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
+        var work = new LegWork(
+            new PlacedLeg("native", config.Legs["native"], host, config.Projects[0], variant, temp.Path, temp.Path, variant.DirectoryUnder(temp.Path), new LocalHostConfig(), Emulated: false),
+            context,
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+        var record = new ArmVerdictRecord(new HarnessFactory().FileSystem, context.Layout);
+
+        foreach (var arm in new[] { "charge", "depth" })
+        {
+            Assert.Null(record.Merge("native", arm, new RecordedVerdict { Verdict = "passed", Run = "r0", At = DateTimeOffset.UnixEpoch, SweptIn = RepositoryTree.MainCheckout }, []));
+        }
+
+        var narrowed = service.Subject(work, charge, force: false, new RepositoryTreesFound([]), records: true, pending: true);
+        var whole = service.Subject(work, every, force: false, new RepositoryTreesFound([]), records: true, pending: true);
+        var plain = service.Subject(work, every, force: false, new RepositoryTreesFound([]), records: true);
+
+        Assert.Equal(["charge"], narrowed.Recorded!.Arms.Keys);
+        Assert.Equal(["charge", "depth"], whole.Recorded!.Arms.Keys.Order(StringComparer.Ordinal));
+        Assert.Null(plain.Recorded);
+    }
+
+    /// <summary>
     /// A sweep of a leg whose own tree never built its variant on this machine counts its workers' builds by the most any
     /// other tree of the repository here recorded of it, naming whose: the main checkout's copy had never built it where a
     /// consumer's leg filled a disk, while three worktrees' copies beside it had.

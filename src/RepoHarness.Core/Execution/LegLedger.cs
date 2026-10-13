@@ -192,6 +192,12 @@ public sealed record LegEntry
     public IReadOnlyList<ArmEntry> Arms { get; init; } = [];
 
     /// <summary>
+    /// What <c>check-mutations --pending</c> made of the leg's arms: how many held a recorded <c>passed</c>, and how many it
+    /// swept; <see langword="null"/> for every leg of every other command, and of a sweep without it.
+    /// </summary>
+    public PendingSweep? PendingSweep { get; init; }
+
+    /// <summary>
     /// The refusal of the run this leg's work was ended by, where the leg had reached verdicts worth keeping by then - the
     /// arms a sweep had judged: this line is recorded, and then the refusal ends the run, as one raised from a leg's work
     /// does. <see langword="null"/> on every line a ledger holds, and nothing a ledger writes: the refusal is the run's.
@@ -208,6 +214,11 @@ public sealed record LegEntry
     /// <summary>What the harness spent outside the leg's own commands.</summary>
     public TimeSpan Overhead => Duration > CommandTime ? Duration - CommandTime : TimeSpan.Zero;
 }
+
+/// <summary>What <c>check-mutations --pending</c> made of one leg's arms.</summary>
+/// <param name="Held">How many held a recorded <c>passed</c>, and were left out.</param>
+/// <param name="Swept">How many were pending, and swept.</param>
+public sealed record PendingSweep(int Held, int Swept);
 
 /// <summary>
 /// The tree a leg worked in: its path as its machine spells it, and for a copy a sync made of it, the tree it is a copy

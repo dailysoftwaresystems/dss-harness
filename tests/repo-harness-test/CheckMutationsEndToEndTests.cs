@@ -292,6 +292,75 @@ public sealed class CheckMutationsEndToEndTests
     }
 
     /// <summary>
+    /// --pending after a sweep holds every arm that passed, sweeping nothing, and exits 0 saying nothing is pending; once a
+    /// site an arm mutates is edited, it sweeps that arm alone, saying why - and once more, with nothing moved since, nothing
+    /// is pending again.
+    /// </summary>
+    [Fact]
+    public async Task APendingSweepAfterASweep_HoldsWhatPassed_SweepsWhatMoved_AndExitsZeroWithNothingPending()
+    {
+        var harness = new HarnessFactory();
+
+        SkipUnlessThisMachineBuilds(harness);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        using var clock = new ClockWatch();
+
+        var repository = await FixtureRepositoryAsync(harness, temp.Combine("r"), token);
+
+        async Task<(JsonElement Leg, string Said)> PendingAsync()
+        {
+            var result = await CliRunner.RunAsync(["check-mutations", "--pending", "--legs", "native", "--arms", "charge-bound,depth-type", "--json", "-C", repository], token);
+
+            Assert.True(result.ExitCode == HarnessExit.Success, result.StandardError + result.StandardOutput);
+
+            using var document = JsonDocument.Parse(result.StandardOutput);
+
+            return (document.RootElement.GetProperty("legs")[0].Clone(), result.StandardError);
+        }
+
+        try
+        {
+            var swept = await CliRunner.RunAsync(["check-mutations", "--legs", "native", "--arms", "charge-bound,depth-type", "-C", repository], token);
+
+            Assert.True(swept.ExitCode == HarnessExit.Success, swept.StandardError + swept.StandardOutput);
+
+            var (held, said) = await PendingAsync();
+
+            Assert.Equal(Verdicts.Display(LegVerdict.Passed), held.GetProperty("verdict").GetString());
+            Assert.Equal((2, 0), (held.GetProperty("pendingSweep").GetProperty("held").GetInt32(), held.GetProperty("pendingSweep").GetProperty("swept").GetInt32()));
+            Assert.Contains("nothing is pending: 2 arm(s) hold a passed, each verified here", said, StringComparison.Ordinal);
+            Assert.All(
+                held.GetProperty("arms").EnumerateArray().Where(arm => arm.GetProperty("arm").GetString() is "charge-bound" or "depth-type"),
+                arm =>
+                {
+                    Assert.Equal(Verdicts.Display(LegVerdict.SkippedNotSelected), arm.GetProperty("verdict").GetString());
+                    Assert.True(arm.TryGetProperty("held", out _), arm.ToString());
+                });
+
+            File.AppendAllText(Path.Combine(repository, "src", "budget.hpp"), "// edited after the sweep\n");
+
+            var (moved, _) = await PendingAsync();
+            var depth = moved.GetProperty("arms").EnumerateArray().Single(arm => arm.GetProperty("arm").GetString() == "depth-type");
+
+            Assert.Equal(Verdicts.Display(LegVerdict.Passed), depth.GetProperty("verdict").GetString());
+            Assert.Equal("site-moved", depth.GetProperty("pending").GetProperty("code").GetString());
+            Assert.True(moved.GetProperty("pendingSweep").GetProperty("swept").GetInt32() >= 1);
+
+            var (again, _) = await PendingAsync();
+
+            Assert.Equal(Verdicts.Display(LegVerdict.Passed), again.GetProperty("verdict").GetString());
+            Assert.Equal(0, again.GetProperty("pendingSweep").GetProperty("swept").GetInt32());
+        }
+        catch (Exception ex) when (clock.Explains(ex))
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
     /// Every arm's line carries the key of what it was judged on, and the key is the same after a clean of the leg - its
     /// workers made, configured and built again - and from another tree of the same content kept elsewhere, whose
     /// workers' paths are other paths: no part of a key is a run, a worker or a tree.

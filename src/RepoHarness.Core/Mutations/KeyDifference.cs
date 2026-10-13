@@ -151,6 +151,23 @@ public sealed class PendingReason
     /// <summary>What the arm would be judged on could not all be read.</summary>
     public static PendingReason KeyUnreadable(string why)
         => new("key-unreadable", $"what it would be judged on cannot be read now: {why}") { Counted = "whose key cannot be read now" };
+
+    /// <summary>
+    /// Arms pending, counted by the first reason each is pending for, in the words a count groups them by - the largest
+    /// group first, groups of one size in the order they first came: <c>9 never swept, 2 whose files moved</c>.
+    /// </summary>
+    /// <param name="firsts">The first reason each arm is pending for.</param>
+    public static string Grouped(IEnumerable<PendingReason> firsts)
+    {
+        ArgumentNullException.ThrowIfNull(firsts);
+
+        return string.Join(
+            ", ",
+            firsts
+                .GroupBy(reason => reason.Counted, StringComparer.Ordinal)
+                .OrderByDescending(group => group.Count())
+                .Select(group => $"{group.Count().ToString(CultureInfo.InvariantCulture)} {group.Key}"));
+    }
 }
 
 /// <summary>
@@ -192,19 +209,36 @@ internal static class KeyDifference
         ArgumentNullException.ThrowIfNull(then);
         ArgumentNullException.ThrowIfNull(now);
 
-        if ((now.Unread ?? then.Unread) is { } why)
+        return (now.Unread ?? then.Unread) is { } why ? [PendingReason.KeyUnreadable(why)] : Between(then.JudgedOn, then.Tables, now);
+    }
+
+    /// <summary>
+    /// Every reason what a sweep reads of an arm now (<paramref name="now"/>) is not what it <paramref name="was"/> judged
+    /// on, as the record keeps it, in the order a line names them: the parts as the record holds them, and each target's
+    /// table the record could give (<paramref name="tables"/>) - a target whose table it could not give is compared by no
+    /// part of its table. None where they are one.
+    /// </summary>
+    /// <param name="was">What the arm was judged on, as recorded.</param>
+    /// <param name="tables">The tables of it the record could give, by target.</param>
+    /// <param name="now">What it would be judged on now, as a worker's build read it.</param>
+    public static IReadOnlyList<PendingReason> Between(JudgedOn was, IReadOnlyDictionary<string, BuiltFromTable> tables, ArmKey now)
+    {
+        ArgumentNullException.ThrowIfNull(was);
+        ArgumentNullException.ThrowIfNull(tables);
+        ArgumentNullException.ThrowIfNull(now);
+
+        if (now.Unread is { } why)
         {
             return [PendingReason.KeyUnreadable(why)];
         }
 
-        var was = then.JudgedOn;
         var @is = now.JudgedOn;
         var reasons = new List<PendingReason>();
-        var tables = Tables(then, now);
+        var compared = Tables(tables, now.Tables);
 
         Read(was, @is.Judge, @is.Rows, @is.Texts, @is.Sites, reasons);
 
-        foreach (var (target, before, after) in tables)
+        foreach (var (target, before, after) in compared)
         {
             // A file both read that holds something else; one that joined or left is the set's, which only a build reads.
             if (Moved(before.Files, after.Files).Where(path => before.Files.ContainsKey(path) && after.Files.ContainsKey(path)).ToList() is { Count: > 0 } files)
@@ -216,7 +250,7 @@ internal static class KeyDifference
         RunRead(was.RunReads, @is.RunReads, StringComparer.Ordinal, reasons);
         Configured(was, @is.Settings, @is.Host, reasons);
 
-        foreach (var (target, before, after) in tables)
+        foreach (var (target, before, after) in compared)
         {
             if (before.Lines != after.Lines)
             {
@@ -368,12 +402,14 @@ internal static class KeyDifference
         }
     }
 
-    /// <summary>Each target both keys hold a table of, with its two tables, in the order of its name.</summary>
-    private static List<(string Target, BuiltFromTable Before, BuiltFromTable After)> Tables(ArmKey then, ArmKey now)
-        => [.. then.Tables.Keys
-            .Where(now.Tables.ContainsKey)
+    /// <summary>Each target both hold a table of, with its two tables, in the order of its name.</summary>
+    private static List<(string Target, BuiltFromTable Before, BuiltFromTable After)> Tables(
+        IReadOnlyDictionary<string, BuiltFromTable> then,
+        IReadOnlyDictionary<string, BuiltFromTable> now)
+        => [.. then.Keys
+            .Where(now.ContainsKey)
             .Order(StringComparer.Ordinal)
-            .Select(target => (target, then.Tables[target], now.Tables[target]))];
+            .Select(target => (target, then[target], now[target]))];
 
     /// <summary>
     /// Each key of the two maps whose value differs, or that only one holds, in ordinal order - keys compared as

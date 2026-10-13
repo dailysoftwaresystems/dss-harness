@@ -258,7 +258,7 @@ public sealed partial class HelpTests
             "a cited text that is not there, or that a sync withholds from every copy of the tree - one sync.neverTransfer, sync.exclude "
             + "or worktrees.root covers, or git ignores - as the registry itself is refused where git ignores it;",
             "An arm reaches others where nothing of its own decides: skipped-not-selected where --arms or its S row leaves it out of a "
-            + "leg; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the path limit; unmeasured "
+            + "leg, or --pending leaves it out, its passed holding; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the path limit; unmeasured "
             + "where ninja's log could not be read around its build, or the report its run wrote could not be read from its file, "
             + "which is no finding about the binary; whatever a guard of its build reaches, as a leg's build does - "
             + "inputs-moved, contended; and whatever a failure that ends its driving comes to, as a leg's does - skipped-tool-missing "
@@ -329,7 +329,10 @@ public sealed partial class HelpTests
 
         foreach (var text in new[]
         {
-            "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key.",
+            "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key; "
+            + "under --pending an arm it left out has held - the run and the time of the passed that holds - and an arm it swept "
+            + "has pending - the first reason, its code and the words it is said in - and each leg has pendingSweep: how many "
+            + "of its arms held, and how many were swept.",
             "An arm's key is the SHA-256 of what it was judged on, read from the first worker made before it drove an arm: the judge's "
             + "revision; the rows the sweep and the judge read of it - never a why, a comment, a line's number, the letter case of its id "
             + "or its S row;",
@@ -406,8 +409,9 @@ public sealed partial class HelpTests
 
         foreach (var text in new[]
         {
-            "--list sweeps nothing (see 'What holds, and what is pending'), so it is refused with --self-test, --force-lock, "
-            + $"--use-staged and --here ({HarnessExit.UsageError}), each in one sentence naming both.",
+            "--list sweeps nothing (see 'What holds, and what is pending'), so it is refused with --pending, --self-test, "
+            + $"--force-lock, --use-staged and --here ({HarnessExit.UsageError}), each in one sentence naming both; and --pending "
+            + "is refused with --self-test, of which nothing is ever recorded.",
             "check-mutations --list says, without sweeping, each selected arm's last verdict on each selected leg its S row names, "
             + "and whether anything it was judged on that this machine reads has moved since.",
             "it asks no host, takes no lock, begins no run and writes nothing, and needs nothing only a sweep needs - report "
@@ -428,6 +432,37 @@ public sealed partial class HelpTests
         }
 
         Assert.Contains("--list Sweep nothing: say each selected arm's last verdict on each leg", command, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The mutations topic says what --pending drives and what it leaves out: the first worker made alone and every key
+    /// read before any arm is mutated, an arm held by a recorded passed of its key and how its line says so, why each
+    /// other is pending, how many workers it makes, and what a leg with nothing pending is and exits with; and the
+    /// option's own description says what it drives.
+    /// </summary>
+    [Fact]
+    public async Task TheMutationsTopic_SaysWhatPendingDrives_WhatItHolds_AndWhatNothingPendingIs()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var said = Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+        var command = Words((await CliRunner.RunAsync(["check-mutations", "--help"], cancellationToken)).StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "check-mutations --pending drives, on each leg, only the arms with no recorded passed that holds",
+            "the first worker is made alone - claimed, synced, built whole - and the key of every arm is read from its build before any arm is mutated.",
+            "An arm whose key is a recorded passed's holds: it is not driven, and is skipped-not-selected on that leg, its detail naming the run whose passed holds and when",
+            "in as many workers beyond the first as the pending arms need",
+            "how a target is built, a file joined or left what it is built from, a file its build makes, the dependency sources it fetched or a file outside the tree it reads moved, its compiler or its developer environment changed, or what it would be judged on cannot be read now.",
+            "With nothing pending no other worker is made and the leg passes on its own verdict, saying nothing is pending",
+            $"A sweep under --pending exits as a sweep does - {HarnessExit.Success} where nothing is pending",
+            "or --pending leaves it out, its passed holding",
+        })
+        {
+            Assert.Contains(text, said, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("--pending Drive on each leg only the arms with no recorded passed that still holds", command, StringComparison.Ordinal);
     }
 
     /// <summary>

@@ -33,6 +33,10 @@ namespace RepoHarness.Core.Mutations;
 /// Whether to sweep nothing, and say instead each selected arm's last verdict on each leg and whether anything it was
 /// judged on that this machine reads has moved since.
 /// </param>
+/// <param name="Pending">
+/// Whether to drive, on each leg, only the arms with no recorded <c>passed</c> that holds: each other is verified on the
+/// leg's machine and left out.
+/// </param>
 public sealed record MutationRequest(
     string Directory,
     IReadOnlyList<string>? LegNames,
@@ -42,7 +46,8 @@ public sealed record MutationRequest(
     bool UseStaged = false,
     HostId? Here = null,
     bool SelfTest = false,
-    bool List = false);
+    bool List = false,
+    bool Pending = false);
 
 /// <summary>The arms a sweep drives, as the registry declares them and <c>--arms</c> and the S rows select them.</summary>
 /// <param name="Registry">The registry, every arm in it.</param>
@@ -201,7 +206,7 @@ public sealed class MutationService(
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
-                    : SweepAsync(runner, work, arms, request.ForceLock, records: request.Here is null, token),
+                    : SweepAsync(runner, work, arms, request.ForceLock, records: request.Here is null, pending: request.Pending && request.Here is null, token),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -332,7 +337,7 @@ public sealed class MutationService(
     /// with what the workers' builds are measured by instead. Each arm's verdict is recorded as it ends where
     /// <paramref name="records"/>: on the machine the command was typed on, which keeps the record.
     /// </summary>
-    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, bool records, CancellationToken cancellationToken)
+    private async Task<LegEntry> SweepAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, bool records, bool pending, CancellationToken cancellationToken)
     {
         var beside = work.Leg.Beside ?? throw new InvalidOperationException($"Leg '{work.Leg.Name}' began its work with no trees listed beside it.");
 
@@ -346,7 +351,7 @@ public sealed class MutationService(
                 + $"{measured} alone: {why}");
         }
 
-        var subject = Subject(work, arms, force, beside, records);
+        var subject = Subject(work, arms, force, beside, records, pending);
 
         await RefuseUnignoredAsync(subject.Workers, cancellationToken).ConfigureAwait(false);
 
@@ -377,9 +382,10 @@ public sealed class MutationService(
     /// where it declares one, else what its own build directory last recorded, else the most any of
     /// <paramref name="beside"/> - the repository's other trees here - recorded of it (<see cref="LegRoom.ExpectedBuildBytes"/>).
     /// Where it <paramref name="records"/>, each arm's verdict is kept in the record of verdicts in the main checkout,
-    /// whichever tree the leg is swept in, which the record names as a line names it.
+    /// whichever tree the leg is swept in, which the record names as a line names it; and where it sweeps only what is
+    /// <paramref name="pending"/>, it is given what that record holds of the arms it drives.
     /// </summary>
-    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound beside, bool records)
+    internal MutationSubject Subject(LegWork work, SweepArms arms, bool force, RepositoryTreesFound beside, bool records, bool pending = false)
     {
         ArgumentNullException.ThrowIfNull(beside);
 
@@ -390,6 +396,8 @@ public sealed class MutationService(
             beside.Trees.Select(tree => (tree.Name, BuildRecord.BytesIn(_fileSystem, leg.Variant.DirectoryUnder(tree.Root)))));
         var project = leg.BuildableProject();
         var tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project);
+        var record = new ArmVerdictRecord(_fileSystem, work.Context.Layout);
+        var driven = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes);
 
         // Where the leg's own build is, as its configuration places it for this machine: in its tree, or in the copy of it
         // the leg works in where its key or the repository's default says one - a sweep reads what that build fetched from
@@ -410,12 +418,13 @@ public sealed class MutationService(
             Project = project,
             Fetched = FetchedSources.Of(_buildDirectoryGuard.Read(leg.Variant.DirectoryOn(HostId.Local, own)), _fileSystem),
             Tests = tests,
-            Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
+            Arms = driven,
             Settings = work.Context.Config.Mutations,
 
             // What the leg is swept with, resolved once with it: the variant placed, and the system its host runs.
             SweepSettings = SweepSettings.Of(work.Context.Config, leg.Variant, project, tests, leg.Os, work.Context.Config.Mutations, leg.HostSettings.Env),
-            Sink = records ? new RecordSink(new ArmVerdictRecord(_fileSystem, work.Context.Layout), leg.Name, _output, CommandName) : null,
+            Sink = records ? new RecordSink(record, leg.Name, _output, CommandName) : null,
+            Recorded = pending ? record.ArmsOf(leg.Name, driven.Driven.Select(arm => arm.Id)) : null,
             SweptIn = RepositoryTree.Of(work.Context, leg.TreeRoot, _platform.PathComparison),
             ExpectedBuildBytes = expected?.Bytes,
             ExpectedBuildSource = expected?.Source ?? string.Empty,

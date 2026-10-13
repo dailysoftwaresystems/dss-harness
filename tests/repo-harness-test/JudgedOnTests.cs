@@ -369,6 +369,61 @@ public sealed class JudgedOnTests
         }
     }
 
+    /// <summary>
+    /// Under --pending an arm is held by one rule: the key of what it is judged on now is a recorded passed's - whichever
+    /// of its entries that is. Every other arm is pending, and says why as a listing would: its record unread or newer,
+    /// nothing recorded, the verdict on the key read now no passed, the entry shown swept with no key, a table of it the
+    /// record could not give, or what differs between the newest entry and now - what only a sweep reads among it - or
+    /// what it is judged on now could not be read.
+    /// </summary>
+    [Fact]
+    public void UnderPending_AnArmIsHeldOnlyByARecordedPassedOfItsKey_AndOtherwiseSaysWhyAsAListingWould()
+    {
+        var arm = Arms(Registry).Find("one")!;
+        var now = KeyOf(arm, new Dictionary<string, string?>(StringComparer.Ordinal));
+        var compiled = Again(now, judged => judged with { Compilers = [new JudgedCompiler("CXX", "GNU", "14.1.0", "C:/mingw/bin/g++.exe", [])] });
+        var digest = now.JudgedOn.Built.Values.Single();
+        var tables = new Dictionary<string, BuiltFromTable>(StringComparer.Ordinal) { [digest] = now.Tables.Values.Single() };
+
+        RecordedVerdict Entry(ArmKey key, string verdict = "passed", string run = "r1")
+            => new() { Verdict = verdict, Run = run, At = DateTimeOffset.UnixEpoch, SweptIn = "the main checkout", Key = key.Key, JudgedOn = key.JudgedOn };
+
+        RecordedArms Holding(params RecordedVerdict[] entries) => new()
+        {
+            Arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase) { ["ONE"] = entries },
+            Tables = tables,
+        };
+
+        List<(string Code, string Said)> Why(RecordedArms recorded, ArmKey key)
+        {
+            var standing = ArmHolding.Of(recorded, "one", key);
+
+            Assert.Null(standing.Held);
+
+            return Said(standing.Why);
+        }
+
+        Assert.Equal("r2", ArmHolding.Of(Holding(Entry(compiled, run: "r1"), Entry(now, run: "r2"), Entry(compiled, "violated", "r3")), "one", now).Held?.Run);
+        Assert.Equal(
+            [("record-unreadable", "the record of this leg cannot be read: it holds null")],
+            Why(RecordedArms.Unreadable(RecordUnread.Because("it holds null")), now));
+        Assert.Equal([("record-newer", $"the record of this leg was written by a newer {ToolPackage.Id}")], Why(RecordedArms.Unreadable(RecordUnread.Newer(2)), now));
+        Assert.Equal([("never-swept", "never swept on this leg")], Why(new RecordedArms(), now));
+        Assert.Equal([("last-not-passed", "its last verdict is violated, not passed")], Why(Holding(Entry(now, "violated"), Entry(compiled)), now));
+        Assert.Equal(
+            [("compiler-changed", "its compiler changed: CXX GNU 14.1.0, now GNU 13.3.0")],
+            Why(Holding(Entry(compiled)), now));
+        Assert.Equal(
+            [("not-keyed", "what it was judged on could not be read when it was swept: its compilers"), ("compiler-changed", "its compiler changed: CXX GNU 14.1.0, now GNU 13.3.0")],
+            Why(Holding(Entry(compiled) with { Key = null, KeyUnread = "its compilers" }), now));
+        Assert.Equal(
+            [("record-unreadable", $"the record of this leg cannot be read: '{digest}.json' is gone"), ("compiler-changed", "its compiler changed: CXX GNU 14.1.0, now GNU 13.3.0")],
+            Why(Holding(Entry(compiled)) with { Tables = new Dictionary<string, BuiltFromTable>(), TablesUnread = new Dictionary<string, string> { [digest] = $"'{digest}.json' is gone" } }, now));
+        Assert.Equal(
+            [("key-unreadable", "what it would be judged on cannot be read now: 'a.h' is gone")],
+            Why(Holding(Entry(compiled)), Again(now, unread: "'a.h' is gone")));
+    }
+
     /// <summary>The key of <paramref name="arm"/> where everything but its rows is held as one value.</summary>
     private static string Key(MutationArm arm) => KeyOf(arm, new Dictionary<string, string?>(StringComparer.Ordinal)).Key!;
 

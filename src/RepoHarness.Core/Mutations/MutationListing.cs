@@ -100,7 +100,8 @@ internal static class MutationListing
     /// <summary>The closing note: what a listing read, and why that is never to say an arm holds.</summary>
     public const string Note =
         "'unmoved here' is not 'holds'. This machine read each arm's rows and texts, the tree's files and the settings. A "
-        + "compiler, how a target is built, a file a build makes and a file outside the tree are read only where the leg is swept.";
+        + "compiler, how a target is built, a file a build makes and a file outside the tree are read only where the leg is swept: "
+        + "'check-mutations --pending' verifies each there, and sweeps what does not hold.";
 
     /// <summary>Lists each of <paramref name="input"/>'s arms.</summary>
     /// <param name="input">What was read of the leg.</param>
@@ -249,7 +250,7 @@ internal static class MutationListing
                 leg.Leg,
                 arm.Last?.Verdict ?? "-",
                 arm.Last?.Run ?? "-",
-                arm.Last is { } last ? last.At.UtcDateTime.ToString("yyyy-MM-dd HH:mm'Z'", CultureInfo.InvariantCulture) : "-",
+                arm.Last?.When ?? "-",
                 Now(arm),
             }));
         }
@@ -368,13 +369,7 @@ internal static class MutationListing
 
         if (leg.Pending > 0)
         {
-            var groups = leg.Arms
-                .Where(arm => arm.Pending)
-                .GroupBy(arm => arm.Why[0].Counted, StringComparer.Ordinal)
-                .OrderByDescending(group => group.Count())
-                .Select(group => $"{group.Count().ToString(CultureInfo.InvariantCulture)} {group.Key}");
-
-            parts.Add($"{leg.Pending.ToString(CultureInfo.InvariantCulture)} pending ({string.Join(", ", groups)})");
+            parts.Add($"{leg.Pending.ToString(CultureInfo.InvariantCulture)} pending ({PendingReason.Grouped(leg.Arms.Where(arm => arm.Pending).Select(arm => arm.Why[0]))})");
         }
 
         if (leg.Unmoved > 0)

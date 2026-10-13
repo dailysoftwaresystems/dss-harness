@@ -17,6 +17,14 @@ internal interface IArmRecordSink
     /// <param name="tables">The tables of the targets its build builds, as a worker's build read them.</param>
     void Judged(string arm, RecordedVerdict verdict, IReadOnlyList<BuiltFromTable> tables);
 
+    /// <summary>
+    /// Keeps that each arm <paramref name="keys"/> names held on the key it names, found so by <paramref name="by"/>: what
+    /// a sweep under <c>--pending</c> verified, once, for every arm it held.
+    /// </summary>
+    /// <param name="keys">The key that held of each arm, by the arm's id.</param>
+    /// <param name="by">The sweep that found them holding, and when.</param>
+    void Verified(IReadOnlyDictionary<string, string> keys, RecordedRun by);
+
     /// <summary>What the leg's line says of the verdicts that were not kept, or <see langword="null"/> where each handed was.</summary>
     string? Unrecorded { get; }
 }
@@ -81,6 +89,36 @@ internal sealed class RecordSink(ArmVerdictRecord record, string leg, IHarnessOu
 
                 _output.Warn(_commandName, $"'{file}' could not be written, so this sweep records no verdict of '{_leg}' from arm '{arm}' on: {why}");
                 _unrecorded = $"its verdicts from arm '{arm}' on were not recorded: '{file}' could not be written: {why}";
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public void Verified(IReadOnlyDictionary<string, string> keys, RecordedRun by)
+    {
+        lock (_gate)
+        {
+            if (_unrecorded is not null || keys.Count == 0)
+            {
+                return;
+            }
+
+            var file = _record.FileOf(_leg);
+
+            try
+            {
+                if (_record.Verified(_leg, keys, by) is { } unread)
+                {
+                    _output.Warn(_commandName, unread.Warning(file, _leg));
+                    _unrecorded = unread.Note(file);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+            {
+                var why = ex.Message.TrimEnd('.');
+
+                _output.Warn(_commandName, $"'{file}' could not be written, so this sweep records nothing of '{_leg}', not even which passed it found holding: {why}");
+                _unrecorded = $"none of its verdicts was recorded, nor which passed held: '{file}' could not be written: {why}";
             }
         }
     }

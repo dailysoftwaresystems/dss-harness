@@ -924,9 +924,10 @@ public sealed class LedgerReportTests
 
     /// <summary>
     /// Each arm a leg was asked about is in the document beneath it, whatever it reached - one the sweep did not select
-    /// among them - with what its run measured beside what it declares, the key of what it was judged on, and where its
-    /// records are, told as the reader is told every path; what an arm no worker drove has none of is left out, and a leg
-    /// asked about no arm has none.
+    /// among them - with what its run measured beside what it declares, the key of what it was judged on, where its
+    /// records are, told as the reader is told every path, and why --pending swept it or which passed held it; what an
+    /// arm no worker drove has none of is left out, and a leg asked about no arm has none. A leg --pending swept says how
+    /// many of its arms held and how many it swept.
     /// </summary>
     [Fact]
     public void EachArmALegWasAskedAbout_IsInTheDocumentBeneathIt()
@@ -951,9 +952,19 @@ public sealed class LedgerReportTests
                         DeclaredReds = ["Fixture.Charge"],
                         Records = "/home/alice/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound",
                         Key = "9f2c0e",
+                        Pending = new ArmPending("files-moved", "what 'lib' is built from moved: /home/alice/repo/src/a.cpp"),
                     },
                     new ArmEntry { Arm = "floor", Verdict = LegVerdict.SkippedNotSelected, Detail = "--arms does not name it", DeclaredCases = 3, DeclaredReds = ["Fixture.Floor"] },
+                    new ArmEntry
+                    {
+                        Arm = "depth",
+                        Verdict = LegVerdict.SkippedNotSelected,
+                        Detail = "--pending left it out: its passed of run 20261012-145059-ba433418 (2026-10-12 14:58Z) holds",
+                        Key = "77a0",
+                        Held = new ArmHeld("20261012-145059-ba433418", new DateTimeOffset(2026, 10, 12, 14, 58, 11, TimeSpan.Zero)),
+                    },
                 ],
+                PendingSweep = new PendingSweep(1, 1),
             },
             Entry("win-msvc", LegVerdict.Passed, TimeSpan.FromSeconds(1), string.Empty),
         ],
@@ -966,7 +977,9 @@ public sealed class LedgerReportTests
         var floor = arms[1];
 
         Assert.False(legs[1].TryGetProperty("arms", out _));
-        Assert.Equal(2, arms.Count);
+        Assert.False(legs[1].TryGetProperty("pendingSweep", out _));
+        Assert.Equal((1, 1), (legs[0].GetProperty("pendingSweep").GetProperty("held").GetInt32(), legs[0].GetProperty("pendingSweep").GetProperty("swept").GetInt32()));
+        Assert.Equal(3, arms.Count);
         Assert.Equal("charge-bound", charge.GetProperty("arm").GetString());
         Assert.Equal("survived", charge.GetProperty("verdict").GetString());
         Assert.True(charge.GetProperty("failure").GetBoolean());
@@ -979,11 +992,23 @@ public sealed class LedgerReportTests
         Assert.Equal(["Fixture.Charge"], charge.GetProperty("declaredReds").EnumerateArray().Select(red => red.GetString()));
         Assert.Equal("~/repo/.harness-config/runs/r1/linux-gcc/arms/charge-bound", charge.GetProperty("records").GetString());
         Assert.Equal("9f2c0e", charge.GetProperty("key").GetString());
+        Assert.Equal(
+            ("files-moved", "what 'lib' is built from moved: ~/repo/src/a.cpp"),
+            (charge.GetProperty("pending").GetProperty("code").GetString(), charge.GetProperty("pending").GetProperty("said").GetString()));
+        Assert.False(charge.TryGetProperty("held", out _));
+
+        var depth = arms[2];
+
+        Assert.Equal(
+            ("20261012-145059-ba433418", new DateTimeOffset(2026, 10, 12, 14, 58, 11, TimeSpan.Zero)),
+            (depth.GetProperty("held").GetProperty("run").GetString(), depth.GetProperty("held").GetProperty("at").GetDateTimeOffset()));
+        Assert.Equal("77a0", depth.GetProperty("key").GetString());
+        Assert.False(depth.TryGetProperty("pending", out _));
 
         Assert.Equal(("floor", "skipped-not-selected", false), (floor.GetProperty("arm").GetString(), floor.GetProperty("verdict").GetString(), floor.GetProperty("failure").GetBoolean()));
         Assert.Equal(["Fixture.Floor"], floor.GetProperty("declaredReds").EnumerateArray().Select(red => red.GetString()));
 
-        foreach (var absent in new[] { "worker", "cases", "reds", "records", "key" })
+        foreach (var absent in new[] { "worker", "cases", "reds", "records", "key", "held", "pending" })
         {
             Assert.False(floor.TryGetProperty(absent, out _), $"an arm no worker drove has no {absent}");
         }

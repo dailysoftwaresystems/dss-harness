@@ -395,7 +395,12 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
                 DeclaredReds = [.. arm.DeclaredReds ?? []],
                 Records = arm.Records,
                 Key = arm.Key,
+                Held = arm.Held,
+                Pending = arm.Pending is { } pending ? pending with { Said = HostProbes.AsConfigured(pending.Said, connection) } : null,
             })],
+
+            // What --pending made of the leg's arms there, as the host counted them.
+            PendingSweep = entry.PendingSweep,
         };
     }
 
@@ -441,7 +446,8 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         AdmissionFact? Admission = null,
         IReadOnlyList<RemoteLedgerArm>? Arms = null,
         string? Records = null,
-        IReadOnlyList<PhaseLogFile>? Logs = null);
+        IReadOnlyList<PhaseLogFile>? Logs = null,
+        PendingSweep? PendingSweep = null);
 
     /// <summary>One arm's line of a host's sweep, beneath its leg's.</summary>
     private sealed record RemoteLedgerArm(
@@ -455,5 +461,7 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<string>? Reds,
         IReadOnlyList<string>? DeclaredReds,
         string? Records,
-        string? Key = null);
+        string? Key = null,
+        ArmHeld? Held = null,
+        ArmPending? Pending = null);
 }

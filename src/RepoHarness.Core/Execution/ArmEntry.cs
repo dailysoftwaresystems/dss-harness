@@ -61,4 +61,26 @@ public sealed record ArmEntry
     /// could not be read, where nothing of the arm was judged, and for every arm of a self-test, which nothing keeps.
     /// </summary>
     public string? Key { get; init; }
+
+    /// <summary>
+    /// The recorded <c>passed</c> that holds, for an arm <c>--pending</c> left out because its key is that passed's key: the
+    /// run that reached it and when. <see langword="null"/> for every other arm.
+    /// </summary>
+    public ArmHeld? Held { get; init; }
+
+    /// <summary>
+    /// Why <c>--pending</c> swept the arm - the first reason it was pending, as data names it and as a line says it - or
+    /// <see langword="null"/> for an arm a sweep without it drove, one it held, and one it never weighed.
+    /// </summary>
+    public ArmPending? Pending { get; init; }
 }
+
+/// <summary>The recorded <c>passed</c> an arm <c>--pending</c> left out holds by: the run that reached it, and when.</summary>
+/// <param name="Run">The run's id.</param>
+/// <param name="At">When its arm ended, as the clock of the machine that swept it said.</param>
+public sealed record ArmHeld(string Run, DateTimeOffset At);
+
+/// <summary>Why <c>--pending</c> swept an arm: the first reason it was pending.</summary>
+/// <param name="Code">The reason, as data names it: <c>files-moved</c>.</param>
+/// <param name="Said">The reason, as a line says it.</param>
+public sealed record ArmPending(string Code, string Said);

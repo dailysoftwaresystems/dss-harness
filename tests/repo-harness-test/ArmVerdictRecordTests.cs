@@ -256,6 +256,74 @@ public sealed class ArmVerdictRecordTests : IDisposable
     }
 
     /// <summary>
+    /// What the record holds of the arms a sweep under --pending weighs is every entry of each, under any spelling of its
+    /// id, and each table the newest of them names - one it cannot read said why - and nothing of an arm it does not
+    /// weigh. A record that cannot be read gives nothing but why.
+    /// </summary>
+    [Fact]
+    public void WhatTheRecordHoldsOfALegsArms_IsEveryEntryOfEach_AndTheTablesTheNewestNames()
+    {
+        var older = Table("fixture_tests", "src/old.cpp");
+        var newer = Table("fixture_tests", "src/fixture.cpp");
+        var gone = Table("fixture", "src/gone.cpp");
+
+        Assert.Null(Record.Merge(Leg, "charge", Verdict("passed", "k1", Noon, older), [older]));
+        Assert.Null(Record.Merge(Leg, "charge", Verdict("violated", "k2", Noon, newer, gone), [newer, gone]));
+        Assert.Null(Record.Merge(Leg, "floor", Verdict("passed", "k3", Noon, older), [older]));
+        File.Delete(Record.TableFile(Leg, gone.Digest()));
+
+        var recorded = Record.ArmsOf(Leg, ["CHARGE", "depth"]);
+
+        Assert.Null(recorded.Unread);
+        Assert.Equal(["CHARGE"], recorded.Arms.Keys);
+        Assert.Equal([("passed", "k1"), ("violated", "k2")], recorded.Arms["Charge"].Select(entry => (entry.Verdict, entry.Key)));
+        Assert.Equal([newer.Digest()], recorded.Tables.Keys);
+        Assert.Equal([gone.Digest()], recorded.TablesUnread.Keys);
+        Assert.Equal($"'{Record.TableFile(Leg, gone.Digest())}', which an entry names, is gone", recorded.TablesUnread[gone.Digest()]);
+
+        File.WriteAllText(Record.FileOf(Leg), "{");
+
+        var unread = Record.ArmsOf(Leg, ["charge"]);
+
+        Assert.NotNull(unread.Unread);
+        Assert.Empty(unread.Arms);
+    }
+
+    /// <summary>
+    /// What a sweep under --pending found holding is kept in one change of the record: each arm's entry on the key that
+    /// held is marked with the run that verified it, every other entry left as it was, an entry no longer there passed
+    /// over - and where the record cannot be read nothing is written, said once as a warning and on the leg's line.
+    /// </summary>
+    [Fact]
+    public void WhatHeld_IsMarkedVerifiedByItsRun_InOneChange_AndAnUnreadRecordIsNeverWritten()
+    {
+        Assert.Null(Record.Merge(Leg, "charge", Verdict("passed", "k1", Noon), []));
+        Assert.Null(Record.Merge(Leg, "charge", Verdict("passed", "k2", Noon), []));
+        Assert.Null(Record.Merge(Leg, "floor", Verdict("passed", "k3", Noon), []));
+
+        var by = new RecordedRun("20261013-090000-0c11aa02", Noon.AddHours(1));
+        var sink = new RecordSink(Record, Leg, _harness.Output, MutationService.CommandName);
+
+        sink.Verified(new Dictionary<string, string>(StringComparer.Ordinal) { ["CHARGE"] = "k1", ["floor"] = "k9", ["depth"] = "k4" }, by);
+
+        var read = Record.Read(Leg);
+
+        Assert.Equal([("k1", by), ("k2", null)], read.Arms["charge"].Select(entry => (entry.Key, entry.Verified)));
+        Assert.Null(Assert.Single(read.Arms["floor"]).Verified);
+        Assert.Null(sink.Unrecorded);
+
+        var file = Record.FileOf(Leg);
+
+        File.WriteAllText(file, "{");
+        sink.Verified(new Dictionary<string, string>(StringComparer.Ordinal) { ["charge"] = "k2" }, by);
+        sink.Verified(new Dictionary<string, string>(StringComparer.Ordinal) { ["charge"] = "k2" }, by);
+
+        Assert.Equal("{", File.ReadAllText(file));
+        Assert.Single(_harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.Equal($"none of its verdicts was recorded: '{file}' cannot be read", sink.Unrecorded);
+    }
+
+    /// <summary>
     /// The record is the run state of the machine that keeps it: no sync carries it to a copy, nor deletes a copy's own,
     /// and it is no place a misplaced name is looked for.
     /// </summary>

@@ -153,6 +153,7 @@ public sealed class CheckMutationsCliTests
         Assert.Matches(@"(?m)^charge\s+native\s+-\s+-\s+-\s+pending: never swept on this leg\r?$", result.StandardOutput);
         Assert.Contains("native: 1 arm(s): 1 pending (1 never swept)", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("'unmoved here' is not 'holds'.", said, StringComparison.Ordinal);
+        Assert.Contains("'check-mutations --pending' verifies each there, and sweeps what does not hold.", string.Join(" ", said.Split((char[])['\r', '\n', ' '], StringSplitOptions.RemoveEmptyEntries)), StringComparison.Ordinal);
         Assert.Equal(before, Files(temp));
         Assert.False(Directory.Exists(temp.Combine(HarnessLayout.DirectoryName, HarnessLayout.RunsDirectoryName)));
         Assert.False(Directory.Exists(temp.Combine(HarnessLayout.DirectoryName, HarnessLayout.MutationRecordDirectoryName)));
@@ -250,6 +251,7 @@ public sealed class CheckMutationsCliTests
     /// no run.
     /// </summary>
     [Theory]
+    [InlineData("--pending", "--list sweeps nothing, so --pending has no arm to sweep: leave one of them out.")]
     [InlineData("--self-test", "--list sweeps nothing, so --self-test has no fixture to sweep: leave one of them out.")]
     [InlineData("--force-lock", "--list sweeps nothing, so --force-lock has no lock to take: leave one of them out.")]
     [InlineData("--use-staged", "--list sweeps nothing, so --use-staged has nothing staged to sweep: leave one of them out.")]
@@ -264,6 +266,23 @@ public sealed class CheckMutationsCliTests
 
         Assert.Equal(HarnessExit.UsageError, result.ExitCode);
         Assert.Contains(said, result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain("check-mutations: run ", result.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A self-test under --pending is a usage error, said in one sentence, and begins no run: nothing of a self-test is
+    /// ever recorded, so nothing of it could be held or pending.
+    /// </summary>
+    [Fact]
+    public async Task PendingWithSelfTest_IsAUsageError()
+    {
+        using var temp = new TempDirectory();
+        await PrepareListedAsync(temp);
+
+        var result = await CliRunner.RunAsync(["check-mutations", "--pending", "--self-test", "-C", temp.Path], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.UsageError, result.ExitCode);
+        Assert.Contains("A self-test is never recorded, so nothing of it is pending: leave --pending out.", result.StandardError, StringComparison.Ordinal);
         Assert.DoesNotContain("check-mutations: run ", result.StandardError, StringComparison.Ordinal);
     }
 

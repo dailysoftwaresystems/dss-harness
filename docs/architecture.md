@@ -1626,7 +1626,7 @@ from the report.
 | `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, a file its host's copy needed changed or was removed after the run began, before it was carried there, and nothing of the leg ran | **yes** |
 | `unmeasured` | Whether those files held still could not be established - where they could not be watched at all, with none of the leg's work run; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
-| `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, and a leg whose sweep drives no arm | no |
+| `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, or `--pending` leaves out because its `passed` holds, and a leg whose sweep drives no arm | no |
 | `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; git could not answer in its tree; or no worker of its sweep fits the room left or the path limit, and every arm of the leg with it | warning |
 | `skipped-tool-missing` | A required tool is not installed | warning |
 | `refused-locked` | Another run holds the lock for this leg, or its host's tree | **yes** |
@@ -3351,7 +3351,8 @@ leg's own tree, project and variant; sync's exclusions; the variant's configure;
 sources the leg's own build fetched; and ninja's records. A leg built by anything but CMake with the
 Ninja generator is refused too, naming the fix: only ninja's records say, for one configuration
 alone, which objects a mutation rebuilt. `--arms` selects arms as `--legs` selects legs, and an arm
-it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg. It is
+it leaves out, or whose S row leaves the leg out, is `skipped-not-selected` on that leg, as is one
+`--pending` leaves out because its `passed` holds. It is
 weighed against the registry only once the registry can be swept (`MutationService.ReadAsync`): the
 S rows' legs are resolved with the rest of the registry's problems, so a scope naming neither a leg
 nor a leg set is listed beside them in one refusal, exit 12, whatever `--arms` names - an arm the
@@ -3717,7 +3718,35 @@ for that. An arm unmoved here whose build is generated from a file that moved si
 configure would be given something else, says so: the causes kept beside the key name it. A
 listing exits `0` whatever is pending - a listing is no gate - and otherwise as a sweep gives it:
 `12` for the registry or the configuration, `10` for the command line, `20` where git could not say
-what a tree ignores, and `3` where a tree changed while it was read.
+what a tree ignores, and `3` where a tree changed while it was read. It is refused with `--pending`,
+`--self-test`, `--force-lock`, `--use-staged` and `--here`, each in one sentence: it sweeps nothing.
+
+`check-mutations --pending` drives, on each leg, only the arms with no recorded `passed` that holds
+(`MutationLegRunner`, `ArmHolding`); `--arms` narrows the arms it weighs, and a sweep without it
+drives every selected arm, as ever, and records each verdict. Held is decided by one rule, in one
+place, on the machine that sweeps the leg: the key of what the arm would be judged on now, read in
+full there, is the key of a recorded `passed`. A listing never decides it - it reads no compiler,
+build line or file a build makes. So the first worker is made alone - claimed, synced, built whole,
+its graph read - and every arm's key is read from its build before any arm is mutated: a worker
+between two arms holds what the last mutation's configure made, and nothing could be said of the
+leg before the sweep was under way. The sweep is given what the record holds of the arms it drives
+(`ArmVerdictRecord.ArmsOf`, `RecordedArms`): every entry of each, and each table the newest names.
+An arm whose key is a recorded `passed`'s is held: it is not driven, its line is
+`skipped-not-selected` - the vocabulary kept, its detail naming the run whose `passed` holds and
+when - with `held` beneath it, and the record is told, in one change for every arm held, that this
+run verified it (`verified`). Every other arm is pending, its first reason said on its progress
+line and as `pending` beneath it, compared with the entry a listing would show - the newest on the
+key read now, which is then no `passed`, else the newest - by the comparisons every reader of a key
+shares (`KeyDifference.Between`), so the eight reasons a listing cannot give are a sweep's here. The
+pending arms are queued, the workers they need beyond the first made (`WorkerRoom.Wanted` of their
+count), and the sweep goes on as ever, the first worker driving with the graph it read. With nothing
+pending, no other worker is made, the first is given back, and the leg reaches `passed` as its own
+verdict: it verified each arm, and the tree asks nothing more of it - so "nothing is pending" exits
+`0`, and is the proof a round is closed with. The leg's line counts the arms swept by verdict,
+those that held and those not selected, and carries `pendingSweep`. A first worker that cannot be
+made is the leg's failure, as any worker's is where none is made, and its line says nothing was
+verified. The refusal of a selection that drives no arm stands under `--pending`, and a self-test
+under it is refused: nothing of a self-test is ever recorded.
 
 ### Self-test
 
@@ -3867,7 +3896,7 @@ or when no selected leg can, and `70` when whether a leg can run was never estab
 a defect in this tool. `build`, `test`, `run` and `clean` exit `1` too when no selected leg can
 run and no failure turned one away, each leg's line saying why it cannot; `check-mutations`
 exits `21` there (see below), and `check-mutations --list` exits `0` whatever is pending - a
-listing is no gate. `install-missing-tools` exits `1` when a tool is missing, out of
+listing is no gate - as `check-mutations --pending` does where nothing is pending. `install-missing-tools` exits `1` when a tool is missing, out of
 date or could not be installed, and `15` when a host could not be reached: a tool that is not
 there and a host that did not answer call for different things. `check-anchor-balance` and
 `check-anchor-citations` exit `1` on a finding, which is what they were asked to look for rather

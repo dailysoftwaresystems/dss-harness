@@ -338,9 +338,11 @@ public sealed class RemoteLegRunnerTests
 
     /// <summary>
     /// Each arm a host's sweep was asked about travels on its leg's line as the host judged it, read from the very
-    /// document the host writes: what its run measured beside what it declares, the key of what it was judged on, and its
-    /// records as the host names them, which stay on that host - its detail naming the host as declared, never by an
-    /// address its name resolved to, and a verdict this build does not know read as poisoned rather than as any it does.
+    /// document the host writes: what its run measured beside what it declares, the key of what it was judged on, why
+    /// --pending swept it or which passed held it, and its records as the host names them, which stay on that host - its
+    /// detail and why it was swept naming the host as declared, never by an address its name resolved to, and a verdict
+    /// this build does not know read as poisoned rather than as any it does. How many of the leg's arms held and how many
+    /// were swept travels with it.
     /// </summary>
     [Fact]
     public async Task EachArmAHostsSweepJudged_IsCarriedOnItsLegsLine()
@@ -367,9 +369,19 @@ public sealed class RemoteLegRunnerTests
                                 DeclaredReds = ["Fixture.Charge"],
                                 Records = "/home/dev/repo/.harness-config/runs/r1/wsl-debug/arms/charge-bound",
                                 Key = "9f2c0e",
+                                Pending = new ArmPending("host-changed", "it was judged on ssh:192.0.2.10, and this leg runs on ssh:mac"),
                             },
                             new ArmEntry { Arm = "floor", Verdict = LegVerdict.Passed, Detail = "a verdict of a later build", DeclaredCases = 3, DeclaredReds = ["Fixture.Floor"] },
+                            new ArmEntry
+                            {
+                                Arm = "depth",
+                                Verdict = LegVerdict.SkippedNotSelected,
+                                Detail = "--pending left it out: its passed of run 20261012-145059-ba433418 (2026-10-12 14:58Z) holds",
+                                Key = "77a0",
+                                Held = new ArmHeld("20261012-145059-ba433418", new DateTimeOffset(2026, 10, 12, 14, 58, 11, TimeSpan.Zero)),
+                            },
                         ],
+                        PendingSweep = new PendingSweep(1, 2),
                     },
                 ],
                 durationWarningFactor: 0)
@@ -394,7 +406,12 @@ public sealed class RemoteLegRunnerTests
 
         var entry = await Runner(hosts).RunAsync(MutationService.CommandName, leg, [], cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(["charge-bound", "floor"], entry.Arms.Select(arm => arm.Arm));
+        Assert.Equal(["charge-bound", "floor", "depth"], entry.Arms.Select(arm => arm.Arm));
+        Assert.Equal(new PendingSweep(1, 2), entry.PendingSweep);
+        Assert.Equal(new ArmPending("host-changed", "it was judged on ssh:mac.invalid, and this leg runs on ssh:mac"), entry.Arms[0].Pending);
+        Assert.Equal(
+            (new ArmHeld("20261012-145059-ba433418", new DateTimeOffset(2026, 10, 12, 14, 58, 11, TimeSpan.Zero)), "77a0", (ArmPending?)null),
+            (entry.Arms[2].Held, entry.Arms[2].Key, entry.Arms[2].Pending));
 
         var charge = entry.Arms[0];
 

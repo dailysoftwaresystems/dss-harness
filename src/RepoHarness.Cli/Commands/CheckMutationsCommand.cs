@@ -43,6 +43,11 @@ internal static class CheckMutationsCommand
         Description = "Sweep nothing: say each selected arm's last verdict on each leg and whether anything it was judged on that this machine reads has moved since. Asks no host, takes no lock, begins no run and writes nothing; exits 0 whatever is pending.",
     };
 
+    private static readonly Option<bool> PendingOption = new("--pending")
+    {
+        Description = "Drive on each leg only the arms with no recorded passed that still holds: its first worker is made alone, each arm's key read from its build, and an arm whose key is a recorded passed's is left out, skipped-not-selected, saying which run's passed holds. With nothing pending the leg passes, and nothing is swept.",
+    };
+
     internal static Command Create()
     {
         var command = new Command(
@@ -56,6 +61,7 @@ internal static class CheckMutationsCommand
         command.Options.Add(UseStagedOption);
         command.Options.Add(SelfTestOption);
         command.Options.Add(ListOption);
+        command.Options.Add(PendingOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
@@ -64,7 +70,7 @@ internal static class CheckMutationsCommand
             var arguments = context.ParseResult;
             var list = arguments.GetValue(ListOption);
 
-            if (list && Refused(arguments) is { } refusal)
+            if (Refused(arguments) is { } refusal)
             {
                 throw new HarnessException(HarnessExit.UsageError, refusal);
             }
@@ -87,7 +93,8 @@ internal static class CheckMutationsCommand
                 arguments.GetValue(UseStagedOption),
                 arguments.GetValue(DispatchOptions.Here),
                 selfTest,
-                list);
+                list,
+                arguments.GetValue(PendingOption));
             var service = context.Get<MutationService>();
 
             return list
@@ -99,13 +106,22 @@ internal static class CheckMutationsCommand
     }
 
     /// <summary>
-    /// Why <c>--list</c> cannot be given with what else <paramref name="arguments"/> holds, or <see langword="null"/> where
-    /// it can: each option given with it that only a sweep has a use for, said in one sentence.
+    /// Why what <paramref name="arguments"/> holds cannot be given together, or <see langword="null"/> where it can: a
+    /// self-test under <c>--pending</c>, which nothing of was ever recorded; and <c>--list</c> with each option only a
+    /// sweep has a use for. Each said in one sentence.
     /// </summary>
     private static string? Refused(ParseResult arguments)
     {
+        if (!arguments.GetValue(ListOption))
+        {
+            return arguments.GetValue(PendingOption) && arguments.GetValue(SelfTestOption)
+                ? $"A self-test is never recorded, so nothing of it is pending: leave {PendingOption.Name} out."
+                : null;
+        }
+
         (Option Option, bool Given, string Wants)[] sweepsOnly =
         [
+            (PendingOption, arguments.GetValue(PendingOption), "has no arm to sweep"),
             (SelfTestOption, arguments.GetValue(SelfTestOption), "has no fixture to sweep"),
             (ForceLockOption, arguments.GetValue(ForceLockOption), "has no lock to take"),
             (UseStagedOption, arguments.GetValue(UseStagedOption), "has nothing staged to sweep"),

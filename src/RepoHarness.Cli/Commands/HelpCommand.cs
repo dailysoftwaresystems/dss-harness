@@ -949,8 +949,9 @@ internal static class HelpCommand
             + $"every selected arm is such a one is refused ({HarnessExit.UsageError}), naming each and where it runs: it would drive "
             + "no arm, and pass having proved nothing. Only a leg built by CMake with the Ninja generator can be swept: "
             + "ninja's own records say which objects a mutation rebuilt. "
-            + "--list sweeps nothing (see 'What holds, and what is pending'), so it is refused with --self-test, --force-lock, "
-            + $"--use-staged and --here ({HarnessExit.UsageError}), each in one sentence naming both.");
+            + "--list sweeps nothing (see 'What holds, and what is pending'), so it is refused with --pending, --self-test, "
+            + $"--force-lock, --use-staged and --here ({HarnessExit.UsageError}), each in one sentence naming both; and --pending "
+            + "is refused with --self-test, of which nothing is ever recorded.");
         builder.AppendLine();
         builder.AppendLine("Workers");
         builder.AppendLine();
@@ -1120,6 +1121,24 @@ internal static class HelpCommand
             + $"and otherwise as a sweep would: {HarnessExit.CommandFailed} where git could not say what a tree ignores, and "
             + $"{LegExit.InputsMoved} where a tree changed while it was read.");
         builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "check-mutations --pending drives, on each leg, only the arms with no recorded passed that holds; --arms narrows "
+            + "the arms it weighs, and without --pending every selected arm is driven, as ever, and recorded. On the leg's "
+            + "machine the first worker is made alone - claimed, synced, built whole - and the key of every arm is read from "
+            + "its build before any arm is mutated. An arm whose key is a recorded passed's holds: it is not driven, and is "
+            + "skipped-not-selected on that leg, its detail naming the run whose passed holds and when, and the record notes "
+            + "that this run verified it. Every other arm is pending, and is swept as ever, in as many workers beyond the "
+            + "first as the pending arms need; its progress and --json say the first reason it was pending - a listing's, or "
+            + "one only a sweep reads: how a target is built, a file joined or left what it is built from, a file its build "
+            + "makes, the dependency sources it fetched or a file outside the tree it reads moved, its compiler or its "
+            + "developer environment changed, or what it would be judged on cannot be read now. The leg's line counts the "
+            + "arms swept by verdict, those that held, and those not selected. With nothing pending no other worker is made "
+            + "and the leg passes on its own verdict, saying nothing is pending: each passed was verified there, and the tree "
+            + $"asks nothing more of it. A sweep under --pending exits as a sweep does - {HarnessExit.Success} where nothing is "
+            + "pending - and a first worker that cannot be made is the leg's failure, as any worker's is where none is made, "
+            + "and verifies nothing.");
+        builder.AppendLine();
         builder.AppendLine("Records");
         builder.AppendLine();
         AppendWrapped(
@@ -1130,7 +1149,10 @@ internal static class HelpCommand
             + $"each worker's whole build in <run>/<leg>/{MutationRecords.WorkersDirectory}/<n>/. A leg's line counts its arms by verdict; "
             + "ARMS, below the table, names each arm selected that did not pass, and why; --json carries every arm beneath "
             + "its leg: "
-            + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key.");
+            + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key; "
+            + "under --pending an arm it left out has held - the run and the time of the passed that holds - and an arm it swept "
+            + "has pending - the first reason, its code and the words it is said in - and each leg has pendingSweep: how many "
+            + "of its arms held, and how many were swept.");
         builder.AppendLine();
         builder.AppendLine("Self-test");
         builder.AppendLine();
@@ -1195,7 +1217,7 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "An arm reaches others where nothing of its own decides: skipped-not-selected where --arms or its S row leaves "
-            + "it out of a leg; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the "
+            + "it out of a leg, or --pending leaves it out, its passed holding; skipped-unavailable, with every arm of its leg, where no worker fits the room left or the "
             + "path limit; unmeasured where ninja's log could not be read around its build, or the report its run wrote "
             + "could not be read from its file, which is no finding about the binary; whatever a guard of its "
             + "build reaches, as a leg's build does - inputs-moved, contended; and whatever a failure that ends its driving "

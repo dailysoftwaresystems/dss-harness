@@ -2520,6 +2520,281 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// Under <c>--pending</c> the first worker is made alone - claimed, synced, built whole - and what every arm is judged
+    /// on is read from its build before any arm is mutated and before any other worker is made; each arm the record holds
+    /// nothing of is pending, said so on its line and in its progress, and swept as it would be without it.
+    /// </summary>
+    [Fact]
+    public async Task UnderPending_TheFirstWorkerIsMadeAlone_AndEveryKeyComputedBeforeAnyArmIsMutated()
+    {
+        using var sweep = new Sweep { Recorded = new RecordedArms() };
+        var readWhenTheSecondWasMade = -1;
+        var armsBuiltBefore = new ConcurrentQueue<int>();
+
+        sweep.Copies.AfterSync = worker =>
+        {
+            if (worker == sweep.Worker(2))
+            {
+                readWhenTheSecondWasMade = sweep.Builder.Graph.AskedOfReads.Count;
+            }
+        };
+        sweep.Builder.Graph.Reads = (worker, _) =>
+        {
+            armsBuiltBefore.Enqueue(sweep.Builder.Builds.Count(build => build.Leg.Contains($"/{MutationRecords.ArmsDirectory}/", StringComparison.Ordinal)));
+            return null;
+        };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.True(entry.Verdict == LegVerdict.Passed, entry.Detail);
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.Synced.Select(sync => sync.Worker));
+        Assert.Equal(["worker-1", "worker-2"], sweep.Admissions.Select(unit => unit.Unit).Where(unit => unit.StartsWith("worker-", StringComparison.Ordinal)));
+        Assert.Equal(2, readWhenTheSecondWasMade);
+        Assert.All(sweep.Builder.Graph.AskedOfReads, read => Assert.Equal(sweep.Worker(1), read.Worker));
+        Assert.All(armsBuiltBefore, built => Assert.Equal(0, built));
+        Assert.All(entry.Arms, arm =>
+        {
+            Assert.Equal((LegVerdict.Passed, "never-swept", "never swept on this leg"), (arm.Verdict, arm.Pending?.Code, arm.Pending?.Said));
+            Assert.Null(arm.Held);
+            Assert.NotNull(arm.Key);
+        });
+        Assert.Equal(new PendingSweep(0, 3), entry.PendingSweep);
+        Assert.Equal("3 arm(s) swept: 3 passed; 0 hold a passed", entry.Detail);
+        Assert.Contains("verifying 0 arm(s) with a recorded passed against the tree as read and worker 1's build", sweep.Said);
+        Assert.Contains("3 arm(s) pending: 3 never swept; 0 hold a passed", sweep.Said);
+        Assert.Contains(sweep.Said, said => said.StartsWith("arm charge-bound, on worker ", StringComparison.Ordinal) && said.EndsWith(": pending, never swept on this leg", StringComparison.Ordinal));
+
+        using var record = JsonDocument.Parse(File.ReadAllText(Path.Combine(sweep.Records("charge-bound"), MutationRecords.ArmRecordFileName)));
+
+        Assert.Equal("never-swept", record.RootElement.GetProperty("pending").GetProperty("code").GetString());
+    }
+
+    /// <summary>
+    /// An arm whose key, read again from the first worker's build, is a recorded passed's is held: never driven, its line
+    /// skipped-not-selected saying which run's passed holds and when, with its key and that passed beneath it - and the
+    /// record told, once for every arm held, that this run verified each. With nothing pending no other worker is made,
+    /// the worker made is given back, and the leg passes on its own verdict, saying nothing is pending.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWhoseKeyIsARecordedPassedsKey_IsHeld_AndNotDriven()
+    {
+        using var sweep = new Sweep();
+
+        sweep.Sink = sweep.Recording();
+
+        var swept = await sweep.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var first = sweep.Run!.Value;
+        var built = sweep.Builder.Builds.Count;
+        var synced = sweep.Copies.Synced.Count;
+
+        Assert.Equal(LegVerdict.Passed, swept.Verdict);
+
+        var kept = new Kept();
+
+        sweep.Sink = kept;
+        sweep.Recorded = sweep.RecordedOf(ChargeBound, DepthType);
+
+        var recorded = sweep.Record.Read(LegName);
+        var entry = await sweep.RunAsync([ChargeBound, DepthType], [new UnselectedArm(ChargeFloor, "--arms does not name it")])
+            .WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.Equal(LegVerdict.Passed, entry.Verdict);
+        Assert.Equal("nothing is pending: 2 arm(s) hold a passed, each verified here; 1 not selected", entry.Detail);
+        Assert.Equal(new PendingSweep(2, 0), entry.PendingSweep);
+        Assert.Equal([sweep.Worker(1)], sweep.Copies.Synced.Skip(synced).Select(sync => sync.Worker));
+        Assert.DoesNotContain(sweep.Builder.Builds.Skip(built), build => build.Leg.Contains($"/{MutationRecords.ArmsDirectory}/", StringComparison.Ordinal));
+        Assert.Contains(sweep.Worker(1), sweep.Copies.Released);
+        Assert.Empty(kept.Judgements);
+        Assert.Contains("nothing is pending: 2 arm(s) hold a passed, each verified here", sweep.Said);
+
+        foreach (var arm in entry.Arms.Where(arm => arm.Arm != "charge-floor"))
+        {
+            var passed = Assert.Single(recorded.Arms[arm.Arm]);
+
+            Assert.Equal(LegVerdict.SkippedNotSelected, arm.Verdict);
+            Assert.Equal($"--pending left it out: its passed of run {first} ({passed.When}) holds", arm.Detail);
+            Assert.Equal((passed.Key, new ArmHeld(first, passed.At)), (arm.Key, arm.Held));
+            Assert.Null(arm.Pending);
+            Assert.Null(arm.Records);
+        }
+
+        var (keys, by) = Assert.Single(kept.Verifications);
+
+        Assert.Equal(entry.Arms.Where(arm => arm.Held is not null).Select(arm => (arm.Arm, arm.Key!)).Order(), keys.Select(pair => (pair.Key, pair.Value)).Order());
+        Assert.Equal(sweep.Run!.Value, by.Run);
+    }
+
+    /// <summary>
+    /// An arm whose last verdict on the key read now is no passed is pending for that verdict, and swept: a passed of
+    /// another key never holds it, and the record holds no passed of this one.
+    /// </summary>
+    [Fact]
+    public async Task AnArmWhoseLastVerdictOnItsKeyIsNoPassed_IsSwept_SayingSo()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+
+        sweep.Sink = sweep.Recording();
+        sweep.Tests.Answer = _ => Tests.Ran([]);
+        Assert.Equal(LegVerdict.Survived, (await sweep.RunAsync([ChargeBound])).Verdict);
+
+        sweep.Recorded = sweep.RecordedOf(ChargeBound);
+
+        var entry = await sweep.RunAsync([ChargeBound]);
+        var arm = Assert.Single(entry.Arms);
+
+        Assert.Equal(("last-not-passed", "its last verdict is survived, not passed"), (arm.Pending?.Code, arm.Pending?.Said));
+        Assert.Equal(LegVerdict.Survived, arm.Verdict);
+        Assert.Contains("arm charge-bound, on worker 1: pending, its last verdict is survived, not passed", sweep.Said);
+    }
+
+    /// <summary>
+    /// The workers a sweep under <c>--pending</c> makes beyond its first are as many as the arms it found pending need -
+    /// never as many as it would drive without it - and its line counts the arms it swept apart from those that held.
+    /// </summary>
+    [Fact]
+    public async Task TheWorkersMadeBeyondTheFirst_AreAsManyAsThePendingArmsNeed()
+    {
+        using var sweep = new Sweep { Workers = 3 };
+
+        sweep.Sink = sweep.Recording();
+        await sweep.RunAsync([ChargeBound]);
+
+        var synced = sweep.Copies.Synced.Count;
+
+        sweep.Recorded = sweep.RecordedOf(ChargeBound, DepthType, ChargeFloor);
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType, ChargeFloor]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.True(entry.Verdict == LegVerdict.Passed, entry.Detail);
+        Assert.Equal([sweep.Worker(1), sweep.Worker(2)], sweep.Copies.Synced.Skip(synced).Select(sync => sync.Worker).Order(StringComparer.Ordinal));
+        Assert.Equal("2 arm(s) swept: 2 passed; 1 hold a passed", entry.Detail);
+        Assert.Equal(new PendingSweep(1, 2), entry.PendingSweep);
+        Assert.Equal(
+            [("charge-bound", LegVerdict.SkippedNotSelected, null), ("depth-type", LegVerdict.Passed, "never-swept"), ("charge-floor", LegVerdict.Passed, "never-swept")],
+            entry.Arms.Select(arm => (arm.Arm, arm.Verdict, arm.Pending?.Code)));
+        Assert.Contains("2 arm(s) pending: 2 never swept; 1 hold a passed", sweep.Said);
+    }
+
+    /// <summary>
+    /// A first worker that cannot be made under <c>--pending</c> is the leg's failure as any worker's is where none is
+    /// made, every arm is said not driven, and the leg's line says nothing of it was verified.
+    /// </summary>
+    [Fact]
+    public async Task UnderPending_AFirstWorkerThatCannotBeMade_VerifiesNothing_AndSaysSo()
+    {
+        using var sweep = new Sweep { Recorded = new RecordedArms() };
+
+        sweep.Copies.SyncFails = _ => new IOException("the disk is full");
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(LegVerdict.Passed, entry.Verdict);
+        Assert.StartsWith("worker 1: it could not be made", entry.Detail, StringComparison.Ordinal);
+        Assert.Contains("nothing of it was verified, since its first worker was not made", entry.Detail, StringComparison.Ordinal);
+        Assert.Equal([sweep.Worker(1)], sweep.Copies.Claimed.Select(claim => claim.Worker));
+        Assert.Null(entry.PendingSweep);
+        Assert.All(entry.Arms, arm =>
+        {
+            Assert.Equal(LegVerdict.Stopped, arm.Verdict);
+            Assert.StartsWith("no worker was left to drive it: worker 1 was retired, ", arm.Detail, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// An arm nothing a listing reads moved for is swept all the same where a sweep reads that something else moved -
+    /// what only the leg's machine and a worker's build read - its line and its progress saying what, in the words that
+    /// name every difference of a key: one case to each reason only a sweep gives.
+    /// </summary>
+    [Theory]
+    [InlineData("compiler-changed", "its compiler changed: CXX GNU 13.3.0, now GNU 14.1.0")]
+    [InlineData("lines-changed", "how 'fixture_tests' is built changed")]
+    [InlineData("set-changed", "a file joined or left what 'fixture_tests' is built from")]
+    [InlineData("made-moved", "a file its build makes moved, in {build}/generated")]
+    [InlineData("fetched-moved", "the sources of 'PLUMB' its build fetched moved")]
+    [InlineData("outside-moved", "a file outside the tree its build reads moved, in ")]
+    [InlineData("environment-changed", "its developer environment changed")]
+    [InlineData("key-unreadable", "what it would be judged on cannot be read now: ")]
+    public async Task AnArmUnmovedHere_WhoseCompilerChanged_IsSwept_SayingWhy(string code, string said)
+    {
+        using var outside = new TempDirectory();
+        using var sweep = new Sweep { Workers = 1 };
+        var generation = 1;
+
+        outside.WriteFile("sys.h", "1");
+        sweep.Fetched = new FetchedSet([new FetchedSource("PLUMB", outside.Combine("plumb"))], Every: true);
+        sweep.Copies.FetchedFiles = _ => [("CMakeLists.txt", code == "fetched-moved" ? generation : 1)];
+        sweep.DeveloperEnvironment = new DeveloperEnvironmentFact("vs", "C:/vs", "17.14", "14.44", "x64");
+        sweep.Builder.Before = (request, _) =>
+        {
+            var build = request.Variant.DirectoryUnder(request.TreeRoot);
+            var compiler = Path.Combine(build, "CMakeFiles", "4.3.2", "CMakeCXXCompiler.cmake");
+
+            Directory.CreateDirectory(Path.Combine(build, ".cmake", "api", "v1", "reply"));
+            Directory.CreateDirectory(Path.GetDirectoryName(compiler)!);
+            Directory.CreateDirectory(Path.Combine(build, "generated"));
+            File.WriteAllText(Path.Combine(build, ".cmake", "api", "v1", "reply", "index-2026-09-22T12-00-00-0000.json"), """{ "cmake": { "version": { "string": "4.3.2" } }, "reply": {} }""");
+            File.WriteAllText(
+                compiler,
+                $"set(CMAKE_CXX_COMPILER \"/usr/bin/g++\")\nset(CMAKE_CXX_COMPILER_ID \"GNU\")\n"
+                + $"set(CMAKE_CXX_COMPILER_VERSION \"{(code == "compiler-changed" && generation == 2 ? "14.1.0" : "13.3.0")}\")\n");
+            File.WriteAllText(Path.Combine(build, "generated", "config.h"), code == "made-moved" ? $"#define GENERATION {generation}" : "#define GENERATION 1");
+
+            return Task.CompletedTask;
+        };
+        sweep.Builder.Graph.Reads = (worker, target) =>
+        {
+            var fixture = sweep.Builder.Graph.Fixture(worker, target);
+            var build = Variant.DirectoryUnder(worker);
+
+            if (target != "fixture_tests")
+            {
+                return fixture;
+            }
+
+            IReadOnlyList<BuiltFromPath> read =
+            [
+                .. fixture.Read.Where(path => !(code == "set-changed" && generation == 2 && path.Path.EndsWith("budget.hpp", StringComparison.Ordinal))),
+                new BuiltFromPath(Path.Combine(build, "generated", "config.h"), false),
+                new BuiltFromPath(Path.Combine(FetchedSources.KeptIn(worker, "PLUMB"), "CMakeLists.txt"), false),
+                new BuiltFromPath(outside.Combine("sys.h"), false),
+                .. code == "key-unreadable" && generation == 2 ? [new BuiltFromPath(outside.Combine("gone.h"), false)] : Array.Empty<BuiltFromPath>(),
+            ];
+
+            return fixture with
+            {
+                Lines = code == "lines-changed" && generation == 2
+                    ? [.. fixture.Lines.Select(line => line with { Command = line.Command + " -O2" })]
+                    : fixture.Lines,
+                Read = read,
+            };
+        };
+
+        sweep.Sink = sweep.Recording();
+        Assert.Equal(LegVerdict.Passed, (await sweep.RunAsync([ChargeBound])).Verdict);
+
+        generation = 2;
+
+        if (code == "outside-moved")
+        {
+            outside.WriteFile("sys.h", "2");
+        }
+
+        if (code == "environment-changed")
+        {
+            sweep.DeveloperEnvironment = sweep.DeveloperEnvironment! with { ToolsVersion = "14.50" };
+        }
+
+        sweep.Recorded = sweep.RecordedOf(ChargeBound);
+
+        var arm = Assert.Single((await sweep.RunAsync([ChargeBound]).WaitAsync(Patience, TestContext.Current.CancellationToken)).Arms);
+
+        Assert.Equal(LegVerdict.Passed, arm.Verdict);
+        Assert.Equal(code, arm.Pending?.Code);
+        Assert.StartsWith(said, arm.Pending!.Said, StringComparison.Ordinal);
+        Assert.Contains($"arm charge-bound, on worker 1: pending, {arm.Pending.Said}", sweep.Said);
+    }
+
+    /// <summary>
     /// The dependency sources the leg's own build fetched are read once, for every worker, and each worker is given its
     /// own copy before it builds, and configured with it: so no build of a worker reads the leg's own build directory,
     /// which a clean of the leg removes and a build of it may fetch again while the sweep runs. Sources the tree's own
@@ -3365,7 +3640,22 @@ public sealed class MutationLegRunnerTests
         public bool ComparesKeys { get; init; }
 
         /// <summary>Where each arm's verdict is kept as it ends, where a test gives one.</summary>
-        public IArmRecordSink? Sink { get; init; }
+        public IArmRecordSink? Sink { get; set; }
+
+        /// <summary>What the record holds of the arms the sweep weighs, where it sweeps only what is pending.</summary>
+        public RecordedArms? Recorded { get; set; }
+
+        /// <summary>The developer environment the leg's toolchain names, as it was set up, where a test gives one.</summary>
+        public DeveloperEnvironmentFact? DeveloperEnvironment { get; set; }
+
+        /// <summary>The record of verdicts kept in the tree's harness directory, as a sweep typed there keeps it.</summary>
+        public ArmVerdictRecord Record => new(Harness.FileSystem, new HarnessLayout(Tree, Tree));
+
+        /// <summary>A sink that keeps each verdict in <see cref="Record"/>, as a sweep on this machine does.</summary>
+        public RecordSink Recording() => new(Record, LegName, Harness.Output, MutationService.CommandName);
+
+        /// <summary>What <see cref="Record"/> holds of <paramref name="arms"/>, as a sweep under <c>--pending</c> is given it.</summary>
+        public RecordedArms RecordedOf(params MutationArm[] arms) => Record.ArmsOf(LegName, arms.Select(arm => arm.Id));
 
         /// <summary>What a line calls the tree swept.</summary>
         public string SweptIn { get; init; } = RepositoryTree.MainCheckout;
@@ -3467,6 +3757,7 @@ public sealed class MutationLegRunnerTests
                     return AdmitAsync is { } asked ? asked(unit, token) : Task.FromResult(Admit(unit));
                 },
                 Progress = Said.Enqueue,
+                DeveloperEnvironment = DeveloperEnvironment,
             };
 
             var runner = new MutationLegRunner(
@@ -3496,6 +3787,7 @@ public sealed class MutationLegRunnerTests
                     SweepSettings = SweepSettings.Of(config, Variant, project, Test, os, settings, HostEnv),
                     ComparesKeys = ComparesKeys,
                     Sink = Sink,
+                    Recorded = Recorded,
                     SweptIn = SweptIn,
                     ExpectedBuildBytes = ExpectedBuildBytes,
                     ExpectedBuildSource = ExpectedBuildBytes is null ? string.Empty : "as declared",
@@ -3847,11 +4139,15 @@ public sealed class MutationLegRunnerTests
         {
             AskedOfReads.Enqueue((worker, target));
 
-            if (Reads(worker, target) is { } said)
-            {
-                return said;
-            }
+            return Reads(worker, target) ?? Fixture(worker, target);
+        }
 
+        /// <summary>
+        /// What <paramref name="target"/>'s build reads in <paramref name="worker"/> as the fixture's build reads it: its
+        /// object compiled from its sources, named by the worker's own path, and the library or the test binary made of it.
+        /// </summary>
+        public BuiltFromSource Fixture(string worker, string target)
+        {
             var source = Path.Combine(worker, "src", "fixture.cpp");
             var objectFile = Path.Combine(Variant.DirectoryUnder(worker), SiteObject);
             var compile = new NinjaEdge("CXX_COMPILER__fixture_", [SiteObject], [source], source, "gcc", $"g++ -I{worker}/src -c {source} -o {SiteObject}");
@@ -3933,6 +4229,11 @@ public sealed class MutationLegRunnerTests
             HandedAt[arm] = Clock?.Invoke() ?? default;
             Judgements.Enqueue((arm, verdict, tables));
         }
+
+        /// <summary>Each set of arms a sweep said held, with the run that verified them, in the order said.</summary>
+        public ConcurrentQueue<(IReadOnlyDictionary<string, string> Keys, RecordedRun By)> Verifications { get; } = new();
+
+        public void Verified(IReadOnlyDictionary<string, string> keys, RecordedRun by) => Verifications.Enqueue((keys, by));
     }
 
     private sealed class Tests : IArmTestRunner

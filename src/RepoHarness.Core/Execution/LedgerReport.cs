@@ -90,6 +90,9 @@ public sealed record LedgerLine(
     /// <summary>The tree the leg worked in, as <see cref="LegEntry.Tree"/> says.</summary>
     public WorkedTree? Tree { get; init; }
 
+    /// <summary>What <c>check-mutations --pending</c> made of the leg's arms, as <see cref="LegEntry.PendingSweep"/> says.</summary>
+    public PendingSweep? PendingSweep { get; init; }
+
     /// <summary>
     /// The project whose tests the leg counted, as the test that reached its runner recorded it;
     /// <see langword="null"/> where no test counted any, or the leg resolves no project.
@@ -318,6 +321,7 @@ public sealed class LedgerReport
                     KeptOutputs = entry.KeptOutputs,
                     Arms = entry.Arms,
                     Tree = entry.Tree,
+                    PendingSweep = entry.PendingSweep,
                     Project = entry.Project,
                     TestSet = entry.TestSet,
                     TestCountNote = counts.GetValueOrDefault(entry.Leg),
@@ -686,6 +690,9 @@ public sealed class LedgerReport
                 // Only for a leg a sweep asked about arms: each arm, whatever it reached, an arm not selected among them, with
                 // what its run measured beside what it declares, and where its records are.
                 Arms = line.Arms.Count > 0 ? line.Arms.Select(arm => ArmDocument(arm, show)) : null,
+
+                // Only for a leg check-mutations --pending swept: how many of its arms held a passed, and how many it swept.
+                line.PendingSweep,
                 Timings = line.Timings.Select(timing => new
                 {
                     timing.Phase,
@@ -726,6 +733,8 @@ public sealed class LedgerReport
         arm.DeclaredReds,
         Records = arm.Records is { } records ? show(records) : null,
         arm.Key,
+        arm.Held,
+        Pending = arm.Pending is { } pending ? new { pending.Code, Said = show(pending.Said) } : null,
     };
 
     /// <summary>
