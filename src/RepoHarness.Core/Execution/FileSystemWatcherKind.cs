@@ -23,7 +23,7 @@ public sealed class FileSystemWatcherKind : IWatchKind
     /// </summary>
     private const int BufferBytes = 64 * 1024;
 
-    private readonly Func<string, bool, IWatchSink, IDisposable> _watch;
+    private readonly Func<WatchTarget, IWatchSink, IDisposable> _watch;
 
     /// <summary>Watches through the runtime's own watcher.</summary>
     internal FileSystemWatcherKind()
@@ -33,7 +33,7 @@ public sealed class FileSystemWatcherKind : IWatchKind
 
     /// <summary>Watches through what <paramref name="watch"/> makes.</summary>
     /// <param name="watch">Makes the one watcher of a directory, started; the runtime's own unless a test says otherwise.</param>
-    internal FileSystemWatcherKind(Func<string, bool, IWatchSink, IDisposable> watch)
+    internal FileSystemWatcherKind(Func<WatchTarget, IWatchSink, IDisposable> watch)
     {
         _watch = watch;
     }
@@ -42,10 +42,10 @@ public sealed class FileSystemWatcherKind : IWatchKind
     public int? MostDirectories => MostDirectoriesWatched;
 
     /// <inheritdoc/>
-    IDisposable IWatchKind.Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink) => Start(targets, sink);
+    IDisposable IWatchKind.Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink) => Start(targets, sink);
 
     /// <inheritdoc cref="IWatchKind.Start"/>
-    internal IDisposable Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink)
+    internal IDisposable Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink)
     {
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(sink);
@@ -55,9 +55,9 @@ public sealed class FileSystemWatcherKind : IWatchKind
 
         try
         {
-            foreach (var (directory, recursive) in targets)
+            foreach (var target in targets)
             {
-                watchers.Add(_watch(directory, recursive, sink));
+                watchers.Add(_watch(target, sink));
             }
 
             started = true;
@@ -81,21 +81,30 @@ public sealed class FileSystemWatcherKind : IWatchKind
     }
 
     /// <summary>
-    /// The runtime's watcher over <paramref name="directory"/>, started. It is told of a directory's own arrival, going
-    /// and renaming as well as a file's, since the inputs below a directory that went are gone with it.
+    /// <paramref name="watcher"/>, its events handed on to <paramref name="sink"/>, started by <paramref name="start"/>:
+    /// each entry made, removed or renamed - a directory's as well as a file's, since the inputs below a directory that
+    /// went are gone with it - by name, under both names of a rename, and each written to as written.
     /// </summary>
-    private static FileSystemWatcher Watch(string directory, bool recursive, IWatchSink sink)
+    /// <remarks>
+    /// An error the watcher raises while it starts refuses the start: .NET raises one on the starting thread, and returns,
+    /// where the system will not watch the directory - on Linux, an inotify watch it could not add - so a start that
+    /// handed it on as a watch lost would return as though it had started, the work would run, and the leg would be
+    /// called unmeasured only once it was done, the watcher holding what it took all the while. One raised once the
+    /// watcher has started loses the span, as it always did.
+    /// </remarks>
+    /// <param name="watcher">The watcher, not yet started.</param>
+    /// <param name="sink">Told of what it hears.</param>
+    /// <param name="start">Starts it: the runtime's own enables its events.</param>
+    /// <exception cref="InputsUnwatchedException">It raised an error while it started: it is let go first.</exception>
+    internal static FileSystemWatcher Started(FileSystemWatcher watcher, IWatchSink sink, Action<FileSystemWatcher> start)
     {
-        var watcher = new FileSystemWatcher(directory)
-        {
-            IncludeSubdirectories = recursive,
-            InternalBufferSize = BufferBytes,
-            NotifyFilter = NotifyFilters.FileName
-                | NotifyFilters.DirectoryName
-                | NotifyFilters.LastWrite
-                | NotifyFilters.Size
-                | NotifyFilters.CreationTime,
-        };
+        ArgumentNullException.ThrowIfNull(watcher);
+        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(start);
+
+        var gate = new Lock();
+        var starting = true;
+        Exception? refusal = null;
 
         try
         {
@@ -110,10 +119,28 @@ public sealed class FileSystemWatcherKind : IWatchKind
                 sink.Named(e.FullPath);
             };
 
-            watcher.Error += (_, e) => sink.Lost(e.GetException().Message);
-            watcher.EnableRaisingEvents = true;
+            watcher.Error += (_, e) =>
+            {
+                lock (gate)
+                {
+                    if (starting)
+                    {
+                        refusal ??= e.GetException();
+                        return;
+                    }
+                }
 
-            return watcher;
+                sink.Lost(e.GetException().Message);
+            };
+
+            start(watcher);
+
+            lock (gate)
+            {
+                starting = false;
+            }
+
+            return refusal is null ? watcher : throw InputsUnwatchedException.BySystem(refusal);
         }
         catch
         {
@@ -121,6 +148,27 @@ public sealed class FileSystemWatcherKind : IWatchKind
             throw;
         }
     }
+
+    /// <summary>
+    /// The runtime's watcher over <paramref name="target"/>'s directory, started: for every entry in it, or, where only
+    /// names are wanted, for the directories in it alone.
+    /// </summary>
+    private static FileSystemWatcher Watch(WatchTarget target, IWatchSink sink)
+        => Started(
+            new FileSystemWatcher(target.Directory)
+            {
+                IncludeSubdirectories = target.Recursive,
+                InternalBufferSize = BufferBytes,
+                NotifyFilter = target.NamesOnly
+                    ? NotifyFilters.DirectoryName
+                    : NotifyFilters.FileName
+                        | NotifyFilters.DirectoryName
+                        | NotifyFilters.LastWrite
+                        | NotifyFilters.Size
+                        | NotifyFilters.CreationTime,
+            },
+            sink,
+            watcher => watcher.EnableRaisingEvents = true);
 
     private static void Release(IEnumerable<IDisposable> watchers)
     {

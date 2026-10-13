@@ -68,19 +68,21 @@ public sealed class WatchKindsTests
     }
 
     /// <summary>
-    /// A limit met is never a reason to fall back: the hub's refusal leaves as the watch's own, nothing is said of
-    /// .NET's watcher, and the next watch asks the hub again.
+    /// A limit met is never a reason to fall back: the hub's refusal leaves as the watch's own - on a directory that is
+    /// there, which .NET's watcher would have watched - nothing is said of .NET's watcher, and the next watch asks the
+    /// hub again.
     /// </summary>
     [Fact]
     public void ALimitMet_IsNeverAReasonToFallBack()
     {
+        using var temp = new TempDirectory();
         using var calls = new ScriptedInotifyCalls { InitError = InotifyErrors.InstancesTaken };
         var factory = new HarnessFactory();
         var hub = new InotifyHub(calls, () => InotifyUses.Of());
         var kind = WatchKinds.For(PlatformId.Linux, factory.Output, () => (hub, null), new SaidOnce());
 
-        Assert.Throws<InputsUnwatchedException>(() => kind.Start([("/tree/a", false)], new RecordingWatchSink()));
-        Assert.Throws<InputsUnwatchedException>(() => kind.Start([("/tree/a", false)], new RecordingWatchSink()));
+        Assert.Throws<InputsUnwatchedException>(() => kind.Start([new(temp.Path)], new RecordingWatchSink()));
+        Assert.Throws<InputsUnwatchedException>(() => kind.Start([new(temp.Path)], new RecordingWatchSink()));
 
         Assert.Equal(2, calls.InitFlags.Count);
         Assert.Empty(factory.StandardError.ToString());
@@ -91,7 +93,7 @@ public sealed class WatchKindsTests
     {
         try
         {
-            return kind.Start([(directory, false)], new RecordingWatchSink());
+            return kind.Start([new(directory)], new RecordingWatchSink());
         }
         catch (InputsUnwatchedException ex)
         {

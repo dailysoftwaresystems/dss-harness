@@ -42,6 +42,9 @@ internal static class InotifyBits
     /// <summary><c>IN_EXCL_UNLINK</c>: nothing of an entry once it is unlinked.</summary>
     public const uint ExcludeUnlinked = 0x0400_0000;
 
+    /// <summary><c>IN_ISDIR</c>: the entry an event names is a directory.</summary>
+    public const uint IsDirectory = 0x4000_0000;
+
     /// <summary><c>IN_CLOEXEC</c>, which is <c>O_CLOEXEC</c>: no program started holds the instance.</summary>
     public const int CloseOnExec = 0x0008_0000;
 

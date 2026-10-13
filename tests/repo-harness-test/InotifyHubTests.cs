@@ -32,8 +32,8 @@ public sealed class InotifyHubTests
         var first = new RecordingWatchSink();
         var second = new RecordingWatchSink();
 
-        var firstSpan = hub.Watch([A], first);
-        var secondSpan = hub.Watch([A, B], second);
+        var firstSpan = hub.Watch(In(A), first);
+        var secondSpan = hub.Watch(In(A, B), second);
 
         Assert.Equal([A, A, B], calls.Added.Select(added => added.Path));
 
@@ -60,8 +60,8 @@ public sealed class InotifyHubTests
         var gone = new RecordingWatchSink();
         var staying = new RecordingWatchSink();
 
-        var goneSpan = hub.Watch([A], gone);
-        using var stayingSpan = hub.Watch([A, B], staying);
+        var goneSpan = hub.Watch(In(A), gone);
+        using var stayingSpan = hub.Watch(In(A, B), staying);
         goneSpan.Dispose();
 
         calls.Give(new InotifyEvent(calls.DescriptorOf(A), InotifyBits.Modify, "x.cpp"));
@@ -81,10 +81,10 @@ public sealed class InotifyHubTests
     {
         using var calls = new ScriptedInotifyCalls { AddError = path => path == C ? InotifyErrors.WatchesRanOut : 0 };
         var hub = Hub(calls);
-        using var other = hub.Watch([A], new RecordingWatchSink());
+        using var other = hub.Watch(In(A), new RecordingWatchSink());
         var sink = new RecordingWatchSink();
 
-        var refused = Assert.Throws<InputsUnwatchedException>(() => hub.Watch([A, B, C], sink));
+        var refused = Assert.Throws<InputsUnwatchedException>(() => hub.Watch(In(A, B, C), sink));
 
         Assert.Equal(
             "the inputs could not be watched, so none of this work was run: this user's inotify watches ran out - "
@@ -107,7 +107,7 @@ public sealed class InotifyHubTests
         using var calls = new ScriptedInotifyCalls { InitError = InotifyErrors.InstancesTaken };
         var hub = Hub(calls);
 
-        var refused = Assert.Throws<InputsUnwatchedException>(() => hub.Watch([A], new RecordingWatchSink()));
+        var refused = Assert.Throws<InputsUnwatchedException>(() => hub.Watch(In(A), new RecordingWatchSink()));
 
         Assert.Equal(
             "the inputs could not be watched, so none of this work was run: this user's inotify instances are all taken - "
@@ -120,7 +120,7 @@ public sealed class InotifyHubTests
 
         calls.InitError = 0;
 
-        using var span = hub.Watch([A], new RecordingWatchSink());
+        using var span = hub.Watch(In(A), new RecordingWatchSink());
 
         Assert.Equal(2, calls.InitFlags.Count);
         Assert.NotEqual(-1, hub.Instance);
@@ -133,7 +133,7 @@ public sealed class InotifyHubTests
         const int noSuchDirectory = 2;
         using var calls = new ScriptedInotifyCalls { AddError = path => path == B ? noSuchDirectory : 0 };
 
-        var refused = Assert.Throws<InputsUnwatchedException>(() => Hub(calls).Watch([A, B], new RecordingWatchSink()));
+        var refused = Assert.Throws<InputsUnwatchedException>(() => Hub(calls).Watch(In(A, B), new RecordingWatchSink()));
 
         Assert.Equal($"'{B}': {InotifyErrors.Said(noSuchDirectory)}", refused.Why);
         Assert.Equal([1], calls.Removed);
@@ -149,8 +149,8 @@ public sealed class InotifyHubTests
         using var calls = new ScriptedInotifyCalls();
         var hub = Hub(calls);
 
-        using var first = hub.Watch([A, B], new RecordingWatchSink());
-        using var second = hub.Watch([C], new RecordingWatchSink());
+        using var first = hub.Watch(In(A, B), new RecordingWatchSink());
+        using var second = hub.Watch(In(C), new RecordingWatchSink());
 
         Assert.Equal([InotifyBits.CloseOnExec], calls.InitFlags);
         Assert.All(calls.Added, added => Assert.Equal(InotifyBits.Watched, added.Mask));
@@ -174,12 +174,41 @@ public sealed class InotifyHubTests
     {
         using var calls = new ScriptedInotifyCalls();
         var sink = new RecordingWatchSink();
-        using var span = Hub(calls).Watch([A], sink);
+        using var span = Hub(calls).Watch(In(A), sink);
 
         calls.Give(new InotifyEvent(calls.DescriptorOf(A), mask, "entry"));
         await sink.WaitForAsync(told, Path.Combine(A, "entry"), TestContext.Current.CancellationToken);
 
         Assert.Equal([(told, Path.Combine(A, "entry"))], sink.Heard);
+    }
+
+    /// <summary>
+    /// A directory watched for names alone - one above inputs that holds none - is told of a directory made, removed or
+    /// moved in it, and of nothing else there; a span watching the same directory for its entries, on the one
+    /// descriptor, is told of everything.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryWatchedForNamesAlone_IsToldOfTheDirectoriesInIt_AndNothingElse()
+    {
+        using var calls = new ScriptedInotifyCalls();
+        var hub = Hub(calls);
+        var names = new RecordingWatchSink();
+        var entries = new RecordingWatchSink();
+        using var namesSpan = hub.Watch([new WatchTarget(A, NamesOnly: true)], names);
+        using var entriesSpan = hub.Watch(In(A), entries);
+        var a = calls.DescriptorOf(A);
+
+        calls.Give(
+            new InotifyEvent(a, InotifyBits.Create, "file.txt"),
+            new InotifyEvent(a, InotifyBits.Modify, "file.txt"),
+            new InotifyEvent(a, InotifyBits.MovedFrom | InotifyBits.IsDirectory, "unit"),
+            new InotifyEvent(a, InotifyBits.Create | InotifyBits.IsDirectory, "made"));
+        await entries.WaitForAsync(RecordingWatchSink.WasNamed, Path.Combine(A, "made"), TestContext.Current.CancellationToken);
+        await names.WaitForAsync(RecordingWatchSink.WasNamed, Path.Combine(A, "made"), TestContext.Current.CancellationToken);
+
+        Assert.Equal([(RecordingWatchSink.WasNamed, Path.Combine(A, "unit")), (RecordingWatchSink.WasNamed, Path.Combine(A, "made"))], names.Heard);
+        Assert.Equal(4, entries.Heard.Count);
+        Assert.Single(calls.Added.Select(added => added.Mask).Distinct());
     }
 
     /// <summary>A rename is told by both its names, each as its own event, with nothing to pair.</summary>
@@ -188,7 +217,7 @@ public sealed class InotifyHubTests
     {
         using var calls = new ScriptedInotifyCalls();
         var sink = new RecordingWatchSink();
-        using var span = Hub(calls).Watch([A, B], sink);
+        using var span = Hub(calls).Watch(In(A, B), sink);
 
         calls.Give(
             new InotifyEvent(calls.DescriptorOf(A), InotifyBits.MovedFrom, "old.json"),
@@ -213,7 +242,7 @@ public sealed class InotifyHubTests
     {
         using var calls = new ScriptedInotifyCalls();
         var sink = new RecordingWatchSink();
-        using var span = Hub(calls).Watch([A, B], sink);
+        using var span = Hub(calls).Watch(In(A, B), sink);
         var a = calls.DescriptorOf(A);
 
         calls.Give(new InotifyEvent(a, mask, string.Empty));
@@ -233,9 +262,9 @@ public sealed class InotifyHubTests
     {
         using var calls = new ScriptedInotifyCalls();
         var hub = Hub(calls);
-        var gone = hub.Watch([A], new RecordingWatchSink());
+        var gone = hub.Watch(In(A), new RecordingWatchSink());
         var sink = new RecordingWatchSink();
-        using var span = hub.Watch([B], sink);
+        using var span = hub.Watch(In(B), sink);
         var a = calls.DescriptorOf(A);
 
         gone.Dispose();
@@ -257,8 +286,8 @@ public sealed class InotifyHubTests
         var hub = Hub(calls);
         var first = new RecordingWatchSink();
         var second = new RecordingWatchSink();
-        using var firstSpan = hub.Watch([A], first);
-        using var secondSpan = hub.Watch([B], second);
+        using var firstSpan = hub.Watch(In(A), first);
+        using var secondSpan = hub.Watch(In(B), second);
 
         calls.Give(new InotifyEvent(-1, InotifyBits.QueueOverflow, string.Empty));
 
@@ -275,8 +304,8 @@ public sealed class InotifyHubTests
         var hub = Hub(calls);
         var first = new RecordingWatchSink();
         var second = new RecordingWatchSink();
-        using var firstSpan = hub.Watch([A], first);
-        using var secondSpan = hub.Watch([B], second);
+        using var firstSpan = hub.Watch(In(A), first);
+        using var secondSpan = hub.Watch(In(B), second);
 
         calls.GiveBytes([
             .. InotifyRecord.Of(new InotifyEvent(calls.DescriptorOf(A), InotifyBits.Create, "whole.txt")),
@@ -297,8 +326,8 @@ public sealed class InotifyHubTests
         var hub = Hub(calls);
         var first = new RecordingWatchSink();
         var second = new RecordingWatchSink();
-        using var firstSpan = hub.Watch([A], first);
-        using var secondSpan = hub.Watch([B], second);
+        using var firstSpan = hub.Watch(In(A), first);
+        using var secondSpan = hub.Watch(In(B), second);
 
         calls.GiveBytes([
             .. InotifyRecord.One(calls.DescriptorOf(A), InotifyBits.Create, [0x61, 0xff], pad: 16),
@@ -316,7 +345,7 @@ public sealed class InotifyHubTests
     {
         using var calls = new ScriptedInotifyCalls();
         var sink = new RecordingWatchSink();
-        using var span = Hub(calls).Watch([A], sink);
+        using var span = Hub(calls).Watch(In(A), sink);
 
         calls.FailRead(InotifyErrors.Interrupted);
         calls.Give(new InotifyEvent(calls.DescriptorOf(A), InotifyBits.Create, "after.txt"));
@@ -337,7 +366,7 @@ public sealed class InotifyHubTests
         using var calls = new ScriptedInotifyCalls();
         var hub = Hub(calls);
         var lost = new RecordingWatchSink();
-        using var lostSpan = hub.Watch([A], lost);
+        using var lostSpan = hub.Watch(In(A), lost);
         var first = hub.Instance;
 
         calls.FailRead(ioError);
@@ -347,7 +376,7 @@ public sealed class InotifyHubTests
         Assert.Equal([first], calls.InstancesClosed);
 
         var sink = new RecordingWatchSink();
-        using var span = hub.Watch([B], sink);
+        using var span = hub.Watch(In(B), sink);
 
         Assert.Equal(2, calls.InitFlags.Count);
         Assert.NotEqual(first, hub.Instance);
@@ -357,8 +386,8 @@ public sealed class InotifyHubTests
     }
 
     /// <summary>
-    /// Through the hub every directory that holds an input is watched for itself, however many there are, and none all
-    /// the way down: a watch of 65 such directories adds 65.
+    /// Through the hub every directory that holds an input, or lies above one, is watched for itself, however many there
+    /// are, and none all the way down: a watch of 65 such directories below one adds 67.
     /// </summary>
     [Fact]
     public void AWatchThroughTheHub_AddsEveryDirectoryOfInputs_NoneAllTheWayDown()
@@ -376,8 +405,9 @@ public sealed class InotifyHubTests
 
         using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, kind);
 
+        // And the two above them, the root and src, for the names of the directories in them.
         Assert.Null(kind.MostDirectories);
-        Assert.Equal(65, calls.Added.Count);
+        Assert.Equal(67, calls.Added.Count);
         Assert.All(watch.Watched, watched => Assert.False(watched.Recursive));
     }
 
@@ -387,11 +417,14 @@ public sealed class InotifyHubTests
     {
         using var calls = new ScriptedInotifyCalls();
 
-        Assert.Throws<ArgumentException>(() => new InotifyWatchKind(Hub(calls)).Start([(A, false), (B, true)], new RecordingWatchSink()));
+        Assert.Throws<ArgumentException>(() => new InotifyWatchKind(Hub(calls)).Start([new(A), new(B, Recursive: true)], new RecordingWatchSink()));
         Assert.Empty(calls.Added);
     }
 
     private static InotifyHub Hub(ScriptedInotifyCalls calls) => new(calls, () => InotifyUses.Of(Holding));
+
+    /// <summary>Each of <paramref name="directories"/>, watched for its entries.</summary>
+    private static WatchTarget[] In(params string[] directories) => [.. directories.Select(directory => new WatchTarget(directory))];
 
     private static Task WaitLostAsync(RecordingWatchSink sink)
         => WaitUntilAsync(() => sink.Heard.Any(heard => heard.What == RecordingWatchSink.WasLost));

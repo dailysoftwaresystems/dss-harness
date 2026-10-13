@@ -79,12 +79,6 @@ public sealed class InputsUnwatchedException : Exception
     public static InputsUnwatchedException NoTree(string root)
         => new($"'{ReportText.Printable(root)}' is not a directory");
 
-    /// <summary>None of the directories holding an input is there, so there is nothing a watch could be put on.</summary>
-    /// <param name="inputs">How many inputs were to be watched.</param>
-    /// <param name="root">The tree they are in.</param>
-    public static InputsUnwatchedException NoDirectory(int inputs, string root)
-        => new($"no directory holding any of the {ReportText.Counted(inputs, "input")} is present under '{ReportText.Printable(root)}'");
-
     /// <summary><c> - key is N</c>, or nothing where the limit could not be read.</summary>
     private static string Limit(string key, long? limit) => limit is { } value ? $" - {key} is {value.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
 

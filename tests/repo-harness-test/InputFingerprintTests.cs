@@ -206,7 +206,7 @@ public sealed class InputFingerprintTests
     /// <summary>
     /// A directory of inputs moved aside while the work ran, and put back before it ended, counts every input in it: put
     /// back, each reads as it did at both ends, while the work found none of them in between. Heard through the directory
-    /// above it, which is watched because it holds an input of its own.
+    /// above it - here the root, which holds no input, and is watched for the names of the directories in it.
     /// </summary>
     [Fact]
     public async Task ADirectoryOfInputsMovedAsideAndPutBack_CountsItsInputs()
@@ -214,8 +214,7 @@ public sealed class InputFingerprintTests
         using var temp = new TempDirectory();
         var fingerprint = Create();
         Seed(temp);
-        temp.WriteFile("README.md", "readme");
-        string[] inputs = [.. Inputs, "README.md"];
+        string[] inputs = Inputs;
 
         var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
         using var watch = Watching(() => fingerprint.Watch(temp.Path, inputs, before));
@@ -467,7 +466,7 @@ public sealed class InputFingerprintTests
 
         Assert.Null(watch.Failure);
         Assert.Equal(
-            [(temp.Path, false), (temp.Combine(".worktrees"), false), (temp.Combine("src", "a"), false), (temp.Combine("src", "b"), false)],
+            [new WatchTarget(temp.Path), new(temp.Combine(".worktrees")), new(temp.Combine("src"), NamesOnly: true), new(temp.Combine("src", "a")), new(temp.Combine("src", "b"))],
             watch.Watched);
     }
 
@@ -492,13 +491,13 @@ public sealed class InputFingerprintTests
         using var watch = new InputWatch(temp.Path, [.. sources, ".worktrees/.gitkeep"], StringComparer.Ordinal, new ScriptedWatchKind());
 
         Assert.Null(watch.Failure);
-        Assert.Equal([(temp.Combine(".worktrees"), false), (temp.Combine("src"), true)], watch.Watched);
+        Assert.Equal([new WatchTarget(temp.Path, NamesOnly: true), new(temp.Combine(".worktrees")), new(temp.Combine("src"), Recursive: true)], watch.Watched);
     }
 
     /// <summary>
-    /// A watch takes as many watches as the tool allows itself and no more: directories of inputs that fit are each watched
-    /// for their own files, and where taking top-level directories whole still leaves more than fit, the tree is watched
-    /// whole, as one watch.
+    /// A watch takes as many watches as the tool allows itself and no more, the root above the inputs counted among them:
+    /// directories of inputs that fit are each watched for their own files, and where taking top-level directories whole
+    /// still leaves more than fit, the tree is watched whole, as one watch.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -506,7 +505,7 @@ public sealed class InputFingerprintTests
     public void AWatch_TakesNoMoreWatchesThanItAllows(bool oneMore)
     {
         using var temp = new TempDirectory();
-        var inputs = Enumerable.Range(0, 64).Select(index => $"d{index:00}/f.cpp").ToList();
+        var inputs = Enumerable.Range(0, FileSystemWatcherKind.MostDirectoriesWatched - 1).Select(index => $"d{index:00}/f.cpp").ToList();
 
         // A top-level directory of two directories of inputs: taken whole, it saves one watch, and one more is needed.
         if (oneMore)
@@ -523,7 +522,9 @@ public sealed class InputFingerprintTests
 
         Assert.Null(watch.Failure);
         Assert.Equal(
-            oneMore ? [(temp.Path, true)] : inputs.Select(input => (temp.Combine(input[..input.IndexOf('/')]), false)).ToList(),
+            oneMore
+                ? [new WatchTarget(temp.Path, Recursive: true)]
+                : [new WatchTarget(temp.Path, NamesOnly: true), .. inputs.Select(input => new WatchTarget(temp.Combine(input[..input.IndexOf('/')])))],
             watch.Watched);
     }
 
@@ -557,6 +558,43 @@ public sealed class InputFingerprintTests
         // Heard in order: word of either write, had the watch been told of it, came before word of the edit after both.
         Assert.Equal([".worktrees/notes.txt"], heard.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
         Assert.Equal(InputChange.Moved, InputFingerprint.Compare(before, after, watch).Change);
+    }
+
+    /// <summary>
+    /// With a real watch, inputs that lie only deep in the tree - no input above them - count every one of them where the
+    /// directory they are in, or a directory above it, is moved aside and put back while the work runs.
+    /// </summary>
+    [Theory]
+    [InlineData("tests/unit")]
+    [InlineData("tests")]
+    public async Task ADirectoryAboveDeepInputsMovedAsideAndPutBack_CountsThem_ThoughNoInputLiesAboveThem(string moved)
+    {
+        Assert.SkipWhen(
+            OperatingSystem.IsWindows() && moved != "tests/unit",
+            "Windows refuses to rename a directory while a handle is open below it - the watch's own, on the directory of "
+            + "inputs - so there a directory above a watched one cannot move while the work runs.");
+
+        using var temp = new TempDirectory();
+        string[] inputs = ["tests/unit/a.cpp", "tests/unit/b.cpp"];
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, input);
+        }
+
+        var fingerprint = Create();
+        var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+        using var watch = Watching(() => fingerprint.Watch(temp.Path, inputs, before));
+        var path = temp.Combine(moved.Split('/'));
+
+        Directory.Move(path, path + ".aside");
+        await WaitForAsync(watch, "tests/unit/b.cpp", TestContext.Current.CancellationToken);
+        Directory.Move(path + ".aside", path);
+
+        var after = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+
+        Assert.Equal(InputChange.Unchanged, InputFingerprint.Compare(before, after).Change);
+        Assert.Equal(inputs, InputFingerprint.Compare(before, after, watch).Changed);
     }
 
     /// <summary>The runtime's own watcher, which the tests of a real watch run under.</summary>

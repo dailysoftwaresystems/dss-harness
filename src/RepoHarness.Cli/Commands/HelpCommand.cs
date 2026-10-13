@@ -66,7 +66,13 @@ internal static class HelpCommand
     [
         ([LegVerdict.Violated], ["Fix the arm's declaration, or the code it guards"]),
         ([LegVerdict.Survived], ["Strengthen the test that should have failed"]),
-        ([LegVerdict.InputsMoved, LegVerdict.Unmeasured], ["Let the tree settle, then run again"]),
+        (
+            [LegVerdict.InputsMoved, LegVerdict.Unmeasured],
+            [
+                "Let the tree settle, then run again; where its",
+                "inputs could not be watched, free or raise what",
+                "the machine's reason names, or restore the tree",
+            ]),
         ([LegVerdict.Contended], ["Wait for the other run"]),
         ([LegVerdict.Unwitnessed], ["Find out what actually ran"]),
         ([LegVerdict.LogHeld], ["Find out which run still owns the logs"]),
@@ -767,7 +773,10 @@ internal static class HelpCommand
             + "reason can be this user's inotify instances all taken (fs.inotify.max_user_instances) - a process of this tool "
             + "holds one, however many legs it runs - or its inotify watches run out (fs.inotify.max_user_watches), one for each "
             + "directory the inputs lie in; each is said with the limit and the processes /proc shows holding it, the most "
-            + "first. The leg does not wait for either: what holds them is another program, whose end nothing here can read.");
+            + "first. The leg does not wait for either: what holds them is another program, whose end nothing here can read. "
+            + "Its remedy is the machine's, not the tree's: free or raise what the reason names - end a program holding this "
+            + "user's inotify instances or watches, or raise the limit - or put back the tree the watch was to be put on, then "
+            + "run again.");
         builder.AppendLine();
         builder.AppendLine("A run's closing line names its verdict with the count of legs that reached it, and");
         builder.AppendLine("then the rest, worst first - 'poisoned: 2 of 8 leg(s); 3 failed, 3 passed' - never");
@@ -1319,7 +1328,8 @@ internal static class HelpCommand
         builder.AppendLine($"    {CiExit.MatrixDidNotRun,3}  the matrix did not run, which is never read as every leg passing");
         builder.AppendLine();
         builder.AppendLine("  build, test, run, check-mutations");
-        builder.AppendLine($"    {LegExit.InputsMoved,3}  inputs-moved or unmeasured: let the tree settle, then run again");
+        builder.AppendLine($"    {LegExit.InputsMoved,3}  inputs-moved or unmeasured: let the tree settle, then run again; where the inputs");
+        builder.AppendLine("         could not be watched, free or raise what the machine's reason names, or restore the tree");
         builder.AppendLine($"    {LegExit.Contended,3}  contended: wait for the other run");
         builder.AppendLine($"    {LegExit.Unwitnessed,3}  unwitnessed: find out what actually ran");
         builder.AppendLine($"    {LegExit.LogHeld,3}  log-held: find out which run still owns this leg's logs");
@@ -2470,17 +2480,18 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "Its inputs are watched only as deep as they lie - each directory holding one, for its own files - so a build in "
-            + "another tree below the worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every "
-            + "such directory is watched, however many there are, through one inotify instance for the whole process. On "
-            + $"Windows and macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories, so past them the top-level "
+            "Its inputs are watched only as deep as they lie - each directory holding one, for its own files, and each "
+            + "directory above one, the root among them, for the names of the directories in it alone - so a build in another "
+            + "tree below the worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such "
+            + "directory is watched, however many there are, through one inotify instance for the whole process. On Windows "
+            + $"and macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories, so past them the top-level "
             + "directories holding the most are watched all the way down, and a tree whose inputs lie in more top-level "
-            + "directories than that, the root counted where it holds one, is watched whole. Where inotify cannot be called "
-            + "directly on Linux, .NET's watcher stands in, as on Windows and macOS, each directory taking an inotify instance "
-            + "of its own, and the process says so once. A directory lying in a watched one that goes, arrives or changes its name "
-            + "counts every input in or below it, under both names of a rename, though it be back when the work ends; one merely "
-            + "written to counts none. A leg whose inputs cannot be watched at all runs none of its work, and ends unmeasured at "
-            + "once, saying why ('help verdicts'). Durations that diverge between legs, or that span a clock step or a host "
+            + "directories than that, the root counted among them, is watched whole. Where inotify cannot be called directly "
+            + "on Linux, .NET's watcher stands in, as on Windows and macOS, each directory taking an inotify instance of its "
+            + "own, and the process says so once. A directory that holds inputs, or lies above some, going, arriving or "
+            + "changing its name counts every input in or below it, under both names of a rename, though it be back when the "
+            + "work ends; one merely written to counts none. A leg whose inputs cannot be watched at all runs none of its "
+            + "work, and ends unmeasured at once, saying why ('help verdicts'). Durations that diverge between legs, or that span a clock step or a host "
             + "sleep, are marked suspect, and never change a verdict.");
         builder.AppendLine();
         builder.AppendLine("A test count countPattern reads that differs from the other legs of the same project");

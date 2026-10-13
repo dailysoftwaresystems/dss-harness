@@ -106,7 +106,7 @@ public sealed class LegGuardsTests
             TestContext.Current.CancellationToken))
         {
             Assert.Equal((1, 0), (kind.Starts, kind.Stops));
-            Assert.Equal([(temp.Combine("src"), false)], kind.Targets);
+            Assert.Equal([new WatchTarget(temp.Path, NamesOnly: true), new WatchTarget(temp.Combine("src"))], kind.Targets);
         }
 
         Assert.Equal(1, kind.Stops);

@@ -138,6 +138,30 @@ public sealed class RunCheckGateTests
         Assert.Contains("could not be run", Assert.Single(result.Reasons), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A check whose own run could not watch its inputs was not run, as one refused was not: it confirms nothing, and
+    /// says why in the refusal's words - never leaving the run that carries it to be called unmeasured.
+    /// </summary>
+    [Fact]
+    public async Task ConfirmAsync_ExcusesNothing_WhenTheCheckedRunnersInputsCouldNotBeWatched()
+    {
+        var entry = ExpectedExceptionMatcherTests.Entry(
+            messages: ["busy"],
+            runChecks: [Check("probe", new RunCheckExpectation { Success = true })]);
+        var unwatched = InputsUnwatchedException.BySystem(new IOException(ScriptedWatchKind.SystemsWords));
+
+        var result = await new RunCheckGate(Output()).ConfirmAsync(
+            Scope(),
+            entry,
+            window: null,
+            steps: [],
+            (_, _) => throw unwatched,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Confirmed);
+        Assert.Equal($"probe: could not be run ({unwatched.Message}), so nothing confirms the entry", Assert.Single(result.Reasons));
+    }
+
     [Fact]
     public async Task ConfirmAsync_Refuses_ACheckThatNamesItsOwnRunner()
     {

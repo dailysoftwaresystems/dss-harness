@@ -455,11 +455,11 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The config topic says a leg's inputs are watched only as deep as they lie, so a build in another tree below the
-    /// worktrees root is never heard: on Linux however many directories they lie in, through one inotify instance for
-    /// the process; on Windows and macOS up to the number of directories .NET's watcher takes, read from the code, past
-    /// which some are watched all the way down - and where inotify cannot be called directly, that .NET's watcher
-    /// stands in, said once.
+    /// The config topic says a leg's inputs are watched only as deep as they lie, and the directories above them for
+    /// the names in them alone, so a build in another tree below the worktrees root is never heard: on Linux however
+    /// many directories they lie in, through one inotify instance for the process; on Windows and macOS up to the number
+    /// of directories .NET's watcher takes, read from the code, past which some are watched all the way down - and where
+    /// inotify cannot be called directly, that .NET's watcher stands in, said once.
     /// </summary>
     [Fact]
     public async Task ConfigTopic_SaysInputsAreWatchedOnlyAsDeepAsTheyLie()
@@ -467,12 +467,13 @@ public sealed partial class HelpTests
         var result = await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken);
 
         Assert.Contains(
-            "Its inputs are watched only as deep as they lie - each directory holding one, for its own files - so a build in another "
-                + "tree below the worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such "
-                + "directory is watched, however many there are, through one inotify instance for the whole process. On Windows and "
+            "Its inputs are watched only as deep as they lie - each directory holding one, for its own files, and each directory "
+                + "above one, the root among them, for the names of the directories in it alone - so a build in another tree below the "
+                + "worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such directory is watched, "
+                + "however many there are, through one inotify instance for the whole process. On Windows and "
                 + $"macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories, so past them the top-level directories "
                 + "holding the most are watched all the way down, and a tree whose inputs lie in more top-level directories than that, "
-                + "the root counted where it holds one, is watched whole. Where inotify cannot be called directly on Linux, .NET's "
+                + "the root counted among them, is watched whole. Where inotify cannot be called directly on Linux, .NET's "
                 + "watcher stands in, as on Windows and macOS, each directory taking an inotify instance of its own, and the process "
                 + "says so once.",
             Words(result.StandardOutput),
@@ -480,9 +481,9 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The config topic says what a directory the watch hears go, arrive or change its name counts - every input in or
-    /// below it, though it be back when the work ends - and that a leg whose inputs cannot be watched runs none of its
-    /// work.
+    /// The config topic says what a directory that holds inputs or lies above some going, arriving or changing its name
+    /// counts - every input in or below it, though it be back when the work ends - and that a leg whose inputs cannot be
+    /// watched runs none of its work.
     /// </summary>
     [Fact]
     public async Task ConfigTopic_SaysWhatADirectoryThatWentCounts_AndThatAnUnwatchedLegRunsNothing()
@@ -490,8 +491,9 @@ public sealed partial class HelpTests
         var said = Words((await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken)).StandardOutput);
 
         Assert.Contains(
-            "and the process says so once. A directory lying in a watched one that goes, arrives or changes its name counts every input in "
-                + "or below it, under both names of a rename, though it be back when the work ends; one merely written to counts none. "
+            "and the process says so once. A directory that holds inputs, or lies above some, going, arriving or changing its name "
+                + "counts every input in or below it, under both names of a rename, though it be back when the work ends; one merely "
+                + "written to counts none. "
                 + "A leg whose inputs cannot be watched at all runs none of its work, and ends unmeasured at once, saying why ('help "
                 + "verdicts').",
             said,
@@ -513,6 +515,35 @@ public sealed partial class HelpTests
                 + "after, the whole of the work was spent to learn what was known before it began. A watch that started and was lost "
                 + "while the work ran still leaves it unmeasured, as the work ends.",
             said,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The remedy for a leg whose inputs could not be watched is the machine's, never the tree's settling: the verdicts
+    /// topic says so where it says why such a leg ran nothing, and again among the verdicts' remedies, and the exit codes
+    /// topic beside the code it exits with.
+    /// </summary>
+    [Fact]
+    public async Task TheRemedyForInputsThatCouldNotBeWatched_IsTheMachines_WhereverExitThreesRemedyIsSaid()
+    {
+        var verdicts = (await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput;
+        var codes = (await CliRunner.RunAsync(["help", "exit-codes"], TestContext.Current.CancellationToken)).StandardOutput;
+
+        Assert.Contains(
+            "Its remedy is the machine's, not the tree's: free or raise what the reason names - end a program holding this user's "
+                + "inotify instances or watches, or raise the limit - or put back the tree the watch was to be put on, then run again.",
+            Words(verdicts),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "  3  inputs-moved, unmeasured   Let the tree settle, then run again; where its" + Environment.NewLine
+                + "                                inputs could not be watched, free or raise what" + Environment.NewLine
+                + "                                the machine's reason names, or restore the tree" + Environment.NewLine,
+            verdicts,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"    {LegExit.InputsMoved,3}  inputs-moved or unmeasured: let the tree settle, then run again; where the inputs" + Environment.NewLine
+                + "         could not be watched, free or raise what the machine's reason names, or restore the tree" + Environment.NewLine,
+            codes,
             StringComparison.Ordinal);
     }
 

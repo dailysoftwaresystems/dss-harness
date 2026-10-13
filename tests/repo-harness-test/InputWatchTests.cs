@@ -13,11 +13,12 @@ public sealed class InputWatchTests
     private static readonly string[] Inputs = ["README.md", "src/a/x.cpp", "src/a/deep/y.cpp", "src/b/z.cpp"];
 
     /// <summary>
-    /// A watch names the directories its inputs are in to the kind that watches for it, once, and stops that watching
-    /// when it is disposed of - once too.
+    /// A watch names to the kind that watches for it, once, the directories its inputs are in, for their entries, and
+    /// each directory above them, for the names of the directories in it alone; and stops that watching when it is
+    /// disposed of - once too.
     /// </summary>
     [Fact]
-    public void AWatch_HandsItsKindTheDirectoriesItsInputsAreIn_AndStopsItWhenDisposed()
+    public void AWatch_HandsItsKindTheDirectoriesItsInputsAreIn_AndThoseAboveThem_AndStopsItWhenDisposed()
     {
         using var temp = Tree();
         var kind = new ScriptedWatchKind();
@@ -26,7 +27,7 @@ public sealed class InputWatchTests
         {
             Assert.Equal(1, kind.Starts);
             Assert.Equal(
-                [(temp.Path, false), (temp.Combine("src", "a"), false), (temp.Combine("src", "a", "deep"), false), (temp.Combine("src", "b"), false)],
+                [new WatchTarget(temp.Path), new(temp.Combine("src"), NamesOnly: true), new(temp.Combine("src", "a")), new(temp.Combine("src", "a", "deep")), new(temp.Combine("src", "b"))],
                 kind.Targets!.OrderBy(target => target.Directory, StringComparer.Ordinal));
             Assert.Equal(kind.Targets!.OrderBy(target => target.Directory, StringComparer.Ordinal), watch.Watched);
             Assert.Same(watch, kind.Sink);
@@ -231,22 +232,23 @@ public sealed class InputWatchTests
     }
 
     /// <summary>
-    /// A watch none of whose inputs' directories is there has nothing to be put on, and is never made: said with how many
-    /// inputs it was for, and where they were looked for.
+    /// A watch none of whose inputs' directories is there is put on the directories above them that are - the root at
+    /// least - for the names of the directories in them: a directory of inputs arriving while the work runs counts every
+    /// input in or below it.
     /// </summary>
     [Fact]
-    public void AWatchWithNoDirectoryOfAnInputThere_IsNeverMade_AndSaysSo()
+    public void AWatchWithNoDirectoryOfAnInputThere_WatchesThoseAboveThem_ForADirectoryOfThemArriving()
     {
         using var temp = new TempDirectory();
         var kind = new ScriptedWatchKind();
 
-        var refused = Assert.Throws<InputsUnwatchedException>(
-            () => new InputWatch(temp.Path, ["gen/a.json", "gen/deep/b.json", "out/c.json"], StringComparer.Ordinal, kind));
+        using var watch = new InputWatch(temp.Path, ["gen/a.json", "gen/deep/b.json", "out/c.json"], StringComparer.Ordinal, kind);
 
-        Assert.Equal(
-            $"the inputs could not be watched, so none of this work was run: no directory holding any of the 3 input(s) is present under '{temp.Path}'",
-            refused.Message);
-        Assert.Equal(0, kind.Starts);
+        Assert.Equal([new WatchTarget(temp.Path, NamesOnly: true)], watch.Watched);
+
+        kind.Sink!.Named(temp.Combine("gen"));
+
+        Assert.Equal(["gen/a.json", "gen/deep/b.json"], watch.Changed);
     }
 
     /// <summary>
@@ -276,11 +278,51 @@ public sealed class InputWatchTests
 
         using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, kind);
 
+        var holding = inputs.Skip(1).Select(input => temp.Combine(input[..input.LastIndexOf('/')].Split('/'))).Append(temp.Path).ToList();
+        var above = Enumerable.Range(0, tops).Select(top => temp.Combine($"t{top:000}")).ToList();
+
         Assert.Equal(
-            inputs.Skip(1).Select(input => temp.Combine(input[..input.LastIndexOf('/')].Split('/'))).Append(temp.Path).Order(StringComparer.Ordinal),
-            watch.Watched.Select(target => target.Directory));
-        Assert.All(watch.Watched, target => Assert.False(target.Recursive));
-        Assert.Equal(directories + 1, kind.Targets!.Count);
+            holding.Select(directory => new WatchTarget(directory)).Concat(above.Select(directory => new WatchTarget(directory, NamesOnly: true))).OrderBy(target => target.Directory, StringComparer.Ordinal),
+            watch.Watched);
+        Assert.Equal(directories + 1 + tops, kind.Targets!.Count);
+    }
+
+    /// <summary>
+    /// Inputs that lie only deep in the tree are watched where they lie, and every directory from the root down to
+    /// theirs is watched for the names of the directories in it: so a directory above them going, arriving or changing
+    /// its name - one whose parent holds no input - counts every input below it, and nothing else in those directories
+    /// is asked for.
+    /// </summary>
+    [Theory]
+    [InlineData("tests/unit", new[] { "tests/unit/a.cpp", "tests/unit/deep/b.cpp" })]
+    [InlineData("tests", new[] { "tests/unit/a.cpp", "tests/unit/deep/b.cpp" })]
+    [InlineData("tests/unit/deep", new[] { "tests/unit/deep/b.cpp" })]
+    public void InputsDeepInTheTree_AreWatchedWhereTheyLie_AndADirectoryAboveThemNamedCountsThem(string directory, string[] counted)
+    {
+        using var temp = new TempDirectory();
+        string[] inputs = ["tests/unit/a.cpp", "tests/unit/deep/b.cpp"];
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, input);
+        }
+
+        var kind = new ScriptedWatchKind();
+
+        using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, kind);
+
+        Assert.Equal(
+            [
+                new WatchTarget(temp.Path, NamesOnly: true),
+                new(temp.Combine("tests"), NamesOnly: true),
+                new(temp.Combine("tests", "unit")),
+                new(temp.Combine("tests", "unit", "deep")),
+            ],
+            watch.Watched);
+
+        kind.Sink!.Named(temp.Combine(directory.Split('/')));
+
+        Assert.Equal(counted, watch.Changed);
     }
 
     /// <summary>A tree holding every one of <see cref="Inputs"/>.</summary>

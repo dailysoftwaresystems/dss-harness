@@ -26,7 +26,7 @@ internal sealed class InotifyHub
     private readonly IInotifyCalls _calls;
     private readonly Func<InotifyUse> _use;
     private readonly Lock _gate = new();
-    private readonly Dictionary<int, List<(Span Span, string Directory)>> _watching = [];
+    private readonly Dictionary<int, List<(Span Span, string Directory, bool NamesOnly)>> _watching = [];
     private int _instance = -1;
 
     /// <summary>A hub over <paramref name="calls"/>, which makes no instance until something is watched.</summary>
@@ -51,23 +51,24 @@ internal sealed class InotifyHub
     }
 
     /// <summary>
-    /// Watches each of <paramref name="directories"/> for its own entries, and the directory itself going or moving,
-    /// until what this returns is disposed, telling <paramref name="sink"/>.
+    /// Watches each of <paramref name="targets"/>' directories for its own entries - or, where only names are wanted, for
+    /// the directories in it alone - and the directory itself going or moving, until what this returns is disposed,
+    /// telling <paramref name="sink"/>.
     /// </summary>
-    /// <param name="directories">Each directory, by its full path.</param>
+    /// <param name="targets">Each directory, by its full path, and whether only the names of the directories in it are wanted.</param>
     /// <param name="sink">Told of what happens in them.</param>
     /// <returns>The span's watches: disposed, it is told nothing more, and each descriptor no span still watches is removed.</returns>
     /// <exception cref="InputsUnwatchedException">
     /// The instance could not be made, or a directory not watched: every watch this call added is removed first. This
     /// user's instances all taken, or its watches run out, are said with the limit and who holds them.
     /// </exception>
-    public IDisposable Watch(IReadOnlyList<string> directories, IWatchSink sink)
+    public IDisposable Watch(IReadOnlyList<WatchTarget> targets, IWatchSink sink)
     {
-        ArgumentNullException.ThrowIfNull(directories);
+        ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(sink);
 
         var span = new Span(this, sink);
-        var refusal = Watched(span, directories);
+        var refusal = Watched(span, targets);
 
         if (refusal is not { } refused)
         {
@@ -78,18 +79,18 @@ internal sealed class InotifyHub
         throw refused switch
         {
             (InotifyErrors.InstancesTaken, null) => InputsUnwatchedException.InstancesTaken(_use()),
-            (InotifyErrors.WatchesRanOut, not null) => InputsUnwatchedException.WatchesRanOut(_use(), directories.Count),
+            (InotifyErrors.WatchesRanOut, not null) => InputsUnwatchedException.WatchesRanOut(_use(), targets.Count),
             (var error, null) => InputsUnwatchedException.BySystem($"inotify_init1: {InotifyErrors.Said(error)}"),
             (var error, { } directory) => InputsUnwatchedException.BySystem($"'{ReportText.Printable(directory)}': {InotifyErrors.Said(error)}"),
         };
     }
 
     /// <summary>
-    /// Adds <paramref name="directories"/> to the instance for <paramref name="span"/>, making the instance first where
+    /// Adds <paramref name="targets"/> to the instance for <paramref name="span"/>, making the instance first where
     /// there is none; or, where a call fails, removes what it added and answers the error and the directory refused -
     /// none where it was the instance that could not be made.
     /// </summary>
-    private (int Error, string? Directory)? Watched(Span span, IReadOnlyList<string> directories)
+    private (int Error, string? Directory)? Watched(Span span, IReadOnlyList<WatchTarget> targets)
     {
         lock (_gate)
         {
@@ -106,8 +107,10 @@ internal sealed class InotifyHub
                 StartReading(instance);
             }
 
-            foreach (var directory in directories)
+            foreach (var (directory, _, namesOnly) in targets)
             {
+                // One mask for every directory, whatever is wanted of it: the kernel keeps one for a directory however
+                // many spans name it. What a span wants only names of is told it alone.
                 var descriptor = _calls.AddWatch(_instance, directory, InotifyBits.Watched, out var error);
 
                 if (descriptor < 0)
@@ -121,7 +124,7 @@ internal sealed class InotifyHub
                     _watching[descriptor] = spans = [];
                 }
 
-                spans.Add((span, directory));
+                spans.Add((span, directory, namesOnly));
                 span.Descriptors.Add(descriptor);
             }
 
@@ -228,21 +231,11 @@ internal sealed class InotifyHub
             return;
         }
 
-        if (heard.NameUnreadable)
-        {
-            foreach (var (span, directory) in spans)
-            {
-                told.Add((span, sink => sink.Lost($"inotify named an entry of '{ReportText.Printable(directory)}' in bytes that are no UTF-8, so what it said of it is lost")));
-            }
-
-            return;
-        }
-
         // The directory itself went, moved, or its watch went with its file system: it took every entry with it, and
         // the descriptor watches nothing a span named any more.
         if (heard.Says(InotifyBits.DeleteSelf | InotifyBits.MoveSelf | InotifyBits.Ignored))
         {
-            foreach (var (span, directory) in spans)
+            foreach (var (span, directory, _) in spans)
             {
                 told.Add((span, sink => sink.Named(directory)));
             }
@@ -261,8 +254,20 @@ internal sealed class InotifyHub
         var named = heard.Says(InotifyBits.Create | InotifyBits.Delete | InotifyBits.MovedFrom | InotifyBits.MovedTo);
         var written = heard.Says(InotifyBits.Modify | InotifyBits.Attrib);
 
-        foreach (var (span, directory) in spans)
+        foreach (var (span, directory, namesOnly) in spans)
         {
+            // Of a directory above inputs that holds none, only the directories in it are wanted.
+            if (namesOnly && !heard.Says(InotifyBits.IsDirectory))
+            {
+                continue;
+            }
+
+            if (heard.NameUnreadable)
+            {
+                told.Add((span, sink => sink.Lost($"inotify named an entry of '{ReportText.Printable(directory)}' in bytes that are no UTF-8, so what it said of it is lost")));
+                continue;
+            }
+
             var path = heard.Name.Length == 0 ? directory : Path.Combine(directory, heard.Name);
 
             if (named)

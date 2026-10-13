@@ -12,7 +12,7 @@ internal sealed class InotifyWatchKind(InotifyHub hub) : IWatchKind
     public int? MostDirectories => null;
 
     /// <inheritdoc/>
-    public IDisposable Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink)
+    public IDisposable Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink)
     {
         ArgumentNullException.ThrowIfNull(targets);
 
@@ -22,6 +22,6 @@ internal sealed class InotifyWatchKind(InotifyHub hub) : IWatchKind
             throw new ArgumentException($"'{recursive}' is to be watched all the way down, which a watch through inotify's hub never is.", nameof(targets));
         }
 
-        return hub.Watch([.. targets.Select(target => target.Directory)], sink);
+        return hub.Watch(targets, sink);
     }
 }

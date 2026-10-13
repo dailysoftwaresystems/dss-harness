@@ -357,7 +357,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
     private readonly Dictionary<string, List<string>> _below;
     private readonly HashSet<string> _changed = new(StringComparer.Ordinal);
     private readonly string _root;
-    private readonly IReadOnlyList<(string Directory, bool Recursive)> _targets;
+    private readonly IReadOnlyList<WatchTarget> _targets;
     private readonly IDisposable _watching;
     private readonly Action<string>? _heardElsewhere;
     private string? _failure;
@@ -374,7 +374,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
     /// only where the inputs are keeps down. Never kept here, where a long build's every file would be.
     /// </param>
     /// <exception cref="InputsUnwatchedException">
-    /// The tree is not there, no directory of an input is, or <paramref name="kind"/> could not watch one: nothing is held.
+    /// The tree is not there, or <paramref name="kind"/> could not watch a directory: nothing is held.
     /// </exception>
     internal InputWatch(
         string root,
@@ -423,22 +423,20 @@ public sealed class InputWatch : IDisposable, IWatchSink
             throw InputsUnwatchedException.NoTree(_root);
         }
 
+        // The root at least, wherever an input is: a directory of inputs that is not there yet is heard arriving.
         _targets = [.. Targets(kind.MostDirectories)];
-
-        if (_targets.Count == 0)
-        {
-            throw InputsUnwatchedException.NoDirectory(_tracked.Count, _root);
-        }
 
         // Last, with everything it tells of in place: a kind may tell of something before it returns.
         _watching = kind.Start(_targets, this);
     }
 
     /// <summary>
-    /// The directories to watch, and whether each is watched all the way down: each directory that
-    /// holds a tracked input, the root among them, for its own files only - and, past
-    /// <paramref name="most"/>, the top-level directories holding the most of them all the way down
-    /// instead, until the rest fit. With no bound, none is watched all the way down.
+    /// The directories to watch, and how: each directory that holds a tracked input, for its own
+    /// entries only; each directory above one - the root among them - for the names of the
+    /// directories in it alone, so that one of those going, arriving or changing its name is heard
+    /// wherever the inputs lie; and, past <paramref name="most"/>, the top-level directories holding
+    /// the most of them all the way down instead, until the rest fit. With no bound, none is watched
+    /// all the way down.
     /// </summary>
     /// <param name="most">The kind's bound on directories, or <see langword="null"/> where it has none.</param>
     /// <remarks>
@@ -451,21 +449,34 @@ public sealed class InputWatch : IDisposable, IWatchSink
     /// <c>unmeasured</c>, for nothing it did. A guard that fails work it cannot fault is worse than the
     /// one it replaced.
     /// <para>
-    /// Watching only the directories the inputs are in excludes the build directory, <c>.git</c>,
-    /// the worktrees root's trees and every other untracked directory by construction, rather than by
-    /// a list of names that would have to be kept correct. Watched all the way down past the limit,
-    /// a top-level directory takes in whatever is built below it again.
+    /// Watching only the directories the inputs are in, and the names in those above them, excludes
+    /// the build directory, <c>.git</c>, the worktrees root's trees and every other untracked
+    /// directory by construction, rather than by a list of names that would have to be kept correct.
+    /// Watched all the way down past the limit, a top-level directory takes in whatever is built below
+    /// it again.
     /// </para>
     /// </remarks>
-    private IEnumerable<(string Directory, bool Recursive)> Targets(int? most)
+    private IEnumerable<WatchTarget> Targets(int? most)
     {
-        var directories = _tracked.Keys
-            .Select(input => input.LastIndexOf('/') is var at and > 0 ? input[..at] : string.Empty)
-            .ToHashSet(StringComparer.Ordinal);
+        var holding = _tracked.Keys.Select(Above).ToHashSet(StringComparer.Ordinal);
+        var directories = new HashSet<string>(holding, StringComparer.Ordinal);
+
+        // Every directory between the root and one holding an input, the root itself among them.
+        foreach (var directory in holding)
+        {
+            for (var above = directory; above.Length > 0;)
+            {
+                above = Above(above);
+                directories.Add(above);
+            }
+        }
+
+        // The directory a path lies in, relative to the tree: the empty name for the root.
+        static string Above(string path) => path.LastIndexOf('/') is var at and > 0 ? path[..at] : string.Empty;
 
         static string TopOf(string directory) => directory.IndexOf('/', StringComparison.Ordinal) is var at and > 0 ? directory[..at] : directory;
 
-        // The widest first: each taken whole saves a watch for every directory of inputs below it but one.
+        // The widest first: each taken whole saves a watch for every directory below it but one.
         var whole = new HashSet<string>(StringComparer.Ordinal);
         var count = directories.Count;
 
@@ -487,7 +498,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
 
         if (count > (most ?? count))
         {
-            yield return (_root, true);
+            yield return new WatchTarget(_root, Recursive: true);
             yield break;
         }
 
@@ -505,7 +516,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
             // fingerprints on either side of the work report on their own.
             if (Directory.Exists(full))
             {
-                yield return (full, recursive);
+                yield return new WatchTarget(full, recursive, NamesOnly: !recursive && !holding.Contains(directory));
             }
         }
     }
@@ -539,7 +550,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
     }
 
     /// <summary>Each directory watched, and whether all the way down, in the order of their paths.</summary>
-    internal IReadOnlyList<(string Directory, bool Recursive)> Watched
+    internal IReadOnlyList<WatchTarget> Watched
         => [.. _targets.OrderBy(watched => watched.Directory, StringComparer.Ordinal)];
 
     /// <summary>

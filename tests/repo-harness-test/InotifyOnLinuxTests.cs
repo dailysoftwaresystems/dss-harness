@@ -28,7 +28,8 @@ public sealed class InotifyOnLinuxTests
         var hub = RealHub();
         var before = Instances();
 
-        var spans = Enumerable.Range(0, 3).Select(_ => hub.Watch(directories, new RecordingWatchSink())).ToList();
+        var targets = directories.Select(directory => new WatchTarget(directory)).ToList();
+        var spans = Enumerable.Range(0, 3).Select(_ => hub.Watch(targets, new RecordingWatchSink())).ToList();
         var instance = hub.Instance;
         var held = Instances();
 
@@ -41,7 +42,7 @@ public sealed class InotifyOnLinuxTests
 
         Assert.Equal(0, Watches(instance));
 
-        using var fourth = hub.Watch(directories[..10], new RecordingWatchSink());
+        using var fourth = hub.Watch(targets[..10], new RecordingWatchSink());
 
         Assert.Equal(instance, hub.Instance);
         Assert.All(Instances().Except(before), made => Assert.Equal(instance, made));
@@ -84,7 +85,7 @@ public sealed class InotifyOnLinuxTests
         var watched = Directory.CreateDirectory(temp.Combine("watched")).FullName;
         var beside = Directory.CreateDirectory(temp.Combine("beside")).FullName;
         var sink = new RecordingWatchSink();
-        using var span = RealHub().Watch([watched], sink);
+        using var span = RealHub().Watch([new WatchTarget(watched)], sink);
         var made = Path.Combine(watched, "made.txt");
         var renamed = Path.Combine(watched, "renamed.txt");
 
@@ -108,8 +109,8 @@ public sealed class InotifyOnLinuxTests
     }
 
     /// <summary>
-    /// A watched directory removed, and one moved aside and put back, each count every input in them - heard through
-    /// the directory's own watch, since the directory above them holds no input and is not watched.
+    /// A watched directory removed, one moved aside and put back, and one above inputs that holds none moved aside and
+    /// put back, each count every input in or below them - though no input lies above any of them.
     /// </summary>
     [Fact]
     public async Task AWatchedDirectoryRemoved_AndOneMovedAsideAndPutBack_EachCountTheirInputs()
@@ -117,7 +118,7 @@ public sealed class InotifyOnLinuxTests
         Assert.SkipUnless(OperatingSystem.IsLinux(), "inotify is Linux's.");
 
         using var temp = new TempDirectory();
-        string[] inputs = ["kept/a/x.cpp", "kept/a/y.cpp", "gone/b/z.cpp", "still/c/w.cpp"];
+        string[] inputs = ["kept/a/x.cpp", "kept/a/y.cpp", "gone/b/z.cpp", "still/c/w.cpp", "above/d/v.cpp"];
 
         foreach (var input in inputs)
         {
@@ -129,15 +130,15 @@ public sealed class InotifyOnLinuxTests
         var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
         using var watch = fingerprint.Watch(temp.Path, inputs, before);
 
-        Assert.Equal([temp.Combine("gone", "b"), temp.Combine("kept", "a"), temp.Combine("still", "c")], watch.Watched.Select(target => target.Directory));
-
         Directory.Move(temp.Combine("kept", "a"), temp.Combine("kept", "a.aside"));
         Directory.Move(temp.Combine("kept", "a.aside"), temp.Combine("kept", "a"));
         Directory.Delete(temp.Combine("gone", "b"), recursive: true);
+        Directory.Move(temp.Combine("above"), temp.Combine("above.aside"));
+        Directory.Move(temp.Combine("above.aside"), temp.Combine("above"));
 
-        await WaitUntilAsync(() => watch.Changed.Count == 3);
+        await WaitUntilAsync(() => watch.Changed.Count == 4);
 
-        Assert.Equal(["gone/b/z.cpp", "kept/a/x.cpp", "kept/a/y.cpp"], watch.Changed);
+        Assert.Equal(["above/d/v.cpp", "gone/b/z.cpp", "kept/a/x.cpp", "kept/a/y.cpp"], watch.Changed);
         Assert.Null(watch.Failure);
     }
 
@@ -149,7 +150,7 @@ public sealed class InotifyOnLinuxTests
 
         using var temp = new TempDirectory();
         var hub = RealHub();
-        using var span = hub.Watch([temp.Path], new RecordingWatchSink());
+        using var span = hub.Watch([new WatchTarget(temp.Path)], new RecordingWatchSink());
 
         Assert.Contains(hub.Instance, Instances());
 

@@ -26,7 +26,7 @@ internal sealed class ScriptedWatchKind(InputsUnwatchedException? refusal = null
     public int? MostDirectories => mostDirectories;
 
     /// <summary>The directories the last start was asked to watch, as it was asked.</summary>
-    public IReadOnlyList<(string Directory, bool Recursive)>? Targets { get; private set; }
+    public IReadOnlyList<WatchTarget>? Targets { get; private set; }
 
     /// <summary>Whom the last start was to tell.</summary>
     public IWatchSink? Sink { get; private set; }
@@ -37,7 +37,7 @@ internal sealed class ScriptedWatchKind(InputsUnwatchedException? refusal = null
     /// <summary>How many of the watches it started were stopped.</summary>
     public int Stops { get; private set; }
 
-    public IDisposable Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink)
+    public IDisposable Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink)
     {
         Starts++;
 

@@ -932,6 +932,30 @@ public sealed class RunnerRunServiceTests
         Assert.Equal("a known confound", result.Outcome.Message);
     }
 
+    /// <summary>
+    /// A run whose every step ran, and whose expected exception's check could not watch its own inputs, is failed - the
+    /// check not run, so nothing confirms the entry - and never unmeasured, which would say none of its work was run.
+    /// </summary>
+    [Fact]
+    public async Task AnExpectedExceptionWhoseCheckCouldNotWatchItsInputs_LeavesTheFailureGenuine_NeverUnmeasured()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        var request = Request(temp, Excusable()) with
+        {
+            InvokeRunner = (_, _) => throw InputsUnwatchedException.BySystem(new IOException(ScriptedWatchKind.SystemsWords)),
+        };
+
+        var result = await Service(factory).RunAsync(Config(), request, TestContext.Current.CancellationToken);
+
+        Assert.False(result.Gate!.Confirmed);
+        Assert.Equal(
+            $"reproduce: could not be run ({ScriptedWatchKind.Refused}), so nothing confirms the entry",
+            Assert.Single(result.Gate.Reasons));
+        Assert.Equal(LegVerdict.Failed, result.Verdict.Verdict);
+    }
+
     [Fact]
     public async Task AnExpectedExceptionWithNothingWiredToInvokeItsCheck_ExcusesNothing()
     {

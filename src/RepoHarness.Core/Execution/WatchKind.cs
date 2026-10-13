@@ -1,5 +1,15 @@
 namespace RepoHarness.Core.Execution;
 
+/// <summary>One directory a watch puts on its kind, and how it is to be watched.</summary>
+/// <param name="Directory">The directory, by its full path.</param>
+/// <param name="Recursive">Whether it is watched all the way down.</param>
+/// <param name="NamesOnly">
+/// Whether only the directories in it arriving, going or changing their names are wanted: a directory above inputs that
+/// holds none itself, watched so that one of those going is heard - and nothing else of it, so what is written there
+/// crowds out nothing.
+/// </param>
+internal readonly record struct WatchTarget(string Directory, bool Recursive = false, bool NamesOnly = false);
+
 /// <summary>
 /// What watches directories for a span of work, as one operating system's means of watching does it. Which directories
 /// to watch is decided once, by the watch that asks; how each is watched, and what watching it takes from the machine, is
@@ -10,7 +20,7 @@ internal interface IWatchKind
     /// <summary>
     /// How many directories a watch through this kind takes at most, or <see langword="null"/> where it has no bound of
     /// its own. Past a bound, the watch takes some directories all the way down instead; with none, every directory that
-    /// holds an input is watched for itself, and none all the way down.
+    /// holds an input, or lies above one, is watched for itself, and none all the way down.
     /// </summary>
     int? MostDirectories { get; }
 
@@ -18,14 +28,14 @@ internal interface IWatchKind
     /// Watches every one of <paramref name="targets"/> until what it returns is disposed, telling
     /// <paramref name="sink"/> of what happens in them - from other threads, and possibly before this returns.
     /// </summary>
-    /// <param name="targets">Each directory to watch, by its full path, and whether all the way down.</param>
+    /// <param name="targets">Each directory to watch, and how.</param>
     /// <param name="sink">Told of each thing heard.</param>
     /// <returns>What stops the watching when disposed. What was already told stays told.</returns>
     /// <exception cref="InputsUnwatchedException">
     /// One of them could not be watched. Whatever had been taken for the others is released before this leaves, so a
     /// watch that could not start holds nothing.
     /// </exception>
-    IDisposable Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink);
+    IDisposable Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink);
 }
 
 /// <summary>What a watch is told of, by whatever kind watches for it.</summary>

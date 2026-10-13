@@ -1885,25 +1885,28 @@ undone before word of it is looked at, and one of the same size undone in place 
 tool that also puts the old time back. The times are compared for equality alone, never
 ordered.
 
-The watch goes only as deep as the inputs: each directory holding one - the root among
-them - is watched for its own files only. A directory tracked for a placeholder, as init
-keeps the worktrees root and `.orchestrators`, costs one shallow watch, and other trees
-building below it are never heard. Measured: watched all the way down, an agent's build
-below the worktrees root overflowed the operating system's buffer, and a run in the main
-tree that only read its own inputs ended `unmeasured`. Past 64 watches, the top-level
-directories holding the most directories of inputs are watched all the way down instead,
-until the rest fit, and a tree whose inputs lie in more than 64 top-level directories -
-the root counted among them where it holds one itself - is watched whole, other trees'
-builds below the worktrees root heard with the rest. The bound is the watcher's, not the
-watch's: each one .NET makes is a handle, a buffer and a thread.
+The watch goes only as deep as the inputs: each directory holding one is watched for its
+own files only, and each directory above one - the root among them - for the names of the
+directories in it alone. A directory tracked for a placeholder, as init keeps the
+worktrees root and `.orchestrators`, costs one shallow watch, and other trees building
+below it are never heard. Measured: watched all the way down, an agent's build below the
+worktrees root overflowed the operating system's buffer, and a run in the main tree that
+only read its own inputs ended `unmeasured`. Past 64 watches, the top-level directories
+holding the most directories of inputs or above them are watched all the way down
+instead, until the rest fit, and a tree whose inputs lie in more top-level directories
+than fit beside the root's own watch is watched whole, other trees' builds below the
+worktrees root heard with the rest. The bound is the watcher's, not the watch's: each one
+.NET makes is a handle, a buffer and a thread.
 
 On Linux there is no such bound. Every directory that holds an input is watched for its
-own entries, and none all the way down, through one inotify instance the process makes at
-its first watch and keeps until it ends, read by one thread. .NET's watcher takes an
+own entries, each above one for the names of the directories in it, and none all the way
+down, through one inotify instance the process makes at its first watch and keeps until it
+ends, read by one thread. .NET's watcher takes an
 instance for each directory it watches, and measured, three legs at once in one
 distribution held 120 of a user's 128; through the one instance they hold three. The
 kernel gives one watch for a directory however often it is named, so spans watching the
-same directory share it, and it is removed when the last of them ends. The instance is made
+same directory share it, and it is removed when the last of them ends; a span watching it
+for names alone is told only of what the kernel marks as a directory. The instance is made
 close-on-exec, so no program a leg starts holds it. The instance's calls are bound from the
 C library by name - `libc.so.6`, then `libc.so`, then `libc` - and where none of them has
 them, .NET's watcher stands in, as on Windows and macOS, and the process warns once
@@ -1913,14 +1916,17 @@ whose own watcher shares one instance (.NET 11); the seam it stands behind - whi
 directories to watch, decided once, apart from what watches them - stays, and so do the
 rules below.
 
-A directory counts for the inputs in it. One lying in a watched directory that goes,
-arrives or changes its name counts every input in or below it, under both names of a
-rename: each went or arrived with it, and a directory moved aside and put back reads the
-same at both ends, as a file does. A directory merely written to - as one is each time a
-file is made in it - counts none, or a build writing beside sources would count every
-source above it. What goes unheard is a directory whose parent neither holds an input nor
-is watched all the way down: its inputs count only if they are still gone when the work
-ends.
+A directory counts for the inputs in or below it. One that holds inputs, or lies above
+some, going, arriving or changing its name counts every input in or below it, under both
+names of a rename: each went or arrived with it, and a directory moved aside and put back
+reads the same at both ends, as a file does. It is heard on every system however deep the
+inputs lie, since the directory it lies in is watched for the names in it - the root
+among them, so a directory of inputs that is not there when the work begins is heard
+arriving. A directory merely written to - as one is each time a file is made in it -
+counts none, or a build writing beside sources would count every source above it. On
+Windows a directory above a watched one cannot go or change its name while the watch
+holds it: the system refuses whoever tries, as it does any directory with a handle open
+below it, so there the rule holds by the move never happening.
 
 A watch that cannot start stops the work before it begins. The leg ends `unmeasured` at
 once, exit 3, with no phase run - a runner's segment not begun, a build's record not
@@ -1930,7 +1936,11 @@ Run first and called `unmeasured` after, as it was, the whole of the work was sp
 learn what was known before it began. A build that had decided to start from clean has
 deleted its directory by then; the decision stands for the next build. A watch that
 started and is lost while the work runs - its buffer or its queue overflowed, its
-directory gone - still ends the leg `unmeasured`, as the work ends.
+directory gone - still ends the leg `unmeasured`, as the work ends. The remedy for a watch
+that could not start is the machine's, not the tree's settling: free or raise what the
+reason names, or put back the tree the watch was to be put on, then run again. A run
+check whose own runner's watch cannot start was not run, and confirms nothing ([The
+gate](#the-gate)).
 
 On Linux the reason can be one of two limits, each said with what `/proc` shows of it:
 this user's inotify instances all taken - `fs.inotify.max_user_instances is 128, and
@@ -2954,6 +2964,9 @@ An expected exception may carry `runChecks`, and until every one passes it excus
 - The runner a check names is never the one carrying it, and a runner reached that way may carry
   no checks of its own, so a check is one level deep and cannot recurse.
 - **Unconfirmed, the failure stays genuine.** That is the whole point of the gate.
+- A check that could not be run - refused, or its runner's inputs not watched - confirms
+  nothing and says why: `could not be run (...), so nothing confirms the entry`. The run it
+  gates was run, so its failure stays genuine, never `unmeasured`.
 - **The window is the failing unit's own** — its output up to its verdict line — never a
   once-per-run sample. A failure is excused only when at least `minStepsInFailureWindow` steps of
   at least `minStepSeconds` fall inside that window. A once-per-run sample was measured charging

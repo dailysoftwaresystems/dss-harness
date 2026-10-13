@@ -66,7 +66,7 @@ internal static class WatchKinds
     {
         public int? MostDirectories => kind.MostDirectories;
 
-        public IDisposable Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink)
+        public IDisposable Start(IReadOnlyList<WatchTarget> targets, IWatchSink sink)
         {
             say();
             return kind.Start(targets, sink);

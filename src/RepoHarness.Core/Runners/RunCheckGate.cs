@@ -1,4 +1,5 @@
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Execution;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Results;
 
@@ -143,8 +144,11 @@ public sealed class RunCheckGate(IHarnessOutput output)
             // not read this as one.
             throw;
         }
-        catch (HarnessException exception)
+        catch (Exception exception) when (exception is HarnessException or InputsUnwatchedException)
         {
+            // Inputs the check's own run could not watch are a check that was not run, as a refusal is: what it was to
+            // confirm stays unconfirmed. Left to leave, it ended the run carrying the check unmeasured, saying none of its
+            // work was run - when every step of it had.
             return new RunCheckResult(
                 check.PredefinedRunner,
                 Passed: false,
