@@ -483,11 +483,12 @@ public sealed class SharedCopiesTests
     }
 
     /// <summary>
-    /// Deleting an agent keeps no copy of what its fold writes: they would be removed with the agent moments later. So
-    /// none is made, nothing is said of one that could not be, and a deletion that stops before its closing has made none.
+    /// Deleting an agent keeps the copies of what its fold writes as any fold does: one that stops after its fold leaves
+    /// the agent live, its seed naming bytes only those copies hold. A copy that could not be kept is said where the agent
+    /// outlives the command, and not by one that deletes it, its copies going with it.
     /// </summary>
     [Fact]
-    public async Task ADeletionsFold_KeepsNoCopy_AndSaysNothingOfOne()
+    public async Task ADeletionsFold_KeepsCopiesAsAnyFoldDoes_AndSaysOfOneNotKeptOnlyWhereTheAgentOutlivesIt()
     {
         using var temp = new TempDirectory();
         using var claude = new TempDirectory();
@@ -497,6 +498,7 @@ public sealed class SharedCopiesTests
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
         var worktree = await kit.CreateAgentAsync("ag", session: "sess1");
         OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var shared = kit.Layout.SharedDirectory("ag");
         var unreadable = kit.Harness.Agents(new UnreadableFileSystem(kit.Harness.FileSystem, transcript), kit.Harness.AnchorRegistryService);
 
         var stopped = await unreadable.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
@@ -505,11 +507,24 @@ public sealed class SharedCopiesTests
         Assert.Equal(AgentStates.Live, kit.Record("ag").State);
         Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
         Assert.Equal(Digest("two\nagent edit\n"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"]);
-        Assert.Equal([Digest("one\nmain edit\n")], await KeptAsync(kit, "ag", proved: false));
+        Assert.Equal(
+            new[] { Digest("one\nmain edit\n"), Digest("two\nagent edit\n") }.Order(StringComparer.Ordinal),
+            await KeptAsync(kit, "ag"));
         NamesShared(kit, "ag", stopped, succeeded: false);
 
         OrchestrationKit.Write(worktree, "c.txt", "three\nagent edit\n");
-        var full = kit.Harness.Agents(new NoRoomFileSystem(kit.Harness.FileSystem, kit.Layout.SharedDirectory("ag")), kit.Harness.AnchorRegistryService);
+        var fullAndUnreadable = kit.Harness.Agents(
+            new NoRoomFileSystem(new UnreadableFileSystem(kit.Harness.FileSystem, transcript), shared),
+            kit.Harness.AnchorRegistryService);
+
+        var unkept = await fullAndUnreadable.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, unkept.ExitCode);
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+        Assert.Contains(unkept.Details!, line => line.StartsWith($"'c.txt' is recorded as shared, and its bytes were not kept in '{shared}': ", StringComparison.Ordinal));
+
+        OrchestrationKit.Write(worktree, "d.txt", "four\nagent edit\n");
+        var full = kit.Harness.Agents(new NoRoomFileSystem(kit.Harness.FileSystem, shared), kit.Harness.AnchorRegistryService);
 
         var deleted = await full.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
 
@@ -517,6 +532,7 @@ public sealed class SharedCopiesTests
         Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
         Assert.DoesNotContain(deleted.Details!, line => line.Contains("were not kept", StringComparison.Ordinal));
         Assert.DoesNotContain(deleted.Details!, line => line.StartsWith("shared ", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(shared), "The copies kept for a deleted agent were not removed with it.");
     }
 
     /// <summary>

@@ -76,10 +76,14 @@ internal sealed record TwoChangePolicy(string? ArmRegistry, IReadOnlySet<string>
     public IEnumerable<string> NamedAsText() => Merge.Where(path => RuleFor(path) == TwoChangeRule.Text).Order(StringComparer.Ordinal);
 }
 
-/// <summary>One side of a path: a blob git holds, a file on disk, or bytes in hand; and whether it could be run.</summary>
+/// <summary>One side of a path: a blob git holds, a file on disk, or bytes in hand; whether it could be run; and whether it is a link.</summary>
 /// <param name="Content">What it holds.</param>
 /// <param name="Executable">Whether it could be run, where the platform keeps such a bit; never on one that keeps none.</param>
-internal sealed record TwoChangeSide(GitContent Content, bool Executable);
+/// <param name="Link">
+/// Whether it is a link, or is reached through one along its path: no file to merge - what it leads to is its content -
+/// and one a merge written there would land outside its tree through.
+/// </param>
+internal sealed record TwoChangeSide(GitContent Content, bool Executable, bool Link);
 
 /// <summary>What both trees held at a path, as far as the command that asks knows it: one of the two kinds below, and no other.</summary>
 internal abstract record TwoChangeAncestor
@@ -92,7 +96,8 @@ internal abstract record TwoChangeAncestor
     /// <summary>What a commit holds at the path: the agent's base, for a path it shares nothing for.</summary>
     /// <param name="Blob">The blob the commit holds there.</param>
     /// <param name="Executable">Whether the commit's entry is one that can be run.</param>
-    public sealed record Committed(string Blob, bool Executable) : TwoChangeAncestor(Executable);
+    /// <param name="Link">Whether the commit's entry is a link, whose blob is where it leads and no file's content.</param>
+    public sealed record Committed(string Blob, bool Executable, bool Link) : TwoChangeAncestor(Executable);
 
     /// <summary>
     /// What the agent's seed records as shared at the path: the digest of the bytes both trees held, which are kept beside
@@ -124,6 +129,12 @@ internal sealed record NoMerge
 
     /// <summary>Neither tree held a file at the path before: there is nothing to merge from.</summary>
     public static NoMerge BothMade { get; } = new("both trees made it, and neither held a file there before");
+
+    /// <summary>
+    /// Both trees made a path merged with nothing both held - the arm registry - one so that it can be run and one not:
+    /// with nothing before, neither bit is a change, and nothing says which is meant.
+    /// </summary>
+    public static NoMerge BitBothMade { get; } = new("both trees made it, one so that it can be run and one not, and nothing either held before says which is meant");
 
     /// <summary>The seed records bytes no copy was kept of, and the main tree's history does not hold them, as far as it could be read.</summary>
     /// <param name="digest">The SHA-256 the seed records.</param>
@@ -158,8 +169,11 @@ internal sealed record NoMerge
     /// <param name="why">git's words.</param>
     public static NoMerge NotMerged(string why) => new($"git would not merge it - {why.TrimEnd('.')}");
 
-    /// <summary>One of its versions is a link, which is no file to merge: what it leads to is its content.</summary>
-    public static NoMerge Link { get; } = new("one of its versions is a link, and only files are merged");
+    /// <summary>
+    /// One of its versions is a link, or is reached through one along its path: no file to merge, since what it leads to is
+    /// its content, and a merge written there would land outside its tree.
+    /// </summary>
+    public static NoMerge Link { get; } = new("one of its versions is a link, or is reached through one, and only files are merged");
 
     /// <summary>git could not bring the merged bytes to the form a checkout writes.</summary>
     /// <param name="why">git's words.</param>
@@ -408,7 +422,9 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
 
     /// <summary>
     /// Whether a file can be run once two changes of it are merged: the bit that differs from what both held, where either
-    /// side's does. A bit has two values, so two sides that both changed it changed it alike, and it never conflicts.
+    /// side's does. A bit has two values, so two sides that both changed it changed it alike, and it never conflicts -
+    /// where something was held before; a registry both trees made whose bits differ is merged by no rule
+    /// (<see cref="NoMerge.BitBothMade"/>).
     /// </summary>
     /// <param name="ancestor">Whether what both held could be run.</param>
     /// <param name="ours">Whether ours can.</param>
@@ -447,6 +463,13 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
         if (rule == TwoChangeRule.Never)
         {
             return TwoChangeOffer.Unmeasured(ask.Path, rule);
+        }
+
+        // A link among the versions, or one along a version's path, is never merged, whatever is named: nothing is read
+        // through it, and nothing would be written through it.
+        if (ask.Ancestor is TwoChangeAncestor.Committed { Link: true } || ask.Ours.Link || ask.Theirs.Link)
+        {
+            return TwoChangeOffer.Unoffered(ask.Path, rule, NoMerge.Link);
         }
 
         if (rule == TwoChangeRule.Arms)
@@ -542,52 +565,58 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
     /// </summary>
     private async Task<TwoChangeOffer> ByArmAsync(TwoChangeAsk ask, CancellationToken cancellationToken)
     {
-        // Asked of a file before it is read: one above the bound is never brought into memory.
-        if (LargestFile(ask) is var largest && largest > MostBytes)
+        // Both made it with nothing before, one so that it can be run and one not: neither bit is a change, and taking
+        // either would be a guess. Never on a platform that keeps no such bit, where both read as not runnable.
+        if (ask.Ancestor is null && ask.Ours.Executable != ask.Theirs.Executable)
         {
-            return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, NoMerge.TooLarge(largest));
+            return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, NoMerge.BitBothMade);
         }
 
-        byte[]? held = null;
+        var (versions, none) = await WithinBoundAsync(
+                ask,
+                async () =>
+                {
+                    byte[]? held = null;
 
-        if (ask.Ancestor is { } ancestor)
+                    if (ask.Ancestor is { } ancestor)
+                    {
+                        var (content, lost) = await AncestorAsync(ask.Path, ancestor, cancellationToken).ConfigureAwait(false);
+
+                        if (lost is not null)
+                        {
+                            return (null, lost);
+                        }
+
+                        held = await BytesAsync(ask.Tree, content!, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    byte[] ours;
+
+                    try
+                    {
+                        // A commit's version as a checkout into the tree writes it: the merge ends its lines as this side does.
+                        ours = ask.Ours.Content is GitContent.Blob blob
+                            ? await CommittedBytes.CheckedOutAsync(git, ask.Tree, ask.Path, blob.Id, cancellationToken).ConfigureAwait(false)
+                            : await BytesAsync(ask.Tree, ask.Ours.Content, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+                    {
+                        return (null, NoMerge.VersionNotCheckedOut(ex.Message));
+                    }
+
+                    return ([held, ours, await BytesAsync(ask.Tree, ask.Theirs.Content, cancellationToken).ConfigureAwait(false)], null);
+                })
+            .ConfigureAwait(false);
+
+        if (none is not null)
         {
-            var (content, lost) = await AncestorAsync(ask.Path, ancestor, cancellationToken).ConfigureAwait(false);
-
-            if (lost is not null)
-            {
-                return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, lost);
-            }
-
-            held = await BytesAsync(ask.Tree, content!, cancellationToken).ConfigureAwait(false);
-        }
-
-        byte[] ours;
-
-        try
-        {
-            // A commit's version as a checkout into the tree writes it: the merge ends its lines as this side does.
-            ours = ask.Ours.Content is GitContent.Blob blob
-                ? await git.ReadCheckedOutAsync(ask.Tree, ask.Path, await BlobAsync(ask.Tree, blob.Id, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false)
-                : await BytesAsync(ask.Tree, ask.Ours.Content, cancellationToken).ConfigureAwait(false);
-        }
-        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
-        {
-            return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, NoMerge.VersionNotCheckedOut(ex.Message));
-        }
-
-        var theirs = await BytesAsync(ask.Tree, ask.Theirs.Content, cancellationToken).ConfigureAwait(false);
-
-        // A blob's size is known only once it is read: the same bound, asked of what was read.
-        if (new[] { held?.LongLength ?? 0, ours.LongLength, theirs.LongLength }.Max() is var size && size > MostBytes)
-        {
-            return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, NoMerge.TooLarge(size));
+            return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, none);
         }
 
         var path = OrchestrationReports.Argument(ask.Path);
         var settle = $"reconcile it by hand, then {FoldAllowances.SettledOption} {path}";
 
-        switch (MutationRegistryMerge.Merge(held, ours, theirs))
+        switch (MutationRegistryMerge.Merge(versions![0], versions[1]!, versions[2]!))
         {
             case RegistryMerge.Merged merged:
             {
@@ -630,9 +659,35 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
             ? string.Empty
             : $"; it can {(executable ? string.Empty : "no longer ")}be run, as {(executable == ask.Theirs.Executable ? Theirs : Ours)} made it";
 
-    /// <summary>How many bytes the larger of the two sides' files holds, asked before either is read; 0 where neither is a file.</summary>
-    private long LargestFile(TwoChangeAsk ask)
-        => new[] { ask.Ours.Content, ask.Theirs.Content }.OfType<GitContent.File>().Select(file => SharedCopies.LengthOf(files, file.Path)).DefaultIfEmpty(0).Max();
+    /// <summary>
+    /// The versions <paramref name="read"/> reads, or why no merge of them is offered: the one bound of every rule, asked
+    /// of the two sides' files before anything is read - one above <see cref="MostBytes"/> is never brought into memory -
+    /// and again of every version read, since a blob's size is known only once it is read.
+    /// </summary>
+    /// <param name="ask">The path and its versions.</param>
+    /// <param name="read">Reads the versions to merge, or says why none is offered.</param>
+    private async Task<(IReadOnlyList<byte[]?>? Versions, NoMerge? None)> WithinBoundAsync(
+        TwoChangeAsk ask,
+        Func<Task<(IReadOnlyList<byte[]?>? Versions, NoMerge? None)>> read)
+    {
+        var onDisk = new[] { ask.Ours.Content, ask.Theirs.Content }.OfType<GitContent.File>().Select(file => SharedCopies.LengthOf(files, file.Path));
+
+        if (TooLarge(onDisk) is { } large)
+        {
+            return (null, large);
+        }
+
+        var (versions, none) = await read().ConfigureAwait(false);
+
+        if (none is not null)
+        {
+            return (null, none);
+        }
+
+        return TooLarge(versions!.Select(version => version?.LongLength ?? 0)) is { } larger ? (null, larger) : (versions, null);
+
+        static NoMerge? TooLarge(IEnumerable<long> sizes) => sizes.DefaultIfEmpty(0).Max() is var largest && largest > MostBytes ? NoMerge.TooLarge(largest) : null;
+    }
 
     /// <summary>The bytes <paramref name="content"/> holds: a file's, a blob's as git stores it, or those in hand.</summary>
     /// <exception cref="HarnessException">git holds no such blob, or could not be asked.</exception>
@@ -641,67 +696,57 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService
         => content switch
         {
             GitContent.File file => await files.ReadAllBytesAsync(file.Path, cancellationToken).ConfigureAwait(false),
-            GitContent.Blob blob => await BlobAsync(tree, blob.Id, cancellationToken).ConfigureAwait(false),
+            GitContent.Blob blob => await CommittedBytes.StoredAsync(git, tree, blob.Id, cancellationToken).ConfigureAwait(false),
             GitContent.Bytes bytes => bytes.Content,
             _ => throw new UnreachableException($"Content is one of three kinds, and {content.GetType().Name} is none of them."),
         };
 
-    /// <summary>The bytes git stores for <paramref name="id"/>.</summary>
-    /// <exception cref="HarnessException">git holds no such blob, or could not be asked.</exception>
-    private async Task<byte[]> BlobAsync(string tree, string id, CancellationToken cancellationToken)
-        => (await git.ReadBlobsAsync(tree, [id], cancellationToken).ConfigureAwait(false))[0]
-            ?? throw new HarnessException(HarnessExit.CommandFailed, $"git holds no blob {id}, which a merge by arm reads.");
-
     /// <summary>The three versions merged as git merges them, or why no merge of them is offered.</summary>
     private async Task<(GitTextMerge? Merge, NoMerge? None)> MergeAsync(TwoChangeAsk ask, CancellationToken cancellationToken)
     {
-        if (ask.Ancestor is null)
+        if (ask.Ancestor is not { } both)
         {
             return (null, NoMerge.BothMade);
         }
 
-        // Asked of a file before it is read: one above the bound is never brought into memory.
-        var largest = LargestFile(ask);
+        var (stored, none) = await WithinBoundAsync(
+                ask,
+                async () =>
+                {
+                    var declared = await git.ReadAttributesAsync(ask.Tree, [MergeAttribute], [ask.Path], cancellationToken: cancellationToken).ConfigureAwait(false);
+                    var attribute = declared.GetValueOrDefault(ask.Path)?.GetValueOrDefault(MergeAttribute) ?? GitAttributes.Unspecified;
 
-        if (largest > MostBytes)
+                    // Unspecified, set and "text" are all git's own merge of text; anything else asks for another, which is not made here.
+                    if (attribute is not (GitAttributes.Unspecified or GitAttributes.Set or "text"))
+                    {
+                        return (null, NoMerge.Attribute(attribute));
+                    }
+
+                    var (ancestor, lost) = await AncestorAsync(ask.Path, both, cancellationToken).ConfigureAwait(false);
+
+                    if (lost is not null)
+                    {
+                        return (null, lost);
+                    }
+
+                    try
+                    {
+                        // Each as git stores it: what is merged, and so what the bound is asked of.
+                        return (await git.ReadStagedAsync(ask.Tree, ask.Path, [ancestor!, ask.Ours.Content, ask.Theirs.Content], cancellationToken).ConfigureAwait(false), null);
+                    }
+                    catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+                    {
+                        return (null, NoMerge.NotStored(ex.Message));
+                    }
+                })
+            .ConfigureAwait(false);
+
+        if (none is not null)
         {
-            return (null, NoMerge.TooLarge(largest));
+            return (null, none);
         }
 
-        var declared = await git.ReadAttributesAsync(ask.Tree, [MergeAttribute], [ask.Path], cancellationToken: cancellationToken).ConfigureAwait(false);
-        var attribute = declared.GetValueOrDefault(ask.Path)?.GetValueOrDefault(MergeAttribute) ?? GitAttributes.Unspecified;
-
-        // Unspecified, set and "text" are all git's own merge of text; anything else asks for another, which is not made here.
-        if (attribute is not (GitAttributes.Unspecified or GitAttributes.Set or "text"))
-        {
-            return (null, NoMerge.Attribute(attribute));
-        }
-
-        var (ancestor, lost) = await AncestorAsync(ask.Path, ask.Ancestor, cancellationToken).ConfigureAwait(false);
-
-        if (lost is not null)
-        {
-            return (null, lost);
-        }
-
-        IReadOnlyList<byte[]> stored;
-
-        try
-        {
-            stored = await git.ReadStagedAsync(ask.Tree, ask.Path, [ancestor!, ask.Ours.Content, ask.Theirs.Content], cancellationToken).ConfigureAwait(false);
-        }
-        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
-        {
-            return (null, NoMerge.NotStored(ex.Message));
-        }
-
-        // A blob's size is known only once it is read: the same bound, asked of what git stores.
-        if (stored.Max(version => version.LongLength) is var size && size > MostBytes)
-        {
-            return (null, NoMerge.TooLarge(size));
-        }
-
-        var merge = await git.MergeTextAsync(stored[0], stored[1], stored[2], Names, cancellationToken).ConfigureAwait(false);
+        var merge = await git.MergeTextAsync(stored![0]!, stored[1]!, stored[2]!, Names, cancellationToken).ConfigureAwait(false);
 
         return merge.NotMerged is { } why ? (null, NoMerge.NotMerged(why)) : (merge, null);
     }

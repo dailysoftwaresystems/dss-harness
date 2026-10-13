@@ -556,7 +556,7 @@ public sealed class GitClientTests
         var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.HeldAtAsync(temp.Path, Unknown, ["README.md"], cancellationToken));
 
         Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
-        Assert.StartsWith($"git cannot read commit {Unknown}, so which files {Unknown} holds cannot be told: ", refused.Message, StringComparison.Ordinal);
+        Assert.StartsWith($"git cannot read commit {Unknown}, so which files it holds cannot be told: ", refused.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1190,7 +1190,7 @@ public sealed class GitClientTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
         var head = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
-        const string Name = "﻿marked.md";
+        const string Name = "\uFEFFmarked.md";
         temp.WriteFile(Name, "text\n");
         await harness.RunGitAsync(temp.Path, ["add", "--", Name], cancellationToken);
 
@@ -2004,6 +2004,26 @@ public sealed class GitClientTests
         Assert.All(many, path => Assert.Equal("lf", declared[path]["eol"]));
         Assert.Empty(await harness.GitClient.ReadAttributesAsync(temp.Path, ["text"], [], cancellationToken: cancellationToken));
     }
+
+    /// <summary>
+    /// What git's attributes declare for a path whose name begins as a byte order mark does is filed under that path, the
+    /// mark kept: read as text, the mark was taken for one and dropped, and the path read as declaring nothing.
+    /// </summary>
+    [Fact]
+    public async Task WhatGitsAttributesDeclare_ForAPathBeginningAsAByteOrderMarkDoes_IsFiledUnderThatPath()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        const string Name = "\uFEFFmarked.reg";
+        File.WriteAllText(temp.Combine(".gitattributes"), "*.reg -merge eol=lf\n");
+
+        var declared = await harness.GitClient.ReadAttributesAsync(temp.Path, ["merge", "eol"], [Name, "plain.reg"], cancellationToken: cancellationToken);
+
+        Assert.Equal(["plain.reg", Name], declared.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal((GitAttributes.Unset, "lf"), (declared[Name]["merge"], declared[Name]["eol"]));
+    }
 }
 
 /// <summary>What the git client sends to git, and how it reads answers, against scripted results.</summary>
@@ -2319,6 +2339,21 @@ public sealed class GitClientProtocolTests
         Assert.False(await Scripted(Exited(0, "false\n")).Client.IsShallowAsync("/repo", cancellationToken));
         Assert.Null(await Scripted(Exited(0, "--is-shallow-repository\n")).Client.IsShallowAsync("/repo", cancellationToken));
         Assert.Null(await Scripted(Exited(128, stderr: "fatal: not a git repository")).Client.IsShallowAsync("/repo", cancellationToken));
+    }
+
+    /// <summary>
+    /// An answer of other than as many lines as git was asked for is refused in the words it always was: which files the
+    /// commit holds cannot be told.
+    /// </summary>
+    [Fact]
+    public async Task HeldAtAsync_RefusesAnAnswerShortOfWhatItAsked_SayingWhichFilesItHoldsCannotBeTold()
+    {
+        var (git, _) = Scripted(Exited(0, "commit 0123456789abcdef0123456789abcdef01234567\n"));
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => git.HeldAtAsync("/repo", "abc", ["a.txt"], TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
+        Assert.Equal("git answered 1 line(s) for the 2 it was asked about abc, so which files it holds cannot be told.", refused.Message);
     }
 
     private static (GitClient Client, List<ProcessRequest> Requests) Scripted(params ProcessResult[] results)

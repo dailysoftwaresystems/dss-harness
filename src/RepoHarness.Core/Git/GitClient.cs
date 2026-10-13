@@ -251,7 +251,8 @@ public sealed partial class GitClient(
         var tree = paths.Any(HoldsLineBreak) ? await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false) : null;
         var asked = paths.Where(path => !HoldsLineBreak(path)).Distinct(StringComparer.Ordinal).ToList();
 
-        var objects = await ObjectsAtAsync(directory, [.. asked.Select(path => (commit, path))], commit, $"which files {commit} holds", cancellationToken).ConfigureAwait(false);
+        var objects = await ObjectsAtAsync(directory, [.. asked.Select(path => (commit, path))], commit, $"which files {commit} holds", "which files it holds", cancellationToken)
+            .ConfigureAwait(false);
         var unanswered = new List<string>();
 
         for (var index = 0; index < asked.Count; index++)
@@ -307,7 +308,8 @@ public sealed partial class GitClient(
     /// <param name="directory">Where git is asked.</param>
     /// <param name="pairs">Each commit and path asked about, neither holding a line break.</param>
     /// <param name="about">What was asked about, as a refusal names it: a commit, or how many.</param>
-    /// <param name="unknown">What cannot be told where git cannot answer, to end a sentence.</param>
+    /// <param name="unknown">What could not be read where git fails, to follow "read".</param>
+    /// <param name="untold">What cannot be told where git answers other than it was asked, to end a sentence after <paramref name="about"/>.</param>
     /// <param name="cancellationToken">Cancels git.</param>
     /// <exception cref="HarnessException">git could not answer, answered other than it was asked, or cannot read one of the commits.</exception>
     private async Task<IReadOnlyList<(string Type, string Id)?>> ObjectsAtAsync(
@@ -315,6 +317,7 @@ public sealed partial class GitClient(
         IReadOnlyList<(string Commit, string Path)> pairs,
         string about,
         string unknown,
+        string untold,
         CancellationToken cancellationToken)
     {
         var commits = pairs.Select(pair => pair.Commit).Distinct(StringComparer.Ordinal).ToList();
@@ -351,14 +354,14 @@ public sealed partial class GitClient(
         {
             throw new HarnessException(
                 HarnessExit.CommandFailed,
-                $"git answered {ReportText.Counted(lines.Count, "line")} for the {commits.Count + pairs.Count} it was asked about {about}, so {unknown} cannot be told.");
+                $"git answered {ReportText.Counted(lines.Count, "line")} for the {commits.Count + pairs.Count} it was asked about {about}, so {untold} cannot be told.");
         }
 
         for (var at = 0; at < commits.Count; at++)
         {
             if (!lines[at].StartsWith("commit ", StringComparison.Ordinal))
             {
-                throw new HarnessException(HarnessExit.CommandFailed, $"git cannot read commit {commits[at]}, so {unknown} cannot be told: {lines[at]}");
+                throw new HarnessException(HarnessExit.CommandFailed, $"git cannot read commit {commits[at]}, so {untold} cannot be told: {lines[at]}");
             }
         }
 

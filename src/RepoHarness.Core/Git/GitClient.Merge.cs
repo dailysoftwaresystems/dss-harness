@@ -155,12 +155,8 @@ public sealed partial class GitClient
             return blobs;
         }
 
-        var objects = await ObjectsAtAsync(
-                directory,
-                pairs,
-                ReportText.Counted(commits.Count, "commit"),
-                $"what the history held at {ReportText.Counted(paths.Count, "path")}",
-                cancellationToken)
+        var held = $"what the history held at {ReportText.Counted(paths.Count, "path")}";
+        var objects = await ObjectsAtAsync(directory, pairs, ReportText.Counted(commits.Count, "commit"), held, held, cancellationToken)
             .ConfigureAwait(false);
 
         for (var at = 0; at < pairs.Count; at++)
@@ -377,7 +373,7 @@ public sealed partial class GitClient
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var result = await RunCoreAsync(directory, ["check-attr", "-z", .. attributes, "--", .. batch], echoOutput: false, untranslated: false, cancellationToken)
+                var result = await RunForBytesAsync(directory, ["check-attr", "-z", .. attributes, "--", .. batch], cancellationToken)
                     .ConfigureAwait(false);
 
                 if (!result.Succeeded)
@@ -388,17 +384,21 @@ public sealed partial class GitClient
                 }
 
                 // NUL-separated triples of path, attribute and value. A path carrying a space or a quote
-                // survives this where git's default quoting would have to be undone first.
+                // survives this where git's default quoting would have to be undone first. Read as bytes and
+                // decoded as git's names are, so a path that begins as a byte order mark does keeps it, and
+                // what is declared for it is filed under the path asked.
                 var fields = result.StandardOutput.Split('\0');
 
                 for (var index = 0; index + 2 < fields.Length; index += 3)
                 {
-                    if (!declared.TryGetValue(fields[index], out var ofPath))
+                    var path = GitName.FromBytes(fields[index]).Text;
+
+                    if (!declared.TryGetValue(path, out var ofPath))
                     {
-                        declared[fields[index]] = ofPath = new Dictionary<string, string>(StringComparer.Ordinal);
+                        declared[path] = ofPath = new Dictionary<string, string>(StringComparer.Ordinal);
                     }
 
-                    ofPath[fields[index + 1]] = fields[index + 2];
+                    ofPath[GitName.FromBytes(fields[index + 1]).Text] = GitName.FromBytes(fields[index + 2]).Text;
                 }
             }
         }

@@ -1781,7 +1781,7 @@ public sealed partial class HelpTests
         Assert.Contains(
             $"a move that stopped part way, exit {HarnessExit.Incomplete}, is finished where it was going by running it again - the command its "
             + "last words name, with every option the move was given - what it wrote held as the new base holds it, and every other command "
-            + "refuses the agent until then",
+            + "refuses the agent until then, naming that same command.",
             text,
             StringComparison.Ordinal);
         Assert.Contains($"  {ToolPackage.Command} rebase-agent <o> <a> [--apply] [--merge <path>]... [--settled <path>]...", result.StandardOutput, StringComparison.Ordinal);
@@ -1864,7 +1864,11 @@ public sealed partial class HelpTests
             Assert.Contains($"  {ToolPackage.Command} {command} <o> <a> [--apply] [--merge <path>]... [--settled <path>]...", result.StandardOutput, StringComparison.Ordinal);
         }
 
-        Assert.Contains("already in the main tree; merged, where both trees changed it and --merge names it; or settled", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "already in the main tree; merged, where both trees changed it and --merge names it, or it is the arm registry, merged by arm unasked; "
+            + "or settled",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains(
             "its refusal says what a three-way merge of the two gives - git's merge, of the forms git stores, from what both held, which for a shared "
             + "path are the bytes kept beside the agent's seed, or found by their digest in the main tree's history where none were kept, and for any "
@@ -1885,7 +1889,8 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Never merged, whatever is named: a deletion against a change, a path both trees made, a file git reads as binary or will not merge, one "
+            "Never merged, whatever is named: a deletion against a change, a path both trees made, a version that is a link or is reached through "
+            + "one, a file git reads as binary or will not merge, one "
             + $"whose merge attribute asks for another merge, a file above {DiskSpace.Size(TwoChanges.MostBytes)}, and an anchor registry; nor is the "
             + "arm registry ever merged by line.",
             text,
@@ -1905,10 +1910,19 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains(
             "Whether a file can be run is merged with its content: the merged file takes the bit of the side that changed it, and the bit alone never "
-            + "conflicts; Windows keeps no such bit, and none is read or set there.",
+            + "conflicts - but a registry both trees made, one so that it can be run and one not, is offered no merge, since nothing either held "
+            + "before says which is meant; Windows keeps no such bit, and none is read or set there.",
             text,
             StringComparison.Ordinal);
         Assert.DoesNotContain("mode is never merged", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "A --merge naming a path the two commits hold alike is refused as the misspelling it most likely is, and one naming any other path "
+            + "they changed is let stand, so the command that finishes a stopped move runs again; a path named with both --merge and --settled is "
+            + $"a usage error, exit {HarnessExit.UsageError}; and a path one of whose versions is a link, or that the agent reaches through one, is "
+            + "offered no merge.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("a change, a new file, a deletion, a file renamed in case alone, a link, a submodule's entry,", text, StringComparison.Ordinal);
     }
 
     [Fact]

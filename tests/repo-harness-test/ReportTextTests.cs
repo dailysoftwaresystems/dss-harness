@@ -48,6 +48,43 @@ public sealed class ReportTextTests
         Assert.Equal("5000000000 byte(s)", ReportText.Counted(5_000_000_000, "byte"));
     }
 
+    /// <summary>Nothing failed: no line.</summary>
+    [Fact]
+    public void NothingFailed_IsSaidInNoLine()
+        => Assert.Empty(ReportText.FailedInOneLine([], "path", (_, _) => "one", (_, _, _) => "many"));
+
+    /// <summary>One item that failed is said as the line for one says it, given the item and why.</summary>
+    [Fact]
+    public void OneItemThatFailed_IsSaidAsTheLineForOneSaysIt()
+        => Assert.Equal(
+            ["'a.txt' failed: full"],
+            ReportText.FailedInOneLine([("a.txt", "full")], "path", (item, why) => $"'{item}' failed: {why}", (_, _, _) => "many"));
+
+    /// <summary>
+    /// Many items that failed for one reason are said in one line: how many, as many as a line names and how many more,
+    /// and that reason alone.
+    /// </summary>
+    [Fact]
+    public void ManyItemsThatFailedForOneReason_AreSaidInOneLine_WithThatReason()
+        => Assert.Equal(
+            ["5 path(s) failed - a, b, c and 2 more: full"],
+            ReportText.FailedInOneLine(
+                [("a", "full"), ("b", "full"), ("c", "full"), ("d", "full"), ("e", "full")],
+                "path",
+                (_, _) => "one",
+                (counted, items, why) => $"{counted} failed - {items}: {why}"));
+
+    /// <summary>Many items that failed for different reasons say the first, and how many other reasons there were.</summary>
+    [Fact]
+    public void ManyItemsThatFailedForDifferentReasons_SayTheFirst_AndHowManyOthers()
+        => Assert.Equal(
+            ["3 kept copy(ies) failed - a, b, c: full; and 1 other reason(s)"],
+            ReportText.FailedInOneLine(
+                [("a", "full"), ("b", "held"), ("c", "full")],
+                "kept copy",
+                (_, _) => "one",
+                (counted, items, why) => $"{counted} failed - {items}: {why}"));
+
     [Fact]
     public void ACountOfNothingNamed_IsRefused()
     {

@@ -50,16 +50,10 @@ internal sealed class SharedCopies(IFileSystem fileSystem, IFilePermissions perm
                 return null;
             }
 
-            // Read as bytes and written anew, never copied: a copy carries the attributes of the file it was made from, and
-            // one kept from a read-only file could not be replaced, nor taken back where it failed.
-            var contents = await fileSystem.ReadAllBytesAsync(holding, cancellationToken).ConfigureAwait(false);
-
-            if (FileContent.Of(contents) is var read && read.Content != digest)
-            {
-                return $"'{holding}' holds other content now than when it was measured - SHA-256 {read.Content}, where it was {digest} - so it was not kept";
-            }
-
-            await WriteAsync(digest, contents, cancellationToken).ConfigureAwait(false);
+            // Written anew, never copied: a copy carries the attributes of the file it was made from, and one kept from a
+            // read-only file could not be replaced, nor taken back where it failed.
+            await VerifiedFileCopy.RewriteAsync(fileSystem, permissions, holding, layout.SharedFile(agent, digest), digest, executable: false, cancellationToken)
+                .ConfigureAwait(false);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -165,13 +159,11 @@ internal sealed class SharedCopies(IFileSystem fileSystem, IFilePermissions perm
         }
 
         // One line however many: a directory nothing can be removed from would otherwise say so for every file in it.
-        return left switch
-        {
-            [] => [],
-            [var (file, why)] => [$"a kept copy the seed no longer names, '{file}', could not be removed: {why}; the next write of the seed removes it"],
-            _ => [$"{left.Count} kept copies the seed no longer names, in '{Directory}', could not be removed - {ReportText.Listed([.. left.Select(copy => Path.GetFileName(copy.File))])}: "
-                + $"{left[0].Why}; the next write of the seed removes them"],
-        };
+        return ReportText.FailedInOneLine(
+            [.. left.Select(copy => (Path.GetFileName(copy.File), copy.Why))],
+            "kept copy",
+            (name, why) => $"a kept copy the seed no longer names, '{Path.Combine(Directory, name)}', could not be removed: {why}; the next write of the seed removes it",
+            (counted, names, why) => $"{counted} the seed no longer names, in '{Directory}', could not be removed - {names}: {why}; the next write of the seed removes them");
     }
 
     /// <summary>Removes every copy, with their directory: what deleting the agent does, once its record says it is deleted.</summary>

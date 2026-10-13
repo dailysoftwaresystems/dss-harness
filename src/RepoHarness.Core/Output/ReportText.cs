@@ -30,6 +30,44 @@ public static class ReportText
     }
 
     /// <summary>
+    /// What failed for each of <paramref name="failed"/>, said in one line however many there are - a full disk would
+    /// otherwise say it once for every item a command meets: one as <paramref name="one"/> says it, given the item and why;
+    /// more as <paramref name="many"/> does, given how many (<see cref="Counted"/> of <paramref name="noun"/>), as many of
+    /// them as a line names (<see cref="Listed"/>), and why - the first reason, and how many other reasons there were where
+    /// they differ.
+    /// </summary>
+    /// <param name="failed">Each item that failed, with why, in the order they are named.</param>
+    /// <param name="noun">What an item is, as one of them is called, to count them by.</param>
+    /// <param name="one">The line for one item, given it and why.</param>
+    /// <param name="many">The line for more, given how many, the items named, and why.</param>
+    /// <returns>No line where nothing failed, and one otherwise.</returns>
+    public static IReadOnlyList<string> FailedInOneLine(
+        IReadOnlyList<(string Item, string Why)> failed,
+        string noun,
+        Func<string, string, string> one,
+        Func<string, string, string, string> many)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+        ArgumentNullException.ThrowIfNull(one);
+        ArgumentNullException.ThrowIfNull(many);
+
+        if (failed.Count == 0)
+        {
+            return [];
+        }
+
+        if (failed.Count == 1)
+        {
+            return [one(failed[0].Item, failed[0].Why)];
+        }
+
+        var others = failed.Select(item => item.Why).Distinct(StringComparer.Ordinal).Count() - 1;
+        var why = others == 0 ? failed[0].Why : $"{failed[0].Why}; and {Counted(others, "other reason")}";
+
+        return [many(Counted(failed.Count, noun), Listed([.. failed.Select(item => item.Item)]), why)];
+    }
+
+    /// <summary>
     /// How many of something there are, as a message says it: the number in digits alone, the same under every
     /// culture, then what is counted with the letters that would make it plural in brackets, so one wording reads
     /// true of one and of many - <c>3 path(s)</c>, <c>2 copy(ies)</c>, <c>4 process(es)</c>.

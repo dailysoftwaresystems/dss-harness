@@ -93,6 +93,65 @@ public sealed class VerifiedFileCopyTests
         Assert.Equal(Merged, File.ReadAllBytes(destination));
     }
 
+    /// <summary>
+    /// A file's bytes written anew are written as bytes in hand are, and the file written carries none of the source's
+    /// attributes: one made from a read-only file is not read-only, and is given the bit asked for.
+    /// </summary>
+    [Fact]
+    public async Task AFilesBytesWrittenAnew_AreWrittenAsBytesInHand_NoneOfItsAttributesCarried()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var source = temp.Combine("source.txt");
+        File.WriteAllBytes(source, Merged);
+        File.SetAttributes(source, FileAttributes.ReadOnly);
+        var destination = temp.Combine("kept", "copy");
+
+        try
+        {
+            var written = await VerifiedFileCopy.RewriteAsync(
+                harness.FileSystem,
+                harness.FilePermissions,
+                source,
+                destination,
+                FileContentHash.Of(Merged),
+                executable: false,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(FileContent.Of(Merged), written);
+            Assert.Equal(Merged, File.ReadAllBytes(destination));
+            Assert.False(File.GetAttributes(destination).HasFlag(FileAttributes.ReadOnly));
+        }
+        finally
+        {
+            File.SetAttributes(source, FileAttributes.Normal);
+        }
+    }
+
+    /// <summary>
+    /// A file whose bytes are written anew that holds other bytes now than when it was measured is not written, in the words
+    /// a copy of one says it: what would be written is not what was weighed.
+    /// </summary>
+    [Fact]
+    public async Task AFileThatHoldsOtherBytesThanMeasured_IsNotWrittenAnew_NorCopied_InOneSentence()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var source = temp.WriteFile("source.txt", "changed since\n");
+        var measured = FileContentHash.Of(Merged);
+        var now = FileContentHash.Of("changed since\n"u8);
+        var said = $"'{source}' holds other content now than when it was measured - SHA-256 {now}, where it was {measured} - so it was not copied.";
+
+        var rewritten = await Assert.ThrowsAsync<IOException>(() => VerifiedFileCopy.RewriteAsync(
+            harness.FileSystem, harness.FilePermissions, source, temp.Combine("rewritten"), measured, executable: false, TestContext.Current.CancellationToken));
+        var copied = await Assert.ThrowsAsync<IOException>(() => VerifiedFileCopy.CopyAsync(
+            harness.FileSystem, source, temp.Combine("copied"), measured, TestContext.Current.CancellationToken));
+
+        Assert.Equal(said, rewritten.Message);
+        Assert.Equal(said, copied.Message);
+        Assert.Equal(["source.txt"], Directory.EnumerateFiles(temp.Path).Select(Path.GetFileName));
+    }
+
     /// <summary>A file system that writes other bytes than it is given, as a disk that garbles a write would.</summary>
     private sealed class WritingOtherBytes(IFileSystem inner) : PassThroughFileSystem(inner)
     {

@@ -179,8 +179,8 @@ public sealed record Handable(IReadOnlyList<string> Files, IReadOnlyList<string>
 /// <summary>
 /// What an agent shares with the main tree, as one command adds to it: the one recorder of a shared path, whichever
 /// command shares it - handed, folded, or found already in. Each file recorded has its bytes kept beside the seed
-/// (<see cref="SharedCopies"/>), so the seed and the copies it names are written from one value - except by a command
-/// that deletes the agent, which keeps none: they would go with it moments later.
+/// (<see cref="SharedCopies"/>), so the seed and the copies it names are written from one value - by a command that
+/// deletes the agent too, which may stop after its fold and leave the agent live, with paths to merge from them.
 /// </summary>
 /// <remarks>
 /// A command writes in one order: the trees, the kept copies - made here, as each path is recorded - the seed, and then
@@ -188,37 +188,27 @@ public sealed record Handable(IReadOnlyList<string> Files, IReadOnlyList<string>
 /// as recorded, and a copy the seed does not name is pruned at the next write.
 /// </remarks>
 /// <param name="seed">What the agent shared before.</param>
-/// <param name="kept">Where the bytes of what it shares are kept; null where none are kept, as the agent is being deleted.</param>
-internal sealed class SharedLedger(SeedRecord seed, SharedCopies? kept)
+/// <param name="kept">Where the bytes of what it shares are kept.</param>
+internal sealed class SharedLedger(SeedRecord seed, SharedCopies kept)
 {
     private readonly Dictionary<string, string> _shared = new(seed.Paths, StringComparer.Ordinal);
     private readonly HashSet<string> _executable = (seed.Executable ?? []).ToHashSet(StringComparer.Ordinal);
     private readonly HashSet<string> _absent = (seed.Absent ?? []).ToHashSet(StringComparer.Ordinal);
     private readonly List<(string Path, string Why)> _notKept = [];
 
-    /// <summary>Where the bytes of what the agent shares are kept, pruned to the seed once it is written; null where none are.</summary>
-    public SharedCopies? Kept => kept;
+    /// <summary>Where the bytes of what the agent shares are kept, pruned to the seed once it is written.</summary>
+    public SharedCopies Kept => kept;
 
     /// <summary>
     /// What is said of the paths recorded whose bytes could not be kept: never a failure of the command that recorded them,
     /// and one line however many there are - which paths, as many as a line names, how many more, and why - since a full
     /// disk would otherwise say it for every file a command records.
     /// </summary>
-    public IReadOnlyList<string> NotKept => _notKept switch
-    {
-        [] => [],
-        [var (path, why)] => [$"'{ReportText.Printable(path)}' is recorded as shared, and its bytes were not kept in '{kept!.Directory}': {why}"],
-        _ => [$"{_notKept.Count} path(s) are recorded as shared, and their bytes were not kept in '{kept!.Directory}' - "
-            + $"{ReportText.Listed([.. _notKept.Select(notKept => notKept.Path)])}: {Why()}"],
-    };
-
-    /// <summary>Why the paths' bytes were not kept: the first reason, and how many others there were where they differ.</summary>
-    private string Why()
-    {
-        var others = _notKept.Select(notKept => notKept.Why).Distinct(StringComparer.Ordinal).Count() - 1;
-
-        return others == 0 ? _notKept[0].Why : $"{_notKept[0].Why}; and {ReportText.Counted(others, "other reason")}";
-    }
+    public IReadOnlyList<string> NotKept => ReportText.FailedInOneLine(
+        _notKept,
+        "path",
+        (path, why) => $"'{ReportText.Printable(path)}' is recorded as shared, and its bytes were not kept in '{kept.Directory}': {why}",
+        (counted, paths, why) => $"{counted} are recorded as shared, and their bytes were not kept in '{kept.Directory}' - {paths}: {why}");
 
     /// <summary>
     /// Records <paramref name="path"/> as a file both trees hold, and keeps its bytes. Never interrupted: a path the
@@ -242,7 +232,7 @@ internal sealed class SharedLedger(SeedRecord seed, SharedCopies? kept)
             _executable.Remove(path);
         }
 
-        if (kept is not null && await kept.KeepAsync(digest, holding, CancellationToken.None).ConfigureAwait(false) is { } why)
+        if (await kept.KeepAsync(digest, holding, CancellationToken.None).ConfigureAwait(false) is { } why)
         {
             _notKept.Add((path, why));
         }
@@ -497,10 +487,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             var head = await _gitClient.HeldAtAsync(main, "HEAD", [.. drifted.Select(drift => drift.Look.Path)], cancellationToken).ConfigureAwait(false);
 
-            // Whether the base's file could be run is its entry's mode, asked for the paths a merge is measured for alone,
-            // and never where the platform keeps no such bit.
+            // What the base held there - a link, which is no file to merge, and whether it could be run, never read where the
+            // platform keeps no such bit - is its entry, asked for the paths a merge is measured for alone.
             var mergeable = drifted.Where(drift => BothHoldAFile(drift.Look)).Select(drift => drift.Look.Path).ToList();
-            var entries = mergeable.Count > 0 && _platform.Current != PlatformId.Windows
+            var entries = mergeable.Count > 0
                 ? await _gitClient.ListEntriesAtAsync(worktree, baseCommit, mergeable, cancellationToken).ConfigureAwait(false)
                 : new Dictionary<string, GitEntry>(StringComparer.Ordinal);
 
@@ -512,7 +502,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
                 if (BothHoldAFile(look))
                 {
-                    twice.Add((look, why, new TwoChangeAncestor.Committed(baseBlob, entries.GetValueOrDefault(path)?.IsExecutable ?? false)));
+                    var entry = entries.GetValueOrDefault(path);
+                    twice.Add((look, why, new TwoChangeAncestor.Committed(baseBlob, Bit(entry), entry is { IsLink: true })));
                 }
                 else
                 {
@@ -532,8 +523,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 new TwoChangeAsk(
                     path,
                     ancestor,
-                    new TwoChangeSide(new GitContent.File(Path.Combine(main, path)), look.Main.File!.Value.Executable),
-                    new TwoChangeSide(new GitContent.File(Path.Combine(worktree, path)), look.Agent.File!.Value.Executable),
+
+                    // Neither tree's copy is a link, nor reached through one: a fold refuses such a path whole, above.
+                    new TwoChangeSide(new GitContent.File(Path.Combine(main, path)), look.Main.File!.Value.Executable, Link: false),
+                    new TwoChangeSide(new GitContent.File(Path.Combine(worktree, path)), look.Agent.File!.Value.Executable, Link: false),
                     main),
                 cancellationToken).ConfigureAwait(false);
 
@@ -1353,7 +1346,12 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         bool InRepository(string path) => repositories.Any(directory => path.StartsWith(directory, StringComparison.Ordinal));
 
-        PathKind KindOf(string path) => _fileSystem.KindOf(Path.Combine(worktree, path));
+        // Where the worktree's file system finds a name in any case, a path the new base holds that a path the old base
+        // held, and the new base does not, spells in another case is that file renamed: what the worktree holds at the new
+        // name is the file at the old one, never a file the agent made, and the new name is written once the old is gone.
+        var renamed = RenamedInCase(worktree, committed, atFrom, atTo);
+
+        PathKind KindOf(string path) => renamed.ContainsKey(path) ? PathKind.None : _fileSystem.KindOf(Path.Combine(worktree, path));
 
         // A file the agent made where its base held nothing that is the very file the new base holds there, as git would
         // compare them once its index is the new base's - untracked, staged, or one git ignores: nothing to reconcile.
@@ -1453,31 +1451,29 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             IReadOnlyList<string> asked = [.. twice.Select(two => two.Path)];
             var atFromEntries = await _gitClient.ListEntriesAtAsync(worktree, from, asked, cancellationToken).ConfigureAwait(false);
             var atToEntries = await _gitClient.ListEntriesAtAsync(worktree, to, asked, cancellationToken).ConfigureAwait(false);
-
-            bool Bit(GitEntry? entry) => _platform.Current != PlatformId.Windows && entry is { IsExecutable: true };
+            var reached = _fileSystem.ResolveLinks(worktree);
 
             foreach (var (path, why) in twice)
             {
                 var file = Path.Combine(worktree, path);
+                var oldEntry = atFromEntries.GetValueOrDefault(path);
+                var newEntry = atToEntries.GetValueOrDefault(path);
 
-                if (KindOf(path) == PathKind.Link || atFromEntries.GetValueOrDefault(path) is { IsLink: true } || atToEntries.GetValueOrDefault(path) is { IsLink: true })
-                {
-                    refused.Add((path, TwoChangeOffer.Unoffered(path, policy.RuleFor(path), NoMerge.Link).After(why)));
-                    continue;
-                }
-
-                var agent = await IdentityAsync(file, cancellationToken).ConfigureAwait(false);
+                // The agent's copy is a link, or reached through one - its directory turned into one - and is never read or
+                // written through it: what a merge wrote there would land outside its worktree.
+                var linked = ThroughLink(worktree, reached, path);
+                var agent = linked ? default : await IdentityAsync(file, cancellationToken).ConfigureAwait(false);
                 var offer = await changes.OfferAsync(
                     policy,
                     new TwoChangeAsk(
                         path,
-                        atFrom[path].Blob is { } held ? new TwoChangeAncestor.Committed(held, Bit(atFromEntries.GetValueOrDefault(path))) : null,
-                        new TwoChangeSide(new GitContent.Blob(atTo[path].Blob!), Bit(atToEntries.GetValueOrDefault(path))),
-                        new TwoChangeSide(new GitContent.File(file), agent.Executable),
+                        atFrom[path].Blob is { } held ? new TwoChangeAncestor.Committed(held, Bit(oldEntry), oldEntry is { IsLink: true }) : null,
+                        new TwoChangeSide(new GitContent.Blob(atTo[path].Blob!), Bit(newEntry), newEntry is { IsLink: true }),
+                        new TwoChangeSide(new GitContent.File(file), agent.Executable, linked),
                         worktree),
                     cancellationToken).ConfigureAwait(false);
 
-                weighed.Add((offer, why, [new MergeTarget(file, AgentTreeName, agent)]));
+                weighed.Add((offer, why, linked ? [] : [new MergeTarget(file, AgentTreeName, agent)]));
             }
         }
 
@@ -1584,8 +1580,11 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         refused.AddRange(policy.NamedNeverMerged());
 
-        // A file or a submodule's entry where the old base held a directory is written once what was below it is gone.
-        var last = taken.Where(path => atFrom[path].IsDirectory && atTo[path] is { IsNothing: false, IsDirectory: false }).ToList();
+        // A file or a submodule's entry where the old base held a directory is written once what was below it is gone, and
+        // a file renamed in case alone once its old name is: written first, removing the old name would remove it.
+        var removed = taken.Where(path => atTo[path].IsNothing).ToHashSet(StringComparer.Ordinal);
+        var last = taken.Where(path => (atFrom[path].IsDirectory && atTo[path] is { IsNothing: false, IsDirectory: false })
+            || (renamed.TryGetValue(path, out var old) && removed.Contains(old))).ToList();
 
         return new RebasePlan
         {
@@ -1600,6 +1599,36 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Written = [.. taken.Except(last, StringComparer.Ordinal)],
             WrittenLast = last,
         };
+    }
+
+    /// <summary>
+    /// Each path of <paramref name="committed"/> the new base holds that, where <paramref name="worktree"/>'s file system
+    /// finds a name in any case, names the same file as a path the old base held and the new base does not: that file
+    /// renamed in case alone, each with its old name. Empty where names are told apart by case.
+    /// </summary>
+    private Dictionary<string, string> RenamedInCase(
+        string worktree,
+        IReadOnlyList<string> committed,
+        IReadOnlyDictionary<string, GitHeld> atFrom,
+        IReadOnlyDictionary<string, GitHeld> atTo)
+    {
+        var names = PathCase.In(_fileSystem, worktree);
+        var renamed = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (names.Equals("a", "A"))
+        {
+            var old = committed.Where(path => !atFrom[path].IsNothing && atTo[path].IsNothing).ToLookup(path => path, names);
+
+            foreach (var path in committed.Where(path => atFrom[path].IsNothing && !atTo[path].IsNothing))
+            {
+                if (old[path].FirstOrDefault(other => other != path) is { } before)
+                {
+                    renamed[path] = before;
+                }
+            }
+        }
+
+        return renamed;
     }
 
     /// <summary>
@@ -1808,6 +1837,28 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             .Concat((seed?.Weighed ?? []).Where(path => !TreeFloor.Covers(floor, path)))
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)];
+
+    /// <summary>Whether a commit's entry is one that can be run, where the platform keeps such a bit: never on Windows, which keeps none.</summary>
+    private bool Bit(GitEntry? entry) => _platform.Current != PlatformId.Windows && entry is { IsExecutable: true };
+
+    /// <summary>
+    /// Whether <paramref name="path"/> in the tree at <paramref name="root"/> is a link, or is reached through one along it:
+    /// what it leads to is not the path git names. One that cannot be followed is taken for one.
+    /// </summary>
+    /// <param name="root">The tree.</param>
+    /// <param name="reached">Where the tree's root itself leads.</param>
+    /// <param name="path">The path, relative to the tree.</param>
+    private bool ThroughLink(string root, string reached, string path)
+    {
+        try
+        {
+            return LinkPaths.LeadsElsewhere(_fileSystem, root, reached, path, _platform.PathComparison) is not null;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+    }
 
     /// <summary>Whether both trees hold a file at the path looked at: what a merge of two changes needs of each.</summary>
     private static bool BothHoldAFile(Look look) => look is { Main.Kind: Kind.File, Agent.Kind: Kind.File };

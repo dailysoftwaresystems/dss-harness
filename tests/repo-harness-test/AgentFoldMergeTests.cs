@@ -266,6 +266,38 @@ public sealed class AgentFoldMergeTests
         Assert.Equal(Text((9, "MAIN 9")), OrchestrationKit.Read(kit.Main, "joined.log"));
     }
 
+    /// <summary>
+    /// A link is no file to merge, whichever version is one: where the agent's base held a link at a path both trees then
+    /// made a file of, the path is offered no merge, saying why, as a move of the agent's base says it.
+    /// </summary>
+    [Fact]
+    public async Task APathTheAgentsBaseHeldAsALink_IsOfferedNoMerge_SayingWhy()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "target.txt", "a.txt");
+        var target = (await kit.Harness.RunGitAsync(kit.Main, ["hash-object", "-w", "target.txt"], Token)).StandardOutput.Trim();
+        File.Delete(Path.Combine(kit.Main, "target.txt"));
+        await kit.GitAsync(kit.Main, "update-index", "--add", "--cacheinfo", $"120000,{target},{Both}");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "a link");
+        await kit.GitAsync(kit.Main, "checkout", "--", Both);
+        var worktree = await kit.CreateAgentAsync(Agent);
+
+        // Removed first: written through, a link would write the file it leads to.
+        File.Delete(Path.Combine(kit.Main, Both));
+        OrchestrationKit.Write(kit.Main, Both, Text((9, "MAIN 9")));
+        File.Delete(Path.Combine(worktree, Both));
+        OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2")));
+
+        var refused = await kit.FoldAsync(Agent, apply: true, Merging(Both));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Both}': ", StringComparison.Ordinal)
+            && line.EndsWith("; no three-way merge is offered: one of its versions is a link, or is reached through one, and only files are merged", StringComparison.Ordinal));
+        Assert.Equal(Text((9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
+        Assert.Equal(Text((2, "AGENT 2")), OrchestrationKit.Read(worktree, Both));
+    }
+
     /// <summary>A file above the bound a merge is offered for is never read into memory to be merged: none is offered, and its size is said.</summary>
     [Fact]
     public async Task AFileAboveTheBound_IsOfferedNoMerge_SayingHowLargeItIs()
@@ -669,11 +701,13 @@ public sealed class AgentFoldMergeTests
     }
 
     /// <summary>
-    /// Deleting an agent keeps nothing it finds in the main tree's history for a seed with no kept copy, since its copies
-    /// go with it moments later: a deletion that stops before its closing has kept none.
+    /// Deleting an agent keeps what it finds in the main tree's history for a seed with no kept copy, and the bytes of the
+    /// merge it writes, as any fold does: a deletion that stops before its closing leaves the agent live, its seed naming
+    /// the merge, which the main tree holds uncommitted and no history holds - and the next fold of the path both trees
+    /// then change merges from the copy kept.
     /// </summary>
     [Fact]
-    public async Task ADeletion_KeepsNothingItFindsInTheMainTreesHistory()
+    public async Task ADeletionThatStopsAfterItsFold_KeepsWhatItMerged_AndTheNextFoldMergesFromIt()
     {
         using var temp = new TempDirectory();
         using var claude = new TempDirectory();
@@ -694,8 +728,16 @@ public sealed class AgentFoldMergeTests
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.StartsWith("Agent 'ag' of 'o1' was not deleted, because its transcripts could not be kept:", stopped.Message, StringComparison.Ordinal);
         Assert.Equal(Text((2, "AGENT 2"), (5, "AS HANDED"), (9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
-        Assert.False(File.Exists(kit.Layout.SharedFile(Agent, recorded)), "A deletion kept the bytes it found in the main tree's history.");
-        Assert.False(File.Exists(kit.Layout.SharedFile(Agent, Seed(kit).Paths[Both])), "A deletion kept the bytes of the merge it wrote.");
+        Assert.Equal(Digest(Text((2, "AGENT 2"), (5, "AS HANDED"), (9, "MAIN 9"))), Seed(kit).Paths[Both]);
+        Assert.True(File.Exists(kit.Layout.SharedFile(Agent, Seed(kit).Paths[Both])), "A deletion kept no copy of the merge it wrote.");
+
+        OrchestrationKit.Write(kit.Main, Both, Text((2, "AGENT 2"), (5, "AS HANDED"), (9, "MAIN 9"), (11, "MAIN 11")));
+        OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2"), (4, "AGENT 4"), (5, "AS HANDED"), (9, "MAIN 9")));
+
+        var folded = await kit.FoldAsync(Agent, apply: true, Merging(Both));
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Equal(Text((2, "AGENT 2"), (4, "AGENT 4"), (5, "AS HANDED"), (9, "MAIN 9"), (11, "MAIN 11")), OrchestrationKit.Read(kit.Main, Both));
     }
 
     [Fact]

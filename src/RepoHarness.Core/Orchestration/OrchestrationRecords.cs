@@ -104,6 +104,13 @@ public sealed record AgentRecord
     /// </summary>
     public string? Moving { get; init; }
 
+    /// <summary>
+    /// What the move <see cref="Moving"/> names was told - each path it merges or keeps, after its option, as its command
+    /// line names them - so the line that finishes it, said by whichever command meets it, is let through the very paths
+    /// it was: said bare, it would be refused over them. Null where it was told nothing, or no move stands.
+    /// </summary>
+    public IReadOnlyList<string>? MovingWith { get; init; }
+
     /// <summary>The Claude session the agent runs as - a session's id or a subagent's - where it was given.</summary>
     public string? Session { get; init; }
 
@@ -175,6 +182,13 @@ public sealed record AgentRecord
         if (Moving is not null && (Base is null || Moving == Base))
         {
             return $"it records a move of its base to {Moving}, from {(Base is null ? "no base" : "that very commit")}";
+        }
+
+        if (MovingWith is not null && (Moving is null || MovingWith.Count == 0 || MovingWith.Any(string.IsNullOrEmpty)))
+        {
+            return Moving is null
+                ? "it records what a move of its base was told, and no move of it"
+                : "it records what the move of its base was told as nothing, or with an empty word";
         }
 
         return State switch

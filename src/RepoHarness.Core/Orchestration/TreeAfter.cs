@@ -77,9 +77,10 @@ internal static class TreeAfter
         ];
 
     /// <summary>
-    /// What a move of an agent's base changes in its worktree: each path it takes as the new base holds it - read from its
-    /// blob as a checkout into the worktree writes it, or removed where the new base holds no file there - and each merged
-    /// path read from the bytes in hand.
+    /// What a move of an agent's base changes in its worktree: each path it takes as the new base holds it - removed where
+    /// the new base holds no file there, and then read from its blob as a checkout into the worktree writes it - and each
+    /// merged path read from the bytes in hand. Removals first, as the move makes them, so a file renamed in case alone is
+    /// the file written.
     /// </summary>
     /// <param name="git">Reads the new base's blobs, and brings them to the form a checkout writes.</param>
     /// <param name="worktree">The agent's worktree.</param>
@@ -91,7 +92,8 @@ internal static class TreeAfter
         IEnumerable<(string Path, string? Blob)> taken,
         IEnumerable<(string Path, byte[] Bytes)> merged)
         => [
-            .. taken.Select(take => (take.Path, take.Blob is { } blob ? (Func<CancellationToken, Task<byte[]>>?)(token => CheckedOutAsync(git, worktree, take.Path, blob, token)) : null)),
+            .. taken.Where(take => take.Blob is null).Select(take => (take.Path, (Func<CancellationToken, Task<byte[]>>?)null)),
+            .. taken.Where(take => take.Blob is not null).Select(take => (take.Path, (Func<CancellationToken, Task<byte[]>>?)(token => CheckedOutAsync(git, worktree, take.Path, take.Blob!, token)))),
             .. merged.Select(merge => (merge.Path, Held(merge.Bytes))),
         ];
 
@@ -99,18 +101,15 @@ internal static class TreeAfter
     private static Func<CancellationToken, Task<byte[]>>? Held(byte[] bytes) => _ => Task.FromResult(bytes);
 
     /// <summary>
-    /// The bytes a checkout of <paramref name="blob"/> writes at <paramref name="path"/> in <paramref name="worktree"/>. One
-    /// git cannot give is a file that could not be read, as the validation says of any.
+    /// The bytes a checkout of <paramref name="blob"/> writes at <paramref name="path"/> in <paramref name="worktree"/>
+    /// (<see cref="CommittedBytes"/>). One git cannot give is a file that could not be read, as the validation says of any.
     /// </summary>
     /// <exception cref="IOException">git could not read the blob, or check it out.</exception>
     private static async Task<byte[]> CheckedOutAsync(IGitClient git, string worktree, string path, string blob, CancellationToken cancellationToken)
     {
         try
         {
-            var stored = (await git.ReadBlobsAsync(worktree, [blob], cancellationToken).ConfigureAwait(false))[0]
-                ?? throw new IOException($"git holds no blob {blob} for '{path}'");
-
-            return await git.ReadCheckedOutAsync(worktree, path, stored, cancellationToken).ConfigureAwait(false);
+            return await CommittedBytes.CheckedOutAsync(git, worktree, path, blob, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
         {

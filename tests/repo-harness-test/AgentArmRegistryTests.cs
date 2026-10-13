@@ -452,6 +452,193 @@ public sealed class AgentArmRegistryTests
         Assert.True(kit.Harness.FilePermissions.IsExecutable(Path.Combine(worktree, Registry)), "The merged registry cannot be run in the agent's worktree.");
     }
 
+    /// <summary>
+    /// A registry both trees made, one copy runnable and one not, is offered no merge, saying why: with nothing either held
+    /// before, neither bit is a change, and nothing says which is meant.
+    /// </summary>
+    [Fact]
+    public async Task ARegistryBothTreesMade_OneRunnableAndOneNot_IsOfferedNoMerge_SayingWhy()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no execute bit with a file.");
+
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp);
+        OrchestrationKit.Write(kit.Main, Registry, Text(Arm("alpha")));
+        WriteTexts(kit.Main, "alpha");
+        kit.Harness.FilePermissions.SetExecutable(Path.Combine(kit.Main, Registry), executable: true);
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree's registry, runnable", Token);
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("gamma")));
+        WriteTexts(worktree, "gamma");
+
+        var refused = await kit.FoldAsync(Agent, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}' is not at the agent's base ", StringComparison.Ordinal)
+            && line.EndsWith(
+                "; no three-way merge is offered: both trees made it, one so that it can be run and one not, and nothing either held before says "
+                + "which is meant",
+                StringComparison.Ordinal));
+        Assert.Equal(Text(Arm("alpha")), OrchestrationKit.Read(kit.Main, Registry));
+        Assert.Equal(Text(Arm("gamma")), OrchestrationKit.Read(worktree, Registry));
+    }
+
+    /// <summary>
+    /// The merged registry is judged by the main tree as the fold leaves it, without each file the fold removes: a text it
+    /// cites that the agent deleted is no file of that tree, and the fold is refused, nothing written.
+    /// </summary>
+    [Fact]
+    public async Task AFoldThatRemovesATextTheMergedRegistryCites_IsRefused_TheTextListed()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha");
+        await MainAddsAsync(kit, "beta", "alpha");
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("gamma")));
+        WriteTexts(worktree, "gamma");
+        File.Delete(Path.Combine(worktree, Texts, "alpha.diag"));
+
+        var refused = await kit.FoldAsync(Agent, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}': ", StringComparison.Ordinal)
+            && line.EndsWith("; merged by arm, it does not read as a registry - 1 problem(s), listed below", StringComparison.Ordinal));
+        Assert.Equal(
+            [
+                $"The arms registry '{Registry}', as the fold would write it, cannot be swept: 1 problem(s), each to fix:",
+                $"  - line 3: text '{Texts}/alpha.diag' is not a file in the tree",
+            ],
+            refused.Details!.SkipWhile(line => !line.StartsWith("The arms registry", StringComparison.Ordinal)).Take(2));
+        Assert.Equal("alpha exceeded", OrchestrationKit.Read(kit.Main, $"{Texts}/alpha.diag"));
+    }
+
+    /// <summary>
+    /// The merged registry is judged by every merge the fold writes, not its own alone: a text both trees changed, merged
+    /// with --merge to one that holds nothing, is read as the merge leaves it, and the fold is refused.
+    /// </summary>
+    [Fact]
+    public async Task AMergedRegistry_IsJudgedByEveryOtherMergeTheFoldWrites()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        kit.Harness.WriteConfig(kit.Main, Config);
+        var diagnostic = $"{Texts}/alpha.diag";
+        OrchestrationKit.Write(kit.Main, Registry, Text(Arm("alpha")));
+        WriteTexts(kit.Main, "alpha");
+        OrchestrationKit.Write(kit.Main, diagnostic, "a\n\nb\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "an arm whose diagnostic both trees will change", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(kit.Main, diagnostic, "\nb\n");
+        await MainAddsAsync(kit, "beta", "alpha");
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("gamma")));
+        WriteTexts(worktree, "gamma");
+        OrchestrationKit.Write(worktree, diagnostic, "a\n\n");
+
+        var refused = await kit.FoldAsync(Agent, apply: true, new FoldAllowances { Merge = [diagnostic] });
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains($"  - line 3: the text in '{diagnostic}' holds nothing, which occurs everywhere and which every run says", refused.Details!);
+        Assert.Equal("\nb\n", OrchestrationKit.Read(kit.Main, diagnostic));
+    }
+
+    /// <summary>
+    /// The merged registry is judged by the worktree as the move leaves it, without each file the new base removes - said
+    /// as the rebase would write it, and the move refused, nothing written.
+    /// </summary>
+    [Fact]
+    public async Task ARebaseThatRemovesATextTheMergedRegistryCites_IsRefused_AsTheRebaseWouldWriteIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha", "beta");
+        File.Delete(Path.Combine(kit.Main, Texts, "beta.diag"));
+        OrchestrationKit.Write(kit.Main, Registry, Text(Arm("alpha"), Arm("beta"), Arm("delta")));
+        WriteTexts(kit.Main, "delta");
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree's arm, and beta's diagnostic gone", Token);
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("beta"), Arm("gamma")));
+        WriteTexts(worktree, "gamma");
+
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            [
+                $"The arms registry '{Registry}', as the rebase would write it, cannot be swept: 1 problem(s), each to fix:",
+                $"  - line 5: text '{Texts}/beta.diag' is not a file in the tree",
+            ],
+            refused.Details!.SkipWhile(line => !line.StartsWith("The arms registry", StringComparison.Ordinal)).Take(2));
+        Assert.Equal("beta exceeded", OrchestrationKit.Read(worktree, $"{Texts}/beta.diag"));
+    }
+
+    /// <summary>
+    /// A text the new base renamed in case alone, which the merged registry cites by its new name, is the file the move
+    /// writes: the registry is judged by the worktree with the old name removed and the new one written, in that order,
+    /// as the move makes them, and the move goes on.
+    /// </summary>
+    [Fact]
+    public async Task ARebaseThatRenamesACitedTextInCase_JudgesTheRegistryByTheRenamedFile()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha");
+        await kit.GitAsync(kit.Main, "mv", $"{Texts}/alpha.diag", $"{Texts}/Alpha.diag");
+        var renamed = Arm("alpha").Replace($"{Texts}/alpha.diag", $"{Texts}/Alpha.diag", StringComparison.Ordinal);
+        OrchestrationKit.Write(kit.Main, Registry, Text(renamed, Arm("beta")));
+        WriteTexts(kit.Main, "beta");
+        await kit.Harness.CommitAllAsync(kit.Main, "alpha's diagnostic renamed in case, and the main tree's arm", Token);
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("gamma")));
+        WriteTexts(worktree, "gamma");
+
+        var moved = await RebaseAsync(kit, apply: true);
+
+        Assert.True(moved.Succeeded, OrchestrationKit.Describe(moved));
+        Assert.Equal(Text(renamed, Arm("beta"), Arm("gamma")), OrchestrationKit.Read(worktree, Registry));
+        Assert.Contains("Alpha.diag", Directory.EnumerateFiles(Path.Combine(worktree, Texts)).Select(Path.GetFileName));
+    }
+
+    /// <summary>A move whose merged registry cites texts no tree holds is refused, every problem listed, nothing written.</summary>
+    [Fact]
+    public async Task ARebaseWhoseMergedRegistryCitesAMissingText_IsRefused_EveryProblemListed()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha");
+        await MainAddsAsync(kit, "beta", "alpha");
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("delta")));
+
+        var refused = await RebaseAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}': ", StringComparison.Ordinal)
+            && line.EndsWith("; merged by arm, it does not read as a registry - 3 problem(s), listed below", StringComparison.Ordinal));
+        Assert.Equal(
+            [
+                $"The arms registry '{Registry}', as the rebase would write it, cannot be swept: 3 problem(s), each to fix:",
+                $"  - line 7: text '{Texts}/delta.before' is not a file in the tree",
+                $"  - line 7: text '{Texts}/delta.after' is not a file in the tree",
+                $"  - line 7: text '{Texts}/delta.diag' is not a file in the tree",
+            ],
+            refused.Details!.SkipWhile(line => !line.StartsWith("The arms registry", StringComparison.Ordinal)).Take(4));
+        Assert.Equal(Text(Arm("alpha"), Arm("delta")), OrchestrationKit.Read(worktree, Registry));
+    }
+
+    /// <summary>
+    /// The bound a merge of text is offered within holds for the registry too, asked again of a version once it is read:
+    /// a new base's registry above it is offered no merge, its size said.
+    /// </summary>
+    [Fact]
+    public async Task ARebase_OffersNoMergeOfARegistryAboveTheBound_ItsSizeAskedOnceItIsRead()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha");
+        OrchestrationKit.Write(kit.Main, Registry, Text(Arm("alpha"), Arm("beta")) + "#" + new string('x', (int)TwoChanges.MostBytes + (1024 * 1024)) + "\n");
+        WriteTexts(kit.Main, "beta");
+        await kit.Harness.CommitAllAsync(kit.Main, "a registry above the bound", Token);
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("gamma")));
+        WriteTexts(worktree, "gamma");
+
+        var refused = await RebaseAsync(kit, apply: false);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Registry}': ", StringComparison.Ordinal)
+            && line.EndsWith("; no three-way merge is offered: it is 17 MiB, and a merge is offered for a file up to 16 MiB", StringComparison.Ordinal));
+    }
+
     /// <summary>The real file system, noting each file under <paramref name="root"/> read whole, by its path relative to it.</summary>
     private sealed class ReadsUnder(IFileSystem inner, string root) : PassThroughFileSystem(inner)
     {

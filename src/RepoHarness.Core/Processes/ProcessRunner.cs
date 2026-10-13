@@ -40,6 +40,9 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// </summary>
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
+    /// <summary>How many bytes of a child's output are read at a time: what .NET's own reader of a child's output reads.</summary>
+    private const int OutputBuffer = 4096;
+
     private readonly IHostPlatform _platform = platform;
     private readonly IFilePermissions _filePermissions = filePermissions;
 
@@ -54,6 +57,16 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // A reader drops an encoding's own byte order mark from the start of what it reads, told to look
+        // for none or not, so output read under such an encoding would lose bytes the caller counts.
+        if (request.StandardOutputEncoding is { Preamble.Length: > 0 } marked)
+        {
+            throw new ArgumentException(
+                $"A child's output is read under the encoding named byte for byte, and {marked.WebName} as named has a byte order mark of "
+                + "its own, which a reader drops from the start: name it without one.",
+                nameof(request));
+        }
 
         // Checked before starting. On Linux and macOS a missing working directory fails with
         // the same error number as a missing executable, so it would otherwise be reported
@@ -552,12 +565,13 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
     /// <summary>
     /// How the child's standard output is read: under the encoding the caller named, exactly, from its first byte - a reader
     /// .NET makes for a child takes bytes that begin as a byte order mark does for the mark, drops them and decodes the rest
-    /// as the mark says, which turns the output of a caller that reads bytes through Latin-1 into other bytes. Text read as
-    /// UTF-8, the caller naming none, is read as .NET reads it.
+    /// as the mark says, which turns the output of a caller that reads bytes through Latin-1 into other bytes. The encoding
+    /// named has no mark of its own, refused otherwise, so none is dropped. Text read as UTF-8, the caller naming none, is
+    /// read as .NET reads it.
     /// </summary>
     private static StreamReader OutputOf(Process process, ProcessRequest request)
         => request.StandardOutputEncoding is { } exact
-            ? new StreamReader(process.StandardOutput.BaseStream, exact, detectEncodingFromByteOrderMarks: false)
+            ? new StreamReader(process.StandardOutput.BaseStream, exact, detectEncodingFromByteOrderMarks: false, OutputBuffer)
             : process.StandardOutput;
 
     /// <summary>A stream read to its end: what is kept of it, and what its line handler raised, where it raised anything.</summary>

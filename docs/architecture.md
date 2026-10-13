@@ -631,9 +631,11 @@ place a seed is written). Stopped anywhere, the seed never names a path the tree
 the seed does not name goes at the next write. A file above 16 MiB (`TwoChanges.MostBytes`) is recorded and not
 kept. A copy that cannot be kept or pruned never fails the command that met it: the path is recorded all the same,
 and one line says so however many paths it was - which, as many as a line names, how many more, and why - since a
-full disk would otherwise say it for every file a command records. Deleting an agent keeps no copy of what its fold
-writes (`SharedLedger` without `SharedCopies`, and no history search kept either): they would be removed with it
-moments later. Every command that writes an agent's records names where they are on each way out once it has -
+full disk would otherwise say it for every file a command records. Deleting an agent keeps the copies of what its fold
+writes as any fold does, and what a history search finds: a deletion that stops after its fold leaves the agent live,
+its seed naming bytes only those copies hold, and a later fold of a path both trees then change merges from them. What
+is said of a copy not kept is said only where the agent outlives the command; once it is closed they go with it.
+Every command that writes an agent's records names where they are on each way out once it has -
 `record`, `seed`, `shared <directory>` where the agent keeps any, `applied rows` - each that is there
 (`AgentService.Records`). list-orchestrator `--json` names the directory as each agent's `shared`.
 
@@ -676,13 +678,18 @@ nothing its own, untracked, ignored or staged - which refuses the move unless `-
 changed that the main tree committed a change to is two changes of one file, resolved where a fold resolves one
 (`TwoChanges`): what both held is the old base's blob, ours the new base's, theirs the agent's file, merged in the
 agent's worktree's forms, and the bit from the two bases' entries and the agent's file (`ListEntriesAtAsync`, which says
-too where a base holds a link, which is offered no merge). Its refusal says what the merge gives and names the command
+too where a base holds a link). A link among the versions - a base's entry, or the agent's file where it is one or is
+reached through one along its path (`LinkPaths.LeadsElsewhere`), its directory turned into a link - is offered no merge,
+decided where a fold's is (`TwoChanges.OfferAsync`, from `TwoChangeSide.Link` and `TwoChangeAncestor.Committed.Link`),
+so nothing is read or written through it. Its refusal says what the merge gives and names the command
 that takes the clean ones; `--merge` takes one, listed before what comes in, written over the agent's file as weighed
 (`AgentFold.WriteMergeAsync`, the one writer of a merge) once git has written the rest and before HEAD moves, and
 recorded nowhere: on the new base it is the agent's own change, which its fold weighs. A `--merge` naming a path the two
-commits hold alike is refused as a misspelling. The arm registry is merged by arm as a fold merges it (below): what both
+commits hold alike is refused as a misspelling, and one naming any other path they changed is let stand, so the command
+that finishes a stopped move runs again; a path named with both `--merge` and `--settled` is a usage error, exit 10. The arm registry is merged by arm as a fold merges it (below): what both
 held is the old base's blob as git stores it, or nothing where the agent made the registry the new base brings; ours is
-the new base's blob as a checkout into the agent's worktree writes it (`ReadCheckedOutAsync`), so the merge ends its
+the new base's blob as a checkout into the agent's worktree writes it (`CommittedBytes.CheckedOutAsync`, the one reader
+of a commit's blob in that form, which `TreeAfter.Moved` reads through too), so the merge ends its
 lines as that checkout would; and the merged text is judged by the worktree as the move leaves it, each path the move
 takes read from its blob when the validation asks for it (`TreeAfter.Moved`). One thing the agent
 made is not its change: a file that is the very file the new base holds there, which is held as the new base holds it
@@ -699,13 +706,16 @@ move unless it is the old base's own, coming in with the rest - the agent's own,
 what to do. A file or a submodule's entry where the old base held a directory is written last
 (`RebasePlan.WrittenLast`), once what was below it is: written first, git removes that, with the directories it leaves
 empty, where asked for both at once it finds that gone and stops, and a submodule's entry written first leaves it in
-place, hidden from git. The record names where the move goes (`Moving`) before anything is written, then the new
+place, hidden from git. Where the worktree's file system finds a name in any case, a file the new base renamed in case
+alone is that one file (`AgentFold.RenamedInCase`): what the worktree holds at the new name is the file at the old one,
+never a file the agent made there, and the new name is written last, once the old is removed - written first, the
+removal of the old name would take it. The record names where the move goes (`Moving`) before anything is written, then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
 name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
 again - the command its last words name, with every `--merge` and `--settled` the move was given, a merge it wrote
 merged again to the same bytes - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
-base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, saying
-so. Only a move its record names is ever finished, and only from its base or where it goes: a HEAD anywhere else was
+base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, naming
+that same command, which the record keeps beside where the move goes (`MovingWith`). Only a move its record names is ever finished, and only from its base or where it goes: a HEAD anywhere else was
 moved by hand - back, forward or beside its base, a move under way or not - or names no commit, and each command
 refuses it, saying how to put it back; one past its base that the main tree's history does not hold is a commit made
 inside the agent. Where git cannot say which a HEAD is, each fails, exit 20, saying so, never guessing.
@@ -748,9 +758,11 @@ the path's refusal: clean, with the hunks each side brought; conflicting, with t
 refusals; or none offered, with why - one of a closed list (`NoMerge`) that owns each reason's sentence, so no
 command words one itself. The refusal then names the command that takes the clean ones. Asking, `--merge <path>`
 once for each, changes one thing: a clean merge is taken. None is offered for a deletion against a change, a path
-both trees made with nothing either held there before, a file above 16 MiB (`TwoChanges.MostBytes`, the bound a
-kept copy has too), one whose `merge` attribute asks for another merge than git's own of text, or one git reads as
-binary or will not merge; and an anchor registry, which changes only through the rows an agent files, and the arm
+both trees made with nothing either held there before, a version that is a link or is reached through one, a file
+above 16 MiB (`TwoChanges.MostBytes`, the bound a kept copy has too, asked by one owner for every rule - of the files on
+disk before anything is read, and of every version once read, since a blob's size is known only then:
+`TwoChanges.WithinBoundAsync`), one whose `merge` attribute asks for another merge than git's own of text, or one git
+reads as binary or will not merge; and an anchor registry, which changes only through the rows an agent files, and the arm
 registry are never merged by line. The arm registry - the configured `mutations.registry` - is merged by arm instead,
 with no option given (`TwoChangeRule.Arms`): its three versions go to `MutationRegistryMerge.Merge` as the bytes each
 tree holds, nothing staged and nothing git merges, so the merge ends its lines as the main tree's file does; what both
@@ -774,7 +786,9 @@ offered no merge, and nothing else of the fold depends on it. For any other path
 it, no merge is offered, and the line says why. A fold merges in the main tree's forms, since the same bytes go to
 both trees and one digest is then true of both. Whether a file can be run is merged with its content
 (`TwoChanges.MergedBit`): the merged bit is the one that differs from what both held, where either side's does. A
-bit has two values, so two sides that both changed it changed it alike, and it never conflicts by itself. What both
+bit has two values, so two sides that both changed it changed it alike, and it never conflicts by itself - where
+something was held before: a registry both trees made, merged by arm from nothing, whose two copies differ in the bit
+is offered no merge (`NoMerge.BitBothMade`), since with nothing before neither bit is a change. What both
 held is the seed's record of the bit for a shared path - whichever source gave the bytes, since a kept copy is bytes
 under a digest and holds no bit - and the base's entry for any other (`ListEntriesAtAsync`, for those paths alone);
 each side's is its file's. Where the platform keeps no such bit, as on Windows, none is read, merged or set. A merged

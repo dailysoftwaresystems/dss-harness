@@ -50,7 +50,10 @@ public sealed record ProcessRequest
     /// How the child's standard output is decoded, or <see langword="null"/> for UTF-8. Latin-1 turns
     /// each byte into one character, for output a caller has to split by a byte count - git's batch
     /// answers name each object's size in bytes, which UTF-8 text cannot be cut by. An encoding named
-    /// here decodes every byte, those that begin as a byte order mark does among them.
+    /// here decodes every byte from the first, those that begin as a byte order mark does among them,
+    /// so it must be one that writes no mark of its own - <see cref="System.Text.Encoding.Latin1"/>, or
+    /// UTF-8 made without one: a reader drops an encoding's own mark from the start of what it reads,
+    /// whatever it is told, and an encoding that has one is refused.
     /// </summary>
     public System.Text.Encoding? StandardOutputEncoding { get; init; }
 

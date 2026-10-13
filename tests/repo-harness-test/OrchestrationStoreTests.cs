@@ -22,6 +22,8 @@ public sealed class OrchestrationStoreTests
     [InlineData("a closing whose evidence is null")]
     [InlineData("a move of its base to that very base")]
     [InlineData("a move of its base to no commit")]
+    [InlineData("what a move of its base was told, and no move")]
+    [InlineData("what a move of its base was told, with an empty word")]
     public async Task AnAgentRecordThatDoesNotRead_IsRefused_NamingItsFile(string how)
     {
         using var temp = new TempDirectory();
@@ -46,6 +48,14 @@ public sealed class OrchestrationStoreTests
                 StringComparison.Ordinal),
             "a move of its base to that very base" => text.Replace("\"state\": \"live\"", $"\"state\": \"live\",\n  \"moving\": \"{based}\"", StringComparison.Ordinal),
             "a move of its base to no commit" => text.Replace("\"state\": \"live\"", "\"state\": \"live\",\n  \"moving\": \"somewhere\"", StringComparison.Ordinal),
+            "what a move of its base was told, and no move" => text.Replace(
+                "\"state\": \"live\"",
+                "\"state\": \"live\",\n  \"movingWith\": [ \"--merge\", \"a.txt\" ]",
+                StringComparison.Ordinal),
+            "what a move of its base was told, with an empty word" => text.Replace(
+                "\"state\": \"live\"",
+                "\"state\": \"live\",\n  \"moving\": \"0123456789abcdef0123456789abcdef01234567\",\n  \"movingWith\": [ \"--merge\", \"\" ]",
+                StringComparison.Ordinal),
             _ => text.Replace("\"session\": \"sess1\"", "\"session\": \"sess1\\n\"", StringComparison.Ordinal),
         });
 

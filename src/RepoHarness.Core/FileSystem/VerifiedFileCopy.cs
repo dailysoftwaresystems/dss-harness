@@ -42,10 +42,7 @@ public static class VerifiedFileCopy
 
         var read = await FileContentHash.OfAsync(fileSystem, source, cancellationToken).ConfigureAwait(false);
 
-        if (expected is not null && read.Content != expected)
-        {
-            throw new IOException($"'{source}' holds other content now than when it was measured - SHA-256 {read.Content}, where it was {expected} - so it was not copied.");
-        }
+        RequireMeasured(source, read, expected);
 
         return await PlaceAsync(
                 fileSystem,
@@ -60,6 +57,42 @@ public static class VerifiedFileCopy
                     + $"{read.Length} with {read.Content}; the copy was not put in place.",
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes the bytes <paramref name="source"/> holds to <paramref name="destination"/> anew, making its directory, as a
+    /// file that can be run or one that cannot, and returns what it holds: read whole, required to be what was measured,
+    /// and written as bytes in hand are (<see cref="WriteAsync"/>). Never copied, so the file written carries none of the
+    /// source's attributes: one made from a read-only file can be replaced, and taken back where it failed.
+    /// </summary>
+    /// <param name="fileSystem">Reads and writes the files.</param>
+    /// <param name="permissions">Gives the file the bit asked for, where the platform keeps one.</param>
+    /// <param name="source">The file whose bytes are written.</param>
+    /// <param name="destination">Where they go; a file there is replaced.</param>
+    /// <param name="expected">The SHA-256 the source held when it was measured; a source that holds anything else now is not copied.</param>
+    /// <param name="executable">Whether the file written is one that can be run.</param>
+    /// <param name="cancellationToken">Stops it before the file is put in place.</param>
+    /// <exception cref="IOException">
+    /// The source is not what was measured, or what was written did not read back as the source did; nothing was put in place.
+    /// </exception>
+    public static async Task<FileContent> RewriteAsync(
+        IFileSystem fileSystem,
+        IFilePermissions permissions,
+        string source,
+        string destination,
+        string expected,
+        bool executable,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expected);
+
+        var contents = await fileSystem.ReadAllBytesAsync(source, cancellationToken).ConfigureAwait(false);
+
+        RequireMeasured(source, FileContent.Of(contents), expected);
+
+        return await WriteAsync(fileSystem, permissions, contents, destination, executable, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -104,6 +137,18 @@ public static class VerifiedFileCopy
                     + $"{given.Length} with {given.Content}; what was written was not put in place.",
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stops a copy of <paramref name="source"/> where what was read of it is not what was measured, named by
+    /// <paramref name="expected"/>: what would be written is not what was weighed.
+    /// </summary>
+    private static void RequireMeasured(string source, FileContent read, string? expected)
+    {
+        if (expected is not null && read.Content != expected)
+        {
+            throw new IOException($"'{source}' holds other content now than when it was measured - SHA-256 {read.Content}, where it was {expected} - so it was not copied.");
+        }
     }
 
     /// <summary>

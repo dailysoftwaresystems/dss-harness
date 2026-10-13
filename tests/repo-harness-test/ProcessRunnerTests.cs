@@ -373,6 +373,48 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// UTF-8 named without a mark of its own reads a leading mark as the character it is, U+FEFF, and keeps it: the output
+    /// is decoded from its first byte under the encoding named.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_ReadsOutputUnderUtf8NamedWithoutAMark_KeepingALeadingMarkAsACharacter()
+    {
+        using var temp = new TempDirectory();
+        var file = temp.Combine("marked.txt");
+        File.WriteAllBytes(file, [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes("João")]);
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("print-bytes", file) with { StandardOutputEncoding = new UTF8Encoding(false), Timeout = TimeSpan.FromSeconds(60) },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("\uFEFFJoão", result.StandardOutput);
+    }
+
+    /// <summary>
+    /// An encoding with a byte order mark of its own is refused before the child starts: a reader drops that mark from the
+    /// start of what it reads whatever it is told, and the output read under it would lose bytes the caller counts.
+    /// </summary>
+    [Theory]
+    [InlineData("utf-8")]
+    [InlineData("utf-16")]
+    [InlineData("utf-32")]
+    public async Task RunAsync_RefusesAnEncodingWithAMarkOfItsOwn_BeforeStartingTheChild(string name)
+    {
+        using var temp = new TempDirectory();
+        var file = temp.Combine("printed.bin");
+        File.WriteAllBytes(file, [0xEF, 0xBB, 0xBF]);
+        var encoding = Encoding.GetEncoding(name);
+
+        var refused = await Assert.ThrowsAsync<ArgumentException>(
+            () => CreateRunner().RunAsync(
+                TestHost.ChildRequest("print-bytes", file) with { StandardOutputEncoding = encoding, Timeout = TimeSpan.FromSeconds(60) },
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains($"{encoding.WebName} as named has a byte order mark of its own", refused.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// An input a writer writes as it makes it reaches the child whole and in order, and is closed once written, as text
     /// is: the child, reading to the end, finishes only once it is.
     /// </summary>
