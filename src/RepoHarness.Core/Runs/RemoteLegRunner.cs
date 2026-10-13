@@ -5,6 +5,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Testing;
 
 namespace RepoHarness.Core.Runs;
 
@@ -403,6 +404,21 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
 
             // What --pending made of the leg's arms there, as the host counted them.
             PendingSweep = entry.PendingSweep,
+
+            // Each control of the host's sweep that did not pass, as it judged it there: its detail named by the host this
+            // machine knows, as the leg's is, and its records named as the host names them, which stay on that host.
+            Controls = [.. (entry.Controls ?? []).Select(control => new ControlEntry(
+                control.Runner ?? string.Empty,
+                control.Verdict ?? string.Empty,
+                HostProbes.AsConfigured(control.Detail ?? string.Empty, connection),
+                [.. control.Reds ?? []],
+                control.Records ?? string.Empty,
+                control.Ctest is { } ctest
+                    ? new CtestControl(
+                        ctest.Matched,
+                        ctest.Unread is { } unread ? HostProbes.AsConfigured(unread, connection) : null,
+                        [.. ctest.Tests ?? []])
+                    : null))],
         };
     }
 
@@ -449,7 +465,23 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
         IReadOnlyList<RemoteLedgerArm>? Arms = null,
         string? Records = null,
         IReadOnlyList<PhaseLogFile>? Logs = null,
-        PendingSweep? PendingSweep = null);
+        PendingSweep? PendingSweep = null,
+        IReadOnlyList<RemoteLedgerControl>? Controls = null);
+
+    /// <summary>One control of a host's sweep that did not pass, beneath its leg's line.</summary>
+    private sealed record RemoteLedgerControl(
+        string? Runner,
+        string? Verdict,
+        string? Detail,
+        IReadOnlyList<string>? Reds = null,
+        string? Records = null,
+        RemoteCtestControl? Ctest = null);
+
+    /// <summary>What ctest registered for a control's red cases, as the host read it.</summary>
+    private sealed record RemoteCtestControl(
+        string? Matched = null,
+        string? Unread = null,
+        IReadOnlyList<CtestTestLine>? Tests = null);
 
     /// <summary>One arm's line of a host's sweep, beneath its leg's.</summary>
     private sealed record RemoteLedgerArm(

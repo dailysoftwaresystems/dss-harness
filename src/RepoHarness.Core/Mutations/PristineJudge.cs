@@ -9,18 +9,19 @@ namespace RepoHarness.Core.Mutations;
 /// </summary>
 public sealed record PristineOutcome
 {
-    private PristineOutcome(ReachedVerdict? leg, string? stops, RunBound? bound)
+    private PristineOutcome(ReachedVerdict? leg, string? stops, RunBound? bound, IReadOnlyList<string>? reds)
     {
         Leg = leg;
         Stops = stops;
         Bound = bound;
+        Reds = reds;
     }
 
     /// <summary>
     /// Nothing to control: the runner builds no program, which each of its arms' pre-flight says, so none of them
     /// reaches a run to bound.
     /// </summary>
-    public static PristineOutcome NothingToControl { get; } = new(null, null, null);
+    public static PristineOutcome NothingToControl { get; } = new(null, null, null, null);
 
     /// <summary>
     /// The leg's own verdict where the control did not pass - its build's verdict, failed, unattributed, or unmeasured -
@@ -37,6 +38,12 @@ public sealed record PristineOutcome
     /// </summary>
     public RunBound? Bound { get; }
 
+    /// <summary>
+    /// The cases the control's binary reddened, where it reddened any; <see langword="null"/> where it did not, or there
+    /// was no run. What a reader of what ctest registers for them is matched against.
+    /// </summary>
+    public IReadOnlyList<string>? Reds { get; }
+
     /// <summary>The control passed: each arm of the binary is driven, its run bounded.</summary>
     /// <param name="bound">How long a mutated run of the binary may take.</param>
     public static PristineOutcome Passed(RunBound bound)
@@ -44,19 +51,37 @@ public sealed record PristineOutcome
         ArgumentNullException.ThrowIfNull(bound);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(bound.Limit, TimeSpan.Zero);
 
-        return new(null, null, bound);
+        return new(null, null, bound, null);
     }
 
     /// <summary>The control did not pass: each arm of the binary is stopped.</summary>
     /// <param name="leg">The leg's own verdict for it.</param>
     /// <param name="why">Why each arm running the binary is stopped rather than driven.</param>
-    public static PristineOutcome Stopped(ReachedVerdict leg, string why)
+    /// <param name="reds">The cases the binary reddened, where it reddened any.</param>
+    public static PristineOutcome Stopped(ReachedVerdict leg, string why, IReadOnlyList<string>? reds = null)
     {
         ArgumentNullException.ThrowIfNull(leg);
         ArgumentException.ThrowIfNullOrWhiteSpace(why);
 
-        return new(leg, why, null);
+        return new(leg, why, null, reds);
     }
+
+    /// <summary>
+    /// This outcome with its lines said in full: <paramref name="note"/> - what ctest registers for the red cases that a
+    /// sweep does not apply, where it could be read - added to the leg's, and the run's log on the arms' reason, so each
+    /// arm the control stops names where the run that reddened is kept. A control that passed, or nothing to control, is
+    /// said by nothing more.
+    /// </summary>
+    /// <param name="note">What ctest registers for the red cases, or <see langword="null"/> where nothing was asked or read.</param>
+    /// <param name="log">The control's run log, as a line names a path; <see langword="null"/> where the control never ran.</param>
+    public PristineOutcome Said(string? note, string? log)
+        => Stops is null || Leg is null
+            ? this
+            : new(
+                Leg with { Detail = note is null ? Leg.Detail : $"{Leg.Detail}; {note}" },
+                log is null ? Stops : $"{Stops}; its run's log: '{log}'",
+                null,
+                Reds);
 }
 
 /// <summary>
@@ -136,7 +161,8 @@ public static class PristineJudge
         {
             return PristineOutcome.Stopped(
                 ReachedVerdict.Of(LegVerdict.Failed, $"the unmutated {runner} has {reds.Count} red: {string.Join(", ", reds)}"),
-                $"the unmutated {runner} has {reds.Count} red, so no mutation of it proves anything");
+                $"the unmutated {runner} has {reds.Count} red, so no mutation of it proves anything",
+                [.. reds]);
         }
 
         if (run.ExitCode != 0)

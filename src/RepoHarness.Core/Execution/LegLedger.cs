@@ -198,6 +198,13 @@ public sealed record LegEntry
     public PendingSweep? PendingSweep { get; init; }
 
     /// <summary>
+    /// Each control of the leg's sweep that did not pass - the unmutated run of a test binary that reddened, hung or could
+    /// not run - with the cases it reddened, where its records are and what ctest registers for them that a sweep does not
+    /// apply; empty for every leg of every command but <c>check-mutations</c>.
+    /// </summary>
+    public IReadOnlyList<ControlEntry> Controls { get; init; } = [];
+
+    /// <summary>
     /// The refusal of the run this leg's work was ended by, where the leg had reached verdicts worth keeping by then - the
     /// arms a sweep had judged: this line is recorded, and then the refusal ends the run, as one raised from a leg's work
     /// does. <see langword="null"/> on every line a ledger holds, and nothing a ledger writes: the refusal is the run's.

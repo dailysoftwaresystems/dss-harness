@@ -1059,6 +1059,43 @@ internal static class HelpCommand
             + "refused-locked, and never holds off a build, test or sync of the leg. --force-lock takes it, and a worker "
             + "another live sweep claims.");
         builder.AppendLine();
+        builder.AppendLine("How a runner is started");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A runner is started by the sweep itself, never by ctest. It is the program the runner's target builds, in the "
+            + "worker's build directory, given mutations.reportArgs and nothing else. It starts in the directory the leg's "
+            + "tests start in - test.workingDirectory, its names filled in for the worker, or the worker's root where the "
+            + "settings name none - with the environment they start with: what the leg's host declares, the developer "
+            + "environment its toolchain names, and test.env over both, the host's program directories added to its PATH.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Nothing else of the test settings is applied: not the runner, its args, a filter, an exclusion, a label, the "
+            + "core count or the success pattern. And nothing of a test's ctest entry is: not the add_test command line, "
+            + "its launcher or its arguments; not ENVIRONMENT or ENVIRONMENT_MODIFICATION; not WORKING_DIRECTORY; not a "
+            + "fixture (FIXTURES_REQUIRED, FIXTURES_SETUP, FIXTURES_CLEANUP), DEPENDS, REQUIRED_FILES, RESOURCE_LOCK or "
+            + "RUN_SERIAL; not TIMEOUT - a mutated run is bounded by runTimeFactor, an unmutated one by "
+            + "defaults.stallSeconds alone; and not what ctest reads a result by - WILL_FAIL, "
+            + "PASS_REGULAR_EXPRESSION, FAIL_REGULAR_EXPRESSION, SKIP_REGULAR_EXPRESSION, SKIP_RETURN_CODE, DISABLED. A "
+            + "case is red where the binary's own report says so.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "So a test that is green under ctest for what ctest sets up around it can be red in its binary's unmutated "
+            + "run, which stops every arm of that binary, each arm's line naming the run's log. Where the leg's tests run "
+            + "through ctest, the binary's line then names what ctest registers for the red cases that a sweep does not "
+            + "apply, read from ctest's own description (ctest --show-only=json-v1), bounded by two minutes; what ctest "
+            + "could not say is said as that and changes no verdict, and where the leg's tests run through no ctest "
+            + "nothing is asked. A sweep starts the binary itself, never through ctest, and runs no fixture.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "A mutated build is a build of its own. Each mutation is configured and built again in its worker, so "
+            + "whatever a project derives from its sources as it builds - a stamp that digests them, a version header, a "
+            + "cache named for either - is another in every mutant than in the unmutated build. A case that depends on "
+            + "such state is red under every arm of its runner, and no arm declares it.");
+        builder.AppendLine();
         builder.AppendLine("What holds, and what is pending");
         builder.AppendLine();
         AppendWrapped(
@@ -1161,7 +1198,9 @@ internal static class HelpCommand
             + "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key; "
             + "under --pending an arm it left out has held - the run and the time of the passed that holds - and an arm it swept "
             + "has pending - the first reason, its code and the words it is said in - and each leg has pendingSweep: how many "
-            + "of its arms held, and how many were swept.");
+            + "of its arms held, and how many were swept; and each control that did not pass is beneath the leg as controls: "
+            + "its runner, verdict, detail, reds, records, and what ctest registered for its red cases - how they were "
+            + "matched, and what of the tests it names a sweep does not apply.");
         builder.AppendLine();
         builder.AppendLine("Self-test");
         builder.AppendLine();

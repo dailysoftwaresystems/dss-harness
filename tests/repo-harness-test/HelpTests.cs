@@ -332,7 +332,9 @@ public sealed partial class HelpTests
             "arm, verdict, failure, detail, durationSeconds, worker, cases, declaredCases, reds, declaredReds, records and key; "
             + "under --pending an arm it left out has held - the run and the time of the passed that holds - and an arm it swept "
             + "has pending - the first reason, its code and the words it is said in - and each leg has pendingSweep: how many "
-            + "of its arms held, and how many were swept.",
+            + "of its arms held, and how many were swept; and each control that did not pass is beneath the leg as controls: "
+            + "its runner, verdict, detail, reds, records, and what ctest registered for its red cases - how they were "
+            + "matched, and what of the tests it names a sweep does not apply.",
             "An arm's key is the SHA-256 of what it was judged on, read from the first worker made before it drove an arm: the judge's "
             + "revision; the rows the sweep and the judge read of it - never a why, a comment, a line's number, the letter case of its id "
             + "or its S row;",
@@ -400,6 +402,39 @@ public sealed partial class HelpTests
             + "each was judged on, in the main checkout ('help mutations')",
             layout,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The mutations topic says how a runner is started - by the sweep itself, never through ctest, with the test
+    /// settings' working directory and environment and nothing else - what of a test's ctest entry a sweep does not
+    /// apply, the red control's line that names it, and that a mutated build is a build of its own.
+    /// </summary>
+    [Fact]
+    public async Task TheMutationsTopic_SaysHowARunnerIsStarted_AndThatAMutatedBuildIsItsOwn()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var said = Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "A runner is started by the sweep itself, never by ctest. It is the program the runner's target builds, in the "
+            + "worker's build directory, given mutations.reportArgs and nothing else.",
+            "Nothing else of the test settings is applied: not the runner, its args, a filter, an exclusion, a label, the "
+            + "core count or the success pattern. And nothing of a test's ctest entry is",
+            "not ENVIRONMENT or ENVIRONMENT_MODIFICATION; not WORKING_DIRECTORY; not a "
+            + "fixture (FIXTURES_REQUIRED, FIXTURES_SETUP, FIXTURES_CLEANUP), DEPENDS, REQUIRED_FILES, RESOURCE_LOCK or "
+            + "RUN_SERIAL; not TIMEOUT",
+            "Where the leg's tests run "
+            + "through ctest, the binary's line then names what ctest registers for the red cases that a sweep does not "
+            + "apply, read from ctest's own description (ctest --show-only=json-v1), bounded by two minutes",
+            "A sweep starts the binary itself, never through ctest, and runs no fixture.",
+            "A mutated build is a build of its own.",
+            "and each control that did not pass is beneath the leg as controls: "
+            + "its runner, verdict, detail, reds, records, and what ctest registered for its red cases",
+        })
+        {
+            Assert.Contains(text, said, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>

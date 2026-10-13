@@ -97,7 +97,7 @@ internal static class Ctest
     /// <param name="runner">The test runner an invocation starts, by name or path.</param>
     /// <param name="argument">The argument an invocation introduces a filter, an exclusion or a label with.</param>
     public static Selection? SelectionOf(string runner, string? argument)
-        => IsCtest(runner) ? Selections.FirstOrDefault(selection => selection.Spellings.Contains(argument, StringComparer.Ordinal)) : null;
+        => Is(runner) ? Selections.FirstOrDefault(selection => selection.Spellings.Contains(argument, StringComparer.Ordinal)) : null;
 
     /// <summary>
     /// Each of ctest's options that choose its tests that <paramref name="args"/> give, with the values they give it,
@@ -106,7 +106,7 @@ internal static class Ctest
     /// <param name="runner">The test runner an invocation starts, by name or path.</param>
     /// <param name="args">The invocation's own arguments.</param>
     public static IEnumerable<(Selection Option, IReadOnlyList<string> Values)> SelectionsIn(string runner, IReadOnlyList<string> args)
-        => IsCtest(runner)
+        => Is(runner)
             ? Selections.Select(option => (option, Values(args, option.Spellings).Values)).Where(given => given.Values.Count > 0)
             : [];
 
@@ -117,7 +117,7 @@ internal static class Ctest
     /// <param name="runner">The test runner an invocation starts, by name or path.</param>
     /// <param name="args">The invocation's own arguments.</param>
     public static bool ChoosesByName(string runner, IReadOnlyList<string> args)
-        => IsCtest(runner) && Values(args, ByName.Spellings).Values.Any(value => value.Length > 0);
+        => Is(runner) && Values(args, ByName.Spellings).Values.Any(value => value.Length > 0);
 
     /// <summary>
     /// Whether <paramref name="runner"/> is ctest and <paramref name="output"/> says it had no test to run: a line of
@@ -131,7 +131,7 @@ internal static class Ctest
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        if (!IsCtest(runner))
+        if (!Is(runner))
         {
             return false;
         }
@@ -191,7 +191,7 @@ internal static class Ctest
     /// </remarks>
     public static string? PresetIn(string runner, IReadOnlyList<string> args)
     {
-        for (var index = 0; IsCtest(runner) && index < args.Count; index++)
+        for (var index = 0; Is(runner) && index < args.Count; index++)
         {
             if (string.Equals(args[index], PresetArg, StringComparison.Ordinal) && index + 1 < args.Count)
             {
@@ -215,7 +215,7 @@ internal static class Ctest
     /// <param name="runner">The test runner an invocation starts, by name or path.</param>
     /// <param name="args">The invocation's own arguments.</param>
     public static bool RerunsFailed(string runner, IReadOnlyList<string> args)
-        => IsCtest(runner) && args.Contains("--rerun-failed", StringComparer.Ordinal);
+        => Is(runner) && args.Contains("--rerun-failed", StringComparer.Ordinal);
 
     /// <summary>
     /// Whether <paramref name="runner"/> is ctest and <paramref name="args"/> give it --union, in either
@@ -227,7 +227,7 @@ internal static class Ctest
     /// <param name="runner">The test runner an invocation starts, by name or path.</param>
     /// <param name="args">The invocation's own arguments.</param>
     public static bool Unites(string runner, IReadOnlyList<string> args)
-        => IsCtest(runner)
+        => Is(runner)
             && (Values(args, UnionArgs).Values.Count > 0 || args.Any(argument => UnionArgs.Contains(argument, StringComparer.Ordinal)));
 
     /// <summary>
@@ -295,7 +295,7 @@ internal static class Ctest
     /// Whether <paramref name="runner"/> is ctest, by its program's name, however its path is spelled: ctest, or ctest3,
     /// as the packages carrying CMake 3 beside an older CMake name it.
     /// </summary>
-    private static bool IsCtest(string runner)
+    public static bool Is(string runner)
         => Path.GetFileNameWithoutExtension(runner) is var name
             && (string.Equals(name, Program, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(name, Program + "3", StringComparison.OrdinalIgnoreCase));

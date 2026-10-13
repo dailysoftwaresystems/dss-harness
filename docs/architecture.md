@@ -3501,7 +3501,8 @@ why, since no mutation of it could prove anything. Its run bounds theirs (see *T
 5. is witnessed: a build that failed is read for the steps ninja said failed, and one that passed
    is held to ninja's log, read before and after, for every object depending on a site;
 6. is run whole with `mutations.reportArgs`, its JUnit report a new file for every run, or for a
-   BUILD-RED arm, has its paired control applied to the site as it was and built;
+   BUILD-RED arm, has its paired control applied to the site as it was and built. The sweep starts
+   the binary itself, never through ctest: see below;
 7. has every site put back and checked against the reading of the tree by its hash, whatever
    happened - never stopped, so a sweep stopped part way still puts its sites back, and each site
    on its own, so one that cannot be written keeps no other from it. A site that cannot be put
@@ -3518,6 +3519,42 @@ and a report a crash cut short read differently. One that is there and cannot be
 file - another process still holding it as the run ends - is read again, five times in a second,
 and then `unmeasured`, saying why: that is this tool's failure to read, and what the file holds
 may name every case. The same holds of a binary's unmutated run, whose arms are then stopped.
+
+A runner is started by the sweep itself, never by ctest: the program the runner's target builds,
+in the worker's build directory, given `mutations.reportArgs` alone, in the directory the leg's
+tests start in (`test.workingDirectory`, filled for the worker, else the worker's root) with the
+environment they start with - the host's declared `env`, the developer environment the toolchain
+names, `test.env` over both, the host's program directories on `PATH` (`MutationLegRunner.RunRequest`).
+Nothing else of the test settings is applied - not the runner, its args, a filter, an exclusion, a
+label, the core count or the success pattern - and nothing of a test's ctest entry: not the
+`add_test` command line, its launcher or its arguments; not `ENVIRONMENT` or
+`ENVIRONMENT_MODIFICATION`; not `WORKING_DIRECTORY`; not a fixture (`FIXTURES_REQUIRED`,
+`FIXTURES_SETUP`, `FIXTURES_CLEANUP`), `DEPENDS`, `REQUIRED_FILES`, `RESOURCE_LOCK` or `RUN_SERIAL`;
+not `TIMEOUT` - a mutated run is bounded by `mutations.runTimeFactor`, an unmutated one by
+`defaults.stallSeconds` alone; and not what ctest reads a result by - `WILL_FAIL`,
+`PASS_REGULAR_EXPRESSION`, `FAIL_REGULAR_EXPRESSION`, `SKIP_REGULAR_EXPRESSION`,
+`SKIP_RETURN_CODE`, `DISABLED`. A case is red where the binary's own report says so, so a test
+that is green under ctest for what ctest sets up around it can be red in its binary's unmutated
+run.
+
+Where that happens, each arm the control stops names the control's run log on its line, and the
+binary's own line names what ctest registers for the red cases that a sweep does not apply
+(`CtestEntries`, `CtestDescription`): the command the test command of the same settings makes,
+`--show-only=json-v1` appended, started as that command starts in the worker whose build ran the
+control, bounded by two minutes, once per runner per sweep - as the control itself is - and only
+where the leg's tests run through ctest. The red cases are matched to the tests the description
+registers for the binary - the one test that starts it; the test a case names, by its name or an
+argument; no way to tell, counting what the tests declare; or no test at all - and what of the
+matched test's entry a sweep does not apply is said with it, an environment by its variables,
+never their values, a working directory only where it is another than the sweep's own. What ctest
+could not say is said as that and changes no verdict; beneath the leg, `--json` carries each
+control that did not pass as `controls` - its runner, verdict, detail, reds, records, and the
+match as `ctest`.
+
+A mutated build is a build of its own. Each mutation is configured and built again in its worker,
+so whatever a project derives from its sources as it builds - a stamp that digests them, a version
+header, a cache named for either - is another in every mutant than in the unmutated build. A case
+that depends on such state is red under every arm of its runner, and no arm declares it.
 
 Whatever fails is kept to what it failed in, so one failure never costs the arms already judged. A
 worker that cannot be made - its copy, its whole build - is retired alone, saying why, and the
@@ -3554,7 +3591,8 @@ the ledger carries it, beside the logs of its build and its run, and of a paired
 `<run>/<leg>/workers/<n>/`. A leg's line counts its arms by verdict; below the table an ARMS block
 names each selected arm that did not pass, and why; `--json` carries every arm beneath its leg - `arm`,
 `verdict`, `failure`, `detail`, `durationSeconds`, `worker`, `cases`, `declaredCases`, `reds`,
-`declaredReds`, `records`, `key` - a skipped one included.
+`declaredReds`, `records`, `key` - a skipped one included, and each control that did not pass as
+`controls`, with what ctest registered for its red cases.
 
 A leg on a host is swept there, by the DssHarness there, on its own copy - with its own workers,
 its own admission and the arms `--arms` named - and its arms travel back beneath its line, their

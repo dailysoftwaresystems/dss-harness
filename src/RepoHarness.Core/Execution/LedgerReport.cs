@@ -93,6 +93,9 @@ public sealed record LedgerLine(
     /// <summary>What <c>check-mutations --pending</c> made of the leg's arms, as <see cref="LegEntry.PendingSweep"/> says.</summary>
     public PendingSweep? PendingSweep { get; init; }
 
+    /// <summary>Each control of the leg's sweep that did not pass, as <see cref="LegEntry.Controls"/> says.</summary>
+    public IReadOnlyList<ControlEntry> Controls { get; init; } = [];
+
     /// <summary>
     /// The project whose tests the leg counted, as the test that reached its runner recorded it;
     /// <see langword="null"/> where no test counted any, or the leg resolves no project.
@@ -322,6 +325,7 @@ public sealed class LedgerReport
                     Arms = entry.Arms,
                     Tree = entry.Tree,
                     PendingSweep = entry.PendingSweep,
+                    Controls = entry.Controls,
                     Project = entry.Project,
                     TestSet = entry.TestSet,
                     TestCountNote = counts.GetValueOrDefault(entry.Leg),
@@ -705,6 +709,9 @@ public sealed class LedgerReport
 
                 // Only for a leg check-mutations --pending swept: how many of its arms held a passed, and how many it swept.
                 line.PendingSweep,
+
+                // Only for a leg a sweep stopped a control of: each control that did not pass, with what ctest registers for its red cases.
+                Controls = line.Controls.Count > 0 ? line.Controls.Select(control => ControlDocument(control, show)) : null,
                 Timings = line.Timings.Select(timing => new
                 {
                     timing.Phase,
@@ -714,6 +721,32 @@ public sealed class LedgerReport
             }),
         },
         JsonOptions);
+
+    /// <summary>
+    /// A control's line as data: what it came to and why, the cases it reddened, where its records are, and what ctest
+    /// registers for them - each path and line of the harness's own told as <paramref name="show"/> tells it.
+    /// </summary>
+    private static object ControlDocument(ControlEntry control, Func<string, string> show) => new
+    {
+        control.Runner,
+        control.Verdict,
+        Detail = show(control.Detail),
+        control.Reds,
+        Records = show(control.Records),
+        Ctest = control.Ctest is { } ctest
+            ? new
+            {
+                ctest.Matched,
+                ctest.Unread,
+                Tests = ctest.Tests.Select(test => new
+                {
+                    test.Test,
+                    test.Cases,
+                    NotApplied = test.NotApplied.Select(notApplied => new { notApplied.Name, notApplied.Value, notApplied.SetUpBy }),
+                }),
+            }
+            : null,
+    };
 
     /// <summary>
     /// An arm's line as the record it leaves among its records holds it: the very shape it has beneath its leg in the

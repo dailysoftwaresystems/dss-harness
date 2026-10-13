@@ -105,6 +105,39 @@ public sealed class PristineJudgeTests
     }
 
     /// <summary>
+    /// A red control carries the cases its binary reddened - what a reader of what ctest registers for them matches
+    /// against - and its lines are said in full once it has them: the leg's gains what ctest registered that a sweep does
+    /// not apply, and each arm's reason names the run's log. A control that passed, or nothing to control, is said by
+    /// nothing more, and a stop with no run to name names no log.
+    /// </summary>
+    [Fact]
+    public void ARedControl_CarriesItsRedCases_AndItsLinesGainWhatCtestRegisteredAndTheRunLog()
+    {
+        var red = PristineJudge.Judge("fixture_tests", Built, Ran(0, string.Empty, "<failure/>"), TimeSpan.FromSeconds(4), 10);
+        var passed = PristineJudge.Judge("fixture_tests", Built, Ran(0, string.Empty, string.Empty), TimeSpan.FromSeconds(4), 10);
+        var unbuilt = PristineJudge.Judge("fixture_tests", new ArmBuild(ReachedVerdict.Of(LegVerdict.Failed, "exited 1"), [], []), null, TimeSpan.Zero, 10);
+
+        Assert.Equal(["Fixture.B"], red.Reds);
+        Assert.Null(passed.Reds);
+        Assert.Null(unbuilt.Reds);
+
+        var said = red.Said("ctest registers 'Fixture.B' as test 'lex.b', with nothing a sweep does not apply", "/run/leg/controls/fixture_tests/run.log");
+
+        Assert.Equal(
+            "the unmutated fixture_tests has 1 red: Fixture.B; ctest registers 'Fixture.B' as test 'lex.b', with nothing a sweep does not apply",
+            said.Leg!.Detail);
+        Assert.Equal("the unmutated fixture_tests has 1 red, so no mutation of it proves anything; its run's log: '/run/leg/controls/fixture_tests/run.log'", said.Stops);
+        Assert.Equal(["Fixture.B"], said.Reds);
+
+        var unlogged = unbuilt.Said(null, null);
+
+        Assert.Equal("the unmutated build of fixture_tests did not pass", unlogged.Stops);
+
+        Assert.Same(passed, passed.Said("a note", "/a/log"));
+        Assert.Same(PristineOutcome.NothingToControl, PristineOutcome.NothingToControl.Said("a note", "/a/log"));
+    }
+
+    /// <summary>
     /// A control's outcome is one of three, and built no other way: it passed, with a bound that is some time; it did
     /// not, with the leg's verdict and why its arms are stopped; or there was nothing to control, which says nothing.
     /// </summary>

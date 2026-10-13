@@ -142,6 +142,7 @@ internal sealed class MutationLegRunner(
     IWorkerSite site,
     IArmBuilder builder,
     IArmTestRunner tests,
+    ICtestDescription ctests,
     IPathBudget pathBudget,
     IFileSystem fileSystem,
     IHarnessOutput output,
@@ -153,6 +154,7 @@ internal sealed class MutationLegRunner(
     private readonly IWorkerSite _site = site;
     private readonly IArmBuilder _builder = builder;
     private readonly IArmTestRunner _tests = tests;
+    private readonly ICtestDescription _ctests = ctests;
     private readonly IPathBudget _pathBudget = pathBudget;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IHarnessOutput _output = output;
@@ -243,6 +245,9 @@ internal sealed class MutationLegRunner(
         private readonly HarnessConfig _config = work.Context.Config;
         private readonly ConcurrentDictionary<string, ArmEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, Lazy<Task<PristineOutcome>>> _controls = new(StringComparer.Ordinal);
+
+        /// <summary>Each control that did not pass, by the runner it controlled: said beneath the leg's line.</summary>
+        private readonly ConcurrentDictionary<string, ControlEntry> _controlEntries = new(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<int, ReachedVerdict> _unmade = new();
         private readonly ConcurrentQueue<ReachedVerdict> _own = new();
 
@@ -1617,7 +1622,11 @@ internal sealed class MutationLegRunner(
 
                 if (build.Verdict.Verdict != LegVerdict.Passed)
                 {
-                    return Decided(PristineJudge.Judge(runner, observed, null, TimeSpan.Zero, _subject.Settings.RunTimeFactor));
+                    var unbuilt = Decided(PristineJudge.Judge(runner, observed, null, TimeSpan.Zero, _subject.Settings.RunTimeFactor));
+
+                    Control(unbuilt, records, asked: null);
+
+                    return unbuilt;
                 }
 
                 var run = Noted(
@@ -1627,7 +1636,21 @@ internal sealed class MutationLegRunner(
                         .RunAsync(RunRequest(named, worker, buildDirectory, path, records, null, null), cancellationToken)
                         .ConfigureAwait(false));
 
-                return Decided(PristineJudge.Judge(runner, observed, run.Run, run.Duration, _subject.Settings.RunTimeFactor));
+                var judged = PristineJudge.Judge(runner, observed, run.Run, run.Duration, _subject.Settings.RunTimeFactor);
+
+                // What ctest registers for the red cases that a sweep does not apply, read in the worker that ran the
+                // control, once per runner per sweep - as the control itself is - and only where it reddened cases: the
+                // build has just run, so the tests a build discovers are there to list.
+                var asked = judged.Reds is { Count: > 0 }
+                    ? await _runner._ctests.AskAsync(Question(worker, buildDirectory, Path.Combine(buildDirectory, path), judged.Reds), cancellationToken).ConfigureAwait(false)
+                    : null;
+                var said = judged.Said(
+                    asked is null ? null : asked.Match is { } match ? match.Said : $"what ctest registers for it could not be read: {asked.Unread}",
+                    PhaseLogs.In(records, ArmTestRunner.PhaseName));
+
+                Control(said, records, asked);
+
+                return Decided(said);
             }
             catch (Exception ex) when (!Stops(ex, cancellationToken) && !EndsTheRun(ex))
             {
@@ -1635,11 +1658,60 @@ internal sealed class MutationLegRunner(
                 // arms are stopped, and every other binary's are still driven.
                 var could = $"the unmutated {runner} could not be built and run";
                 var failure = Failure(ex, could);
-
-                return Decided(PristineOutcome.Stopped(
+                var outcome = Decided(PristineOutcome.Stopped(
                     failure.Verdict == LegVerdict.Poisoned ? failure : failure with { Detail = $"{could}: {failure.Detail}" },
                     $"{could}, so nothing could tell what a mutation of it changed"));
+
+                Control(outcome, records, asked: null);
+
+                return outcome;
             }
+        }
+
+        /// <summary>
+        /// What a red control asks about the binary it ran, in the worker whose build ran it: the pieces
+        /// <see cref="RunRequest"/> starts the binary with, which the asking starts as the leg's tests start.
+        /// </summary>
+        private CtestQuestion Question(string worker, string buildDirectory, string program, IReadOnlyList<string> redCases)
+        {
+            var invocation = _subject.Tests is { } settings ? TestInvocationResolver.InvocationFor(settings, _leg.Os) : null;
+
+            return new CtestQuestion(
+                program,
+                redCases,
+                _subject.Tests,
+                _leg.Os,
+                new LegPaths(worker, buildDirectory)
+                {
+                    Identity = _leg.IdentityFor(_work.RunId.Value),
+                    Compilers = _runner._toolchains.NamedFor(_subject.Project, buildDirectory),
+                },
+                _leg.InCopy ? invocation?.RemoteExcludes ?? [] : [],
+                worker,
+                _leg.Environment,
+                _leg.Host.ProgramDirectories,
+                _config.Defaults.TestCores);
+        }
+
+        /// <summary>
+        /// Keeps <paramref name="outcome"/>'s control on the leg's line, where it did not pass: each control that stops a
+        /// binary's arms is said beneath the leg, with its red cases, where its records are and what ctest registered for
+        /// them.
+        /// </summary>
+        private void Control(PristineOutcome outcome, string records, CtestAsked? asked)
+        {
+            if (outcome.Leg is not { } leg)
+            {
+                return;
+            }
+
+            _controlEntries[Path.GetFileName(records)] = new ControlEntry(
+                Path.GetFileName(records),
+                Verdicts.Display(leg.Verdict),
+                leg.Detail,
+                [.. outcome.Reds ?? []],
+                _runner._output.Shown(records),
+                asked is null ? null : new CtestControl(asked.Match?.Wire, asked.Unread, [.. asked.Match?.Tests ?? []]));
         }
 
         /// <summary><paramref name="outcome"/>, its verdict for the leg counted among the leg's own.</summary>
@@ -1936,6 +2008,7 @@ internal sealed class MutationLegRunner(
                 Arms = ordered,
                 TimingNotes = [.. _timing.Order(StringComparer.Ordinal)],
                 PendingSweep = pending,
+                Controls = [.. _controlEntries.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Value)],
             };
         }
 

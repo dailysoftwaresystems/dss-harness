@@ -13,6 +13,7 @@ using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
+using RepoHarness.Core.Testing;
 using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
@@ -333,11 +334,109 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(LegVerdict.Failed, entry.Verdict);
         Assert.Equal("the unmutated fixture_tests has 1 red: Fixture.Depth; 2 arm(s): 2 stopped", entry.Detail);
         Assert.All(entry.Arms, arm => Assert.Equal(
-            (LegVerdict.Stopped, "the unmutated fixture_tests has 1 red, so no mutation of it proves anything", null, null),
+            (LegVerdict.Stopped, $"the unmutated fixture_tests has 1 red, so no mutation of it proves anything; its run's log: '{sweep.ControlLog("fixture_tests")}'", null, null),
             (arm.Verdict, arm.Detail, arm.Worker, arm.Records)));
         Assert.Single(sweep.Tests.Runs);
         Assert.DoesNotContain(sweep.Builder.Builds, build => build.Leg.Contains("/arms/", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// A red control names its log on each arm it stops, and the leg's line carries the control itself beneath its arms:
+    /// its verdict, its red cases, where its records are - and nothing of ctest, which it was not asked (the subject's
+    /// tests run through no runner here).
+    /// </summary>
+    [Fact]
+    public async Task ARedControl_NamesItsLogOnEachArmItStops()
+    {
+        using var sweep = new Sweep { Workers = 1 };
+        sweep.Tests.Answer = request => request.Bound is null ? Tests.Ran(["Fixture.Depth"]) : Tests.Judged(request);
+
+        var entry = await sweep.RunAsync([ChargeBound, ChargeFloor]);
+
+        var control = Assert.Single(entry.Controls);
+
+        Assert.Equal(
+            ("fixture_tests", "failed", "the unmutated fixture_tests has 1 red: Fixture.Depth", "Fixture.Depth", sweep.Controls("fixture_tests"), null, null),
+            (control.Runner, control.Verdict, control.Detail, Assert.Single(control.Reds), control.Records, control.Ctest?.Matched, control.Ctest?.Unread));
+        Assert.All(entry.Arms, arm => Assert.EndsWith($"; its run's log: '{sweep.ControlLog("fixture_tests")}'", arm.Detail, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A red control asks ctest what it registers for its red cases once per runner per sweep, in the worker that ran the
+    /// control, after its build - as the control itself is asked - with the binary that control ran and the cases it
+    /// reddened. A green control asks nothing, and nothing is said of ctest where the answer said nothing.
+    /// </summary>
+    [Fact]
+    public async Task ARedControl_AsksCtest_OncePerRunner_WithItsBinaryAndRedCases()
+    {
+        using var throughCtest = new Sweep { Workers = 1, Test = CtestSettings() };
+        throughCtest.Tests.Answer = request => request.Bound is null ? Tests.Ran(["Fixture.Depth"]) : Tests.Judged(request);
+
+        var entry = await throughCtest.RunAsync([ChargeBound, ChargeFloor]);
+
+        Assert.Equal(LegVerdict.Failed, entry.Verdict);
+
+        var asked = Assert.Single(throughCtest.Ctests.Asked);
+
+        Assert.Equal(["Fixture.Depth"], asked.RedCases);
+        Assert.StartsWith(throughCtest.Worker(1), asked.Program, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        Assert.EndsWith("fixture_tests", asked.Program, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+        using var green = new Sweep { Workers = 1, Test = CtestSettings() };
+
+        var passed = await green.RunAsync([ChargeBound, ChargeFloor]);
+
+        Assert.Empty(passed.Controls);
+        Assert.Empty(green.Ctests.Asked);
+    }
+
+    /// <summary>
+    /// What ctest could not say is said - on the leg's line, after the red cases, and beneath the leg, as the control's
+    /// why - and changes no verdict: the arms are stopped by the red control alone, and what ctest registered, where it
+    /// answered, is said the same way.
+    /// </summary>
+    [Fact]
+    public async Task WhatCtestCouldNotSay_IsSaid_AndChangesNoVerdict()
+    {
+        using var unread = new Sweep { Workers = 1, Test = CtestSettings() };
+        unread.Tests.Answer = request => request.Bound is null ? Tests.Ran(["Fixture.Depth"]) : Tests.Judged(request);
+        unread.Ctests.Answer = _ => CtestAsked.Refused("ctest exited 1");
+
+        var entry = await unread.RunAsync([ChargeBound]);
+
+        Assert.Equal(LegVerdict.Failed, entry.Verdict);
+        Assert.Equal(
+            "the unmutated fixture_tests has 1 red: Fixture.Depth; what ctest registers for it could not be read: ctest exited 1; 1 arm(s): 1 stopped",
+            entry.Detail);
+        Assert.Equal((null, "ctest exited 1"), (Assert.Single(entry.Controls).Ctest?.Matched, Assert.Single(entry.Controls).Ctest?.Unread));
+        Assert.StartsWith("the unmutated fixture_tests has 1 red, so no mutation of it proves anything", Assert.Single(entry.Arms).Detail, StringComparison.Ordinal);
+        Assert.EndsWith($"; its run's log: '{unread.ControlLog("fixture_tests")}'", Assert.Single(entry.Arms).Detail, StringComparison.Ordinal);
+
+        using var answered = new Sweep { Workers = 1, Test = CtestSettings() };
+        answered.Tests.Answer = request => request.Bound is null ? Tests.Ran(["Fixture.Depth"]) : Tests.Judged(request);
+        answered.Ctests.Answer = _ => CtestAsked.Said(CtestMatch.Of(
+            CtestMatched.ByName,
+            [new CtestTestLine("lex.depth", ["Fixture.Depth"], [new NotApplied("TIMEOUT", ["120"])])],
+            "ctest registers 'Fixture.Depth' as test 'lex.depth', whose TIMEOUT (120) a sweep does not apply"));
+
+        var said = await answered.RunAsync([ChargeBound]);
+
+        Assert.Equal(
+            "the unmutated fixture_tests has 1 red: Fixture.Depth; ctest registers 'Fixture.Depth' as test 'lex.depth', whose TIMEOUT (120) a sweep does not apply; 1 arm(s): 1 stopped",
+            said.Detail);
+
+        var ctest = Assert.Single(said.Controls).Ctest!;
+
+        Assert.Equal("by-name", ctest.Matched);
+        Assert.Null(ctest.Unread);
+        Assert.Equal([("lex.depth", "Fixture.Depth", "TIMEOUT", "120")], ctest.Tests.Select(test => (test.Test, string.Join(", ", test.Cases), test.NotApplied[0].Name, test.NotApplied[0].Value[0])));
+    }
+
+    /// <summary>The test settings of a leg whose tests run through ctest, started in the build directory it made.</summary>
+    private static TestConfig CtestSettings() => new()
+    {
+        All = new TestInvocation { Runner = "ctest", Args = ["--test-dir", "{buildDir}"], WorkingDirectory = "{buildDir}" },
+    };
 
     /// <summary>
     /// A control that cannot be built and run at all is the leg's own verdict, as it would be for a build of the leg, and
@@ -2074,7 +2173,7 @@ public sealed class MutationLegRunnerTests
         var unheld = await stopped.RunAsync([ChargeBound]);
 
         Assert.Equal(
-            (LegVerdict.Stopped, "the unmutated fixture_tests has 1 red, so no mutation of it proves anything"),
+            (LegVerdict.Stopped, $"the unmutated fixture_tests has 1 red, so no mutation of it proves anything; its run's log: '{stopped.ControlLog("fixture_tests")}'"),
             (Assert.Single(unheld.Arms).Verdict, unheld.Arms[0].Detail));
     }
 
@@ -3646,6 +3745,9 @@ public sealed class MutationLegRunnerTests
 
         public Tests Tests { get; } = new();
 
+        /// <summary>What each red control's asking of ctest is answered with; nothing, unless a test says.</summary>
+        public Ctests Ctests { get; } = new();
+
         public IPathBudget Budget { get; set; } = Substitute.For<IPathBudget>();
 
         /// <summary>What the sites are read and written through, where not the real file system.</summary>
@@ -3753,6 +3855,12 @@ public sealed class MutationLegRunnerTests
 
         public string Records(string arm) => Path.Combine(RunDirectory, LegName, MutationRecords.ArmsDirectory, arm);
 
+        /// <summary>Where the run keeps the control of <paramref name="runner"/>'s records.</summary>
+        public string Controls(string runner) => Path.Combine(RunDirectory, LegName, MutationRecords.ControlsDirectory, runner);
+
+        /// <summary>The log of the control of <paramref name="runner"/>'s run, as each arm it stops names it.</summary>
+        public string ControlLog(string runner) => PhaseLogs.In(Controls(runner), ArmTestRunner.PhaseName);
+
         /// <summary>Worker <paramref name="number"/> as a listing finds it, holding 2 KiB, its marker saying <paramref name="origin"/>.</summary>
         public WorkerCopy Copy(int number, CopyOrigin origin)
             => new(Family, number, new HostCopyFound($"{Family.Name}-{number}", Worker(number), origin, 2048));
@@ -3815,6 +3923,7 @@ public sealed class MutationLegRunnerTests
                 new WorkerSite(SiteFiles ?? Harness.FileSystem, _clock),
                 Builder,
                 Tests,
+                Ctests,
                 Budget,
                 Files ?? Harness.FileSystem,
                 Harness.Output,
@@ -4341,6 +4450,24 @@ public sealed class MutationLegRunnerTests
                 reds.Count > 0 ? 1 : 0,
                 RunReport.Of(JUnitReport.Read($"<testsuites><testsuite name=\"Fixture\">{cases}</testsuite></testsuites>")!),
                 said);
+        }
+    }
+
+    /// <summary>
+    /// What a red control's asking of ctest is answered with, as a test scripts it: what each question asked, and what
+    /// ctest said of it - nothing, by default, which is also what the leg's tests running through no ctest ask for.
+    /// </summary>
+    private sealed class Ctests : ICtestDescription
+    {
+        public ConcurrentQueue<CtestQuestion> Asked { get; } = new();
+
+        public Func<CtestQuestion, CtestAsked?> Answer { get; set; } = _ => null;
+
+        public Task<CtestAsked?> AskAsync(CtestQuestion question, CancellationToken cancellationToken)
+        {
+            Asked.Enqueue(question);
+
+            return Task.FromResult(Answer(question));
         }
     }
 
