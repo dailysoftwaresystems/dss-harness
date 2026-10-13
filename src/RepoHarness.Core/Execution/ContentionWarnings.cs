@@ -54,7 +54,7 @@ public static class ContentionWarnings
 
         foreach (var limit in report.Limits)
         {
-            output.Detail(commandName, $"{leg}: sampling cannot see {limit}");
+            output.Detail(commandName, $"{leg}: {SamplingLimits.Said(limit)}");
         }
     }
 

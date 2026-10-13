@@ -105,17 +105,6 @@ public sealed record OwnedBuildDirectory(string Directory, BuildDirectoryOwner O
 /// </remarks>
 public sealed class ProcessSampler(IProcessTable processTable, IHostPlatform platform, IHarnessOutput output)
 {
-    /// <summary>What the report always says sampling cannot see.</summary>
-    /// <remarks>
-    /// Stated on every report, including a clean one. A reader who does not know what was not
-    /// looked at reads "no contender" as "nothing could have contended".
-    /// </remarks>
-    public static IReadOnlyList<string> KnownBlindSpots { get; } =
-    [
-        "a tool started from inside the build directory by a relative path is not seen, because another process's working directory cannot be read",
-        "a process that does not expose its command line is counted but never matched against the build directory",
-    ];
-
     /// <summary>How far a parent link is followed before the walk is abandoned as a cycle.</summary>
     private const int MaxAncestors = 64;
 

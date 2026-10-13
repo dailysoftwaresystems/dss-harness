@@ -64,9 +64,9 @@ public sealed class ProcessSamplerTests
         Assert.Null(report.Verdict());
 
         // Stated even on a clean report: a reader who does not know what was not looked at reads
-        // "no contender" as "nothing could have contended".
-        Assert.Contains(report.Limits, limit => limit.Contains("relative path", StringComparison.Ordinal));
-        Assert.Contains(report.Limits, limit => limit.Contains("command line", StringComparison.Ordinal));
+        // "no contender" as "nothing could have contended". This machine's own table may add what
+        // it could not read of its processes, after them.
+        Assert.Equal(SamplingLimits.Always, report.Limits.Take(SamplingLimits.Always.Count));
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public sealed class ProcessSamplerTests
         var report = Classify([Sample(0, Process(4242, "ninja", commandLine: null, parent: 9999))]);
 
         Assert.Empty(report.Contenders);
-        Assert.Contains(report.Limits, limit => limit.Contains("no command line could be read", StringComparison.Ordinal));
+        Assert.Equal([.. SamplingLimits.Always, SamplingLimits.NoCommandLine], report.Limits);
     }
 
     [Fact]
@@ -250,7 +250,7 @@ public sealed class ProcessSamplerTests
         var contender = Assert.Single(report.Contenders);
 
         Assert.Equal(ProcessSeen.Throughout, contender.Seen);
-        Assert.Contains(report.Limits, limit => limit.Contains("reused during the leg", StringComparison.Ordinal));
+        Assert.Equal([.. SamplingLimits.Always, SamplingLimits.NoStartTimes], report.Limits);
     }
 
     /// <summary>

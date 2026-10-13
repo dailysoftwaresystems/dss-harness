@@ -197,22 +197,18 @@ public sealed class ProcessSamplingSession : IAsyncDisposable
             .Select(sample => $"sample {sample.Index} at {sample.Elapsed:g}: {sample.Unreadable}")
             .ToList();
 
-        var limits = new List<string>(ProcessSampler.KnownBlindSpots);
+        var limits = new List<string>(SamplingLimits.Always);
 
         if (samples.Any(sample => sample.Processes.Count > 0)
             && samples.All(sample => sample.Processes.All(process => process.CommandLine is null)))
         {
-            limits.Add("no command line could be read on this machine, so nothing was matched against the build directory");
+            limits.Add(SamplingLimits.NoCommandLine);
         }
 
-        // Said rather than left for the reader to infer. Without a start time an id is all there is
-        // to go on, so an id freed and handed to something else inside one leg is reported as one
-        // process that ran throughout.
+        // Said rather than left for the reader to infer.
         if (unstamped.Count > 0)
         {
-            limits.Add(
-                "no start time could be read for some processes on this machine, so a process id "
-                + "reused during the leg is reported as one process");
+            limits.Add(SamplingLimits.NoStartTimes);
         }
 
         return new ContentionReport(

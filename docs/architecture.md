@@ -2067,9 +2067,15 @@ while a gate ran turned a green suite red, with four test processes live at once
   `/proc/stat`'s `btime` to ticks-since-boot produces — moves for every live process the
   moment the clock steps, and every live holder then reads as a recycled id at once. On a
   host whose clock steps by about 25 seconds every few seconds, that is not an edge case.
-- What sampling cannot see is stated in the report: a tool started from inside the
-  build directory with a relative path, since another process's working directory
-  cannot be read, and processes that do not expose their command line.
+- What sampling cannot see is stated in the report, and said under `--verbose` one line
+  each, as `sampling cannot see` and the limit. Two hold on every machine: a tool started
+  from inside the build directory by a relative path, since another process's working
+  directory cannot be read; and the command line of a process that does not expose it,
+  so such a process is counted and never matched against the build directory. Where no
+  process sampled had a command line that could be read, it cannot see any command line
+  on this machine, so nothing was matched against the build directory; and where some
+  had no start time, when some processes on this machine started, so a process id
+  reused during the leg is reported as one process.
 - Selecting two legs that resolve to the same build directory is refused before either
   starts.
 
