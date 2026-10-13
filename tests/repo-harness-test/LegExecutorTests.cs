@@ -568,6 +568,33 @@ public sealed class LegExecutorTests
         Assert.Equal(LegVerdict.Passed, execution.Entries.Single(entry => entry.Leg == "fine").Verdict);
     }
 
+    /// <summary>
+    /// A leg whose inputs could not be watched is unmeasured, saying that none of its work was run and why: it is no
+    /// defect of this tool's, and nothing about the code. The other legs still report.
+    /// </summary>
+    [Fact]
+    public async Task ALegWhoseInputsCouldNotBeWatched_IsUnmeasured_NeverPoisoned()
+    {
+        var factory = new HarnessFactory();
+        var ledger = new LegLedger(factory.Output, "test");
+
+        var execution = await Executor(factory).RunAsync(
+            new LegExecutionRequest
+            {
+                Legs = [Leg("unwatched"), Leg("fine")],
+                RunLeg = (leg, _) => leg.Name == "unwatched"
+                    ? throw InputsUnwatchedException.BySystem(new IOException(ScriptedWatchKind.SystemsWords))
+                    : Task.FromResult<LegEntry?>(Passed(leg)),
+            },
+            ledger,
+            TestContext.Current.CancellationToken);
+
+        var unwatched = execution.Entries.Single(entry => entry.Leg == "unwatched");
+
+        Assert.Equal((LegVerdict.Unmeasured, ScriptedWatchKind.Refused), (unwatched.Verdict, unwatched.Detail));
+        Assert.Equal(LegVerdict.Passed, execution.Entries.Single(entry => entry.Leg == "fine").Verdict);
+    }
+
     [Fact]
     public async Task AnInterruptedRun_ReportsWhatWasLeft()
     {

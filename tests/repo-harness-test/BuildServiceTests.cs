@@ -38,6 +38,42 @@ public sealed class BuildServiceTests
     }
 
     /// <summary>
+    /// A build whose inputs cannot be watched runs no phase: the refusal leaves before configure, saying why in the
+    /// words a leg ends unmeasured with, and the build writes no record of itself - one would say its directory was
+    /// built from a tree no phase of it read. The same build runs both, and records itself, where the watch starts.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ABuildWhoseInputsCannotBeWatched_RunsNoPhase_AndWritesNoRecord(bool refused)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var temp = new TempDirectory();
+        var (_, factory) = await TrackedWithFactoryAsync(temp, cancellationToken);
+        var request = Request(temp, [App]);
+        var phases = new CountingRunner();
+        var kind = refused ? ScriptedWatchKind.Refusing() : new ScriptedWatchKind();
+        var service = Service(factory, exitCode: 0, phases: phases, watch: kind);
+
+        if (!refused)
+        {
+            await service.BuildAsync(Config(), request, cancellationToken);
+
+            Assert.True(phases.Started > 0, "a build that could be watched ran no phase");
+            Assert.True(File.Exists(RecordOf(request, temp)));
+            Assert.Equal((1, 1), (kind.Starts, kind.Stops));
+            return;
+        }
+
+        var refusal = await Assert.ThrowsAsync<InputsUnwatchedException>(() => service.BuildAsync(Config(), request, cancellationToken));
+
+        Assert.Equal(ScriptedWatchKind.Refused, refusal.Message);
+        Assert.Equal(ReachedVerdict.Of(LegVerdict.Unmeasured, ScriptedWatchKind.Refused), Verdicts.ForFailure(refusal));
+        Assert.Equal(0, phases.Started);
+        Assert.False(File.Exists(RecordOf(request, temp)));
+    }
+
+    /// <summary>
     /// worktrees.pathBudgetReserve is a number measured once, against whatever the build produced
     /// then. Every build measures what it actually left below its build directory and says so, with
     /// both numbers, when that went deeper - and says nothing when it did not, at the boundary too.
@@ -2271,7 +2307,8 @@ public sealed class BuildServiceTests
         IProcessRunner? compilers = null,
         IReadOnlyList<string>? leaves = null,
         IProcessRunner? deadOutputs = null,
-        Func<TimeSpan, CancellationToken, Task>? floorWait = null)
+        Func<TimeSpan, CancellationToken, Task>? floorWait = null,
+        IWatchKind? watch = null)
         => new(
             new PhaseRunner(new Leaving(phases ?? new QuietRunner(exitCode), leaves ?? [App]), factory.FileSystem, factory.Output, wallClock ?? new SteppingClock()),
             new BuildDirectoryGuard(factory.FileSystem, factory.Platform, factory.FilePermissions),
@@ -2281,7 +2318,11 @@ public sealed class BuildServiceTests
             // Asked of its own runner: the dependency check's is counted by tests that ask it alone.
             new NinjaDeadOutputCheck(deadOutputs ?? new QuietRunner(1), factory.FileSystem),
             new CompilerVersionProbe(compilers ?? new QuietRunner(exitCode), fileSystem ?? factory.FileSystem),
-            new InputFingerprint(fileSystem ?? factory.FileSystem, factory.Platform),
+
+            // This machine's own watcher, unless a test says what watches: one that will not start, say.
+            watch is null
+                ? new InputFingerprint(fileSystem ?? factory.FileSystem, factory.Platform)
+                : new InputFingerprint(fileSystem ?? factory.FileSystem, factory.Platform, watch),
             new ProcessSampler(processTable ?? new QuietProcessTable(), factory.Platform, factory.Output),
             factory.GitClient,
             fileSystem ?? factory.FileSystem,

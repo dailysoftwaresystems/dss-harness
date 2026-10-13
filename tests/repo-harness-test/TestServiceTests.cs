@@ -174,6 +174,30 @@ public sealed class TestServiceTests
         Assert.Equal(LegExit.InputsMoved, Verdicts.ExitCodeFor(result.Verdict.Verdict));
     }
 
+    /// <summary>
+    /// Tests whose inputs cannot be watched are not run: the refusal leaves before the suite is started, saying why in
+    /// the words a leg ends unmeasured with, and no log of a run that never was is left. Run first and called
+    /// unmeasured after, the whole suite was spent to learn what was known before it began.
+    /// </summary>
+    [Fact]
+    public async Task TestsWhoseInputsCannotBeWatched_AreNotRun_AndTheRefusalSaysWhy()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        temp.WriteFile(Fixture, "fixture");
+        var runner = new ScriptedRunner(() => Task.CompletedTask, exitCode: 0, line: "tests passed");
+        var kind = ScriptedWatchKind.Refusing();
+
+        var refused = await Assert.ThrowsAsync<InputsUnwatchedException>(
+            () => Service(factory, runner, watch: kind).RunAsync(Config(), Request(temp, Child()), TestContext.Current.CancellationToken));
+
+        Assert.Equal(ScriptedWatchKind.Refused, refused.Message);
+        Assert.Equal(ReachedVerdict.Of(LegVerdict.Unmeasured, ScriptedWatchKind.Refused), Verdicts.ForFailure(refused));
+        Assert.Equal(1, kind.Starts);
+        Assert.Null(runner.Started);
+        Assert.Empty(new LegRecords(RunDirectory(temp), Leg).Logs(factory.FileSystem));
+    }
+
     [Fact]
     public async Task InputsThatMoved_OutrankASuiteThatFailed()
     {
@@ -646,10 +670,18 @@ public sealed class TestServiceTests
         Assert.Contains($"working in the build directory of worktree o1/xa's leg '{Leg}'", factory.StandardError.ToString(), StringComparison.Ordinal);
     }
 
-    private static TestService Service(HarnessFactory factory, IProcessRunner? phaseRunner = null, IProcessTable? processTable = null)
+    private static TestService Service(
+        HarnessFactory factory,
+        IProcessRunner? phaseRunner = null,
+        IProcessTable? processTable = null,
+        IWatchKind? watch = null)
         => new(
             new PhaseRunner(phaseRunner ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
-            new InputFingerprint(factory.FileSystem, factory.Platform),
+
+            // This machine's own watcher, unless a test says what watches: one that will not start, say.
+            watch is null
+                ? new InputFingerprint(factory.FileSystem, factory.Platform)
+                : new InputFingerprint(factory.FileSystem, factory.Platform, watch),
 
             // A table that answers, rather than the platform's own source: that one is a program on
             // Windows, and these tests are about the verdict rather than about a WMI query. It has

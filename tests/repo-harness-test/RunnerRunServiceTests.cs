@@ -1374,6 +1374,82 @@ public sealed class RunnerRunServiceTests
     }
 
     /// <summary>
+    /// A step that asked for its inputs to be held still, on a machine that cannot watch them, is not run, and nor is
+    /// any other step of its action: the refusal leaves before the first, saying why, with no segment of the run begun -
+    /// one begun would say an attempt was made, and the next run would resume from it - and with nothing said of steps
+    /// starting. The same action runs, and records its segment, where the watch starts.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AStepWhoseInputsCannotBeWatched_RunsNothing_AndBeginsNoSegmentOfTheRun(bool refused)
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+
+        await WriteActionAsync(factory, temp, """
+            name: corpus
+            steps:
+              - name: prepare
+                run: |
+                  dotnet --version
+              - name: build
+                requireInputsUnmoved: true
+                run: |
+                  dotnet --version
+            """);
+
+        temp.WriteFile("src/tracked.txt", "tracked");
+        await factory.RunGitAsync(temp.Path, ["add", "src/tracked.txt"], TestContext.Current.CancellationToken);
+
+        var config = Config();
+        config.Tools.Add(new ToolConfig { Name = "dotnet" });
+        var request = Request(temp, new RunnerConfig { Action = "corpus/corpus.yml" });
+        var kind = refused ? ScriptedWatchKind.Refusing() : new ScriptedWatchKind();
+        var steps = new CountingSteps();
+        var service = Service(factory, steps, watch: kind);
+
+        if (!refused)
+        {
+            var result = await service.RunAsync(config, request, TestContext.Current.CancellationToken);
+
+            Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
+            Assert.Equal(2, steps.Started);
+            Assert.True(File.Exists(RunSegments.RecordPath(request.RunDirectory, Leg)));
+            Assert.Equal((1, 1), (kind.Starts, kind.Stops));
+            return;
+        }
+
+        var refusal = await Assert.ThrowsAsync<InputsUnwatchedException>(
+            () => service.RunAsync(config, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ScriptedWatchKind.Refused, refusal.Message);
+        Assert.Equal(ReachedVerdict.Of(LegVerdict.Unmeasured, ScriptedWatchKind.Refused), Verdicts.ForFailure(refusal));
+        Assert.Equal(0, steps.Started);
+        Assert.False(File.Exists(RunSegments.RecordPath(request.RunDirectory, Leg)));
+        Assert.Empty(new LegRecords(request.RunDirectory, Leg).Logs(factory.FileSystem));
+        Assert.DoesNotContain("starting", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>A runner that starts nothing, counts the steps it was asked to run, and passes each.</summary>
+    private sealed class CountingSteps : IProcessRunner
+    {
+        private int _started;
+
+        /// <summary>How many steps it was asked to run.</summary>
+        public int Started => Volatile.Read(ref _started);
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _started);
+
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, TimeSpan.Zero, TimedOut: false));
+        }
+
+        public string? FindExecutable(string command) => command;
+    }
+
+    /// <summary>
     /// A run that names no step leaves a manual one out before anything reads it - here a program nobody
     /// declared, which the policy refuses the whole file over where the step runs - and says so as it runs
     /// and on the leg's line, so a plain run is never read as having done the manual work.
@@ -2682,7 +2758,11 @@ public sealed class RunnerRunServiceTests
         Assert.Contains($"working in the build directory of worktree o1/xa's leg '{Leg}'", factory.StandardError.ToString(), StringComparison.Ordinal);
     }
 
-    private static RunnerRunService Service(HarnessFactory factory, IProcessRunner? phases = null, Core.Platform.IProcessTable? processTable = null)
+    private static RunnerRunService Service(
+        HarnessFactory factory,
+        IProcessRunner? phases = null,
+        Core.Platform.IProcessTable? processTable = null,
+        IWatchKind? watch = null)
         => new(
             new PhaseRunner(phases ?? factory.ProcessRunner, factory.FileSystem, factory.Output),
             new ActionFileParser(factory.FileSystem, factory.Output, factory.Platform),
@@ -2692,7 +2772,11 @@ public sealed class RunnerRunServiceTests
             new RunCheckGate(factory.Output),
             new RunSegments(factory.FileSystem, factory.Output),
             new PredefinedActionRunner(factory.GitClient, factory.Output),
-            new InputFingerprint(factory.FileSystem, factory.Platform),
+
+            // This machine's own watcher, unless a test says what watches: one that will not start, say.
+            watch is null
+                ? new InputFingerprint(factory.FileSystem, factory.Platform)
+                : new InputFingerprint(factory.FileSystem, factory.Platform, watch),
             new ProcessSampler(processTable ?? factory.ProcessTable, factory.Platform, factory.Output),
             factory.GitClient,
             factory.Platform,

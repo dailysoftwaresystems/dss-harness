@@ -57,6 +57,77 @@ public sealed class LegGuardsTests
         Assert.Contains("src/a.c", decided.Detail, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Guards whose watch cannot start are never opened: the refusal leaves for the work to be stopped before it begins,
+    /// and nothing was started that somebody would have to stop - the process table is not read once.
+    /// </summary>
+    [Fact]
+    public async Task GuardsWhoseWatchCannotStart_AreNeverOpened_AndStartNoSampling()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("src/a.c", "a");
+        var factory = new HarnessFactory();
+        var table = new CountingTable();
+        var kind = ScriptedWatchKind.Refusing();
+
+        var refused = await Assert.ThrowsAsync<InputsUnwatchedException>(
+            () => LegGuards.OpenAsync(
+                new InputFingerprint(factory.FileSystem, factory.Platform, kind),
+                new ProcessSampler(table, factory.Platform, factory.Output),
+                new LegGuardRequest
+                {
+                    TreeRoot = temp.Path,
+                    Inputs = LegInputs.Watch(["src/a.c"]),
+                    Contention = new ContentionRequest { Leg = "leg", BuildDirectory = temp.Combine("build") },
+                },
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(ScriptedWatchKind.Refused, refused.Message);
+        Assert.Equal(1, kind.Starts);
+        Assert.Equal(0, table.Readings);
+    }
+
+    /// <summary>
+    /// Guards that open hold their watch until they are disposed of, and let go of it then, whether or not anybody asked
+    /// what they saw.
+    /// </summary>
+    [Fact]
+    public async Task GuardsThatOpened_HoldTheirWatch_UntilTheyAreDisposedOf()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("src/a.c", "a");
+        var factory = new HarnessFactory();
+        var kind = new ScriptedWatchKind();
+
+        await using (await LegGuards.OpenAsync(
+            new InputFingerprint(factory.FileSystem, factory.Platform, kind),
+            new ProcessSampler(new CountingTable(), factory.Platform, factory.Output),
+            new LegGuardRequest { TreeRoot = temp.Path, Inputs = LegInputs.Watch(["src/a.c"]) },
+            TestContext.Current.CancellationToken))
+        {
+            Assert.Equal((1, 0), (kind.Starts, kind.Stops));
+            Assert.Equal([(temp.Combine("src"), false)], kind.Targets);
+        }
+
+        Assert.Equal(1, kind.Stops);
+    }
+
+    /// <summary>A process table that counts how often it is read, and finds nothing but this test.</summary>
+    private sealed class CountingTable : RepoHarness.Core.Platform.IProcessTable
+    {
+        private int _readings;
+
+        /// <summary>How many times it was read.</summary>
+        public int Readings => Volatile.Read(ref _readings);
+
+        public Task<RepoHarness.Core.Platform.ProcessTableReading> ReadAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _readings);
+
+            return new QuietProcessTable().ReadAsync(cancellationToken);
+        }
+    }
+
     /// <summary>A span that decided nothing has no verdict, and says so rather than inventing one.</summary>
     [Fact]
     public void ASpanThatDecidedNothing_IsRefused()

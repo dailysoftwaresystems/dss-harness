@@ -1422,7 +1422,7 @@ from the report.
 | `failed` | Ran to completion and reported failure; or a mutation arm's build failed at a step that is no object depending on its site - a link, another object - or named no step that failed | **yes** |
 | `unwitnessed` | Exited 0, but its success pattern never matched; or a mutation arm's build, or its paired control's, passed with an object that depends on a site not rebuilt | **yes** |
 | `inputs-moved` | Files the tests read changed while they ran; or, for a leg on another machine, a file its host's copy needed changed or was removed after the run began, before it was carried there, and nothing of the leg ran | **yes** |
-| `unmeasured` | Whether those files held still could not be established; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
+| `unmeasured` | Whether those files held still could not be established - where they could not be watched at all, with none of the leg's work run; or what a phase printed could not be read back from its log where a verdict was to be read from it; or ninja's log could not be read around a mutation arm's build, so nothing witnessed what it rebuilt; or the report a mutation arm's run wrote, or its binary's unmutated run, could not be read from its file | **yes** |
 | `contended` | Another process used the leg's build directory while it ran | **yes** |
 | `skipped-not-selected` | Filtered out by `--legs`; or a mutation arm `--arms`, or its S row, leaves out of the leg, and a leg whose sweep drives no arm | no |
 | `skipped-unavailable` | No host can take the leg; its host or its tree could not be reached; whether a program it starts is there could not be established; git could not answer in its tree; or no worker of its sweep fits the room left or the path limit, and every arm of the leg with it | warning |
@@ -1863,7 +1863,27 @@ tree that only read its own inputs ended `unmeasured`. Past 64 watches, the top-
 directories holding the most directories of inputs are watched all the way down instead,
 until the rest fit, and a tree whose inputs lie in more than 64 top-level directories -
 the root counted among them where it holds one itself - is watched whole, other trees'
-builds below the worktrees root heard with the rest.
+builds below the worktrees root heard with the rest. The bound is the watcher's, not the
+watch's: each one .NET makes is a handle, a buffer and a thread.
+
+A directory counts for the inputs in it. One lying in a watched directory that goes,
+arrives or changes its name counts every input in or below it, under both names of a
+rename: each went or arrived with it, and a directory moved aside and put back reads the
+same at both ends, as a file does. A directory merely written to - as one is each time a
+file is made in it - counts none, or a build writing beside sources would count every
+source above it. What goes unheard is a directory whose parent neither holds an input nor
+is watched all the way down: its inputs count only if they are still gone when the work
+ends.
+
+A watch that cannot start stops the work before it begins. The leg ends `unmeasured` at
+once, exit 3, with no phase run - a runner's segment not begun, a build's record not
+written - saying `the inputs could not be watched, so none of this work was run:` and the
+machine's reason, and whatever the watch had taken is released before the refusal leaves.
+Run first and called `unmeasured` after, as it was, the whole of the work was spent to
+learn what was known before it began. A build that had decided to start from clean has
+deleted its directory by then; the decision stands for the next build. A watch that
+started and is lost while the work runs - its buffer overflowed, its directory gone -
+still ends the leg `unmeasured`, as the work ends.
 
 A leg on another machine tests that machine's copy, which holds still under it; what can
 move is the tree here, before the copy is made of it. So a run reads each tree its hosts'

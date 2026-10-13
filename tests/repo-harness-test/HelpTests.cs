@@ -472,6 +472,43 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The config topic says what a directory the watch hears go, arrive or change its name counts - every input in or
+    /// below it, though it be back when the work ends - and that a leg whose inputs cannot be watched runs none of its
+    /// work.
+    /// </summary>
+    [Fact]
+    public async Task ConfigTopic_SaysWhatADirectoryThatWentCounts_AndThatAnUnwatchedLegRunsNothing()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            "which is watched whole. A directory lying in a watched one that goes, arrives or changes its name counts every input in "
+                + "or below it, under both names of a rename, though it be back when the work ends; one merely written to counts none. "
+                + "A leg whose inputs cannot be watched at all runs none of its work, and ends unmeasured at once, saying why ('help "
+                + "verdicts').",
+            said,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The verdicts topic says a leg whose inputs cannot be watched is unmeasured with none of its work run, in the words
+    /// its line opens with, read from the code; and that a watch lost while the work ran ends it unmeasured as it ends.
+    /// </summary>
+    [Fact]
+    public async Task VerdictsTopic_SaysALegWhoseInputsCannotBeWatched_IsUnmeasuredWithNoneOfItsWorkRun()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            "A leg whose inputs cannot be watched - the machine refusing the watch as its work was to begin - is unmeasured with no "
+                + $"phase of it run: '{InputsUnwatchedException.Opening.TrimEnd()}' and the machine's reason. Run first and called unmeasured "
+                + "after, the whole of the work was spent to learn what was known before it began. A watch that started and was lost "
+                + "while the work ran still leaves it unmeasured, as the work ends.",
+            said,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The config topic says a test count that differs is marked on its own, never as a timing, and
     /// how a set that differs on purpose is declared.
     /// </summary>

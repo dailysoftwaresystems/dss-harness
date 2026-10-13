@@ -209,6 +209,10 @@ public sealed class LegGuards : IAsyncDisposable
     /// <param name="sampler">Samples the process table.</param>
     /// <param name="request">What to watch.</param>
     /// <param name="cancellationToken">Stops the opening reading.</param>
+    /// <exception cref="InputsUnwatchedException">
+    /// The inputs could not be watched. Nothing is held, and the work is not to begin: left to leave, so the span ends
+    /// unmeasured before its first phase, where every unit of work reads what a failure comes to.
+    /// </exception>
     public static async Task<LegGuards> OpenAsync(
         InputFingerprint fingerprints,
         ProcessSampler sampler,
@@ -229,7 +233,8 @@ public sealed class LegGuards : IAsyncDisposable
 
         // Before, during and after. Two snapshots alone cannot see an edit that was undone before
         // the work ended, which is the shape the measured failure took: a configuration file
-        // rewritten while a suite ran and restored before it finished.
+        // rewritten while a suite ran and restored before it finished. A watch that cannot start
+        // raises, having let go of what it took, and nothing here holds anything yet.
         var watch = watching ? fingerprints.Watch(request.TreeRoot, request.Inputs.Paths, before!) : null;
 
         try

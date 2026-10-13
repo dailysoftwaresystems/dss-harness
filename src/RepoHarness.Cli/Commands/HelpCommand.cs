@@ -756,6 +756,15 @@ internal static class HelpCommand
         builder.AppendLine("A leg whose inputs moved is not reported as failed even when its tests failed,");
         builder.AppendLine("because what failed was a tree that never existed.");
         builder.AppendLine();
+
+        // The words such a leg's line opens with, read from where the line is made.
+        AppendWrapped(
+            builder,
+            "A leg whose inputs cannot be watched - the machine refusing the watch as its work was to begin - is unmeasured "
+            + $"with no phase of it run: '{InputsUnwatchedException.Opening.TrimEnd()}' and the machine's reason. Run first and "
+            + "called unmeasured after, the whole of the work was spent to learn what was known before it began. A watch that "
+            + "started and was lost while the work ran still leaves it unmeasured, as the work ends.");
+        builder.AppendLine();
         builder.AppendLine("A run's closing line names its verdict with the count of legs that reached it, and");
         builder.AppendLine("then the rest, worst first - 'poisoned: 2 of 8 leg(s); 3 failed, 3 passed' - never");
         builder.AppendLine("the verdict beside the total, which reads as every leg having it.");
@@ -2440,8 +2449,12 @@ internal static class HelpCommand
         builder.AppendLine("lie - each directory holding one, for its own files - so a build in another tree below");
         builder.AppendLine("the worktrees root, which init keeps in git by a placeholder, is never heard: but in a");
         builder.AppendLine($"tree whose inputs lie in more than {InputWatch.MostDirectoriesWatched} top-level directories, the root counted where it");
-        builder.AppendLine("holds one, which is watched whole. Durations that diverge between legs, or that span a");
-        builder.AppendLine("clock step or a host sleep, are marked suspect, and never change a verdict.");
+        builder.AppendLine("holds one, which is watched whole. A directory lying in a watched one that goes,");
+        builder.AppendLine("arrives or changes its name counts every input in or below it, under both names of a");
+        builder.AppendLine("rename, though it be back when the work ends; one merely written to counts none. A leg");
+        builder.AppendLine("whose inputs cannot be watched at all runs none of its work, and ends unmeasured at");
+        builder.AppendLine("once, saying why ('help verdicts'). Durations that diverge between legs, or that span");
+        builder.AppendLine("a clock step or a host sleep, are marked suspect, and never change a verdict.");
         builder.AppendLine();
         builder.AppendLine("A test count countPattern reads that differs from the other legs of the same project");
         builder.AppendLine("and test set is marked on its own - 'test count differs', and testCountDiffers and");

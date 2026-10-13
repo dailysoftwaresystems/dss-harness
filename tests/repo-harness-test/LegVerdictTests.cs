@@ -247,6 +247,25 @@ public sealed class LegVerdictTests
         Assert.Null(Verdicts.ForFailure(new IOException("the disk went away")));
     }
 
+    /// <summary>
+    /// Work whose inputs could not be watched comes to unmeasured, in the refusal's own words - that none of it was run,
+    /// and why - and exits as a leg whose tree did not hold still does: the remedy is the machine's, never the code's,
+    /// and it is no defect of this tool's.
+    /// </summary>
+    [Fact]
+    public void WorkWhoseInputsCouldNotBeWatched_ComesToUnmeasured_SayingNoneOfItWasRun()
+    {
+        var reached = Verdicts.ForFailure(InputsUnwatchedException.BySystem(new IOException("the user limit on watches was reached")));
+
+        Assert.Equal(
+            ReachedVerdict.Of(
+                LegVerdict.Unmeasured,
+                "the inputs could not be watched, so none of this work was run: the user limit on watches was reached"),
+            reached);
+        Assert.Equal(LegExit.InputsMoved, Verdicts.ExitCodeFor(reached!.Verdict));
+        Assert.Equal(3, LegExit.InputsMoved);
+    }
+
     [Fact]
     public void ARefusal_KeepsTheMeaningItWasRaisedWith()
     {

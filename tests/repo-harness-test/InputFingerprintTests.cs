@@ -138,12 +138,7 @@ public sealed class InputFingerprintTests
 
         var before = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
 
-        using var watch = fingerprint.Watch(temp.Path, Inputs, before);
-
-        if (watch.Failure is { } failure)
-        {
-            Assert.Skip($"This machine cannot watch the tree: {failure}");
-        }
+        using var watch = Watching(() => fingerprint.Watch(temp.Path, Inputs, before));
 
         temp.WriteFile("config/c.lang.json", "{\"rewritten\": true}");
         await WaitForAsync(watch, "config/c.lang.json", TestContext.Current.CancellationToken);
@@ -165,18 +160,101 @@ public sealed class InputFingerprintTests
     public async Task AWatchThatLostItsEvents_IsUnmeasured()
     {
         using var temp = new TempDirectory();
-        var fingerprint = Create();
+        var kind = new ScriptedWatchKind();
+        var factory = new HarnessFactory();
+        var fingerprint = new InputFingerprint(factory.FileSystem, factory.Platform, kind);
         Seed(temp);
 
         var before = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
+        using var watch = fingerprint.Watch(temp.Path, Inputs, before);
         var after = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
 
-        // A directory that does not exist cannot be watched, which stands in here for the machine
-        // that runs out of watches mid-run: either way the question was never answered.
-        using var broken = fingerprint.Watch(temp.Combine("gone"), Inputs, before);
+        Assert.Equal(InputChange.Unchanged, InputFingerprint.Compare(before, after, watch).Change);
 
-        Assert.NotNull(broken.Failure);
-        Assert.Equal(InputChange.Unmeasured, InputFingerprint.Compare(before, after, broken).Change);
+        // What the machine that runs out of watches mid-run says, or one whose buffer of events
+        // overflowed: either way the question can no longer be answered.
+        kind.Sink!.Lost("too many changes at once in directory");
+
+        Assert.NotNull(watch.Failure);
+        Assert.Equal(InputChange.Unmeasured, InputFingerprint.Compare(before, after, watch).Change);
+    }
+
+    /// <summary>
+    /// A watch that cannot start is refused, and holds nothing: a tree that is not there, or a machine that will not
+    /// watch, is known before the work begins, and the work is not to run under a watch that never was.
+    /// </summary>
+    [Fact]
+    public async Task AWatchThatCannotStart_IsRefused_BeforeAnyWorkRunsUnderIt()
+    {
+        using var temp = new TempDirectory();
+        var factory = new HarnessFactory();
+        Seed(temp);
+
+        var refusing = new InputFingerprint(factory.FileSystem, factory.Platform, ScriptedWatchKind.Refusing());
+        var before = await refusing.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ScriptedWatchKind.Refused,
+            Assert.Throws<InputsUnwatchedException>(() => refusing.Watch(temp.Path, Inputs, before)).Message);
+
+        // With this machine's own watcher: a tree that is not there.
+        Assert.Equal(
+            $"the inputs could not be watched, so none of this work was run: '{temp.Combine("gone")}' is not a directory",
+            Assert.Throws<InputsUnwatchedException>(() => Create().Watch(temp.Combine("gone"), Inputs, before)).Message);
+    }
+
+    /// <summary>
+    /// A directory of inputs moved aside while the work ran, and put back before it ended, counts every input in it: put
+    /// back, each reads as it did at both ends, while the work found none of them in between. Heard through the directory
+    /// above it, which is watched because it holds an input of its own.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryOfInputsMovedAsideAndPutBack_CountsItsInputs()
+    {
+        using var temp = new TempDirectory();
+        var fingerprint = Create();
+        Seed(temp);
+        temp.WriteFile("README.md", "readme");
+        string[] inputs = [.. Inputs, "README.md"];
+
+        var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+        using var watch = Watching(() => fingerprint.Watch(temp.Path, inputs, before));
+
+        // Looked at while it is aside, so a watch that can be told of earlier writes finds the file gone.
+        Directory.Move(temp.Combine("config"), temp.Combine("config.aside"));
+        await WaitForAsync(watch, "config/c.lang.json", TestContext.Current.CancellationToken);
+        Directory.Move(temp.Combine("config.aside"), temp.Combine("config"));
+
+        var after = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+
+        Assert.Equal(InputChange.Unchanged, InputFingerprint.Compare(before, after).Change);
+
+        var comparison = InputFingerprint.Compare(before, after, watch);
+        Assert.Equal(InputChange.Moved, comparison.Change);
+        Assert.Equal(["config/c.lang.json"], comparison.Changed);
+    }
+
+    /// <summary>
+    /// A file renamed while the work ran counts the input at the name it left and the input at the name it took: the
+    /// first is gone, and the second holds what it did not.
+    /// </summary>
+    [Fact]
+    public async Task AFileRenamedWhileTheWorkRan_CountsTheInputAtItsOldName_AndTheOneAtItsNew()
+    {
+        using var temp = new TempDirectory();
+        var fingerprint = Create();
+        temp.WriteFile("config/old.json", "{}");
+        string[] inputs = ["config/old.json", "config/new.json", "config/other.json"];
+        temp.WriteFile("config/other.json", "{}");
+
+        var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+        using var watch = Watching(() => fingerprint.Watch(temp.Path, inputs, before));
+
+        File.Move(temp.Combine("config", "old.json"), temp.Combine("config", "new.json"));
+        await WaitForAsync(watch, "config/old.json", TestContext.Current.CancellationToken);
+        await WaitForAsync(watch, "config/new.json", TestContext.Current.CancellationToken);
+
+        Assert.Equal(["config/new.json", "config/old.json"], watch.Changed);
     }
 
     /// <summary>
@@ -197,12 +275,7 @@ public sealed class InputFingerprintTests
         Seed(temp);
 
         var before = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
-        using var watch = new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, reportsEarlierWrites, before.Files);
-
-        if (watch.Failure is { } failure)
-        {
-            Assert.Skip($"This machine cannot watch the tree: {failure}");
-        }
+        using var watch = Watching(() => new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, Runtime, reportsEarlierWrites, before.Files));
 
         // What macOS delivers late: word of the write that made the file, after the first reading held it.
         watch.Record(temp.Combine("config/c.lang.json"));
@@ -226,12 +299,7 @@ public sealed class InputFingerprintTests
         var path = temp.Combine("config/c.lang.json");
 
         var before = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
-        using var watch = new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, reportsEarlierWrites: true, before.Files);
-
-        if (watch.Failure is { } failure)
-        {
-            Assert.Skip($"This machine cannot watch the tree: {failure}");
-        }
+        using var watch = Watching(() => new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, Runtime, reportsEarlierWrites: true, before.Files));
 
         File.Move(path, path + ".aside");
         await File.WriteAllTextAsync(path, "{\"for this run\": true}", TestContext.Current.CancellationToken);
@@ -266,12 +334,7 @@ public sealed class InputFingerprintTests
         File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddHours(-1));
 
         var before = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
-        using var watch = new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, reportsEarlierWrites: true, before.Files);
-
-        if (watch.Failure is { } failure)
-        {
-            Assert.Skip($"This machine cannot watch the tree: {failure}");
-        }
+        using var watch = Watching(() => new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, Runtime, reportsEarlierWrites: true, before.Files));
 
         await File.WriteAllTextAsync(path, "{\"rewrite!\": true}", TestContext.Current.CancellationToken);
         Assert.Equal(original.Length, (await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken)).Length);
@@ -301,12 +364,7 @@ public sealed class InputFingerprintTests
         File.Delete(temp.Combine("corpus/sample.txt"));
 
         var before = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
-        using var watch = new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, reportsEarlierWrites: true, before.Files);
-
-        if (watch.Failure is { } failure)
-        {
-            Assert.Skip($"This machine cannot watch the tree: {failure}");
-        }
+        using var watch = Watching(() => new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, Runtime, reportsEarlierWrites: true, before.Files));
 
         // Word of the file, looked at only once it has gone again: absent then and absent now.
         watch.Record(temp.Combine("corpus/sample.txt"));
@@ -338,12 +396,7 @@ public sealed class InputFingerprintTests
         var written = File.GetLastWriteTimeUtc(path);
 
         var before = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
-        using var watch = new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, reportsEarlierWrites: true, before.Files);
-
-        if (watch.Failure is { } failure)
-        {
-            Assert.Skip($"This machine cannot watch the tree: {failure}");
-        }
+        using var watch = Watching(() => new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, Runtime, reportsEarlierWrites: true, before.Files));
 
         // Made a while after the original, so a coarse clock that stamps files still tells the two
         // apart; then dated as the original and moved over it.
@@ -382,7 +435,7 @@ public sealed class InputFingerprintTests
         host.Current.Returns(platform);
         host.PathComparison.Returns(new HostPlatform().PathComparison);
 
-        var fingerprint = new InputFingerprint(new HarnessFactory().FileSystem, host);
+        var fingerprint = new InputFingerprint(new HarnessFactory().FileSystem, host, new ScriptedWatchKind());
         var before = await fingerprint.TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
 
         using var watch = fingerprint.Watch(temp.Path, Inputs, before);
@@ -410,7 +463,7 @@ public sealed class InputFingerprintTests
         temp.WriteFile("src/b/y.cpp", "y");
         temp.WriteFile("README.md", "readme");
 
-        using var watch = new InputWatch(temp.Path, [".worktrees/.gitkeep", "src/a/x.cpp", "src/b/y.cpp", "README.md"], StringComparer.Ordinal);
+        using var watch = new InputWatch(temp.Path, [".worktrees/.gitkeep", "src/a/x.cpp", "src/b/y.cpp", "README.md"], StringComparer.Ordinal, new ScriptedWatchKind());
 
         Assert.Null(watch.Failure);
         Assert.Equal(
@@ -436,7 +489,7 @@ public sealed class InputFingerprintTests
 
         temp.WriteFile(".worktrees/.gitkeep", string.Empty);
 
-        using var watch = new InputWatch(temp.Path, [.. sources, ".worktrees/.gitkeep"], StringComparer.Ordinal);
+        using var watch = new InputWatch(temp.Path, [.. sources, ".worktrees/.gitkeep"], StringComparer.Ordinal, new ScriptedWatchKind());
 
         Assert.Null(watch.Failure);
         Assert.Equal([(temp.Combine(".worktrees"), false), (temp.Combine("src"), true)], watch.Watched);
@@ -466,7 +519,7 @@ public sealed class InputFingerprintTests
             temp.WriteFile(input, "f");
         }
 
-        using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal);
+        using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, new ScriptedWatchKind());
 
         Assert.Null(watch.Failure);
         Assert.Equal(
@@ -491,12 +544,7 @@ public sealed class InputFingerprintTests
 
         var heard = new ConcurrentQueue<string>();
 
-        using var watch = fingerprint.Watch(temp.Path, inputs, before, heard.Enqueue);
-
-        if (watch.Failure is { } failure)
-        {
-            Assert.Skip($"This machine cannot watch the tree: {failure}");
-        }
+        using var watch = Watching(() => fingerprint.Watch(temp.Path, inputs, before, heard.Enqueue));
 
         temp.WriteFile(".worktrees/o1/ag/build/obj.o", "an agent's build");
         temp.WriteFile(".worktrees/notes.txt", "beside the placeholder");
@@ -511,10 +559,30 @@ public sealed class InputFingerprintTests
         Assert.Equal(InputChange.Moved, InputFingerprint.Compare(before, after, watch).Change);
     }
 
+    /// <summary>The runtime's own watcher, which the tests of a real watch run under.</summary>
+    private static readonly FileSystemWatcherKind Runtime = new();
+
     private static InputFingerprint Create()
     {
         var factory = new HarnessFactory();
         return new InputFingerprint(factory.FileSystem, factory.Platform);
+    }
+
+    /// <summary>
+    /// The watch a test of a real one runs under, or the test skipped where this machine cannot watch the tree: a
+    /// machine that cannot refuses the watch, and what these pin is what a watch that started sees.
+    /// </summary>
+    private static InputWatch Watching(Func<InputWatch> start)
+    {
+        try
+        {
+            return start();
+        }
+        catch (InputsUnwatchedException ex)
+        {
+            Assert.Skip($"This machine cannot watch the tree: {ex.Why}");
+            throw;
+        }
     }
 
     private static void Seed(TempDirectory temp)

@@ -38,8 +38,9 @@ public enum LegVerdict
 
     /// <summary>
     /// Whether those files held still could not be established. Never reported as passed: an
-    /// unreadable snapshot is not evidence that nothing moved. Nor is anything decided on a phase's
-    /// output that could not be read back whole from its log. Of a mutation arm: ninja's log could
+    /// unreadable snapshot is not evidence that nothing moved. Where they could not be watched at
+    /// all, none of the work is run: it ends here before its first phase. Nor is anything decided on
+    /// a phase's output that could not be read back whole from its log. Of a mutation arm: ninja's log could
     /// not be read around its build, so nothing witnessed what it rebuilt; or the report its run wrote
     /// could not be read from its file, so nothing says which cases failed.
     /// </summary>
@@ -333,9 +334,10 @@ public static class Verdicts
     /// <summary>
     /// The verdict work that ended in <paramref name="exception"/> comes to - a leg's, or a unit's of a sweep - where the
     /// exception neither stopped it nor refuses the run: the verdict a refusal names; <c>unmeasured</c> where what a
-    /// phase printed could not be read back from its log, since nothing is decided on what is left of one; and
-    /// <c>failed</c> where its cause is one this build can name. <see langword="null"/> where nobody named it, which is
-    /// <c>poisoned</c>, said by whoever caught it in its own words.
+    /// phase printed could not be read back from its log, since nothing is decided on what is left of one, and where
+    /// its inputs could not be watched, so that none of it was run; and <c>failed</c> where its cause is one this build
+    /// can name. <see langword="null"/> where nobody named it, which is <c>poisoned</c>, said by whoever caught it in
+    /// its own words.
     /// </summary>
     /// <param name="exception">What the work raised.</param>
     public static ReachedVerdict? ForFailure(Exception exception)
@@ -346,6 +348,7 @@ public static class Verdicts
         {
             HarnessException refused => ReachedVerdict.Of(ForRefusal(refused.ExitCode), refused.Message),
             PhaseOutputUnreadException unread => ReachedVerdict.Of(LegVerdict.Unmeasured, unread.Message),
+            InputsUnwatchedException unwatched => ReachedVerdict.Of(LegVerdict.Unmeasured, unwatched.Message),
             _ when KnownCauses.Names(exception) => ReachedVerdict.Of(LegVerdict.Failed, exception.Message),
             _ => null,
         };

@@ -100,7 +100,7 @@ public sealed record InputComparison(InputChange Change, IReadOnlyList<string> C
 /// unchanged tree, because a configuration file was rewritten while the suite ran. The watch exists
 /// because two snapshots alone cannot see an edit that was reverted before the suite finished.
 /// </remarks>
-public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platform)
+public sealed class InputFingerprint
 {
     /// <summary>The size recorded for an input that was not there.</summary>
     public const long AbsentLength = -1;
@@ -112,8 +112,28 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
     /// </summary>
     public const string AbsentContent = "absent";
 
-    private readonly IFileSystem _fileSystem = fileSystem;
-    private readonly IHostPlatform _platform = platform;
+    private readonly IFileSystem _fileSystem;
+    private readonly IHostPlatform _platform;
+    private readonly IWatchKind _watchKind;
+
+    /// <summary>Fingerprints and watches as this machine does.</summary>
+    /// <param name="fileSystem">Reads the files.</param>
+    /// <param name="platform">The machine: how its paths compare, and what its watches can be told of.</param>
+    public InputFingerprint(IFileSystem fileSystem, IHostPlatform platform)
+        : this(fileSystem, platform, new FileSystemWatcherKind())
+    {
+    }
+
+    /// <summary>Fingerprints as this machine does, and watches through <paramref name="watchKind"/>.</summary>
+    /// <param name="fileSystem">Reads the files.</param>
+    /// <param name="platform">The machine: how its paths compare, and what its watches can be told of.</param>
+    /// <param name="watchKind">What watches the directories a watch names.</param>
+    internal InputFingerprint(IFileSystem fileSystem, IHostPlatform platform, IWatchKind watchKind)
+    {
+        _fileSystem = fileSystem;
+        _platform = platform;
+        _watchKind = watchKind;
+    }
 
     /// <summary>
     /// Fingerprints <paramref name="inputs"/> under <paramref name="root"/> by content and size, on
@@ -174,6 +194,7 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
     /// counts only where it no longer stands as <paramref name="found"/> read it: see
     /// <see cref="InputWatch.ReportsEarlierWrites"/>.
     /// </remarks>
+    /// <exception cref="InputsUnwatchedException">The watch could not start: it holds nothing, and the work it was for is not to begin.</exception>
     public InputWatch Watch(string root, IReadOnlyList<string> inputs, InputSnapshot found) => Watch(root, inputs, found, heardElsewhere: null);
 
     /// <summary>
@@ -184,6 +205,7 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
     /// <param name="inputs">The inputs, relative to the tree.</param>
     /// <param name="found">The inputs as the work found them.</param>
     /// <param name="heardElsewhere">Told of each path no input is, relative to the tree, as the watch hears of it.</param>
+    /// <exception cref="InputsUnwatchedException">The watch could not start.</exception>
     internal InputWatch Watch(string root, IReadOnlyList<string> inputs, InputSnapshot found, Action<string>? heardElsewhere)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
@@ -194,6 +216,7 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
             root,
             inputs.Select(Normalize),
             Comparer,
+            _watchKind,
             reportsEarlierWrites: _platform.Current == PlatformId.MacOs,
             found.Files,
             heardElsewhere);
@@ -201,9 +224,10 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
 
     /// <summary>
     /// What <paramref name="before"/>, <paramref name="after"/> and <paramref name="watch"/> say
-    /// together. An incomplete snapshot, or a watch that lost events, yields <c>unmeasured</c>:
-    /// there is no escape hatch, because a command that rewrites its own inputs is a build step,
-    /// not a test.
+    /// together. An incomplete snapshot, or a watch that lost events or was itself lost while the
+    /// work ran, yields <c>unmeasured</c>: there is no escape hatch, because a command that rewrites
+    /// its own inputs is a build step, not a test. A watch that could not start never reaches here:
+    /// its work was not begun (<see cref="InputsUnwatchedException"/>).
     /// </summary>
     /// <param name="before">The snapshot taken before the phase.</param>
     /// <param name="after">The snapshot taken after it.</param>
@@ -318,15 +342,14 @@ public sealed class InputFingerprint(IFileSystem fileSystem, IHostPlatform platf
 /// the shape the measured failure took: a configuration file rewritten while the suite ran and
 /// restored before it ended. What the watch could not see is reported as <c>unmeasured</c> rather
 /// than as nothing found, for the reason an unreadable snapshot is.
+/// <para>
+/// Which directories to watch is decided here, once; what watches them is an <see cref="IWatchKind"/>,
+/// and this is what it tells. A watch that cannot start is never made: the failure leaves, with
+/// nothing held, before the work it was for begins.
+/// </para>
 /// </remarks>
-public sealed class InputWatch : IDisposable
+public sealed class InputWatch : IDisposable, IWatchSink
 {
-    /// <summary>
-    /// The largest buffer the operating system accepts. Events arrive faster than they can be read
-    /// during a build, and a buffer that overflows loses them silently, which this exists to avoid.
-    /// </summary>
-    private const int BufferBytes = 64 * 1024;
-
     /// <summary>
     /// How many directories are watched at most. Past it, the top-level directories holding the most
     /// directories of inputs are watched all the way down instead, one watch each, and a tree whose
@@ -338,9 +361,11 @@ public sealed class InputWatch : IDisposable
     private readonly Lock _gate = new();
     private readonly Dictionary<string, string> _tracked;
     private readonly Dictionary<string, FileFingerprint> _found;
+    private readonly Dictionary<string, List<string>> _below;
     private readonly HashSet<string> _changed = new(StringComparer.Ordinal);
     private readonly string _root;
-    private readonly List<FileSystemWatcher> _watchers = [];
+    private readonly IReadOnlyList<(string Directory, bool Recursive)> _targets;
+    private readonly IDisposable _watching;
     private readonly Action<string>? _heardElsewhere;
     private string? _failure;
 
@@ -348,16 +373,21 @@ public sealed class InputWatch : IDisposable
     /// <param name="root">The tree the paths are relative to.</param>
     /// <param name="inputs">The inputs, relative to the tree, as the configuration declared them.</param>
     /// <param name="comparer">How input paths compare on this platform.</param>
+    /// <param name="kind">What watches the directories this names.</param>
     /// <param name="reportsEarlierWrites">Whether the watch can be told of a write made before it began.</param>
     /// <param name="found">The inputs as the work found them.</param>
     /// <param name="heardElsewhere">
     /// Told of each path the watch hears of that no input is, relative to the tree, under the watch's lock: what watching
     /// only where the inputs are keeps down. Never kept here, where a long build's every file would be.
     /// </param>
+    /// <exception cref="InputsUnwatchedException">
+    /// The tree is not there, no directory of an input is, or <paramref name="kind"/> could not watch one: nothing is held.
+    /// </exception>
     internal InputWatch(
         string root,
         IEnumerable<string> inputs,
         StringComparer comparer,
+        IWatchKind kind,
         bool reportsEarlierWrites = false,
         IReadOnlyList<FileFingerprint>? found = null,
         Action<string>? heardElsewhere = null)
@@ -369,53 +399,46 @@ public sealed class InputWatch : IDisposable
             .ToDictionary(group => group.Key, group => group.First(), comparer);
         _root = Path.GetFullPath(root);
         _tracked = new Dictionary<string, string>(comparer);
+        _below = new Dictionary<string, List<string>>(comparer);
 
         foreach (var input in inputs)
         {
             _tracked[input] = input;
         }
 
+        // Each directory that holds an input or lies above one, with the inputs in or below it: what a
+        // directory going, arriving or changing its name takes with it.
+        foreach (var input in _tracked.Values)
+        {
+            for (var at = input.LastIndexOf('/'); at > 0; at = input.LastIndexOf('/', at - 1))
+            {
+                var directory = input[..at];
+
+                if (!_below.TryGetValue(directory, out var inputsBelow))
+                {
+                    _below[directory] = inputsBelow = [];
+                }
+
+                inputsBelow.Add(input);
+            }
+        }
+
         if (!Directory.Exists(_root))
         {
             // Nothing to watch and nothing watched. Left unsaid this would answer every question
             // about the span with "nothing changed", which is the one answer it has not earned.
-            _failure = $"'{_root}' is not a directory, so nothing about it could be watched";
-            return;
+            throw InputsUnwatchedException.NoTree(_root);
         }
 
-        try
+        _targets = [.. Targets()];
+
+        if (_targets.Count == 0)
         {
-            foreach (var (directory, recursive) in Targets())
-            {
-                var watcher = new FileSystemWatcher(directory)
-                {
-                    IncludeSubdirectories = recursive,
-                    InternalBufferSize = BufferBytes,
-                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime,
-                };
-
-                watcher.Changed += OnChanged;
-                watcher.Created += OnChanged;
-                watcher.Deleted += OnChanged;
-                watcher.Renamed += OnRenamed;
-                watcher.Error += OnError;
-                watcher.EnableRaisingEvents = true;
-
-                _watchers.Add(watcher);
-            }
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or PlatformNotSupportedException)
-        {
-            // A machine that cannot watch this tree — one out of inotify watches, say — leaves the
-            // question open. It never leaves it answered "nothing changed".
-            _failure = ex.Message;
+            throw InputsUnwatchedException.NoDirectory(_tracked.Count, _root);
         }
 
-        if (_watchers.Count == 0)
-        {
-            _failure ??= $"no directory holding any of the {ReportText.Counted(_tracked.Count, "input")} is present under "
-                + $"'{_root}', so nothing about them could be watched";
-        }
+        // Last, with everything it tells of in place: a kind may tell of something before it returns.
+        _watching = kind.Start(_targets, this);
     }
 
     /// <summary>
@@ -523,9 +546,12 @@ public sealed class InputWatch : IDisposable
 
     /// <summary>Each directory watched, and whether all the way down, in the order of their paths.</summary>
     internal IReadOnlyList<(string Directory, bool Recursive)> Watched
-        => [.. _watchers.Select(watcher => (watcher.Path, watcher.IncludeSubdirectories)).OrderBy(watched => watched.Path, StringComparer.Ordinal)];
+        => [.. _targets.OrderBy(watched => watched.Directory, StringComparer.Ordinal)];
 
-    /// <summary>Why the watch cannot be trusted, or <see langword="null"/> when it can.</summary>
+    /// <summary>
+    /// Why the watch can no longer be trusted - events were lost, or the watch itself was, while the
+    /// work ran - or <see langword="null"/> when it can.
+    /// </summary>
     public string? Failure
     {
         get
@@ -538,36 +564,50 @@ public sealed class InputWatch : IDisposable
     }
 
     /// <summary>Stops watching. The changes already recorded stay readable.</summary>
-    public void Dispose()
-    {
-        foreach (var watcher in _watchers)
-        {
-            try
-            {
-                watcher.Dispose();
-            }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
-            {
-                // Already gone, or the platform tore the watch down first; either way nothing is
-                // lost, because what it recorded is held here rather than in the watcher.
-            }
-        }
-    }
+    public void Dispose() => _watching.Dispose();
 
-    private void OnChanged(object sender, FileSystemEventArgs e) => Record(e.FullPath);
+    /// <inheritdoc/>
+    void IWatchSink.Written(string fullPath) => Record(fullPath);
 
-    private void OnRenamed(object sender, RenamedEventArgs e)
-    {
-        // Both names, because a rename is a change to the file that left and to the one that arrived.
-        Record(e.OldFullPath);
-        Record(e.FullPath);
-    }
+    /// <inheritdoc/>
+    void IWatchSink.Named(string fullPath) => Named(fullPath);
 
-    private void OnError(object sender, ErrorEventArgs e)
+    /// <inheritdoc/>
+    void IWatchSink.Lost(string why)
     {
         lock (_gate)
         {
-            _failure ??= e.GetException().Message;
+            _failure ??= why;
+        }
+    }
+
+    /// <summary>
+    /// Counts what the entry at <paramref name="fullPath"/> arriving, going or changing its name changed: the input
+    /// it is, as <see cref="Record"/> counts one, and - where it is a directory that holds inputs or lies above
+    /// some - every input in or below it, since each went or arrived with it.
+    /// </summary>
+    /// <remarks>
+    /// Only for a name: a directory merely written to - as one is whenever a file is made in it - took none of its
+    /// inputs anywhere, and a build writing beside sources would otherwise count every one of them.
+    /// </remarks>
+    /// <param name="fullPath">The entry the platform said arrived, went or was renamed.</param>
+    internal void Named(string fullPath)
+    {
+        Record(fullPath);
+
+        if (Relative(fullPath) is not { } relative)
+        {
+            return;
+        }
+
+        // The tree itself is above every input.
+        IEnumerable<string> inputs = relative == "."
+            ? _tracked.Values
+            : _below.TryGetValue(relative, out var below) ? below : [];
+
+        foreach (var input in inputs)
+        {
+            Count(input);
         }
     }
 
@@ -579,13 +619,7 @@ public sealed class InputWatch : IDisposable
     /// <param name="fullPath">The file the platform said changed.</param>
     internal void Record(string fullPath)
     {
-        string relative;
-
-        try
-        {
-            relative = Path.GetRelativePath(_root, fullPath).Replace('\\', '/');
-        }
-        catch (ArgumentException)
+        if (Relative(fullPath) is not { } relative)
         {
             return;
         }
@@ -599,7 +633,32 @@ public sealed class InputWatch : IDisposable
                 _heardElsewhere?.Invoke(relative);
                 return;
             }
+        }
 
+        Count(declared);
+    }
+
+    /// <summary><paramref name="fullPath"/> as the inputs are spelt, relative to the tree; <see langword="null"/> where it is no path.</summary>
+    private string? Relative(string fullPath)
+    {
+        try
+        {
+            return Path.GetRelativePath(_root, fullPath).Replace('\\', '/');
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Counts the input <paramref name="declared"/> as changed: where the watch can be told of a write made before
+    /// it began, only once the file no longer stands as the work found it.
+    /// </summary>
+    private void Count(string declared)
+    {
+        lock (_gate)
+        {
             if (_changed.Contains(declared))
             {
                 return;

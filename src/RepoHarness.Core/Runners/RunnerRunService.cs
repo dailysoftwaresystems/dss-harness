@@ -293,25 +293,14 @@ public sealed class RunnerRunService(
 
         Refuse(request, steps, values, scratch);
 
-        var record = await _runSegments
-            .BeginAsync(request.RunDirectory, request.RunId, request.Leg, request.SegmentId, DateTimeOffset.UtcNow, cancellationToken)
-            .ConfigureAwait(false);
-
-        var remaining = new HashSet<string>(record.Remaining(steps.Phases.Select(phase => phase.Name)), StringComparer.OrdinalIgnoreCase);
         var elapsed = Stopwatch.StartNew();
-        var state = new RunState { Leg = request.Leg };
-
-        // Said before the first one starts, naming every step. A parallel run weaves several legs'
-        // lines together, so what a leg set out to do is the one thing its output cannot be read
-        // backwards to recover.
-        _output.Info(
-            CommandName,
-            $"{request.Leg}: starting {ReportText.Counted(steps.Phases.Count, "step")}: "
-            + string.Join(", ", steps.Phases.Select(phase => values.Redact(phase.Name))));
 
         // One scope around every step, not one per step: an action of five steps has four gaps
         // between them, and a file changed in a gap is the same moving tree as one changed inside a
         // step. A sampler restarted per step loses a contender that spanned the join.
+        //
+        // Opened before the run's record of this segment is begun: a span whose inputs cannot be
+        // watched runs no step, and a segment begun for it would say an attempt was made.
         var watching = steps.Phases.Any(phase => phase.WatchContention);
         var fingerprinting = steps.Phases.Any(phase => phase.RequireInputsUnmoved);
 
@@ -354,6 +343,21 @@ public sealed class RunnerRunService(
                 },
                 cancellationToken)
             .ConfigureAwait(false);
+
+        var record = await _runSegments
+            .BeginAsync(request.RunDirectory, request.RunId, request.Leg, request.SegmentId, DateTimeOffset.UtcNow, cancellationToken)
+            .ConfigureAwait(false);
+
+        var remaining = new HashSet<string>(record.Remaining(steps.Phases.Select(phase => phase.Name)), StringComparer.OrdinalIgnoreCase);
+        var state = new RunState { Leg = request.Leg };
+
+        // Said before the first one starts, naming every step. A parallel run weaves several legs'
+        // lines together, so what a leg set out to do is the one thing its output cannot be read
+        // backwards to recover.
+        _output.Info(
+            CommandName,
+            $"{request.Leg}: starting {ReportText.Counted(steps.Phases.Count, "step")}: "
+            + string.Join(", ", steps.Phases.Select(phase => values.Redact(phase.Name))));
 
         try
         {
