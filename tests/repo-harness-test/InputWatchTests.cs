@@ -27,7 +27,7 @@ public sealed class InputWatchTests
         {
             Assert.Equal(1, kind.Starts);
             Assert.Equal(
-                [new WatchTarget(temp.Path), new(temp.Combine("src"), NamesOnly: true), new(temp.Combine("src", "a")), new(temp.Combine("src", "a", "deep")), new(temp.Combine("src", "b"))],
+                [WatchTarget.Entries(temp.Path), WatchTarget.NamesOnly(temp.Combine("src")), WatchTarget.Entries(temp.Combine("src", "a")), WatchTarget.Entries(temp.Combine("src", "a", "deep")), WatchTarget.Entries(temp.Combine("src", "b"))],
                 kind.Targets!.OrderBy(target => target.Directory, StringComparer.Ordinal));
             Assert.Equal(kind.Targets!.OrderBy(target => target.Directory, StringComparer.Ordinal), watch.Watched);
             Assert.Same(watch, kind.Sink);
@@ -244,7 +244,7 @@ public sealed class InputWatchTests
 
         using var watch = new InputWatch(temp.Path, ["gen/a.json", "gen/deep/b.json", "out/c.json"], StringComparer.Ordinal, kind);
 
-        Assert.Equal([new WatchTarget(temp.Path, NamesOnly: true)], watch.Watched);
+        Assert.Equal([WatchTarget.NamesOnly(temp.Path)], watch.Watched);
 
         kind.Sink!.Named(temp.Combine("gen"));
 
@@ -282,7 +282,7 @@ public sealed class InputWatchTests
         var above = Enumerable.Range(0, tops).Select(top => temp.Combine($"t{top:000}")).ToList();
 
         Assert.Equal(
-            holding.Select(directory => new WatchTarget(directory)).Concat(above.Select(directory => new WatchTarget(directory, NamesOnly: true))).OrderBy(target => target.Directory, StringComparer.Ordinal),
+            holding.Select(directory => WatchTarget.Entries(directory)).Concat(above.Select(directory => WatchTarget.NamesOnly(directory))).OrderBy(target => target.Directory, StringComparer.Ordinal),
             watch.Watched);
         Assert.Equal(directories + 1 + tops, kind.Targets!.Count);
     }
@@ -313,10 +313,10 @@ public sealed class InputWatchTests
 
         Assert.Equal(
             [
-                new WatchTarget(temp.Path, NamesOnly: true),
-                new(temp.Combine("tests"), NamesOnly: true),
-                new(temp.Combine("tests", "unit")),
-                new(temp.Combine("tests", "unit", "deep")),
+                WatchTarget.NamesOnly(temp.Path),
+                WatchTarget.NamesOnly(temp.Combine("tests")),
+                WatchTarget.Entries(temp.Combine("tests", "unit")),
+                WatchTarget.Entries(temp.Combine("tests", "unit", "deep")),
             ],
             watch.Watched);
 

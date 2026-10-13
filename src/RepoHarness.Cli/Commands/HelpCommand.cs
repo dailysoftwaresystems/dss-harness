@@ -645,7 +645,8 @@ internal static class HelpCommand
         builder.AppendLine("the failure stays genuine. The window is the failing unit's own output up to its");
         builder.AppendLine("verdict line, never a once-per-run sample: a sample was measured charging");
         builder.AppendLine("genuine-looking failures to the tool on a loaded machine and excusing them on a");
-        builder.AppendLine("quiet one, the same day.");
+        builder.AppendLine("quiet one, the same day. A check whose own runner's watch cannot start was not");
+        builder.AppendLine("run, and confirms nothing: the failure stays genuine, and the run fails.");
         builder.AppendLine();
         builder.AppendLine("Every key");
         builder.AppendLine();
@@ -773,7 +774,8 @@ internal static class HelpCommand
             + "started and was lost while the work ran still leaves it unmeasured, as the work ends. On Linux the machine's "
             + "reason can be this user's inotify instances all taken (fs.inotify.max_user_instances) - a process of this tool "
             + "holds one, however many legs it runs - or its inotify watches run out (fs.inotify.max_user_watches), one for each "
-            + "directory the inputs lie in; each is said with the limit and the processes /proc shows holding it, the most "
+            + "directory the work watches - those its inputs lie in and those above them; each is said with the limit and the "
+            + "processes /proc shows holding it, the most "
             + "first. The leg does not wait for either: what holds them is another program, whose end nothing here can read. "
             + "Its remedy is the machine's, not the tree's: free or raise what the reason names - end a program holding this "
             + "user's inotify instances or watches, or raise the limit - or put back the tree the watch was to be put on, then "
@@ -2538,9 +2540,10 @@ internal static class HelpCommand
             + "directory above one, the root among them, for the names of the directories in it alone - so a build in another "
             + "tree below the worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such "
             + "directory is watched, however many there are, through one inotify instance for the whole process. On Windows "
-            + $"and macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories, so past them the top-level "
-            + "directories holding the most are watched all the way down, and a tree whose inputs lie in more top-level "
-            + "directories than that, the root counted among them, is watched whole. Where inotify cannot be called directly "
+            + $"and macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories holding inputs, those above "
+            + "them besides, so past them the top-level directories holding the most are watched all the way down, and a tree "
+            + "whose inputs lie in more top-level directories than that, the root counted among them where it holds one, is "
+            + "watched whole. Where inotify cannot be called directly "
             + "on Linux, .NET's watcher stands in, as on Windows and macOS, each directory taking an inotify instance of its "
             + "own, and the process says so once. A directory that holds inputs, or lies above some, going, arriving or "
             + "changing its name counts every input in or below it, under both names of a rename, though it be back when the "

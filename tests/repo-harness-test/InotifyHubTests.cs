@@ -73,6 +73,65 @@ public sealed class InotifyHubTests
     }
 
     /// <summary>
+    /// A span let go of while the reading thread is telling another span of the same read is told nothing of that read
+    /// once its letting go has returned, though what it was to be told was taken before it went: the span itself holds
+    /// it back, as the hub no longer can.
+    /// </summary>
+    [Fact]
+    public async Task ASpanLetGoOfWhileAnotherIsBeingTold_IsToldNothingOfWhatWasReadBefore()
+    {
+        using var calls = new ScriptedInotifyCalls();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var hub = Hub(calls);
+        var gone = new RecordingWatchSink();
+        var last = new RecordingWatchSink();
+
+        using var held = hub.Watch(In(A), new GatedWatchSink(entered, release));
+        var goneSpan = hub.Watch(In(B), gone);
+        using var lastSpan = hub.Watch(In(C), last);
+
+        calls.Give(
+            new InotifyEvent(calls.DescriptorOf(A), InotifyBits.Modify, "x.cpp"),
+            new InotifyEvent(calls.DescriptorOf(B), InotifyBits.Modify, "y.cpp"),
+            new InotifyEvent(calls.DescriptorOf(C), InotifyBits.Modify, "z.cpp"));
+
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken), "the first span was never told");
+            goneSpan.Dispose();
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        await last.WaitForAsync(RecordingWatchSink.WasWritten, Path.Combine(C, "z.cpp"), TestContext.Current.CancellationToken);
+
+        Assert.Empty(gone.Heard);
+    }
+
+    /// <summary>A sink whose first word holds the reading thread until the test lets it go on.</summary>
+    /// <param name="entered">Set once it is told.</param>
+    /// <param name="release">What it waits for before the reading thread goes on.</param>
+    private sealed class GatedWatchSink(ManualResetEventSlim entered, ManualResetEventSlim release) : IWatchSink
+    {
+        public void Written(string fullPath)
+        {
+            entered.Set();
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+        }
+
+        public void Named(string fullPath)
+        {
+        }
+
+        public void Lost(string why)
+        {
+        }
+    }
+
+    /// <summary>
     /// This user's watches running out on the third directory removes the two the span had added - but never one
     /// another span still watches - and says the limit, how many directories the work needs, and who holds the watches.
     /// </summary>
@@ -88,7 +147,7 @@ public sealed class InotifyHubTests
 
         Assert.Equal(
             "the inputs could not be watched, so none of this work was run: this user's inotify watches ran out - "
-            + "fs.inotify.max_user_watches is 8192; this work's inputs lie in 3 directory(ies), one watch each, and /proc "
+            + "fs.inotify.max_user_watches is 8192; this work watches 3 directory(ies) - those its inputs lie in and those above them - one watch each, and /proc "
             + "shows 6011 held: 5800 by pid 99 (node), 211 by pid 4242 (dssharness).",
             refused.Message);
         // A is 1, the other span's as well; B is 2, the refused span's alone.
@@ -194,7 +253,7 @@ public sealed class InotifyHubTests
         var hub = Hub(calls);
         var names = new RecordingWatchSink();
         var entries = new RecordingWatchSink();
-        using var namesSpan = hub.Watch([new WatchTarget(A, NamesOnly: true)], names);
+        using var namesSpan = hub.Watch([WatchTarget.NamesOnly(A)], names);
         using var entriesSpan = hub.Watch(In(A), entries);
         var a = calls.DescriptorOf(A);
 
@@ -408,7 +467,7 @@ public sealed class InotifyHubTests
         // And the two above them, the root and src, for the names of the directories in them.
         Assert.Null(kind.MostDirectories);
         Assert.Equal(67, calls.Added.Count);
-        Assert.All(watch.Watched, watched => Assert.False(watched.Recursive));
+        Assert.All(watch.Watched, watched => Assert.NotEqual(WatchDepth.AllTheWayDown, watched.Depth));
     }
 
     /// <summary>Asked to watch a directory all the way down, which no watch with no bound asks, the kind refuses.</summary>
@@ -417,14 +476,14 @@ public sealed class InotifyHubTests
     {
         using var calls = new ScriptedInotifyCalls();
 
-        Assert.Throws<ArgumentException>(() => new InotifyWatchKind(Hub(calls)).Start([new(A), new(B, Recursive: true)], new RecordingWatchSink()));
+        Assert.Throws<ArgumentException>(() => new InotifyWatchKind(Hub(calls)).Start([WatchTarget.Entries(A), WatchTarget.AllTheWayDown(B)], new RecordingWatchSink()));
         Assert.Empty(calls.Added);
     }
 
     private static InotifyHub Hub(ScriptedInotifyCalls calls) => new(calls, () => InotifyUses.Of(Holding));
 
     /// <summary>Each of <paramref name="directories"/>, watched for its entries.</summary>
-    private static WatchTarget[] In(params string[] directories) => [.. directories.Select(directory => new WatchTarget(directory))];
+    private static WatchTarget[] In(params string[] directories) => [.. directories.Select(directory => WatchTarget.Entries(directory))];
 
     private static Task WaitLostAsync(RecordingWatchSink sink)
         => WaitUntilAsync(() => sink.Heard.Any(heard => heard.What == RecordingWatchSink.WasLost));

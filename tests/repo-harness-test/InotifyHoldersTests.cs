@@ -51,7 +51,7 @@ public sealed class InotifyHoldersTests
 
         Assert.Equal(
             "the inputs could not be watched, so none of this work was run: this user's inotify watches ran out - "
-            + "fs.inotify.max_user_watches is 8192; this work's inputs lie in 3120 directory(ies), one watch each, and "
+            + "fs.inotify.max_user_watches is 8192; this work watches 3120 directory(ies) - those its inputs lie in and those above them - one watch each, and "
             + "/proc shows 6011 held: 5800 by pid 99 (node), 211 by pid 4242 (dssharness).",
             refused.Message);
     }
@@ -110,7 +110,7 @@ public sealed class InotifyHoldersTests
         Assert.Equal(new InotifyUse(null, null, null), none);
         Assert.Equal("this user's inotify instances are all taken. A leg needs one.", InputsUnwatchedException.InstancesTaken(none).Why);
         Assert.Equal(
-            "this user's inotify watches ran out; this work's inputs lie in 1 directory(ies), one watch each.",
+            "this user's inotify watches ran out; this work watches 1 directory(ies) - those its inputs lie in and those above them - one watch each.",
             InputsUnwatchedException.WatchesRanOut(none, 1).Why);
     }
 

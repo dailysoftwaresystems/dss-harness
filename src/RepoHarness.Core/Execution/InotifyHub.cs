@@ -55,7 +55,7 @@ internal sealed class InotifyHub
     /// the directories in it alone - and the directory itself going or moving, until what this returns is disposed,
     /// telling <paramref name="sink"/>.
     /// </summary>
-    /// <param name="targets">Each directory, by its full path, and whether only the names of the directories in it are wanted.</param>
+    /// <param name="targets">Each directory, by its full path, and whether only the names of the directories in it are wanted: none all the way down.</param>
     /// <param name="sink">Told of what happens in them.</param>
     /// <returns>The span's watches: disposed, it is told nothing more, and each descriptor no span still watches is removed.</returns>
     /// <exception cref="InputsUnwatchedException">
@@ -107,16 +107,16 @@ internal sealed class InotifyHub
                 StartReading(instance);
             }
 
-            foreach (var (directory, _, namesOnly) in targets)
+            foreach (var target in targets)
             {
                 // One mask for every directory, whatever is wanted of it: the kernel keeps one for a directory however
                 // many spans name it. What a span wants only names of is told it alone.
-                var descriptor = _calls.AddWatch(_instance, directory, InotifyBits.Watched, out var error);
+                var descriptor = _calls.AddWatch(_instance, target.Directory, InotifyBits.Watched, out var error);
 
                 if (descriptor < 0)
                 {
                     LetGoLocked(span);
-                    return (error, directory);
+                    return (error, target.Directory);
                 }
 
                 if (!_watching.TryGetValue(descriptor, out var spans))
@@ -124,7 +124,7 @@ internal sealed class InotifyHub
                     _watching[descriptor] = spans = [];
                 }
 
-                spans.Add((span, directory, namesOnly));
+                spans.Add((span, target.Directory, target.Depth == WatchDepth.NamesOnly));
                 span.Descriptors.Add(descriptor);
             }
 

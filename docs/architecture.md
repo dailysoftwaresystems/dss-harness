@@ -1943,12 +1943,13 @@ worktrees root, `.orchestrators`, `.mutations` and `.legs`, costs one shallow wa
 other trees building below it - an agent's worktree, a sweep's worker, a leg's copy - are
 never heard. Measured: watched all the way down, an agent's build below the
 worktrees root overflowed the operating system's buffer, and a run in the main tree that
-only read its own inputs ended `unmeasured`. Past 64 watches, the top-level directories
-holding the most directories of inputs or above them are watched all the way down
-instead, until the rest fit, and a tree whose inputs lie in more top-level directories
-than fit beside the root's own watch is watched whole, other trees' builds below the
-worktrees root heard with the rest. The bound is the watcher's, not the watch's: each one
-.NET makes is a handle, a buffer and a thread.
+only read its own inputs ended `unmeasured`. Past 64 directories holding inputs - those
+above them are watched besides, and never counted - the top-level directories holding the
+most of them are watched all the way down instead, until the rest fit, each hearing the
+directories inside it through its own watch, and a tree whose inputs lie in more
+top-level directories than 64, the root among them where it holds one, is watched whole,
+other trees' builds below the worktrees root heard with the rest. The bound is the
+watcher's, not the watch's: each one .NET makes is a handle, a buffer and a thread.
 
 On Linux there is no such bound. Every directory that holds an input is watched for its
 own entries, each above one for the names of the directories in it, and none all the way
@@ -1997,8 +1998,9 @@ gate](#the-gate)).
 On Linux the reason can be one of two limits, each said with what `/proc` shows of it:
 this user's inotify instances all taken - `fs.inotify.max_user_instances is 128, and
 /proc shows 128 held: 51 by pid 4242 (dssharness), ...` and `A leg needs one.` - or its
-watches run out - `fs.inotify.max_user_watches is 8192; this work's inputs lie in 3120
-directory(ies), one watch each, and /proc shows 6011 held: ...`. The holders are this
+watches run out - `fs.inotify.max_user_watches is 8192; this work watches 3120
+directory(ies) - those its inputs lie in and those above them - one watch each, and /proc
+shows 6011 held: ...`. The holders are this
 user's processes, the most first, three named and the rest counted; where `/proc` cannot
 be read the sentence ends at the limit. The leg does not wait for an instance, and
 admission does not count them: at one instance a process this tool is not what holds
@@ -2121,8 +2123,8 @@ while a gate ran turned a green suite red, with four test processes live at once
   host whose clock steps by about 25 seconds every few seconds, that is not an edge case.
 - What sampling cannot see is stated in the report, and said under `--verbose` one line
   each, as `sampling cannot see` and the limit. Two hold on every machine: a tool started
-  from inside the build directory by a relative path, since another process's working
-  directory cannot be read; and the command line of a process that does not expose it,
+  from inside the build directory by a relative path, since no process's working
+  directory is read; and the command line of a process that does not expose it,
   so such a process is counted and never matched against the build directory. Where no
   process sampled had a command line that could be read, it cannot see any command line
   on this machine, so nothing was matched against the build directory; and where some

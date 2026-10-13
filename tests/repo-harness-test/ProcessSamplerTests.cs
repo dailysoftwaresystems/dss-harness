@@ -182,6 +182,25 @@ public sealed class ProcessSamplerTests
         Assert.Equal([.. SamplingLimits.Always, SamplingLimits.NoCommandLine], report.Limits);
     }
 
+    /// <summary>
+    /// A machine that gave one process's command line is no machine that gives none, though another process hid its
+    /// own: only where processes were sampled and not one had a command line is that said - and a report that sampled
+    /// nothing says it of no machine.
+    /// </summary>
+    [Fact]
+    public void AProcessWithACommandLineBesideOneWithout_IsNoMachineThatGivesNone()
+    {
+        var report = Classify(
+        [
+            Sample(
+                0,
+                Process(4242, "ninja", commandLine: null, parent: 9999, started: DateTimeOffset.UnixEpoch),
+                Process(4243, "cc1plus", "cc1plus -quiet main.cpp", parent: 9999, started: DateTimeOffset.UnixEpoch.AddMinutes(1))),
+        ]);
+
+        Assert.Equal(SamplingLimits.Always, report.Limits);
+    }
+
     [Fact]
     public void AParentThatStartedAfterItsChild_IsNotFollowed()
     {
@@ -287,6 +306,7 @@ public sealed class ProcessSamplerTests
         Assert.False(report.Looked);
         Assert.Equal(LegVerdict.Unmeasured, report.Verdict()!.Verdict);
         Assert.Contains("could not be read", report.Verdict()!.Detail, StringComparison.Ordinal);
+        Assert.Equal(SamplingLimits.Always, report.Limits);
     }
 
     [Fact]

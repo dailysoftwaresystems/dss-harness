@@ -13,7 +13,7 @@ public static class SamplingLimits
 {
     /// <summary>A tool a relative path started from inside the build directory: always.</summary>
     public const string RelativeTool =
-        "a tool started from inside the build directory by a relative path, since another process's working directory cannot be read";
+        "a tool started from inside the build directory by a relative path, since no process's working directory is read";
 
     /// <summary>The command line of a process that hides it: always.</summary>
     public const string HiddenCommandLine =

@@ -17,7 +17,7 @@ internal sealed class InotifyWatchKind(InotifyHub hub) : IWatchKind
         ArgumentNullException.ThrowIfNull(targets);
 
         // A watch with no bound names no directory all the way down; one that did would hear nothing below it here.
-        if (targets.FirstOrDefault(target => target.Recursive) is { Directory: { } recursive })
+        if (targets.FirstOrDefault(target => target.Depth == WatchDepth.AllTheWayDown) is { Directory: { } recursive })
         {
             throw new ArgumentException($"'{recursive}' is to be watched all the way down, which a watch through inotify's hub never is.", nameof(targets));
         }

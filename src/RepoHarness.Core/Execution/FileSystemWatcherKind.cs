@@ -8,11 +8,11 @@ namespace RepoHarness.Core.Execution;
 public sealed class FileSystemWatcherKind : IWatchKind
 {
     /// <summary>
-    /// How many directories a watch through .NET's watcher takes at most: each watcher is a handle, a buffer and a
-    /// thread. Past it, the top-level directories holding the most directories of inputs are watched all the way down
-    /// instead, one watch each, and a tree whose inputs lie in more top-level directories than this - the root counted
-    /// among them where it holds one itself - is watched whole: a watcher per directory would spend handles to no
-    /// purpose. The bound is this kind's, and no watch's: a kind with none, as inotify's hub on Linux is, watches every
+    /// How many directories holding inputs a watch through .NET's watcher takes at most - those above them, watched for
+    /// the names in them alone, besides: each watcher is a handle, a buffer and a thread. Past it, the top-level
+    /// directories holding the most directories of inputs are watched all the way down instead, one watch each, and a
+    /// tree whose inputs lie in more top-level directories than this - the root counted among them where it holds one
+    /// itself - is watched whole: a watcher per directory would spend handles to no purpose. The bound is this kind's, and no watch's: a kind with none, as inotify's hub on Linux is, watches every
     /// directory of inputs for itself.
     /// </summary>
     public const int MostDirectoriesWatched = 64;
@@ -157,9 +157,9 @@ public sealed class FileSystemWatcherKind : IWatchKind
         => Started(
             new FileSystemWatcher(target.Directory)
             {
-                IncludeSubdirectories = target.Recursive,
+                IncludeSubdirectories = target.Depth == WatchDepth.AllTheWayDown,
                 InternalBufferSize = BufferBytes,
-                NotifyFilter = target.NamesOnly
+                NotifyFilter = target.Depth == WatchDepth.NamesOnly
                     ? NotifyFilters.DirectoryName
                     : NotifyFilters.FileName
                         | NotifyFilters.DirectoryName

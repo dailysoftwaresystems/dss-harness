@@ -14,7 +14,7 @@ public sealed class SamplingLimitsTests
     [Theory]
     [InlineData(
         SamplingLimits.RelativeTool,
-        "sampling cannot see a tool started from inside the build directory by a relative path, since another process's working directory cannot be read")]
+        "sampling cannot see a tool started from inside the build directory by a relative path, since no process's working directory is read")]
     [InlineData(
         SamplingLimits.HiddenCommandLine,
         "sampling cannot see the command line of a process that does not expose it, so such a process is counted and never matched against the build directory")]
@@ -52,12 +52,25 @@ public sealed class SamplingLimitsTests
 
         Assert.Equal(
             [
-                "test: linux-x86_64-debug: sampling cannot see a tool started from inside the build directory by a relative path, since another process's working directory cannot be read",
+                "test: linux-x86_64-debug: sampling cannot see a tool started from inside the build directory by a relative path, since no process's working directory is read",
                 "test: linux-x86_64-debug: sampling cannot see the command line of a process that does not expose it, so such a process is counted and never matched against the build directory",
                 "test: linux-x86_64-debug: sampling cannot see any command line on this machine, so nothing was matched against the build directory",
                 "test: linux-x86_64-debug: sampling cannot see when some processes on this machine started, so a process id reused during the leg is reported as one process",
             ],
             written.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>Without --verbose a report's limits are said nowhere: they are detail, never a warning.</summary>
+    [Fact]
+    public void WithoutVerbose_NoLimitOfAReport_IsSaid()
+    {
+        using var written = new StringWriter();
+        var output = new ConsoleHarnessOutput(written, written, verbose: false);
+        var report = new ContentionReport([], [], [], [], [.. SamplingLimits.Always, SamplingLimits.NoCommandLine, SamplingLimits.NoStartTimes]);
+
+        ContentionWarnings.Write(output, "test", "linux-x86_64-debug", report, new ContentionConfig());
+
+        Assert.Equal(string.Empty, written.ToString());
     }
 
     /// <summary>The architecture names the four limits, and the frame they are said in, in the words this type owns, read from the code.</summary>

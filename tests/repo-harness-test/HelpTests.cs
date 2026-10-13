@@ -511,9 +511,10 @@ public sealed partial class HelpTests
                 + "above one, the root among them, for the names of the directories in it alone - so a build in another tree below the "
                 + "worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such directory is watched, "
                 + "however many there are, through one inotify instance for the whole process. On Windows and "
-                + $"macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories, so past them the top-level directories "
-                + "holding the most are watched all the way down, and a tree whose inputs lie in more top-level directories than that, "
-                + "the root counted among them, is watched whole. Where inotify cannot be called directly on Linux, .NET's "
+                + $"macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories holding inputs, those above them "
+                + "besides, so past them the top-level directories holding the most are watched all the way down, and a tree whose "
+                + "inputs lie in more top-level directories than that, the root counted among them where it holds one, is watched "
+                + "whole. Where inotify cannot be called directly on Linux, .NET's "
                 + "watcher stands in, as on Windows and macOS, each directory taking an inotify instance of its own, and the process "
                 + "says so once.",
             Words(result.StandardOutput),
@@ -599,7 +600,8 @@ public sealed partial class HelpTests
         Assert.Contains(
             "On Linux the machine's reason can be this user's inotify instances all taken (fs.inotify.max_user_instances) - "
                 + "a process of this tool holds one, however many legs it runs - or its inotify watches run out "
-                + "(fs.inotify.max_user_watches), one for each directory the inputs lie in; each is said with the limit and the "
+                + "(fs.inotify.max_user_watches), one for each directory the work watches - those its inputs lie in and those "
+                + "above them; each is said with the limit and the "
                 + "processes /proc shows holding it, the most first. The leg does not wait for either: what holds them is "
                 + "another program, whose end nothing here can read.",
             said,
@@ -689,6 +691,21 @@ public sealed partial class HelpTests
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    /// The runners topic says that a run check whose own runner's inputs cannot be watched was not run, and confirms
+    /// nothing: the failure it was to excuse stays genuine.
+    /// </summary>
+    [Fact]
+    public async Task RunnersTopic_SaysARunCheckWhoseWatchCannotStart_ConfirmsNothing()
+    {
+        var result = await CliRunner.RunAsync(["help", "runners"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "A check whose own runner's watch cannot start was not run, and confirms nothing: the failure stays genuine, and the run fails.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
     }
 
     /// <summary>

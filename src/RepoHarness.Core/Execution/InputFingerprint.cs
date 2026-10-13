@@ -434,11 +434,16 @@ public sealed class InputWatch : IDisposable, IWatchSink
     /// The directories to watch, and how: each directory that holds a tracked input, for its own
     /// entries only; each directory above one - the root among them - for the names of the
     /// directories in it alone, so that one of those going, arriving or changing its name is heard
-    /// wherever the inputs lie; and, past <paramref name="most"/>, the top-level directories holding
-    /// the most of them all the way down instead, until the rest fit. With no bound, none is watched
-    /// all the way down.
+    /// wherever the inputs lie; and, where the directories holding inputs are more than
+    /// <paramref name="most"/>, the top-level directories holding the most of them all the way down
+    /// instead, until the rest fit. With no bound, none is watched all the way down.
     /// </summary>
-    /// <param name="most">The kind's bound on directories, or <see langword="null"/> where it has none.</param>
+    /// <param name="most">
+    /// The kind's bound on the directories that hold inputs, or <see langword="null"/> where it has none.
+    /// Those above them are watched besides and never counted against it, so a tree's inputs take the
+    /// watches they took before those were watched at all; inside a top-level directory taken whole, its
+    /// own watch hears them.
+    /// </param>
     /// <remarks>
     /// Not one watch over the whole tree, nor over a whole top-level directory. A build writes its
     /// objects into <c>build/&lt;variant&gt;</c>, and other trees build below the worktrees root - a
@@ -455,34 +460,32 @@ public sealed class InputWatch : IDisposable, IWatchSink
     /// Watched all the way down past the limit, a top-level directory takes in whatever is built below
     /// it again.
     /// </para>
+    /// <para>
+    /// Which directories lie above an input is what <see cref="_below"/> keeps, told apart as input
+    /// paths are on this platform: where names fold case, a directory two inputs spell two ways is one
+    /// directory, and one watch.
+    /// </para>
     /// </remarks>
     private IEnumerable<WatchTarget> Targets(int? most)
     {
-        var holding = _tracked.Keys.Select(Above).ToHashSet(StringComparer.Ordinal);
-        var directories = new HashSet<string>(holding, StringComparer.Ordinal);
+        var comparer = _below.Comparer;
+        var holding = _tracked.Keys.Select(Above).ToHashSet(comparer);
 
-        // Every directory between the root and one holding an input, the root itself among them.
-        foreach (var directory in holding)
-        {
-            for (var above = directory; above.Length > 0;)
-            {
-                above = Above(above);
-                directories.Add(above);
-            }
-        }
+        // Every directory above one holding an input, the root among them, that holds none itself.
+        var above = _below.Keys.Append(string.Empty).Where(directory => !holding.Contains(directory)).ToHashSet(comparer);
 
         // The directory a path lies in, relative to the tree: the empty name for the root.
         static string Above(string path) => path.LastIndexOf('/') is var at and > 0 ? path[..at] : string.Empty;
 
         static string TopOf(string directory) => directory.IndexOf('/', StringComparison.Ordinal) is var at and > 0 ? directory[..at] : directory;
 
-        // The widest first: each taken whole saves a watch for every directory below it but one.
-        var whole = new HashSet<string>(StringComparer.Ordinal);
-        var count = directories.Count;
+        // The widest first: each taken whole saves a watch for every directory holding inputs below it but one.
+        var whole = new HashSet<string>(comparer);
+        var count = holding.Count;
 
-        foreach (var group in directories
+        foreach (var group in holding
             .Where(directory => directory.Length > 0)
-            .GroupBy(TopOf, StringComparer.Ordinal)
+            .GroupBy(TopOf, comparer)
             .Select(group => (Top: group.Key, Count: group.Count()))
             .OrderByDescending(group => group.Count)
             .ThenBy(group => group.Top, StringComparer.Ordinal))
@@ -498,17 +501,19 @@ public sealed class InputWatch : IDisposable, IWatchSink
 
         if (count > (most ?? count))
         {
-            yield return new WatchTarget(_root, Recursive: true);
+            yield return WatchTarget.AllTheWayDown(_root);
             yield break;
         }
 
-        var targets = directories
-            .Where(directory => !whole.Contains(TopOf(directory)))
-            .Select(directory => (Directory: directory, Recursive: false))
-            .Concat(whole.Select(top => (Directory: top, Recursive: true)))
+        // A directory inside one taken whole is heard through that one's watch.
+        bool Apart(string directory) => directory.Length == 0 || !whole.Contains(TopOf(directory));
+
+        var targets = holding.Where(Apart).Select(directory => (Directory: directory, Made: (Func<string, WatchTarget>)WatchTarget.Entries))
+            .Concat(above.Where(Apart).Select(directory => (Directory: directory, Made: (Func<string, WatchTarget>)WatchTarget.NamesOnly)))
+            .Concat(whole.Select(top => (Directory: top, Made: (Func<string, WatchTarget>)WatchTarget.AllTheWayDown)))
             .OrderBy(target => target.Directory, StringComparer.Ordinal);
 
-        foreach (var (directory, recursive) in targets)
+        foreach (var (directory, made) in targets)
         {
             var full = directory.Length == 0 ? _root : Path.Combine(_root, directory.Replace('/', Path.DirectorySeparatorChar));
 
@@ -516,7 +521,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
             // fingerprints on either side of the work report on their own.
             if (Directory.Exists(full))
             {
-                yield return new WatchTarget(full, recursive, NamesOnly: !recursive && !holding.Contains(directory));
+                yield return made(full);
             }
         }
     }

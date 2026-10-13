@@ -28,7 +28,7 @@ public sealed class InotifyOnLinuxTests
         var hub = RealHub();
         var before = Instances();
 
-        var targets = directories.Select(directory => new WatchTarget(directory)).ToList();
+        var targets = directories.Select(directory => WatchTarget.Entries(directory)).ToList();
         var spans = Enumerable.Range(0, 3).Select(_ => hub.Watch(targets, new RecordingWatchSink())).ToList();
         var instance = hub.Instance;
         var held = Instances();
@@ -85,7 +85,7 @@ public sealed class InotifyOnLinuxTests
         var watched = Directory.CreateDirectory(temp.Combine("watched")).FullName;
         var beside = Directory.CreateDirectory(temp.Combine("beside")).FullName;
         var sink = new RecordingWatchSink();
-        using var span = RealHub().Watch([new WatchTarget(watched)], sink);
+        using var span = RealHub().Watch([WatchTarget.Entries(watched)], sink);
         var made = Path.Combine(watched, "made.txt");
         var renamed = Path.Combine(watched, "renamed.txt");
 
@@ -150,7 +150,7 @@ public sealed class InotifyOnLinuxTests
 
         using var temp = new TempDirectory();
         var hub = RealHub();
-        using var span = hub.Watch([new WatchTarget(temp.Path)], new RecordingWatchSink());
+        using var span = hub.Watch([WatchTarget.Entries(temp.Path)], new RecordingWatchSink());
 
         Assert.Contains(hub.Instance, Instances());
 

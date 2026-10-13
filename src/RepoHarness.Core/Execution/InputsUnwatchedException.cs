@@ -61,7 +61,7 @@ public sealed class InputsUnwatchedException : Exception
     /// limit, how many the work needs, and who holds them where <c>/proc</c> shows it.
     /// </summary>
     /// <param name="use">What <c>/proc</c> showed as the watch was refused.</param>
-    /// <param name="directories">How many directories the work's inputs lie in: a watch each.</param>
+    /// <param name="directories">How many directories the work watches - those its inputs lie in and those above them: a watch each.</param>
     internal static InputsUnwatchedException WatchesRanOut(InotifyUse use, int directories)
     {
         ArgumentNullException.ThrowIfNull(use);
@@ -69,7 +69,7 @@ public sealed class InputsUnwatchedException : Exception
         return new(
             "this user's inotify watches ran out"
             + Limit("fs.inotify.max_user_watches", use.MaxWatches)
-            + $"; this work's inputs lie in {ReportText.Counted(directories, "directory")}, one watch each"
+            + $"; this work watches {ReportText.Counted(directories, "directory")} - those its inputs lie in and those above them - one watch each"
             + Shown(use.Held(holder => holder.Watches))
             + ".");
     }

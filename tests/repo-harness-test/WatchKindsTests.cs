@@ -81,8 +81,8 @@ public sealed class WatchKindsTests
         var hub = new InotifyHub(calls, () => InotifyUses.Of());
         var kind = WatchKinds.For(PlatformId.Linux, factory.Output, () => (hub, null), new SaidOnce());
 
-        Assert.Throws<InputsUnwatchedException>(() => kind.Start([new(temp.Path)], new RecordingWatchSink()));
-        Assert.Throws<InputsUnwatchedException>(() => kind.Start([new(temp.Path)], new RecordingWatchSink()));
+        Assert.Throws<InputsUnwatchedException>(() => kind.Start([WatchTarget.Entries(temp.Path)], new RecordingWatchSink()));
+        Assert.Throws<InputsUnwatchedException>(() => kind.Start([WatchTarget.Entries(temp.Path)], new RecordingWatchSink()));
 
         Assert.Equal(2, calls.InitFlags.Count);
         Assert.Empty(factory.StandardError.ToString());
@@ -93,7 +93,7 @@ public sealed class WatchKindsTests
     {
         try
         {
-            return kind.Start([new(directory)], new RecordingWatchSink());
+            return kind.Start([WatchTarget.Entries(directory)], new RecordingWatchSink());
         }
         catch (InputsUnwatchedException ex)
         {

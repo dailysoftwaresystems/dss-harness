@@ -466,7 +466,7 @@ public sealed class InputFingerprintTests
 
         Assert.Null(watch.Failure);
         Assert.Equal(
-            [new WatchTarget(temp.Path), new(temp.Combine(".worktrees")), new(temp.Combine("src"), NamesOnly: true), new(temp.Combine("src", "a")), new(temp.Combine("src", "b"))],
+            [WatchTarget.Entries(temp.Path), WatchTarget.Entries(temp.Combine(".worktrees")), WatchTarget.NamesOnly(temp.Combine("src")), WatchTarget.Entries(temp.Combine("src", "a")), WatchTarget.Entries(temp.Combine("src", "b"))],
             watch.Watched);
     }
 
@@ -492,7 +492,7 @@ public sealed class InputFingerprintTests
         using (var scripted = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, new ScriptedWatchKind()))
         {
             Assert.Equal(
-                [new WatchTarget(temp.Path, NamesOnly: true), new(temp.Combine(".legs")), new(temp.Combine(".mutations")), new(temp.Combine("src"))],
+                [WatchTarget.NamesOnly(temp.Path), WatchTarget.Entries(temp.Combine(".legs")), WatchTarget.Entries(temp.Combine(".mutations")), WatchTarget.Entries(temp.Combine("src"))],
                 scripted.Watched);
         }
 
@@ -518,6 +518,27 @@ public sealed class InputFingerprintTests
     }
 
     /// <summary>
+    /// Where the tree's names fold case, a directory above inputs spelt two ways by them is one directory, watched once:
+    /// what lies above an input is told by the comparer the inputs are, never by their spelling alone.
+    /// </summary>
+    [Fact]
+    public void ADirectoryTheInputsSpellTwoWays_WhereNamesFoldCase_IsWatchedOnce()
+    {
+        using var temp = new TempDirectory();
+        string[] inputs = ["Src/x/a.cpp", "src/y/b.cpp"];
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, "f");
+        }
+
+        using var watch = new InputWatch(temp.Path, inputs, StringComparer.OrdinalIgnoreCase, new ScriptedWatchKind());
+
+        Assert.Single(watch.Watched, target => string.Equals(target.Directory, temp.Combine("src"), StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(4, watch.Watched.Count);
+    }
+
+    /// <summary>
     /// Only past the watches the tool allows itself is a top-level directory watched all the way down - the one whose
     /// inputs spread over the most directories first - so a tree whose sources fill many directories is watched as it was,
     /// and a directory beside them tracked for one placeholder still costs one shallow watch.
@@ -538,13 +559,14 @@ public sealed class InputFingerprintTests
         using var watch = new InputWatch(temp.Path, [.. sources, ".worktrees/.gitkeep"], StringComparer.Ordinal, new ScriptedWatchKind());
 
         Assert.Null(watch.Failure);
-        Assert.Equal([new WatchTarget(temp.Path, NamesOnly: true), new(temp.Combine(".worktrees")), new(temp.Combine("src"), Recursive: true)], watch.Watched);
+        Assert.Equal([WatchTarget.NamesOnly(temp.Path), WatchTarget.Entries(temp.Combine(".worktrees")), WatchTarget.AllTheWayDown(temp.Combine("src"))], watch.Watched);
     }
 
     /// <summary>
-    /// A watch takes as many watches as the tool allows itself and no more, the root above the inputs counted among them:
-    /// directories of inputs that fit are each watched for their own files, and where taking top-level directories whole
-    /// still leaves more than fit, the tree is watched whole, as one watch.
+    /// A watch takes as many watches for the directories its inputs lie in as the tool allows itself and no more - the
+    /// directories above them, the root among them, watched for names besides and never counted: directories of inputs
+    /// that fit are each watched for their own files, and where taking top-level directories whole still leaves more than
+    /// fit, the tree is watched whole, as one watch.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -552,7 +574,7 @@ public sealed class InputFingerprintTests
     public void AWatch_TakesNoMoreWatchesThanItAllows(bool oneMore)
     {
         using var temp = new TempDirectory();
-        var inputs = Enumerable.Range(0, FileSystemWatcherKind.MostDirectoriesWatched - 1).Select(index => $"d{index:00}/f.cpp").ToList();
+        var inputs = Enumerable.Range(0, FileSystemWatcherKind.MostDirectoriesWatched).Select(index => $"d{index:00}/f.cpp").ToList();
 
         // A top-level directory of two directories of inputs: taken whole, it saves one watch, and one more is needed.
         if (oneMore)
@@ -570,8 +592,8 @@ public sealed class InputFingerprintTests
         Assert.Null(watch.Failure);
         Assert.Equal(
             oneMore
-                ? [new WatchTarget(temp.Path, Recursive: true)]
-                : [new WatchTarget(temp.Path, NamesOnly: true), .. inputs.Select(input => new WatchTarget(temp.Combine(input[..input.IndexOf('/')])))],
+                ? [WatchTarget.AllTheWayDown(temp.Path)]
+                : [WatchTarget.NamesOnly(temp.Path), .. inputs.Select(input => WatchTarget.Entries(temp.Combine(input[..input.IndexOf('/')])))],
             watch.Watched);
     }
 

@@ -1,14 +1,55 @@
 namespace RepoHarness.Core.Execution;
 
-/// <summary>One directory a watch puts on its kind, and how it is to be watched.</summary>
-/// <param name="Directory">The directory, by its full path.</param>
-/// <param name="Recursive">Whether it is watched all the way down.</param>
-/// <param name="NamesOnly">
-/// Whether only the directories in it arriving, going or changing their names are wanted: a directory above inputs that
-/// holds none itself, watched so that one of those going is heard - and nothing else of it, so what is written there
-/// crowds out nothing.
-/// </param>
-internal readonly record struct WatchTarget(string Directory, bool Recursive = false, bool NamesOnly = false);
+/// <summary>How a watched directory is watched.</summary>
+internal enum WatchDepth
+{
+    /// <summary>For every entry in it, and nothing below them.</summary>
+    Entries,
+
+    /// <summary>
+    /// For the directories in it arriving, going or changing their names alone: a directory above inputs that holds none
+    /// itself, watched so that one of those going is heard - and nothing else of it, so what is written there crowds out
+    /// nothing.
+    /// </summary>
+    NamesOnly,
+
+    /// <summary>For every entry in it and below it.</summary>
+    AllTheWayDown,
+}
+
+/// <summary>
+/// One directory a watch puts on its kind, and how it is to be watched: made only as one of the three ways, so no target
+/// is ever two of them at once.
+/// </summary>
+internal sealed record WatchTarget
+{
+    private WatchTarget(string directory, WatchDepth depth)
+    {
+        Directory = directory;
+        Depth = depth;
+    }
+
+    /// <summary>The directory, by its full path.</summary>
+    public string Directory { get; }
+
+    /// <summary>How it is watched.</summary>
+    public WatchDepth Depth { get; }
+
+    /// <summary>A directory watched for every entry in it.</summary>
+    /// <param name="directory">The directory, by its full path.</param>
+    /// <returns>The target.</returns>
+    public static WatchTarget Entries(string directory) => new(directory, WatchDepth.Entries);
+
+    /// <summary>A directory watched for the names of the directories in it alone.</summary>
+    /// <param name="directory">The directory, by its full path.</param>
+    /// <returns>The target.</returns>
+    public static WatchTarget NamesOnly(string directory) => new(directory, WatchDepth.NamesOnly);
+
+    /// <summary>A directory watched for every entry in it and below it.</summary>
+    /// <param name="directory">The directory, by its full path.</param>
+    /// <returns>The target.</returns>
+    public static WatchTarget AllTheWayDown(string directory) => new(directory, WatchDepth.AllTheWayDown);
+}
 
 /// <summary>
 /// What watches directories for a span of work, as one operating system's means of watching does it. Which directories
@@ -18,9 +59,10 @@ internal readonly record struct WatchTarget(string Directory, bool Recursive = f
 internal interface IWatchKind
 {
     /// <summary>
-    /// How many directories a watch through this kind takes at most, or <see langword="null"/> where it has no bound of
-    /// its own. Past a bound, the watch takes some directories all the way down instead; with none, every directory that
-    /// holds an input, or lies above one, is watched for itself, and none all the way down.
+    /// How many directories holding inputs a watch through this kind takes at most - those above them watched besides,
+    /// never counted - or <see langword="null"/> where it has no bound of its own. Past a bound, the watch takes some
+    /// directories all the way down instead; with none, every directory that holds an input, or lies above one, is
+    /// watched for itself, and none all the way down.
     /// </summary>
     int? MostDirectories { get; }
 

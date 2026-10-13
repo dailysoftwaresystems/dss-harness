@@ -9,7 +9,7 @@ namespace RepoHarness.Tests;
 /// </summary>
 public sealed class FileSystemWatcherKindTests
 {
-    private static readonly WatchTarget[] Three = [new("one"), new("two", Recursive: true), new("three", NamesOnly: true)];
+    private static readonly WatchTarget[] Three = [WatchTarget.Entries("one"), WatchTarget.AllTheWayDown("two"), WatchTarget.NamesOnly("three")];
 
     /// <summary>
     /// A start that fails on one directory has let go of every watcher made before it by the time the failure leaves -
@@ -109,9 +109,9 @@ public sealed class FileSystemWatcherKindTests
         var refusedSink = new RecordingWatchSink();
         var control = new RecordingWatchSink();
 
-        using var watching = Started(kind, [new(first)], control);
+        using var watching = Started(kind, [WatchTarget.Entries(first)], control);
 
-        var refused = Assert.Throws<InputsUnwatchedException>(() => kind.Start([new(first), new(temp.Combine("gone"))], refusedSink));
+        var refused = Assert.Throws<InputsUnwatchedException>(() => kind.Start([WatchTarget.Entries(first), WatchTarget.Entries(temp.Combine("gone"))], refusedSink));
 
         Assert.StartsWith(InputsUnwatchedException.Opening, refused.Message, StringComparison.Ordinal);
         Assert.Contains("gone", refused.Why, StringComparison.Ordinal);
@@ -135,7 +135,7 @@ public sealed class FileSystemWatcherKindTests
     {
         using var temp = new TempDirectory();
         var sink = new RecordingWatchSink();
-        using var watching = Started(new FileSystemWatcherKind(), [new(temp.Path)], sink);
+        using var watching = Started(new FileSystemWatcherKind(), [WatchTarget.Entries(temp.Path)], sink);
         var made = temp.Combine("made.txt");
         var renamed = temp.Combine("renamed.txt");
 
@@ -167,7 +167,7 @@ public sealed class FileSystemWatcherKindTests
     {
         using var temp = new TempDirectory();
         var sink = new RecordingWatchSink();
-        using var watching = Started(new FileSystemWatcherKind(), [new(temp.Path)], sink);
+        using var watching = Started(new FileSystemWatcherKind(), [WatchTarget.Entries(temp.Path)], sink);
         var made = temp.Combine("made");
         var renamed = temp.Combine("renamed");
 
@@ -246,13 +246,35 @@ public sealed class FileSystemWatcherKindTests
     {
         using var temp = new TempDirectory();
         var sink = new RecordingWatchSink();
-        using var watching = Started(new FileSystemWatcherKind(), [new(temp.Path, NamesOnly: true)], sink);
+        using var watching = Started(new FileSystemWatcherKind(), [WatchTarget.NamesOnly(temp.Path)], sink);
 
         await File.WriteAllTextAsync(temp.Combine("file.txt"), "a file", TestContext.Current.CancellationToken);
         Directory.CreateDirectory(temp.Combine("made"));
         await sink.WaitForAsync(RecordingWatchSink.WasNamed, temp.Combine("made"), TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(sink.Heard, heard => heard.Path == temp.Combine("file.txt"));
+    }
+
+    /// <summary>
+    /// With the runtime's watcher, a directory watched all the way down - a top-level directory taken whole past the bound,
+    /// or the tree whole - tells of a file made and written in a directory below it, as one watched for its entries tells
+    /// of its own.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryWatchedAllTheWayDown_TellsOfAFileMadeAndWrittenBelowIt()
+    {
+        using var temp = new TempDirectory();
+        var below = temp.Combine("below", "deeper");
+        Directory.CreateDirectory(below);
+        var sink = new RecordingWatchSink();
+        using var watching = Started(new FileSystemWatcherKind(), [WatchTarget.AllTheWayDown(temp.Path)], sink);
+        var file = Path.Combine(below, "file.txt");
+
+        await File.WriteAllTextAsync(file, "a file", TestContext.Current.CancellationToken);
+        await sink.WaitForAsync(RecordingWatchSink.WasNamed, file, TestContext.Current.CancellationToken);
+
+        await File.AppendAllTextAsync(file, " and written again", TestContext.Current.CancellationToken);
+        await sink.WaitForAsync(RecordingWatchSink.WasWritten, file, TestContext.Current.CancellationToken);
     }
 
     /// <summary>The watch a test of the runtime's watcher runs under, or the test skipped where this machine cannot watch.</summary>
