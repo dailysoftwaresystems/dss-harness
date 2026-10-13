@@ -289,13 +289,17 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
     /// <summary>Says a leg is starting, and where - unless the machine that dispatched it here says so itself.</summary>
     /// <param name="leg">The leg.</param>
     /// <param name="where">Where it runs, as a reader names the host.</param>
-    public void Starting(string leg, string where)
+    /// <param name="worksIn">
+    /// Where this machine's leg works, as its starting line says it (<see cref="LegPlan.WorksIn"/>), or empty for a leg
+    /// another machine runs.
+    /// </param>
+    public void Starting(string leg, string where, string worksIn = "")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(where);
 
         if (!_dispatched)
         {
-            Transition(leg, $"starting on {where}");
+            Transition(leg, $"starting on {where}{worksIn}");
         }
     }
 

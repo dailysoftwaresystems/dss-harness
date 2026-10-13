@@ -57,6 +57,10 @@ internal static class RunCommand
         AllowMultipleArgumentsPerToken = true,
     };
 
+    private static readonly Option<bool> LocalCopyOption = DispatchOptions.LocalCopy;
+
+    private static readonly Option<bool> InPlaceOption = DispatchOptions.InPlace;
+
     internal static Command Create()
     {
         var command = new Command(
@@ -71,6 +75,8 @@ internal static class RunCommand
         command.Options.Add(UseStagedOption);
         command.Options.Add(InputOption);
         command.Options.Add(ManualStepOption);
+        command.Options.Add(LocalCopyOption);
+        command.Options.Add(InPlaceOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
@@ -216,6 +222,7 @@ internal static class RunCommand
                         RunnerRunService.RemoteArguments(runnerName, arguments.GetValue(TimeOption), inputs, manualSteps))
                     {
                         Workload = workload,
+                        LocalTrees = DispatchOptions.WhereWorkRuns(arguments),
                     },
                     (work, token) => RunLegAsync(runners, builds, toolchains, runnerName, inputs, manualSteps, workload, work, token),
                     cancellationToken)

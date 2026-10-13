@@ -36,6 +36,10 @@ internal static class BuildCommand
 
     private static readonly Option<bool> UseStagedOption = DispatchOptions.UseStaged("Build");
 
+    private static readonly Option<bool> LocalCopyOption = DispatchOptions.LocalCopy;
+
+    private static readonly Option<bool> InPlaceOption = DispatchOptions.InPlace;
+
     internal static Command Create()
     {
         var command = new Command(
@@ -47,6 +51,8 @@ internal static class BuildCommand
         command.Options.Add(TimeOption);
         command.Options.Add(ForceLockOption);
         command.Options.Add(UseStagedOption);
+        command.Options.Add(LocalCopyOption);
+        command.Options.Add(InPlaceOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
@@ -75,6 +81,7 @@ internal static class BuildCommand
                         RemoteArguments(arguments))
                     {
                         Workload = LegWorkload.BuildOnly,
+                        LocalTrees = DispatchOptions.WhereWorkRuns(arguments),
                     },
                     (work, token) => BuildLegAsync(builds, work, token),
                     cancellationToken)

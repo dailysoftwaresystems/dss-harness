@@ -1,3 +1,4 @@
+using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Repository;
@@ -6,6 +7,25 @@ using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Core.Legs;
 
+/// <summary>Where the legs this machine runs itself work, for one run.</summary>
+public enum LocalTrees
+{
+    /// <summary>Each as its configuration places it: the leg's own key, else the repository's default, else its tree.</summary>
+    AsConfigured,
+
+    /// <summary>In its tree, whatever the configuration says.</summary>
+    InPlace,
+
+    /// <summary>In a copy of its tree, whatever the configuration says.</summary>
+    Copy,
+}
+
+/// <summary>The tree a leg acts on here, and the tree its work happens in on the machine that runs it.</summary>
+/// <param name="Here">The tree the leg acts on here: the worktree it names, or the tree the command was typed in.</param>
+/// <param name="Work">The tree the work happens in, on the machine it happens on.</param>
+/// <param name="LocalCopy">Whether <paramref name="Work"/> is a copy of <paramref name="Here"/> kept in its .legs on this machine.</param>
+public sealed record LegTree(string Here, string Work, bool LocalCopy);
+
 /// <summary>The tree a leg acts on here, and the tree its work happens in on the machine that runs it.</summary>
 /// <remarks>
 /// One answer for placing a leg and for asking a host about it beforehand, so the build directory a host is
@@ -13,6 +33,66 @@ namespace RepoHarness.Core.Legs;
 /// </remarks>
 public static class LegTrees
 {
+    /// <summary>
+    /// Whether the configuration has <paramref name="leg"/> work in a copy of its tree where this machine runs it: its own
+    /// key, else the repository's default. The one expression of the configuration's half of that order of precedence,
+    /// which nothing else repeats.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="leg">The leg.</param>
+    public static bool Configured(HarnessConfig config, LegConfig leg)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(leg);
+
+        return leg.LocalCopy ?? config.Defaults.LocalCopy;
+    }
+
+    /// <summary>
+    /// Where <paramref name="leg"/>'s work happens on <paramref name="host"/>: the tree itself, that machine's copy of it,
+    /// or - where this machine runs the leg and <paramref name="local"/> puts it in one - the copy of its tree kept in the
+    /// tree's own .legs (<see cref="LegCopies.PathOf"/>).
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="leg">The leg.</param>
+    /// <param name="variant">The leg's variant, whose key names its copy.</param>
+    /// <param name="host">The machine the work runs on.</param>
+    /// <param name="here">
+    /// The host this machine is to the machine that dispatched the leg here, or <see langword="null"/> where this machine
+    /// placed it itself.
+    /// </param>
+    /// <param name="comparison">How this machine compares paths.</param>
+    /// <param name="local">Where this run's own legs work.</param>
+    public static LegTree For(
+        HarnessContext context,
+        LegConfig leg,
+        VariantKey variant,
+        HostId host,
+        HostId? here,
+        StringComparison comparison,
+        LocalTrees local)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(leg);
+        ArgumentNullException.ThrowIfNull(variant);
+        ArgumentNullException.ThrowIfNull(host);
+
+        var tree = Here(context, leg, here);
+
+        if (host.Kind != HostKind.Local)
+        {
+            return new LegTree(tree, On(context, host, tree, comparison), LocalCopy: false);
+        }
+
+        // Never a copy of a copy: a host running a leg another machine sent it works in the copy it was sent, which is
+        // that machine's to replace, and nothing of the harness's is kept beside a tree anyway.
+        var copy = HostCopies.KeptAs(here) is null
+            && !context.IsSyncedCopy
+            && (local == LocalTrees.Copy || local == LocalTrees.AsConfigured && Configured(context.Config, leg));
+
+        return new LegTree(tree, copy ? LegCopies.PathOf(tree, variant) : tree, copy);
+    }
+
     /// <summary>
     /// The tree <paramref name="leg"/> acts on here: the worktree it names, or the tree the command was typed in.
     /// </summary>

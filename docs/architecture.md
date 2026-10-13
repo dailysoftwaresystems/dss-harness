@@ -1183,6 +1183,36 @@ Where it runs is measured before anything starts, never declared:
 A native run and an emulated run are different legs. Neither their timings nor their
 failures compare.
 
+A leg's work happens in a tree, and which tree is not where it runs: a leg a host runs works in
+that host's copy of its tree, whatever anything else says. A leg this machine runs itself works
+where the first of these says anything - `--local-copy` or `--in-place` on the command, for that
+run of `build`, `test` or `run`; the leg's own `localCopy`, `true` or `false`; the repository's
+`defaults.localCopy`; and, where none says, its tree itself. The key is refused when the
+configuration is read on a leg that names a host, whichever value it gives, since a host's leg
+always works in that host's copy; the default never is, for it says nothing of such a leg. Where
+the leg works in a copy, the copy is kept in the tree's own `.legs` slot, one per tree and
+variant and named by the variant's key, made from the run's one reading of the tree as a host's
+copy is and kept warm between runs: its build directory is the variant's own within it, and a
+write the tree receives while the leg runs - a fold, a commit, an edit - ends nothing of the
+leg's, which ends on the tree its run read. A leg naming a worktree gets a copy of that worktree,
+of its own. The first build in a copy starts from nothing, said on the leg's line, for a build
+directory holds absolute paths of the tree it was configured in; files git ignores are not in a
+copy, by the one rule that withholds them from every copy; and the room a leg needs is reckoned
+for the tree its build is in, so a copy's first build is measured by what the variant came to in
+the tree and in every other copy, leg copies included among the trees a host is asked about. Each
+tree this machine holds is listed with its leg copies after it, named as its - `the main
+checkout's leg copy`, `worktree o1/xa's leg copy` - so a compiler working in one is named as that
+copy's and never as nobody's. A copy is a repository of its own, as every copy a sync makes is,
+and holds the tree's HEAD and a `.git` of its own; the leg works by the configuration and the
+actions the reading carried, while values, secrets and the run lock are read where this machine
+keeps them, and its records stay in the run's own directory. Its starting line names where it
+works - `starting on local, in its copy '<path>'`, or `, in '<tree>' itself` - and a leg in place
+that ends `inputs-moved` names the remedy, the key, the default or the option that would have run
+it on a copy. A copy whose build would pass this machine's path limit refuses the run before
+anything starts, with the numbers and the way out; a tree whose `.legs` git does not ignore
+refuses it naming `init`, as a sweep's workers do. `check-mutations` makes no copy of its own -
+its workers are already copies of one reading - and `clean` and `sync` place nothing in one.
+
 ### Emulators
 
 An emulator runs programs built for another processor without leaving the host's
@@ -2411,7 +2441,13 @@ while their sources are being replaced. A lock is released only by the run that 
 A sweep of a leg's mutation arms builds in workers of its own, never in the tree, and takes
 their key exclusively instead - spelt as one more copy in the tree's `.mutations`, which no copy is - so
 it meets another sweep of the leg's variant and a `clean` of its workers, and never a build,
-test or sync of the leg (see *Mutation testing*).
+test or sync of the leg (see *Mutation testing*). A leg that works in a copy of its tree holds
+only the copy: its sync takes `'<tree>/.legs/<key>' on local` whole, and it then holds that copy
+shared with its variant, as a host's leg holds the host's copy - so a fold, a rebase, a refresh,
+a commit or an edit in the tree meets no lock of the leg's, and the leg ends on the tree its run
+read. A fold that lands while the run is still reading the tree ends the legs on its copies
+`inputs-moved` with nothing run - seconds, at the run's start - and the same run started again
+reads the folded tree.
 
 - A held lock **refuses immediately**. It never waits: silently blocking for
   hours is worse than a refusal that names the holder.
@@ -2505,8 +2541,13 @@ removes from before it has removed - no sync, no lock entry, no run records.
   removing the link would free nothing and have the next build fill this disk instead.
 - **Said per leg.** Each leg's line says what was removed and the room left on its filesystem,
   or, with `--dry-run`, what it holds, removing nothing; `--json` carries both as the leg's
-  `space`. A leg on a host is asked of the DssHarness there, in the copy - once the copy is known
-  to be there, so a tree never synced to a host has nothing removed rather than a host refusing it.
+  `space`. A dry run ends as the clean would: a leg a run is building, whose workers a sweep
+  holds, or whose copy a run holds, is `refused-locked` in the dry run too, exit 13, the holder
+  named - with what each holds still said, and still measured, for the dry run asks every
+  question the clean asks and moves nothing. A leg on a host is asked of the DssHarness there, in
+  the copy - once the copy is known to be there, so a tree never synced to a host has nothing
+  removed rather than a host refusing it, and asked here first on a dry run as in a clean, so the
+  host is sent nothing a run of this machine's holds off.
 - **A leg's mutation workers go with it.** The workers its sweeps keep in its tree are removed
   the same way, and first, so the room its line says is the room once they are gone: its own
   variant's, its self-test's, and those of a variant no leg of that host and tree builds any more,
@@ -2521,6 +2562,14 @@ removes from before it has removed - no sync, no lock entry, no run records.
   first, and said; and a directory under a worker's name that no sync made is said and left. A host
   holding no copy of the tree holds none of its workers either, since they were kept in the copy:
   it is asked nothing. What `clean` measures of a build directory never reaches a slot.
+- **The copies its legs work in go too.** The copies of the tree kept in its `.legs` slot are
+  removed the same way - the leg's own variant's, and those of a variant no leg builds any more,
+  whatever the configuration says now, for a copy made under a setting since changed is still the
+  leg's - each under the lock a run takes on it, so one a run is building in, or replacing, is
+  kept and said, the leg `refused-locked`. `--json` carries what they held as `space.copyBytes`,
+  beside the workers' `workerBytes`, and a leg whose build directory was not measured carries a
+  `space` saying its workers and copies alone, where any is there. `delete-worktree` removes them
+  with the worktree, asked about before anything of it goes, as it asks the workers.
 
 A host whose DssHarness is older than this machine's is brought to this build first, as it is by
 every command that asks it anything, and that write needs room. A host that is both full and
@@ -2541,7 +2590,7 @@ heavy leg also claims its room as it is let start, held against every other comm
   naming whose - less what the directory already holds. A build records what its directory came
   to in its `.harness-build`, summed from the walk it already makes of the directory as it
   finishes. The other copies are the main checkout's and every worktree's, an agent's or a plain
-  one: a consumer's leg, placed where neither its own tree's copy nor the main checkout's had built
+  one, and each tree's leg copies after it: a consumer's leg, placed where neither its own tree's copy nor the main checkout's had built
   its variant, filled a 47 GiB disk under two other legs while three worktrees' copies beside them
   had each recorded about 11.4 GiB. The most of them, since one variant comes to about as much in
   every tree, and a need said over keeps a leg out until there is room where one said under fills
@@ -2650,7 +2699,9 @@ directory here cannot drift apart.
   every host, so a flag meaning "go ahead" would take over whatever unexpected directory is found
   at another host's `repositoryPath`, a mistyped one included, without being asked again. A host
   nobody named is refused exactly as it would have been without the flag, and told which spelling
-  would take it.
+  would take it. A directory on this machine - a leg's copy - is never taken over: no command
+  that reaches one takes an adopt list for it, so its refusal names what a person can do, to move
+  it away or run the leg with `--in-place`.
 - **It says what that is about to cost before it starts** — not only in the refusal, because
   somebody who reads the flag in the help and types it never sees a refusal.
 - **The marker records which it was.** Afterwards a copy taken over and one the tool made are the
@@ -3384,10 +3435,13 @@ worker the network cannot reach still configures. One not found is fetched by th
 would fetch it.
 
 They are carried into each worker rather than pointed at where they are. They sit in the leg's own
-build directory, which the sweep's lock deliberately leaves to a `clean` or a `build` of the leg:
-pointed at in place, a clean mid-sweep failed every later arm's build, and a build that fetched
-again measured later arms against other sources than the arms before them - each blamed on the arm.
-So they are read once, as the tree is, by size and hash, and each worker is given its own copy by
+build directory - where the leg's configuration places that build for this machine: the copy of
+its tree it works in where its `localCopy` key or the repository's default says one, its tree
+itself where neither does - and the sweep's lock deliberately leaves it to a `clean` or a `build`
+of the leg: pointed at in place, a clean mid-sweep failed every later arm's build, and a build
+that fetched again measured later arms against other sources than the arms before them - each
+blamed on the arm. So they are read once, as the tree is, by size and hash, and each worker is
+given its own copy by
 content, in `<worker>/.harness-config/deps/<name>`: the harness's own directory, which no sync of
 the tree carries or deletes and no build from clean removes, under no longer a path than a build
 directory keeps them under. A file that moved since the reading stops that worker being made, as a

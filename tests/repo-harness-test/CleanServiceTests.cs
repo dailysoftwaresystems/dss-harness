@@ -863,6 +863,111 @@ public sealed class CleanServiceTests
         Assert.True(Directory.Exists(somebodys));
     }
 
+    /// <summary>
+    /// The copies of its tree a leg's legs work in are removed with its build directory - its own variant's, and those of
+    /// a variant no leg builds any more, whatever the configuration says now: a copy made under a setting since changed
+    /// is still the leg's. A dry run measures each; a copy a run holds is left, saying who, and that leg's clean is
+    /// refused-locked.
+    /// </summary>
+    [Fact]
+    public async Task TheCopiesOfItsTreeALegsLegsWorkIn_AreRemovedWithItsBuildDirectory()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var own = Copy(temp, variant, 100);
+        var orphan = Copy(temp, variant with { Config = "relwithdebinfo" }, 40);
+
+        var (measured, dry) = await CleanAsync(temp, harness, config, dryRun: true);
+
+        Assert.Equal(HarnessExit.Success, measured.ExitCode);
+        Assert.EndsWith(
+            $"; 2 leg copy(ies): {DiskSpace.Size(Workers.Holding(100))} in '{own}', {DiskSpace.Size(Workers.Holding(40))} in '{orphan}'",
+            dry.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+        Assert.Equal(Workers.Holding(100) + Workers.Holding(40), dry.GetProperty("space").GetProperty("copyBytes").GetInt64());
+        Assert.All(new[] { own, orphan }, path => Assert.True(Directory.Exists(path), path));
+
+        // A run building in one keeps it alone; the copy of the variant no leg builds any more still goes.
+        await using (var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            PlacedLeg.BuildLock(HostId.Local, own, variant, RunId.New(), "test"),
+            TestContext.Current.CancellationToken))
+        {
+            var (_, locked) = await CleanAsync(temp, harness, config, runLock: runLock);
+            var detail = locked.GetProperty("detail").GetString()!;
+
+            Assert.Equal("refused-locked", locked.GetProperty("verdict").GetString());
+            Assert.Contains($"its copy '{own}' was left, as a run holds it: ", detail);
+            Assert.Contains(held.Entry.Holder.RunId, detail, StringComparison.Ordinal);
+            Assert.Equal(Workers.Holding(40), locked.GetProperty("space").GetProperty("copyBytes").GetInt64());
+            Assert.True(Directory.Exists(own));
+            Assert.False(Directory.Exists(orphan));
+        }
+
+        var (again, free) = await CleanAsync(temp, harness, config, runLock: runLock);
+
+        Assert.Equal(HarnessExit.Success, again.ExitCode);
+        Assert.EndsWith($"; removed 1 leg copy(ies), {DiskSpace.Size(Workers.Holding(100))}: '{own}'", free.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.False(Directory.Exists(own));
+    }
+
+    /// <summary>
+    /// A dry run of a clean ends as the clean would: a leg a run is building is refused-locked in the dry run too, exit
+    /// 13, the run named - with what the directory holds still said, and still in its space, and nothing removed or
+    /// moved aside.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfAClean_EndsRefusedLockedForALegARunIsBuilding_WithWhatItHoldsStillSaid()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var directory = BuildDirectory(temp, harness, config);
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+
+        File.WriteAllText(Written(Path.Combine(directory, "obj", "a.o")), new string('a', 1000));
+
+        await using (var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            PlacedLeg.BuildLock(HostId.Local, temp.Path, Variant(harness, config), RunId.New(), "build"),
+            TestContext.Current.CancellationToken))
+        {
+            var (outcome, leg) = await CleanAsync(temp, harness, config, runLock: runLock, dryRun: true);
+            var detail = leg.GetProperty("detail").GetString()!;
+
+            Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
+            Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+            Assert.StartsWith($"'{temp.Path}' variant '{Variant(harness, config).DirectoryName}' on local is held by ", detail);
+            Assert.Contains($"1000 bytes in '{directory}'", detail);
+            Assert.Equal(1000, leg.GetProperty("space").GetProperty("buildBytes").GetInt64());
+            Assert.True(Directory.Exists(directory), "a dry run removes nothing");
+        }
+
+        var (after, freed) = await CleanAsync(temp, harness, config, runLock: runLock, dryRun: true);
+
+        Assert.Equal(HarnessExit.Success, after.ExitCode);
+        Assert.Equal("passed", freed.GetProperty("verdict").GetString());
+        Assert.StartsWith($"1000 bytes in '{directory}'", freed.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.True(Directory.Exists(directory));
+    }
+
+    /// <summary>A copy of the tree its legs work in, marked as a sync makes one, its build holding <paramref name="bytes"/>.</summary>
+    private static string Copy(TempDirectory temp, VariantKey variant, int bytes)
+    {
+        var copy = LegCopies.PathOf(temp.Path, variant);
+
+        Directory.CreateDirectory(Path.Combine(copy, HarnessLayout.DirectoryName));
+        File.WriteAllText(
+            Path.Combine(copy, HarnessLayout.DirectoryName, HarnessLayout.SyncedCopyMarkerName),
+            """{"CreatedUtc":"2026-10-07T12:00:00Z","CreatedBy":"builder","Adopted":false,"Completed":true}""");
+        File.WriteAllText(Written(Path.Combine(variant.DirectoryUnder(copy), "a.o")), new string('a', bytes));
+
+        return copy;
+    }
+
     /// <summary>The variant the one leg of <paramref name="config"/> builds on this machine.</summary>
     private static VariantKey Variant(HarnessFactory harness, HarnessConfig config)
         => VariantKey.For(config, config.Legs.Single().Value, harness.Platform.PlatformKey);

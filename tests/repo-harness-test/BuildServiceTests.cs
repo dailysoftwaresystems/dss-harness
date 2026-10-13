@@ -2430,6 +2430,35 @@ public sealed class BuildServiceTests
         Assert.Equal(LegVerdict.Passed, result.Verdict.Verdict);
     }
 
+    /// <summary>
+    /// The first build in a copy says it starts from nothing - a copy is expected to keep a warm build, and this one is
+    /// cold - and only that first one does: a directory the copy already holds builds on as ever, and a first build in a
+    /// tree itself is ordinary, said by nothing.
+    /// </summary>
+    [Fact]
+    public async Task TheFirstBuildInACopy_SaysItStartsFromNothing()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var request = Request(temp, outputs: ["bin/app.dll"]) with { CopyOf = temp.Path };
+        var (service, factory) = await TrackedWithFactoryAsync(temp, token, leaves: [Path.Combine("bin", "app.dll")]);
+
+        Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+        Assert.Contains($"{request.Leg}: nothing is built in its copy yet, so this build starts from nothing", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+
+        factory.StandardOutput.GetStringBuilder().Clear();
+
+        Assert.Equal(LegVerdict.Passed, (await service.BuildAsync(Config(), request, token)).Verdict.Verdict);
+        Assert.DoesNotContain("starts from nothing", factory.StandardOutput.ToString(), StringComparison.Ordinal);
+
+        using var plain = new TempDirectory();
+        var inPlace = Request(plain, outputs: ["bin/app.dll"]);
+        var (tree, treeFactory) = await TrackedWithFactoryAsync(plain, token, leaves: [Path.Combine("bin", "app.dll")]);
+
+        Assert.Equal(LegVerdict.Passed, (await tree.BuildAsync(Config(), inPlace, token)).Verdict.Verdict);
+        Assert.DoesNotContain("starts from nothing", treeFactory.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
     private static BuildRequest Request(TempDirectory temp, IReadOnlyList<string> outputs)
         => Request(temp, [.. outputs.Select(output => (BuildOutput)output)], "windows");
 

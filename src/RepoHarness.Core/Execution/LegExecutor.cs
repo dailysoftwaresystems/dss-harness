@@ -46,6 +46,12 @@ public sealed record LegPlan
 
     /// <summary>The host as a message names it, such as <c>local</c> or <c>ssh vps</c>.</summary>
     public string Host { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Where this machine's leg works, as its starting line says it - <c>, in its copy '&lt;path&gt;'</c> or
+    /// <c>, in '&lt;tree&gt;' itself</c> - or empty for a leg another machine runs, whose machine says where.
+    /// </summary>
+    public string WorksIn { get; init; } = string.Empty;
 }
 
 /// <summary>What running the selected legs produced.</summary>
@@ -318,7 +324,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             return null;
         }
 
-        ledger.Starting(leg.Name, leg.Host.Length > 0 ? leg.Host : "this machine");
+        ledger.Starting(leg.Name, leg.Host.Length > 0 ? leg.Host : "this machine", leg.WorksIn);
 
         try
         {

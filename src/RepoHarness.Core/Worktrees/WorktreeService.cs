@@ -5,6 +5,8 @@ using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Legs;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
@@ -134,7 +136,8 @@ public sealed class WorktreeService(
     IHostPlatform platform,
     IHarnessOutput output,
     IHostCopyRemover hostCopies,
-    ISyncTransport local) : IWorktreeService
+    LocalSyncTransport local,
+    RunLock runLock) : IWorktreeService
 {
     /// <summary>The command a deletion reports under.</summary>
     internal const string DeleteCommand = "delete-worktree";
@@ -170,8 +173,17 @@ public sealed class WorktreeService(
     private readonly IHarnessOutput _output = output;
     private readonly IHostCopyRemover _hostCopies = hostCopies;
 
-    /// <summary>This machine's own transport, which removes the mutation workers kept in a worktree here.</summary>
-    private readonly ISyncTransport _local = local;
+    /// <summary>
+    /// This machine's own transport, which removes the copies kept in a worktree here: its mutation workers, and the
+    /// copies of it its legs work in.
+    /// </summary>
+    private readonly LocalSyncTransport _local = local;
+
+    /// <summary>
+    /// The run lock of the repositories this machine holds, which says whether a run still holds a leg's copy kept in a
+    /// worktree being deleted.
+    /// </summary>
+    private readonly RunLock _runLock = runLock;
 
     /// <summary>
     /// How long a deletion may run after an interruption before git is stopped, just before the
@@ -583,11 +595,11 @@ public sealed class WorktreeService(
             return Unchecked(worktreeName, ex.Message);
         }
 
-        // The mutation workers kept in it are asked about before anything of it is looked through for what another
-        // program holds: a worker a sweep still running holds is said as that, with what holds it, never as files held.
-        // Asked about before any goes, so a deletion refused for one has removed nothing, a worker no sweep holds
-        // included.
-        if (!force && Kept(await RemoveWorkersAsync(worktreeName, path, measureOnly: true, cancellationToken).ConfigureAwait(false), "Nothing was removed") is { } kept)
+        // The copies kept in it are asked about before anything of it is looked through for what another program holds:
+        // a mutation worker a sweep still running holds, or a leg copy a run does, is said as that, with what holds it,
+        // never as files held. Asked about before any goes, so a deletion refused for one has removed nothing, a copy no
+        // run or sweep holds included.
+        if (!force && Kept(await RemoveCopiesAsync(worktreeName, layout, path, measureOnly: true, cancellationToken).ConfigureAwait(false), "Nothing was removed") is { } kept)
         {
             return kept;
         }
@@ -664,13 +676,13 @@ public sealed class WorktreeService(
             }
         }
 
-        // The mutation workers kept in it go first, each as a copy is removed, by its marker and its claim: one still in
-        // use - a sweep still running holds it - says the tree is, and keeps it; forced, the worktree goes with what of it
-        // can be removed, that worker's files among them, and what is left is said.
-        var workers = await RemoveWorkersAsync(worktreeName, path, measureOnly: false, cancellationToken).ConfigureAwait(false);
+        // The copies kept in it go first, each as a copy is removed, by its marker and its claim: one still in use - a
+        // sweep still running holds a worker, a run a leg copy - says the tree is, and keeps it; forced, the worktree goes
+        // with what of it can be removed, that copy's files among them, and what is left is said.
+        var workers = await RemoveCopiesAsync(worktreeName, layout, path, measureOnly: false, cancellationToken).ConfigureAwait(false);
 
         // The last moment an interruption can stop this cleanly: the worktree itself is whole. One that came as its
-        // workers went, or just after, is said with those that went - a worker gone is gone whoever is told, and nothing
+        // copies went, or just after, is said with those that went - a copy gone is gone whoever is told, and nothing
         // else would ever say so - where one that found none to say is the command's own. From here the deletion goes
         // on after an interruption, which is reported at once; it can still be left partly done, and --force then
         // finishes it.
@@ -680,34 +692,35 @@ public sealed class WorktreeService(
                 ? throw new OperationCanceledException(cancellationToken)
                 : WorktreeOutcome.Failed(CommandOutcome.Failed(
                     HarnessExit.Cancelled,
-                    $"Deleting worktree '{worktreeName}' was interrupted as the mutation workers kept in it were being removed. Nothing else of the "
+                    $"Deleting worktree '{worktreeName}' was interrupted as the copies kept in it were being removed. Nothing else of the "
                     + $"worktree was removed: run '{ToolPackage.Command} {DeleteCommand} {worktreeName}' again to delete it.",
                     workers.Lines));
         }
 
-        // A sweep that took one between the asking and the removal keeps the worktree as well, and so does one that
-        // could not be removed: the others are gone by then, which what is said of it says.
+        // A sweep or a run that took one between the asking and the removal keeps the worktree as well, and so does one
+        // that could not be removed: the others are gone by then, which what is said of it says.
         if (!force && Kept(workers, "Nothing of the worktree was removed") is { } late)
         {
             return late;
         }
 
-        // What keeps the worktree, of what became of its workers - one a sweep holds, one that could not be removed or
-        // told, or none that could be looked for - or null. Each is said as what it is: only a sweep's ends by waiting.
+        // What keeps the worktree, of what became of the copies kept in it - one a sweep or a run holds, one that could
+        // not be removed or told, or none that could be looked for - or null. Each is said as what it is: only one a run
+        // still holds ends by waiting.
         WorktreeOutcome? Kept(WorkersGone gone, string nothing)
             => gone.Kept is { } kept
                 ? WorktreeOutcome.Failed(CommandOutcome.Failed(
                     gone.ExitCode!.Value,
                     kept.As == WorkerLeftAs.Held
-                        ? $"Worktree '{worktreeName}' was not deleted: a mutation worker kept in it is in use - '{kept.Path}': {kept.Why.TrimEnd('.')}. "
-                            + $"Wait for it to end, or pass --force to delete the worktree with that worker in it. {nothing}."
-                        : $"Worktree '{worktreeName}' was not deleted: a mutation worker kept in it could not be removed - {kept.Told().TrimEnd('.')}. "
-                            + $"Put that right and try again, or pass --force to delete the worktree with that worker in it. {nothing}.",
+                        ? $"Worktree '{worktreeName}' was not deleted: {gone.KeptMember} kept in it is in use - '{kept.Path}': {kept.Why.TrimEnd('.')}. "
+                            + $"Wait for it to end, or pass --force to delete the worktree with that copy in it. {nothing}."
+                        : $"Worktree '{worktreeName}' was not deleted: {gone.KeptMember} kept in it could not be removed - {kept.Told().TrimEnd('.')}. "
+                            + $"Put that right and try again, or pass --force to delete the worktree with that copy in it. {nothing}.",
                     gone.Lines))
                 : gone.Failure is { } failure
                     ? WorktreeOutcome.Failed(CommandOutcome.Failed(
                         gone.ExitCode!.Value,
-                        $"The mutation workers kept in worktree '{worktreeName}' could not be removed: {failure.TrimEnd('.')}. Nothing of the worktree "
+                        $"The copies kept in worktree '{worktreeName}' could not be removed: {failure.TrimEnd('.')}. Nothing of the worktree "
                         + "was removed: put that right and try again, or pass --force to delete the worktree with them in it."))
                     : null;
 
@@ -767,31 +780,123 @@ public sealed class WorktreeService(
         return await AndItsHostCopiesAsync(context, address, path, treeConfig, outcome, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>What removing the mutation workers kept in a worktree did, as its deletion says it.</summary>
-    /// <param name="Lines">What was removed, and each worker left, with why: said where the worktree is still there.</param>
+    /// <summary>What removing the copies kept in a worktree did, as its deletion says it.</summary>
+    /// <param name="Lines">What was removed, and each copy left, with why: said where the worktree is still there.</param>
     /// <param name="WentWithIt">
-    /// The same, said once the worktree is gone: each worker left in it - held, not removed, nobody's the harness made,
+    /// The same, said once the worktree is gone: each copy left in it - held, not removed, nobody's the harness made,
     /// or not looked for at all - went with it.
     /// </param>
     /// <param name="Removal">What became of them, or <see langword="null"/> where they could not be looked for.</param>
     /// <param name="Failure">Why they could not be looked for at all, or <see langword="null"/>.</param>
     private sealed record WorkersGone(IReadOnlyList<string> Lines, IReadOnlyList<string> WentWithIt, WorkersRemoval? Removal, string? Failure)
     {
-        /// <summary>The worker that keeps the worktree, or <see langword="null"/> where none does (<see cref="WorkersRemoval.Kept"/>).</summary>
+        /// <summary>The copy that keeps the worktree, or <see langword="null"/> where none does (<see cref="WorkersRemoval.Kept"/>).</summary>
         public WorkerLeft? Kept => Removal?.Kept;
 
-        /// <summary>Whether the removal was stopped before every worker had been dealt with.</summary>
+        /// <summary>What a line calls the copy that keeps the worktree, in the singular: <c>a mutation worker</c>, <c>a leg copy</c>.</summary>
+        public string KeptMember { get; init; } = "a " + MutationWorkers.Member;
+
+        /// <summary>Whether the removal was stopped before every copy had been dealt with.</summary>
         public bool Interrupted => Removal is { Interrupted: true };
 
         /// <summary>
-        /// The exit code a worker not yet removed leaves a deletion with - its removal's verdict's: refused where a sweep
-        /// holds one, which ends by waiting, failed where one could not be removed - and failed where they could not be
-        /// looked for; or <see langword="null"/> where none is left that asking again would remove.
+        /// The exit code a copy not yet removed leaves a deletion with - its removal's verdict's: refused where a sweep or
+        /// a run holds one, which ends by waiting, failed where one could not be removed - and failed where they could not
+        /// be looked for; or <see langword="null"/> where none is left that asking again would remove.
         /// </summary>
         public int? ExitCode
             => Failure is not null ? HarnessExit.CommandFailed
                 : Removal is { Kept: not null } ? Verdicts.ExitCodeFor(Removal.Verdict)
                 : null;
+    }
+
+    /// <summary>
+    /// Removes the copies kept in the worktree at <paramref name="path"/> - the mutation workers its sweeps made, and the
+    /// copies of it its legs work in, each of whichever variant - and says what it did: what was removed, and each left,
+    /// with why. Asked only to measure, it removes none, and says each that would be left.
+    /// </summary>
+    /// <param name="name">The worktree's address, for the command that removes what was left.</param>
+    /// <param name="layout">The repository, whose run lock says whether a run holds a leg copy.</param>
+    /// <param name="path">The worktree's directory.</param>
+    /// <param name="measureOnly">Whether to say what would be left, and remove nothing.</param>
+    /// <param name="cancellationToken">Stops the removal between copies.</param>
+    private async Task<WorkersGone> RemoveCopiesAsync(string name, HarnessLayout layout, string path, bool measureOnly, CancellationToken cancellationToken)
+    {
+        // The workers first: a sweep's are asked about as they always were, through the transport - which on a host
+        // serving a removal is that host's own. The leg copies never leave this machine, so they are asked of the local
+        // slot directly, by the run lock that holds them.
+        var workers = await RemoveWorkersAsync(name, path, measureOnly, cancellationToken).ConfigureAwait(false);
+
+        if (workers.Failure is not null)
+        {
+            return workers;
+        }
+
+        WorkersRemoval copies;
+
+        try
+        {
+            copies = await _local.RemoveInSlotAsync(path, HarnessLayout.LegsDirectoryName, LegCopies.Claims(_runLock, layout), measureOnly, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
+        {
+            return workers with
+            {
+                Lines = [.. workers.Lines, $"the leg copies kept in it could not be removed: {ex.Message.TrimEnd('.')}"],
+                WentWithIt = [.. workers.WentWithIt, $"the leg copies kept in it could not be looked for, and went with it: {ex.Message.TrimEnd('.')}"],
+                Failure = ex.Message,
+            };
+        }
+
+        // Asked only to measure, nothing went: an interruption then has nothing to say first, and is the command's own.
+        if (measureOnly && copies.Interrupted)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        var again = $"'{ToolPackage.Command} {DeleteCommand} {name}'";
+        IReadOnlyList<string> went = !measureOnly && copies.Removed.Count > 0
+            ? [$"removed {ReportText.Counted(copies.Removed.Count, LegCopies.Member)} kept in it, {DiskSpace.Size(copies.Bytes)}: "
+                + string.Join(", ", copies.Removed.Select(copy => $"'{copy.Path}'"))]
+            : [];
+
+        var said = new WorkersGone(
+            [.. went, .. copies.Left.Select(copy => copy.As switch
+            {
+                WorkerLeftAs.Held => $"left the leg copy '{copy.Path}' kept in it: {copy.Why.TrimEnd('.')}; {again} removes it once nothing holds it",
+                WorkerLeftAs.NotRemoved => $"left the leg copy '{copy.Path}' kept in it: {copy.Why.TrimEnd('.')}; {again} removes it once nothing stops it",
+                _ => $"left '{copy.Path}', named as a leg copy kept in it: {copy.Why.TrimEnd('.')}",
+            })],
+            [.. went, .. copies.Left.Select(copy => copy.As == WorkerLeftAs.Somebodys
+                ? WorktreeReports.WentWithItsTree(copy.Path)
+                : $"the leg copy '{copy.Path}' kept in it went with it, forced: {copy.Why.TrimEnd('.')}")],
+            copies,
+            Failure: null);
+
+        return workers with
+        {
+            Lines = [.. workers.Lines, .. said.Lines],
+            WentWithIt = [.. workers.WentWithIt, .. said.WentWithIt],
+
+            // Whichever copy keeps the worktree keeps it: one a run holds ends by waiting, as one a sweep holds does.
+            Removal = workers.Kept is not null ? workers.Removal
+                : copies.Kept is not null ? copies
+                : Merge(workers.Removal, copies),
+            KeptMember = workers.Kept is not null ? workers.KeptMember
+                : copies.Kept is not null ? "a " + LegCopies.Member
+                : workers.KeptMember,
+        };
+
+        // Neither keeps the worktree: the two removals' verdicts apart, their counts and what went merge, so what the
+        // deletion says covers both families.
+        static WorkersRemoval? Merge(WorkersRemoval? workers, WorkersRemoval copies)
+            => workers is null ? copies
+                : new WorkersRemoval(
+                    [.. workers.Removed, .. copies.Removed],
+                    [.. workers.Left, .. copies.Left])
+                {
+                    Interrupted = workers.Interrupted || copies.Interrupted,
+                };
     }
 
     /// <summary>

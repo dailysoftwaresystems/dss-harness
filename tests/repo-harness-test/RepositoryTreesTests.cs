@@ -199,6 +199,45 @@ public sealed class RepositoryTreesTests
         }
     }
 
+    /// <summary>
+    /// Each tree this machine holds is followed by the copies of it its legs work in, from the tree's own slot for them,
+    /// named as the tree's leg copies: a compiler working in one is named as that tree's leg copy's, never as nobody's -
+    /// and a first build in a copy is measured by what the other trees' builds of the variant came to, as any tree's.
+    /// </summary>
+    [Fact]
+    public async Task EachTreeHoldsIsFollowedByTheLegCopiesKeptInItsLegs_NamedAsIts()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var context = new HarnessContext(new HarnessLayout(temp.Path, temp.Path), new HarnessConfig());
+        var root = context.Layout.WorktreesDirectoryUnder(context.Config.Worktrees.Root);
+        var plain = Path.Combine(root, "plain");
+
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["worktree", "add", "--detach", plain], cancellationToken);
+
+        foreach (var (tree, name) in new[] { (temp.Path, "357e24c"), (plain, "357e24d") })
+        {
+            var copy = HarnessLayout.InSlot(tree, HarnessLayout.LegsDirectoryName, name);
+
+            Directory.CreateDirectory(copy);
+            File.WriteAllText(Path.Combine(copy, "main.c"), "int main;");
+        }
+
+        var found = await Trees(harness).HereAsync(context, here: null, cancellationToken);
+
+        Assert.Null(found.Unlisted);
+        Assert.Equal(
+            [
+                new RepositoryTree(temp.Path, RepositoryTree.MainCheckout),
+                new RepositoryTree(HarnessLayout.InSlot(temp.Path, HarnessLayout.LegsDirectoryName, "357e24c"), "the main checkout's leg copy"),
+                new RepositoryTree(plain, "worktree plain"),
+                new RepositoryTree(HarnessLayout.InSlot(plain, HarnessLayout.LegsDirectoryName, "357e24d"), "worktree plain's leg copy"),
+            ],
+            found.Trees);
+    }
+
     private static RepositoryTrees Trees(HarnessFactory harness)
         => new(harness.GitClient, harness.LocalTransport, harness.FileSystem, harness.Platform);
 

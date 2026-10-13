@@ -1968,7 +1968,8 @@ public sealed class HostCopiesTests
             harness.Platform,
             harness.Output,
             new HostCopyRemover(new RecordingInspector(Answering), transports, Lock(harness), harness.FileSystem, harness.Platform),
-            harness.LocalTransport);
+            harness.LocalTransport,
+            harness.RunLock);
 
         var deleted = await service.DeleteAsync(temp.Path, "feature", force: false, deleteEvidence: false, cancellationToken: cancellationToken);
 
@@ -2381,7 +2382,8 @@ public sealed class HostCopiesTests
             harness.Platform,
             harness.Output,
             new HostCopyRemover(inspector, new LocalHosts(harness, hostDisk ?? harness.FileSystem, claims), Lock(harness), record ?? harness.FileSystem, harness.Platform),
-            harness.LocalTransport);
+            harness.LocalTransport,
+            harness.RunLock);
 
     private static RunLock Lock(HarnessFactory harness) => new(harness.FileSystem, harness.Output, harness.Identity);
 

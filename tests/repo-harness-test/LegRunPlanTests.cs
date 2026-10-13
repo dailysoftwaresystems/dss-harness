@@ -1,3 +1,4 @@
+using NSubstitute;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Hosts;
@@ -144,15 +145,130 @@ public sealed class LegRunPlanTests
         Assert.EndsWith("Nothing was run. Rename one of the worktrees, or run them separately.", refusal.Message, StringComparison.Ordinal);
     }
 
-    private static IReadOnlyList<PlacedLeg> Place(HarnessLayout layout, HostId host, HostId? here, string? namedWorktree)
+    /// <summary>
+    /// Where a leg this machine runs itself works is said by the first of these that says anything - the command's
+    /// option, the leg's own key, the repository's default, the tree - so a leg with the key works in
+    /// <c>&lt;tree&gt;/.legs/&lt;key&gt;</c>, its own <see langword="false"/> turns a <see langword="true"/> default off,
+    /// and the command's option overrules both either way.
+    /// </summary>
+    [Theory]
+    [InlineData(null, null, false)]
+    [InlineData(true, null, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(null, true, true)]
+    [InlineData(null, false, false)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false, LocalTrees.InPlace)]
+    [InlineData(true, null, false, LocalTrees.InPlace)]
+    [InlineData(null, null, true, LocalTrees.Copy)]
+    [InlineData(false, false, true, LocalTrees.Copy)]
+    public void WhereALegThisMachineRunsItselfWorks_IsSaidByTheFirstOfOptionKeyAndDefaultThatSaysAnything(
+        bool? key,
+        bool? @default,
+        bool copy,
+        LocalTrees option = LocalTrees.AsConfigured)
     {
-        var selected = new SelectedLeg("remote", new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Worktree = namedWorktree });
+        using var temp = new TempDirectory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { LocalCopy = @default == true } };
+        var leg = Assert.Single(Place(new HarnessLayout(temp.Path, temp.Path), HostId.Local, here: null, namedWorktree: null, key, config, option));
+
+        var variant = VariantKey.For(config, leg.Leg, "linux");
+
+        Assert.Equal(copy, leg.LocalCopy);
+        PathAssert.Same(temp.Path, leg.TreeRoot);
+        PathAssert.Same(copy ? LegCopies.PathOf(temp.Path, variant) : temp.Path, leg.HostTreeRoot);
+        PathAssert.Same(variant.DirectoryUnder(leg.HostTreeRoot), leg.BuildDirectory);
+    }
+
+    /// <summary>
+    /// A leg naming a worktree gets a copy of that worktree, of its own, in the worktree's .legs - never a copy of the
+    /// main checkout, whose files the worktree's leg has no business building.
+    /// </summary>
+    [Fact]
+    public void ALegNamingAWorktree_GetsACopyOfThatWorktree_InItsOwnLegs()
+    {
+        using var temp = new TempDirectory();
+        var worktree = temp.Combine(".harness-config", "worktrees", "feature");
+        var leg = Assert.Single(Place(new HarnessLayout(worktree, temp.Path), HostId.Local, here: null, namedWorktree: "feature", key: true));
+        var variant = VariantKey.For(Config, leg.Leg, "linux");
+
+        PathAssert.Same(worktree, leg.TreeRoot);
+        PathAssert.Same(LegCopies.PathOf(worktree, variant), leg.HostTreeRoot);
+    }
+
+    /// <summary>
+    /// A copy whose build would pass this machine's path limit refuses the run before anything starts, with the numbers
+    /// and the way out; the same leg with the option that works it in its tree is placed as any in-place leg is.
+    /// </summary>
+    [Fact]
+    public void ACopyWhoseBuildWouldPassThePathLimit_RefusesTheRun_BeforeAnythingStarts()
+    {
+        using var temp = new TempDirectory();
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+        var budget = Substitute.For<IPathBudget>();
+
+        budget.Check(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int?>())
+            .Returns(PathBudgetResult.Exceeded(300, 260, -1));
+
+        var refusal = Assert.Throws<HarnessException>(() => Place(layout, HostId.Local, here: null, namedWorktree: null, key: true, budget: budget));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.StartsWith(
+            $"Leg 'remote' is to work in a copy of '{temp.Path}', kept at '",
+            refusal.Message,
+            StringComparison.Ordinal);
+        Assert.EndsWith(
+            "Keep the tree at a shorter path, set worktrees.pathLimit where every tool its build runs takes longer ones, "
+            + "or run it with --in-place. Nothing was run.",
+            refusal.Message,
+            StringComparison.Ordinal);
+
+        var inPlace = Assert.Single(Place(layout, HostId.Local, here: null, namedWorktree: null, key: true, budget: budget, option: LocalTrees.InPlace));
+
+        Assert.False(inPlace.LocalCopy);
+        PathAssert.Same(temp.Path, inPlace.HostTreeRoot);
+    }
+
+    /// <summary>
+    /// A <see langword="true"/> default says nothing of a leg a host runs: that leg works in the host's copy of its tree,
+    /// whatever the default says, and no copy is made here.
+    /// </summary>
+    [Fact]
+    public void ATrueDefault_SaysNothingOfALegAHostRuns()
+    {
+        using var temp = new TempDirectory();
+        var config = new HarnessConfig
+        {
+            SshItems = { "pi" },
+            Hosts = new HostsConfig { Ssh = { ["pi"] = new SshHostConfig { RepositoryPath = "/home/pi/repo" } } },
+            Defaults = new HarnessDefaults { LocalCopy = true },
+        };
+
+        var leg = Assert.Single(Place(new HarnessLayout(temp.Path, temp.Path), Pi, here: null, namedWorktree: null, config: config));
+
+        Assert.False(leg.LocalCopy);
+        Assert.Equal("/home/pi/repo", leg.HostTreeRoot);
+    }
+
+    private static IReadOnlyList<PlacedLeg> Place(
+        HarnessLayout layout,
+        HostId host,
+        HostId? here,
+        string? namedWorktree,
+        bool? key = null,
+        HarnessConfig? config = null,
+        LocalTrees option = LocalTrees.AsConfigured,
+        IPathBudget? budget = null)
+    {
+        var selected = new SelectedLeg("remote", new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Worktree = namedWorktree, LocalCopy = key });
         var report = new HostReport { Host = host, Os = "linux", Processor = "x86_64" };
 
         return LegRunPlan.From(
-            new HarnessContext(layout, Config),
-            new LegsReport([new LegPlacement(selected, report, null)], [report], Named: false) { Here = here },
+            new HarnessContext(layout, config ?? Config),
+            new LegsReport([new LegPlacement(selected, report, null)], [report], Named: false) { Here = here, LocalTrees = option },
             HostDoubles.Platform(PlatformId.Linux),
+            budget,
             out _);
     }
 }

@@ -54,6 +54,12 @@ public sealed record BuildRequest(
     /// began there: whose build directory a process found beside the build works in is told by them.
     /// </summary>
     public RepositoryTreesFound? Beside { get; init; }
+
+    /// <summary>
+    /// The tree this build's tree is a copy of - a leg working in one, whose first build starts from nothing - or
+    /// <see langword="null"/> where the leg builds in its tree itself.
+    /// </summary>
+    public string? CopyOf { get; init; }
 }
 
 /// <summary>What one leg's build did.</summary>
@@ -195,6 +201,13 @@ public sealed class BuildService(
         {
             _output.Info(CommandName, $"{request.Leg}: rebuilding from clean, because {rebuilt}");
             _fileSystem.DeleteDirectory(buildDirectory);
+        }
+
+        // Nothing is built in a copy that holds no build directory yet: said, because a copy is expected to keep a warm
+        // build, and this one starts cold - every path of it made new.
+        if (rebuilt is null && request.CopyOf is not null && !_fileSystem.DirectoryExists(buildDirectory))
+        {
+            _output.Info(CommandName, $"{request.Leg}: nothing is built in its copy yet, so this build starts from nothing");
         }
 
         _fileSystem.CreateDirectory(buildDirectory);

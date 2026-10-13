@@ -231,4 +231,12 @@ public sealed class HarnessDefaults
     /// started and finished between the first and the last would otherwise go unreported.
     /// </summary>
     public int ProcessSampleSeconds { get; init; } = 5;
+
+    /// <summary>
+    /// Where this machine runs a leg itself, it works in a copy of its tree kept in the tree's own .legs: a default for
+    /// every leg, which a leg's own <see cref="LegConfig.LocalCopy"/> - <see langword="true"/> or <see langword="false"/>
+    /// - overrides, and the command's <c>--local-copy</c> or <c>--in-place</c> overrides both. Says nothing of a leg a
+    /// host runs, which always works in that host's copy of its tree.
+    /// </summary>
+    public bool LocalCopy { get; init; }
 }

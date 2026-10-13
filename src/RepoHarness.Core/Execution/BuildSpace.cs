@@ -26,4 +26,11 @@ public sealed record BuildSpace(string Directory, long BuildBytes, bool Removed,
     /// this alone, nothing of the directory and no room. A host holding no copy of the tree holds none of its workers.
     /// </summary>
     public long? WorkerBytes { get; init; }
+
+    /// <summary>
+    /// What the copies of its tree the leg's legs work in held: what was removed of them - 0 where every one there was
+    /// kept - or, in a dry run, what is there. <see langword="null"/> where the tree keeps none, whatever the
+    /// configuration says now: a copy made under a setting since changed is still the leg's.
+    /// </summary>
+    public long? CopyBytes { get; init; }
 }

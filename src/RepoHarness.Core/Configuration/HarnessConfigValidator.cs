@@ -1113,6 +1113,23 @@ public static partial class HarnessConfigValidator
             problems.Add($"{owner} names both a wsl and an ssh host; a leg runs on one host");
         }
 
+        // Whichever value the key gives: a host's leg works in that host's copy whatever it says, so the key can only be
+        // read as saying something of a leg it says nothing of. The default is never refused for such a leg - it is a
+        // default for the legs it can apply to.
+        if (leg.LocalCopy is { } && leg.Wsl is not null)
+        {
+            problems.Add(
+                $"{owner} sets localCopy and names wsl '{leg.Wsl}'. A leg a host runs always works in that host's copy of "
+                + "its tree, so localCopy says nothing there. Remove one of the two.");
+        }
+
+        if (leg.LocalCopy is { } && leg.Ssh is not null)
+        {
+            problems.Add(
+                $"{owner} sets localCopy and names ssh '{leg.Ssh}'. A leg a host runs always works in that host's copy of "
+                + "its tree, so localCopy says nothing there. Remove one of the two.");
+        }
+
         if (leg.Wsl is { } wsl)
         {
             if (!config.Hosts.Wsl.ContainsKey(wsl))

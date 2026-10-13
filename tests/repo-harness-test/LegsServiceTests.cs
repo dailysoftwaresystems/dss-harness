@@ -5,6 +5,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
 using RepoHarness.Core.Worktrees;
@@ -32,7 +33,7 @@ public sealed class LegsServiceTests
     {
         var fixture = Create(new() { ["a"] = HostDoubles.Leg("linux", "x86_64"), ["b"] = HostDoubles.Leg("linux", "x86_64") });
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(report.Passed);
         Assert.Equal([HostId.Local], fixture.Inspector.Inspected);
@@ -43,7 +44,7 @@ public sealed class LegsServiceTests
     {
         var fixture = Create(new() { ["arm-a"] = HostDoubles.Leg("linux", "arm64"), ["arm-b"] = HostDoubles.Leg("linux", "arm64") });
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.All(report.Placements, placement => Assert.Equal(HostId.Ssh("pi"), placement.Host?.Host));
         Assert.Equal(3, fixture.Inspector.Inspected.Count);
@@ -55,7 +56,7 @@ public sealed class LegsServiceTests
     {
         var fixture = Create(new() { ["mac"] = HostDoubles.Leg("macos", "arm64"), ["native"] = HostDoubles.Leg("linux", "x86_64") });
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(report.Passed);
         Assert.Contains(
@@ -70,7 +71,7 @@ public sealed class LegsServiceTests
         // A distribution runs Linux only, and measuring one installs DssHarness there, for a leg it can never run.
         var fixture = Create(new() { ["mac"] = HostDoubles.Leg("macos", "arm64") });
 
-        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal([HostId.Local, HostId.Ssh("pi")], fixture.Inspector.Inspected);
     }
@@ -83,7 +84,7 @@ public sealed class LegsServiceTests
             ["pinned"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi" },
         });
 
-        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal([HostId.Ssh("pi")], fixture.Inspector.Inspected);
     }
@@ -95,7 +96,7 @@ public sealed class LegsServiceTests
         var fixture = Create(new() { ["a"] = HostDoubles.Leg("linux", "x86_64") });
 
         var exception = await Assert.ThrowsAsync<HarnessException>(
-            () => fixture.Service.CheckAsync(Root, ["nope"], LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken));
+            () => fixture.Service.CheckAsync(Root, ["nope"], LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.UsageError, exception.ExitCode);
         Assert.Empty(fixture.Inspector.Inspected);
@@ -122,7 +123,7 @@ public sealed class LegsServiceTests
                 config.Toolchains["mingw"] = new ToolchainConfig { Platforms = ["windows"], Env = { ["CC"] = "gcc" } };
             });
 
-        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(fixture.Inspector.DeveloperEnvironmentsAsked);
         Assert.All(fixture.Inspector.DeveloperEnvironmentsAsked, asked => Assert.Equal(["vs"], asked.Keys));
@@ -135,7 +136,7 @@ public sealed class LegsServiceTests
                 config.Toolchains["msvc"] = new ToolchainConfig { Platforms = ["windows"], Env = { ["CC"] = "cl" }, DeveloperEnvironment = "vs" };
             });
 
-        await copying.Service.CheckAsync(Root, null, LegWorkload.Copy, here: null, TestContext.Current.CancellationToken);
+        await copying.Service.CheckAsync(Root, null, LegWorkload.Copy, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(copying.Inspector.DeveloperEnvironmentsAsked);
         Assert.All(copying.Inspector.DeveloperEnvironmentsAsked, Assert.Empty);
@@ -156,7 +157,7 @@ public sealed class LegsServiceTests
                 config.Emulators["unused"] = Emulator();
             });
 
-        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(fixture.Inspector.EmulatorsAsked);
         Assert.All(fixture.Inspector.EmulatorsAsked, asked => Assert.Equal(["qemu-arm64"], asked.Keys));
@@ -178,7 +179,7 @@ public sealed class LegsServiceTests
             });
 
         var exception = await Assert.ThrowsAsync<HarnessException>(
-            () => fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken));
+            () => fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Same(refusal, exception);
         Assert.Contains("legs: wsl Ubuntu: updated DssHarness 1.1.9 to 1.2.0", fixture.Output.ToString(), StringComparison.Ordinal);
@@ -272,7 +273,7 @@ public sealed class LegsServiceTests
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = 8 } },
             rooms: (_, path) => Room(path, exists: false, recorded: null, free: 3));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
         var placement = Assert.Single(report.Placements);
 
         Assert.False(placement.Runnable);
@@ -305,7 +306,7 @@ public sealed class LegsServiceTests
                 ? Room(path, exists: true, recorded: 5L << 30, free: 30)
                 : Room(path, exists: false, recorded: null, free: 30));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         RoomNeed? NeedOf(string leg) => report.Placements.Single(placement => placement.Leg.Name == leg).Need;
 
@@ -317,6 +318,41 @@ public sealed class LegsServiceTests
         Assert.Equal(new RoomNeed(4L << 30, "as its buildSpaceGiB, 4, declares", "D:\\", ", where WSL keeps its disk"), NeedOf("distro"));
         Assert.Null(NeedOf("again"));
         Assert.Null(NeedOf("arm"));
+    }
+
+    /// <summary>
+    /// The room a leg needs is reckoned for the tree its build is in: where the leg's key, the repository's default or
+    /// the command's option puts it in a copy, the copy's build directory is what the room is asked about - never the
+    /// tree's own, whose warm build says nothing of what the copy's first one will need.
+    /// </summary>
+    [Fact]
+    public async Task TheRoomALegNeeds_IsReckonedForTheCopyItsConfigurationPutsItIn()
+    {
+        var asked = new List<string>();
+
+        var fixture = Create(
+            new() { ["here"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", LocalCopy = true, BuildSpaceGiB = 8 } },
+            rooms: (_, path) =>
+            {
+                asked.Add(path);
+                return Room(path, exists: false, recorded: null, free: 30);
+            });
+
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(Assert.Single(report.Placements).Runnable);
+        Assert.NotEmpty(asked);
+
+        var slot = Root.TrimEnd('/', '\\') + Path.DirectorySeparatorChar + HarnessLayout.LegsDirectoryName + Path.DirectorySeparatorChar;
+
+        Assert.Contains(asked, path => path.StartsWith(slot, StringComparison.Ordinal));
+
+        asked.Clear();
+
+        var inPlace = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, local: LocalTrees.InPlace, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(Assert.Single(inPlace.Placements).Runnable);
+        Assert.All(asked, path => Assert.DoesNotContain(HarnessLayout.LegsDirectoryName, path, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -333,7 +369,7 @@ public sealed class LegsServiceTests
                 : Measurements[host],
             rooms: (_, path) => Room(path, exists: false, recorded: null, free: 30));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(
             new RoomNeed(4L << 30, "as its buildSpaceGiB, 4, declares", null, ", where WSL keeps its disk", "wsl.exe did not say where the disk is"),
@@ -354,7 +390,7 @@ public sealed class LegsServiceTests
                 ? Room(path, exists: true, recorded: 6L << 30, free: 30)
                 : Room(path, exists: false, recorded: null, free: 30));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Ssh("pi"), TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Ssh("pi"), cancellationToken: TestContext.Current.CancellationToken);
 
         var need = Assert.Single(report.Placements).Need;
         Assert.NotNull(need);
@@ -378,7 +414,7 @@ public sealed class LegsServiceTests
             configure: config => config.BuildConfigs["release"] = new BuildConfiguration(),
             rooms: (_, path) => Room(path, exists: false, recorded: null, free: 8));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(report.Placements.Single(placement => placement.Leg.Name == "arm-debug").Runnable);
 
@@ -400,7 +436,7 @@ public sealed class LegsServiceTests
                 ? Room(path, exists: false, recorded: null, free: 6)
                 : Room(path, exists: true, recorded: 7L << 30, free: 6));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
         var placement = Assert.Single(report.Placements);
 
         Assert.False(placement.Runnable);
@@ -432,7 +468,7 @@ public sealed class LegsServiceTests
                     : [],
             });
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
         var placement = Assert.Single(report.Placements);
 
         Assert.False(placement.Runnable);
@@ -455,7 +491,7 @@ public sealed class LegsServiceTests
                 : Room(path, exists: false, recorded: null, free: 30),
             trees: new KnownTrees { Beside = host => host == HostId.Local ? [new RepositoryTree("/home/pi/repo.worktree-o1--xa", "worktree o1/xa")] : [] });
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Ssh("pi"), TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Ssh("pi"), cancellationToken: TestContext.Current.CancellationToken);
 
         var need = Assert.Single(report.Placements).Need;
         Assert.NotNull(need);
@@ -478,7 +514,7 @@ public sealed class LegsServiceTests
                 : Room(path, exists: false, recorded: null, free: 30),
             trees: new KnownTrees { Beside = host => host == HostId.Local ? [new RepositoryTree(feature, "worktree feature")] : [] });
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Local, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Local, cancellationToken: TestContext.Current.CancellationToken);
 
         var need = Assert.Single(report.Placements).Need;
         Assert.NotNull(need);
@@ -501,7 +537,7 @@ public sealed class LegsServiceTests
                 ? Room(path, exists: false, recorded: null, free: 30)
                 : Room(path, exists: true, recorded: 7L << 30, free: 30));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Local, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: HostId.Local, cancellationToken: TestContext.Current.CancellationToken);
 
         var need = Assert.Single(report.Placements).Need;
         Assert.NotNull(need);
@@ -519,7 +555,7 @@ public sealed class LegsServiceTests
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "nas" } },
             inspect: host => new HostReport { Host = host, Os = "linux", Processor = "arm64" });
 
-        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal([HostId.Ssh("nas")], fixture.Inspector.Inspected);
         Assert.DoesNotContain("could not be listed", fixture.Error.ToString(), StringComparison.Ordinal);
@@ -539,7 +575,7 @@ public sealed class LegsServiceTests
                 : Room(path, exists: true, recorded: 7L << 30, free: 6),
             trees: new KnownTrees { Unlisted = "the record cannot be read" });
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(Assert.Single(report.Placements).Runnable);
         Assert.Contains(
@@ -563,7 +599,7 @@ public sealed class LegsServiceTests
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = declared } },
             rooms: (_, path) => Room(path, exists: true, recorded: recorded, free: 1));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(Assert.Single(report.Placements).Runnable);
     }
@@ -583,7 +619,7 @@ public sealed class LegsServiceTests
             },
             rooms: (_, path) => Room(path, exists: false, recorded: null, free: 8));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.All(report.Placements, placement => Assert.True(placement.Runnable, placement.Reason));
         Assert.Equal(["ssh pi", "wsl Ubuntu"], report.Placements.Select(placement => placement.Host!.Host.ToString()).Order(StringComparer.Ordinal));
@@ -605,7 +641,7 @@ public sealed class LegsServiceTests
                 ? Room(path, exists: own is not null, recorded: own, free: 5)
                 : Room(path, exists: true, recorded: 10L << 30, free: 5));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(fits, Assert.Single(report.Placements).Runnable);
     }
@@ -625,7 +661,7 @@ public sealed class LegsServiceTests
             },
             rooms: (_, path) => Room(path, exists: false, recorded: null, free: 8));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.All(report.Placements, placement => Assert.True(placement.Runnable, placement.Reason));
     }
@@ -653,7 +689,7 @@ public sealed class LegsServiceTests
                 ? new BuildDirectoryRoom(path, false, null, drive, null)
                 : Room(path, exists: false, recorded: null, free: 800));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(report.Placements.Single(placement => placement.Leg.Name == "native").Runnable);
 
@@ -675,7 +711,7 @@ public sealed class LegsServiceTests
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = 5 } },
             rooms: (_, path) => new BuildDirectoryRoom(path, false, null, null, "the drive of a UNC path cannot be measured"));
 
-        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var report = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(Assert.Single(report.Placements).Runnable);
         Assert.Contains(
@@ -695,7 +731,7 @@ public sealed class LegsServiceTests
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", BuildSpaceGiB = 100 } },
             rooms: (_, path) => Room(path, exists: false, recorded: null, free: 1));
 
-        var copying = await fixture.Service.CheckAsync(Root, null, LegWorkload.Copy, here: null, TestContext.Current.CancellationToken);
+        var copying = await fixture.Service.CheckAsync(Root, null, LegWorkload.Copy, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(Assert.Single(copying.Placements).Runnable);
 
@@ -703,7 +739,7 @@ public sealed class LegsServiceTests
         Assert.Equal("/home/pi/repo", asked.SpaceAt);
         Assert.Empty(asked.Builds);
 
-        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         var building = fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room;
         Assert.Equal("/home/pi/repo/build/arm64-none-debug", Assert.Single(building.Builds));
@@ -724,12 +760,12 @@ public sealed class LegsServiceTests
         static BuildCause Deps(string os) => BuildCause.Of(new ActionStep { Name = "deps", WorkingDirectory = "{buildDir}", RunOn = [os] });
 
         var elsewhere = new LegWorkload(Build: false, Test: false, ["python3"]) { BuiltBy = [Deps("windows")] };
-        await fixture.Service.CheckAsync(Root, null, elsewhere, here: null, TestContext.Current.CancellationToken);
+        await fixture.Service.CheckAsync(Root, null, elsewhere, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Empty(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
 
         var linux = elsewhere with { BuiltBy = [Deps("Linux")] };
-        await fixture.Service.CheckAsync(Root, null, linux, here: null, TestContext.Current.CancellationToken);
+        await fixture.Service.CheckAsync(Root, null, linux, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(
             "/home/pi/repo/build/arm64-none-debug",
@@ -750,12 +786,12 @@ public sealed class LegsServiceTests
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },
             rooms: (_, path) => path == Worker ? Room(path, exists: true, recorded: 4L << 30, free: 3) : Room(path, exists: false, recorded: null, free: 3));
 
-        var sweeping = await fixture.Service.CheckAsync(Root, null, MutationService.Workload, here: null, TestContext.Current.CancellationToken);
+        var sweeping = await fixture.Service.CheckAsync(Root, null, MutationService.Workload, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(Worker, fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
         Assert.True(Assert.Single(sweeping.Placements).Runnable, Assert.Single(sweeping.Placements).Reason);
 
-        var building = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, TestContext.Current.CancellationToken);
+        var building = await fixture.Service.CheckAsync(Root, null, LegWorkload.BuildAndTest, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(Worker, fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
         Assert.False(Assert.Single(building.Placements).Runnable);
@@ -772,7 +808,7 @@ public sealed class LegsServiceTests
             new() { ["arm"] = new LegConfig { Os = "linux", Processor = "arm64", Config = "debug", Ssh = "pi", BuildSpaceGiB = 6 } },
             rooms: (_, path) => Room(path, exists: false, recorded: null, free: 3));
 
-        var testing = await fixture.Service.CheckAsync(Root, null, MutationService.SelfTestWorkload, here: null, TestContext.Current.CancellationToken);
+        var testing = await fixture.Service.CheckAsync(Root, null, MutationService.SelfTestWorkload, here: null, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Empty(fixture.Inspector.RoomAsked.Last(entry => entry.Host == HostId.Ssh("pi")).Room.Builds);
         Assert.True(Assert.Single(testing.Placements).Runnable, testing.Placements[0].Reason);

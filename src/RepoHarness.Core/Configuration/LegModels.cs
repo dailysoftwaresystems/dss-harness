@@ -49,6 +49,15 @@ public sealed class LegConfig
     /// </summary>
     public string? Worktree { get; init; }
 
+    /// <summary>
+    /// Where this machine runs the leg itself, it works in a copy of its tree kept in the tree's own .legs, made from the
+    /// run's one reading of the tree: a write the tree receives while the leg runs ends nothing of the leg's. Left out,
+    /// <see cref="HarnessDefaults.LocalCopy"/> decides; <see langword="false"/> on the leg turns a <see langword="true"/>
+    /// default off for it. A leg a host runs always works in that host's copy of its tree, so the key is refused on a leg
+    /// naming one, whichever value it gives.
+    /// </summary>
+    public bool? LocalCopy { get; init; }
+
     /// <summary>Test settings for this leg, overriding the project's.</summary>
     public TestConfig? Test { get; init; }
 

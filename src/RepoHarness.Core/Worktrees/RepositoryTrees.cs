@@ -2,6 +2,7 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Legs;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -165,16 +166,42 @@ public sealed class RepositoryTrees(IGitClient gitClient, LocalSyncTransport loc
 
         // A worktree under the root is spelt as its address puts it there, as a leg naming it spells its tree, not as git
         // spells it with its links resolved: one tree, said one way. Any other is spelt as git records it.
-        return new RepositoryTreesFound(
-        [
-            mainCheckout,
-            .. listed
-                .Where(worktree => !worktree.IsMain && !worktree.IsBare)
-                .Select(worktree => Path.GetFullPath(worktree.Path))
-                .Select(path => new RepositoryTree(
-                    HostCopies.AddressOf(worktreesDirectory, path, comparison)?.PathUnder(worktreesDirectory) ?? path,
-                    RepositoryTree.WorktreeAt(worktreesDirectory, path, comparison))),
-        ]);
+        var trees = listed
+            .Where(worktree => !worktree.IsMain && !worktree.IsBare)
+            .Select(worktree => Path.GetFullPath(worktree.Path))
+            .Select(path => new RepositoryTree(
+                HostCopies.AddressOf(worktreesDirectory, path, comparison)?.PathUnder(worktreesDirectory) ?? path,
+                RepositoryTree.WorktreeAt(worktreesDirectory, path, comparison)))
+            .Prepend(mainCheckout)
+            .ToList();
+
+        // Each tree's leg copies after it: a compiler working in one is named as that tree's leg copy's, never as
+        // nobody's, and a first build in a copy is measured by what other trees' builds of the variant came to - and a
+        // first build in a tree by what a copy's did. None where the tree keeps none.
+        return new RepositoryTreesFound([.. trees.SelectMany(tree => LegCopiesOf(tree).Prepend(tree))]);
+    }
+
+    /// <summary>
+    /// The copies of the tree at <paramref name="tree"/> its legs work in, as a listing says each: after the tree, in the
+    /// order of their names. Nothing is walked: one look at the tree's slot for them.
+    /// </summary>
+    private IReadOnlyList<RepositoryTree> LegCopiesOf(RepositoryTree tree)
+    {
+        try
+        {
+            return
+            [
+                .. _localTransport
+                    .CopiesInSlot(tree.Root, HarnessLayout.LegsDirectoryName, LegCopies.IsKey)
+                    .Select(copy => new RepositoryTree(copy.Path, $"{tree.Name}'s leg copy")),
+            ];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Said as the trees could not be listed, of the whole listing, rather than failing it for one tree's slot:
+            // a process nobody could name is better than none at all.
+            return [];
+        }
     }
 
     /// <inheritdoc/>

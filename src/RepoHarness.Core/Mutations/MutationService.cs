@@ -85,6 +85,7 @@ public sealed class MutationService(
     IProcessIdentity identity,
     IHostPlatform platform,
     TimeProvider clock,
+    IHostPlatform platform,
     IHarnessOutput output)
 {
     /// <summary>The command, as it is typed and as it reports.</summary>
@@ -125,6 +126,7 @@ public sealed class MutationService(
     private readonly IProcessIdentity _identity = identity;
     private readonly IHostPlatform _platform = platform;
     private readonly TimeProvider _clock = clock;
+    private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
 
     /// <summary>Sweeps every selected leg, and reports the ledger, each arm beneath its leg.</summary>
@@ -194,6 +196,10 @@ public sealed class MutationService(
                     Workload = request.SelfTest ? SelfTestWorkload : Workload,
                     Lock = MutationWorkers.SweepLock,
                     NothingRunsExit = NothingRuns,
+
+                    // A sweep makes no copy of its own: its workers are already copies of one reading. The legs it runs
+                    // here work in their trees, wherever the configuration would have a command's legs work.
+                    LocalTrees = LocalTrees.InPlace,
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
@@ -387,12 +393,24 @@ public sealed class MutationService(
         var project = leg.BuildableProject();
         var tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project);
 
+        // Where the leg's own build is, as its configuration places it for this machine: in its tree, or in the copy of it
+        // the leg works in where its key or the repository's default says one - a sweep reads what that build fetched from
+        // the copy's build directory, and makes no copy of its own (its workers already are copies of one reading).
+        var own = LegTrees.For(
+            work.Context,
+            leg.Leg,
+            leg.Variant,
+            HostId.Local,
+            leg.Named.Kind == HostKind.Local ? null : leg.Named,
+            _platform.PathComparison,
+            LocalTrees.AsConfigured).Work;
+
         return new MutationSubject
         {
             TreeRoot = leg.HostTreeRoot,
             Workers = MutationWorkers.Of(leg.HostTreeRoot, leg.Variant),
             Project = project,
-            Fetched = FetchedSources.Of(_buildDirectoryGuard.Read(leg.BuildDirectory), _fileSystem),
+            Fetched = FetchedSources.Of(_buildDirectoryGuard.Read(leg.Variant.DirectoryOn(HostId.Local, own)), _fileSystem),
             Tests = tests,
             Arms = ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = work.Context.Config.Mutations,

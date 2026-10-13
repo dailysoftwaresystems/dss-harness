@@ -403,6 +403,9 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "os": "linux", "processor": "arm64", "config": "debug", "emulator": "missing" }""", "emulator 'missing', which is not declared")]
     [InlineData("""{ "os": "linux", "processor": "riscv64", "config": "debug", "emulator": "qemu-arm64" }""", "but emulator 'qemu-arm64' runs arm64 programs")]
     [InlineData("""{ "os": "macos", "processor": "arm64", "config": "debug", "emulator": "qemu-arm64" }""", "but emulator 'qemu-arm64' runs on linux hosts")]
+    [InlineData("""{ "os": "linux", "processor": "x86_64", "config": "debug", "wsl": "Ubuntu", "localCopy": true }""", "sets localCopy and names wsl 'Ubuntu'")]
+    [InlineData("""{ "os": "linux", "processor": "x86_64", "config": "debug", "wsl": "Ubuntu", "localCopy": false }""", "sets localCopy and names wsl 'Ubuntu'")]
+    [InlineData("""{ "os": "linux", "processor": "x86_64", "config": "debug", "ssh": "vps", "localCopy": true }""", "sets localCopy and names ssh 'vps'")]
     public void Load_RejectsALegThatCanNeverBePlaced(string leg, string expected)
     {
         var exception = LoadInvalid($$"""
@@ -416,6 +419,39 @@ public sealed class ConfigStoreTests
             """);
 
         Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+
+        if (leg.Contains("localCopy", StringComparison.Ordinal))
+        {
+            Assert.Contains("Remove one of the two.", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// A leg's own localCopy, a true one under a false default and a false one under a true, reads as it is; a true
+    /// <c>defaults.localCopy</c> beside a leg a host runs is no problem: a default is for the legs it can apply to, and
+    /// says nothing of one a host runs.
+    /// </summary>
+    [Fact]
+    public void Load_AcceptsALegsLocalCopy_AndADefaultBesideALegAHostRuns()
+    {
+        var config = LoadValid("""
+            {
+              "buildConfigs": { "debug": {} },
+              "wslDistros": ["Ubuntu"],
+              "hosts": { "wsl": { "Ubuntu": { "repositoryPath": "/home/dev/repo" } } },
+              "defaults": { "localCopy": true },
+              "legs": {
+                "here": { "os": "linux", "processor": "x86_64", "config": "debug", "localCopy": false },
+                "also-here": { "os": "linux", "processor": "x86_64", "config": "debug" },
+                "there": { "os": "linux", "processor": "x86_64", "config": "debug", "wsl": "Ubuntu" }
+              }
+            }
+            """);
+
+        Assert.True(config.Defaults.LocalCopy);
+        Assert.False(config.Legs["here"].LocalCopy);
+        Assert.Null(config.Legs["also-here"].LocalCopy);
+        Assert.Null(config.Legs["there"].LocalCopy);
     }
 
     [Fact]

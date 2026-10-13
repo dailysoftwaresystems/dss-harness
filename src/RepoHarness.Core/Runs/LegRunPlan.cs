@@ -172,6 +172,7 @@ public sealed record PlacedLeg(
             HostEnvironment = Environment,
             Floor = Floor,
             Beside = Beside,
+            CopyOf = LocalCopy ? TreeRoot : null,
         };
     }
 
@@ -287,6 +288,12 @@ public sealed record PlacedLeg(
         Emulated = Emulated,
         MachineKey = Host.Host.MachineKey,
         Host = Named.ToString(),
+
+        // Where this machine's leg works, as its starting line says it; a host's leg says nothing of it, since the
+        // machine that sent it says where.
+        WorksIn = !Dispatched
+            ? LocalCopy ? $", in its copy '{HostTreeRoot}'" : $", in '{TreeRoot}' itself"
+            : string.Empty,
     };
 }
 
@@ -313,6 +320,31 @@ public static class LegRunPlan
         LegsReport report,
         IHostPlatform platform,
         out IReadOnlyList<LegEntry> skipped)
+        => From(context, report, platform, null, out skipped);
+
+    /// <summary>
+    /// Builds the placed legs for a report, with the legs no host can run recorded as skipped, refusing before anything
+    /// starts a leg whose copy would pass this machine's path limit.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="report">Where each selected leg can run, and where this run's own legs work.</param>
+    /// <param name="platform">Supplies how paths compare on this machine.</param>
+    /// <param name="pathBudget">
+    /// Reckons a copy's paths against this machine's limit; <see langword="null"/> where the command makes no copies.
+    /// </param>
+    /// <param name="skipped">Receives one ledger entry per leg that cannot run.</param>
+    /// <exception cref="HarnessException">
+    /// Two selected legs resolve to the same build directory, or a leg is to work in a copy whose build passes this
+    /// machine's path limit. Refused before either starts, because by the time the second reached its build directory the
+    /// first would already have been reconfigured out from under itself, and both would report on objects neither alone
+    /// produced.
+    /// </exception>
+    public static IReadOnlyList<PlacedLeg> From(
+        HarnessContext context,
+        LegsReport report,
+        IHostPlatform platform,
+        IPathBudget? pathBudget,
+        out IReadOnlyList<LegEntry> skipped)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(report);
@@ -335,11 +367,12 @@ public static class LegRunPlan
                 continue;
             }
 
-            placed.Add(Place(context, placement.Leg, placement.Host, report.Here, platform.PathComparison) with { Need = placement.Need });
+            placed.Add(Place(context, placement.Leg, placement.Host, report.Here, report.LocalTrees, platform.PathComparison) with { Need = placement.Need });
         }
 
         RefuseSharedBuildDirectories(placed, platform);
         RefuseSharedHostCopies(placed, platform);
+        RefusePathsTooLong(context, placed, pathBudget, report.LocalTrees);
 
         skipped = notRun;
         return placed;
@@ -369,7 +402,7 @@ public static class LegRunPlan
             [.. skipped.Select(entry => $"{entry.Leg}: {Verdicts.Display(entry.Verdict)}: {entry.Detail}")]);
     }
 
-    private static PlacedLeg Place(HarnessContext context, SelectedLeg selected, HostReport host, HostId? here, StringComparison comparison)
+    private static PlacedLeg Place(HarnessContext context, SelectedLeg selected, HostReport host, HostId? here, LocalTrees local, StringComparison comparison)
     {
         var config = context.Config;
         var leg = selected.Leg;
@@ -382,13 +415,11 @@ public static class LegRunPlan
         var project = VariantKey.ProjectFor(config, leg);
         var variant = VariantKey.For(config, leg, host.Os ?? string.Empty);
 
-        var treeRoot = LegTrees.Here(context, leg, here);
-
-        // Where the work actually happens. A leg on another machine works in that machine's copy of its
-        // tree, and describing it with a path from this one would key its lock, its sync and its build
-        // directory by a directory the work never touches. Resolved here rather than at the moment of the
-        // sync, so a host that declares no repositoryPath is refused before anything starts.
-        var hostTreeRoot = LegTrees.On(context, host.Host, treeRoot, comparison);
+        // Where the work happens, on every machine alike: in the tree, in a host's copy of it, or in a copy of it kept
+        // in the tree's own .legs where this machine runs the leg and this run has it work in one. One answer, asked
+        // here, so a path derived from the work's tree never names a directory the work never touches - and the room the
+        // leg is placed by is reckoned for the tree its build is in.
+        var tree = LegTrees.For(context, leg, variant, host.Host, here, comparison, local);
 
         // Read under the name the reader knows the host by. A host running a leg another machine
         // dispatched to it is 'local' to itself, and 'local' in the configuration the two share is
@@ -402,14 +433,43 @@ public static class LegRunPlan
             host,
             project,
             variant,
-            treeRoot,
-            hostTreeRoot,
-            variant.DirectoryOn(host.Host, hostTreeRoot),
+            tree.Here,
+            tree.Work,
+            variant.DirectoryOn(host.Host, tree.Work),
             config.Hosts.SettingsFor(named),
             leg.Emulator is { Length: > 0 })
         {
             Named = named,
+            LocalCopy = tree.LocalCopy,
         };
+    }
+
+    /// <summary>
+    /// Refuses a leg whose copy would pass this machine's path limit, before anything starts: a copy whose build passes
+    /// it fails as compile errors in files nobody touched, so it is never made.
+    /// </summary>
+    private static void RefusePathsTooLong(HarnessContext context, IReadOnlyList<PlacedLeg> placed, IPathBudget? budget, LocalTrees local)
+    {
+        if (budget is null)
+        {
+            return;
+        }
+
+        foreach (var leg in placed.Where(leg => leg.LocalCopy))
+        {
+            var settings = context.Config.Worktrees;
+            var reckoned = CopyPathBudget.Check(budget, settings, leg.HostTreeRoot, leg.Variant, settings.PathBudgetReserve);
+
+            if (!reckoned.IsWithinBudget && reckoned.Limit is { } limit)
+            {
+                throw new HarnessException(
+                    HarnessExit.Refused,
+                    $"Leg '{leg.Name}' is to work in a copy of '{leg.TreeRoot}', kept at '{leg.HostTreeRoot}', where its build "
+                    + $"needs paths of {reckoned.RequiredLength} characters, as worktrees.pathBudgetReserve and pathBudgetMargin "
+                    + $"reckon them, and every path must stay under {limit}. Keep the tree at a shorter path, set worktrees.pathLimit "
+                    + "where every tool its build runs takes longer ones, or run it with --in-place. Nothing was run.");
+            }
+        }
     }
 
     /// <summary>

@@ -790,7 +790,8 @@ public sealed partial class HelpTests
     /// <summary>
     /// The verdicts topic says when a leg on a copy is inputs-moved with nothing run - the tree moving while it was read,
     /// a file to carry changing after, another command's sync of the copy in between, and under --use-staged a copy part
-    /// made, absent or unmarked - and what its line and its --json say of the tree it tested.
+    /// made, absent or unmarked - what its line and its --json say of the tree it tested, and the remedy a leg that
+    /// worked in its tree itself is named.
     /// </summary>
     [Fact]
     public async Task VerdictsTopic_SaysWhenALegOnACopyIsInputsMoved_AndWhichTreeItTested()
@@ -798,20 +799,22 @@ public sealed partial class HelpTests
         var result = await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken);
 
         Assert.Contains(
-            "A leg on a copy of its tree - a host's - is inputs-moved with nothing of it run where the copy cannot be the tree "
-                + "the run read: a file written, appearing or going while the tree was read, named; a file to carry changed after "
-                + "it was read; another command synced the copy again between this run's sync and the leg taking it, naming that "
-                + "run; or, under --use-staged, the copy is part made, is not there, or holds no copy this tool made. Each leg on "
-                + "a copy says which tree it tested with its verdict - 'tree read at <commit>', with the uncommitted changes the "
-                + "reading carried, or under --use-staged 'tree staged at <commit> by run <id>' as the copy records it - and "
-                + "--json's 'tree' holds its path, the tree it is a copy of, and the commit, the count and the run.",
+            "A leg on a copy of its tree - a host's, or one of its own in the tree's .legs - is inputs-moved with nothing of it "
+                + "run where the copy cannot be the tree the run read: a file written, appearing or going while the tree was read, "
+                + "named; a file to carry changed after it was read; another command synced the copy again between this run's sync "
+                + "and the leg taking it, naming that run; or, under --use-staged, the copy is part made, is not there, or holds no "
+                + "copy this tool made. Each leg on a copy says which tree it tested with its verdict - 'tree read at <commit>', "
+                + "with the uncommitted changes the reading carried, or under --use-staged 'tree staged at <commit> by run <id>' as "
+                + "the copy records it - and --json's 'tree' holds its path, the tree it is a copy of, and the commit, the count and "
+                + "the run. A leg that worked in its tree itself and is inputs-moved names the remedy after its detail, where its "
+                + "command could have run it on a copy: the leg's localCopy, defaults.localCopy, or --local-copy ('help legs').",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
 
     /// <summary>
     /// --use-staged says, for each command that takes it, which copies end their legs inputs-moved: one part made, one
-    /// that is not there, and one this tool did not make.
+    /// that is not there, and one this tool did not make - of each copy, a host's as a leg's own alike.
     /// </summary>
     [Theory]
     [InlineData("build", "Build")]
@@ -823,9 +826,84 @@ public sealed partial class HelpTests
         var result = await CliRunner.RunAsync([command, "--help"], TestContext.Current.CancellationToken);
 
         Assert.Contains(
-            $"{verb} what is already staged on each host, without syncing again. Legs on a copy a sync or a takeover began and did "
+            $"{verb} what is already staged on each copy, without syncing again. Legs on a copy a sync or a takeover began and did "
                 + "not finish, that is not there, or that holds no copy this tool made are inputs-moved.",
             Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The legs topic says where a leg works - its tree, its host's copy, or its own in the tree's .legs - and the order
+    /// of precedence in one sentence: the command's option, the leg's own key, the default, the tree.
+    /// </summary>
+    [Fact]
+    public async Task LegsTopic_SaysWhereALegWorks_AndTheOrderOfPrecedence()
+    {
+        var result = await CliRunner.RunAsync(["help", "legs"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "A leg a host runs works in that host's copy of its tree, whatever anything else says. A leg this machine runs "
+                + "itself works where the first of these says anything: --local-copy or --in-place on the command, for that run "
+                + "(build, test, run); the leg's own localCopy, true or false; defaults.localCopy, a default for every leg of the "
+                + "repository; and, where none says, its tree itself.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "made from the run's one reading of the tree and kept warm between runs: a write the tree receives while the leg "
+                + "runs - a fold, a commit, an edit - ends nothing of the leg's",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>build, test and run each take --local-copy and --in-place, one description for the three.</summary>
+    [Theory]
+    [InlineData("build")]
+    [InlineData("test")]
+    [InlineData("run")]
+    public async Task EachCommandThatRunsLegs_TakesLocalCopyAndInPlace(string command)
+    {
+        var result = await CliRunner.RunAsync([command, "--help"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "Every leg this machine runs itself works in a copy of its tree kept in the tree's .legs, for this run: over the "
+                + "leg's own localCopy and defaults.localCopy.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Every leg this machine runs itself works in its tree itself, for this run: over the leg's own localCopy and "
+                + "defaults.localCopy.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>Both given, --local-copy and --in-place are a usage error; neither is passed to a host.</summary>
+    [Theory]
+    [InlineData("build", "")]
+    [InlineData("test", "")]
+    [InlineData("run", "probe")]
+    public async Task LocalCopyAndInPlaceTogether_AreAUsageError(string command, string argument)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+
+        await harness.InitializeHarnessAsync(
+            temp.Path,
+            TestContext.Current.CancellationToken,
+            new HarnessConfig
+            {
+                PredefinedRunners = { ["probe"] = new RunnerConfig { Phases = [new RunnerPhase { Name = "p", Command = ["true"] }] } },
+            });
+
+        string[] arguments = command is "build" or "test"
+            ? [command, "--local-copy", "--in-place", "--directory", temp.Path]
+            : [command, argument, "--local-copy", "--in-place", "--directory", temp.Path];
+
+        var outcome = await CliRunner.RunAsync([.. arguments], TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.UsageError, outcome.ExitCode);
+        Assert.Contains(
+            "--local-copy and --in-place say opposite things about where this run's own legs work. Give one.",
+            outcome.StandardOutput + outcome.StandardError,
             StringComparison.Ordinal);
     }
 
@@ -1249,23 +1327,26 @@ public sealed partial class HelpTests
     /// <summary>
     /// The worktrees topic says what becomes of the mutation workers kept in a worktree that is deleted: asked about
     /// before anything of it is removed, so a worktree kept for one removes nothing; which code each one kept leaves it
-    /// with; what an interruption says; that --force deletes every worker with the worktree; and that a host's copy is
-    /// treated as the worktree is.
+    /// with; what an interruption says; that --force deletes every copy with the worktree; and that a host's copy is
+    /// treated as the worktree is - the leg copies of the worktree among the families that go with it, never sent to a
+    /// host.
     /// </summary>
     [Fact]
-    public async Task WorktreesTopic_SaysWhatBecomesOfTheMutationWorkersInAWorktree()
+    public async Task WorktreesTopic_SaysWhatBecomesOfTheCopiesKeptInAWorktree()
     {
         var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
 
         Assert.Contains(
-            "The mutation workers kept in a worktree ('help mutations') go before it. They are asked about before anything of it is "
-            + $"removed or looked through: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), and one that cannot "
+            "The copies kept in a worktree go before it, of its two families: the mutation workers its sweeps made "
+            + "('help mutations'), in .mutations, and the copies of it its legs work in ('help legs'), in .legs - never "
+            + "sent to any host, so only this machine holds them. They are asked about before anything of it is removed or "
+            + $"looked through: one a sweep still running holds - or a run holds a leg copy - keeps the worktree ({HarnessExit.Refused}), and one that cannot "
             + $"be removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as workers that cannot be looked "
             + "for do, with nothing removed. A sweep that takes one meanwhile keeps the worktree as well, and so does one whose removal "
             + "then fails, the others gone by then, which is said. An interruption as they go says which went, and that nothing else of "
-            + $"the worktree was removed ({HarnessExit.Cancelled}). --force deletes the worktree with every worker in it, one held or one "
+            + $"the worktree was removed ({HarnessExit.Cancelled}). --force deletes the worktree with every copy in it, one held or one "
             + "that could not be removed among them, saying which went with it. A worktree whose own removal then fails, or is stopped, "
-            + "says which workers went before it. In a host's copy they are asked about first as well, and a copy kept once some had "
+            + "says which copies went before it. In a host's copy the workers are asked about first as well, and a copy kept once some had "
             + "gone says which went.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
@@ -1673,18 +1754,30 @@ public sealed partial class HelpTests
         Assert.Contains("the leg's buildSpaceGiB", text, StringComparison.Ordinal);
         Assert.Contains("Commands that build nothing - sync, clean - need no room.", text, StringComparison.Ordinal);
         Assert.Contains(
-            "with its mutation workers' as 'workerBytes': what was removed of them - 0 where every one there was kept - or, in a dry "
-            + "run, what is there. A leg whose build directory was not measured - a link, locked or not removable - carries a space "
-            + "saying its workers alone, where any is there.",
+            "all of it as each leg's 'space', with its mutation workers' as 'workerBytes' and its copies' as 'copyBytes': what "
+                + "was removed of them - 0 where every one there was kept - or, in a dry run, what is there. A leg whose build "
+                + "directory was not measured - a link, locked or not removable - carries a space saying its workers and copies "
+                + "alone, where any is there.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(
             "one a live sweep claims is kept, one that cannot be removed fails the leg, which still says what went, and a directory "
-            + "under a worker's name that no sync made is said and left",
+                + "under a worker's name that no sync made is said and left",
             text,
             StringComparison.Ordinal);
         Assert.Contains("The mutation workers a sweep of the leg keeps in that tree go with it", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "The copies of the tree its legs work in, in the tree's .legs slot, go the same way - the leg's own variant's and "
+                + "those of a variant no leg builds any more, whatever the configuration says now",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a leg a run is building, or whose workers a sweep holds, or whose copy a run holds, is refused-locked in the dry run "
+                + "too",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("A host holding no copy of the tree holds nothing of it to remove.", text, StringComparison.Ordinal);
+
         Assert.Contains("legs -v' says the room on each host it measured", text, StringComparison.Ordinal);
     }
 

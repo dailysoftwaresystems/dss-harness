@@ -59,6 +59,10 @@ internal static class TestCommand
         Description = "Test what is already built, without building first.",
     };
 
+    private static readonly Option<bool> LocalCopyOption = DispatchOptions.LocalCopy;
+
+    private static readonly Option<bool> InPlaceOption = DispatchOptions.InPlace;
+
     internal static Command Create()
     {
         var command = new Command(
@@ -74,6 +78,8 @@ internal static class TestCommand
         command.Options.Add(ForceLockOption);
         command.Options.Add(UseStagedOption);
         command.Options.Add(SkipBuildOption);
+        command.Options.Add(LocalCopyOption);
+        command.Options.Add(InPlaceOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
@@ -112,6 +118,7 @@ internal static class TestCommand
                     {
                         // Built first unless told not to, and tested either way.
                         Workload = new LegWorkload(Build: !skipBuild, Test: true, []),
+                        LocalTrees = DispatchOptions.WhereWorkRuns(arguments),
                     },
                     (work, token) => RunLegAsync(builds, tests, context.Get<CMakeToolchainReader>(), work, filter, excludes, labels, skipBuild, token),
                     cancellationToken)

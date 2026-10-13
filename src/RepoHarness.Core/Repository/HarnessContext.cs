@@ -49,6 +49,15 @@ public interface IHarnessContextLoader
     /// been initialised.
     /// </exception>
     Task<HarnessContext> LoadAsync(string startDirectory, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The context for work that happens in <paramref name="copy"/>: <paramref name="of"/>'s layout over the copy, and the
+    /// configuration the copy holds - the reading's, which a sync places there as it makes the copy.
+    /// </summary>
+    /// <param name="of">The context the command loaded, whose machine state the work keeps.</param>
+    /// <param name="copy">The copy of the tree the work happens in.</param>
+    /// <exception cref="HarnessException">The copy holds no configuration (<see cref="HarnessExit.NotInitialized"/>).</exception>
+    HarnessContext ForCopy(HarnessContext of, string copy);
 }
 
 /// <inheritdoc cref="IHarnessContextLoader"/>
@@ -151,5 +160,25 @@ public sealed class HarnessContextLoader(
     {
         await _copyTool.WarnWhenBehindAsync(context, cancellationToken).ConfigureAwait(false);
         return context;
+    }
+
+    /// <inheritdoc/>
+    public HarnessContext ForCopy(HarnessContext of, string copy)
+    {
+        ArgumentNullException.ThrowIfNull(of);
+        ArgumentException.ThrowIfNullOrWhiteSpace(copy);
+
+        // The copy keeps the main checkout of the context it was made from, so values, secrets and the lock resolve where
+        // this machine keeps them, while the tree the work happens in - the actions it runs, the runs directory its records
+        // would take - is the copy's. The tool check is not asked: a run made the copy, and its reading said already.
+        var layout = of.Layout with { RepositoryRoot = copy };
+        var configFile = layout.ConfigFile;
+
+        return _fileSystem.FileExists(configFile)
+            ? new HarnessContext(layout, _configStore.Load(configFile)) { ConfigFile = configFile, IsSyncedCopy = true }
+            : throw new HarnessException(
+                HarnessExit.NotInitialized,
+                $"'{copy}' holds no harness configuration at '{configFile}', so work cannot run by the reading it was made from. "
+                + "Sync it again.");
     }
 }

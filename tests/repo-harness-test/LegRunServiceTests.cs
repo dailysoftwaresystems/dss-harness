@@ -2539,9 +2539,14 @@ public sealed class LegRunServiceTests
         Action<PlacedLeg>? ran = null,
         IProcessRunner? keepAwake = null,
         DeveloperEnvironmentProvider? developerEnvironments = null,
-        LegAdmission? admission = null)
+        LegAdmission? admission = null,
+        ISyncTransportFactory? transports = null,
+        IHarnessContextLoader? loader = null,
+        Func<LegWork, LegEntry>? work = null)
     {
-        var outcome = await OutcomeAsync(temp, harness, config, inspector, request, runLock, sync, ran, keepAwake, developerEnvironments: developerEnvironments, admission: admission);
+        var outcome = await OutcomeAsync(
+            temp, harness, config, inspector, request, runLock, sync, ran, keepAwake, developerEnvironments: developerEnvironments, admission: admission,
+            transports: transports, loader: loader, work: work);
 
         return Verdicts(outcome);
     }
@@ -2554,6 +2559,315 @@ public sealed class LegRunServiceTests
         return document.RootElement.GetProperty("legs").EnumerateArray().ToDictionary(
             leg => leg.GetProperty("leg").GetString()!,
             leg => (leg.GetProperty("verdict").GetString(), leg.GetProperty("detail").GetString()));
+    }
+
+    /// <summary>
+    /// A leg with localCopy that this machine runs works in a copy of its tree kept in the tree's own .legs, named by its
+    /// variant's key: the run reads the tree once, syncs the copy from that reading, and the leg works there - by the
+    /// configuration the reading carried, its records in the run's own directory - holding the copy, never the tree. Its
+    /// lines say where it works and which reading its copy holds, and the ledger's tree says the same.
+    /// </summary>
+    [Fact]
+    public async Task ALegWithLocalCopy_WorksInACopyOfItsTreeKeptInTheTreesOwnLegs()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var run = RunId.New();
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Projects = { new ProjectConfig { Name = "app", Type = "dotnet", Path = "." } },
+            Toolchains = { ["gcc"] = new ToolchainConfig { Platforms = [harness.Platform.PlatformKey] } },
+            Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", Project = "app", Toolchain = "gcc", LocalCopy = true } },
+            Worktrees = new WorktreeSettings { PathLimit = 1000 },
+        };
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        temp.WriteFile("src/a.c", "int a;\n");
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        var transports = LocalOnlyTransports(harness);
+        string? workedIn = null;
+        string? ranBy = null;
+        BuildRequest? build = null;
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly },
+            sync: SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports),
+            transports: transports,
+            loader: harness.ContextLoader,
+            runId: run,
+            work: work =>
+            {
+                workedIn = work.Context.Layout.RepositoryRoot;
+                ranBy = work.RunDirectory;
+                build = work.Leg.BuildRequestFor(work.Context.Config, work.RunDirectory);
+                return new LegEntry { Leg = work.Leg.Name, Verdict = LegVerdict.Passed };
+            });
+
+        Assert.True(HarnessExit.Success == outcome.ExitCode, $"the run ended {outcome.ExitCode}: {outcome.Message}");
+
+        var variant = VariantKey.For(config, config.Legs["native"], harness.Platform.PlatformKey);
+
+        var copy = LegCopies.PathOf(temp.Path, variant);
+
+        Assert.True(Directory.Exists(copy), $"no copy was made at '{copy}'");
+        Assert.True(File.Exists(Path.Combine(copy, "src", "a.c")), "the copy holds none of the tree");
+        Assert.Equal(copy, workedIn);
+        Assert.Equal(copy, build!.TreeRoot);
+        Assert.Equal(temp.Path, build.CopyOf);
+        Assert.StartsWith(Path.Combine(temp.Path, ".harness-config", "runs") + Path.DirectorySeparatorChar, ranBy, StringComparison.Ordinal);
+
+        var lines = (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+
+        Assert.Contains($"test: native: starting on local, in its copy '{copy}'", lines);
+        Assert.Contains($"test: native: sync of '{copy}' on local", lines);
+
+        using var document = JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+        var tree = leg.GetProperty("tree");
+
+        Assert.Equal(copy, tree.GetProperty("path").GetString());
+        Assert.Equal(temp.Path, tree.GetProperty("copyOf").GetString());
+        Assert.Equal(run.Value, tree.GetProperty("readBy").GetString());
+
+        // A repository of its own, as every copy a sync makes is: git answers there for the copy, never for the tree.
+        Assert.Equal("true", (await harness.RunGitAsync(copy, ["rev-parse", "--is-inside-work-tree"], token)).StandardOutput.Trim());
+    }
+
+    /// <summary>
+    /// A fold holds the tree it writes, whole - and nothing of a leg that works in a copy of that tree: the two no longer
+    /// refuse each other, where the same leg in place is refused for the fold's whole length.
+    /// </summary>
+    [Fact]
+    public async Task AFoldHoldingTheTree_RefusesALegInPlace_AndNotALegInACopyOfIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Projects = { new ProjectConfig { Name = "app", Type = "dotnet", Path = "." } },
+            Toolchains = { ["gcc"] = new ToolchainConfig { Platforms = [harness.Platform.PlatformKey] } },
+            Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", Project = "app", Toolchain = "gcc", LocalCopy = true } },
+            Worktrees = new WorktreeSettings { PathLimit = 1000 },
+        };
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        temp.WriteFile("src/a.c", "int a;\n");
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        var layout = new HarnessLayout(temp.Path, temp.Path);
+
+        await using (await new RunLock(harness.FileSystem, harness.Output, harness.Identity).AcquireAsync(
+            layout,
+            new LockRequest { Host = HostId.Local.ToString(), Tree = temp.Path, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "fold-agent" },
+            token))
+        {
+            var transports = LocalOnlyTransports(harness);
+            var verdicts = await RunAsync(
+                temp,
+                harness,
+                config,
+                SshAndLocal(harness),
+                new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly },
+                sync: SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports),
+                transports: transports,
+                loader: harness.ContextLoader);
+
+            Assert.Equal("passed", verdicts["native"].Verdict);
+        }
+
+        var inPlaceConfig = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug" } },
+        };
+
+        var inPlace = await RunAsync(
+            temp,
+            harness,
+            inPlaceConfig,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly, LocalTrees = LocalTrees.InPlace },
+            loader: LocalOnlyLoader(inPlaceConfig, temp.Path));
+
+        // The fold is over, so the leg in place runs in its tree - as it would have been refused while it lasted.
+        Assert.Equal("passed", inPlace["native"].Verdict);
+    }
+
+    /// <summary>
+    /// A run whose leg is to work in a copy, in a tree whose .legs git does not ignore, is refused before anything is
+    /// made: naming init, exit 13, with no copy and no reading - as a sweep is for the workers it would make there.
+    /// </summary>
+    [Fact]
+    public async Task ARunWhoseLegWouldWorkInACopy_WhereGitDoesNotIgnoreTheLegs_IsRefusedNamingInit()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Projects = { new ProjectConfig { Name = "app", Type = "dotnet", Path = "." } },
+            Toolchains = { ["gcc"] = new ToolchainConfig { Platforms = [harness.Platform.PlatformKey] } },
+            Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", Project = "app", Toolchain = "gcc", LocalCopy = true } },
+            Worktrees = new WorktreeSettings { PathLimit = 1000 },
+        };
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        // The tree's ignore rules, as a branch that predates them holds it: nothing ignores .legs.
+        var ignore = Path.Combine(temp.Path, ".gitignore");
+        File.WriteAllLines(ignore, File.ReadAllLines(ignore).Where(rule => !rule.Contains(HarnessLayout.LegsDirectoryName, StringComparison.Ordinal)));
+
+        var transports = LocalOnlyTransports(harness);
+        var read = false;
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly },
+            sync: ReadBy(SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports), () => read = true),
+            transports: transports,
+            loader: harness.ContextLoader));
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.Contains($"git does not ignore '{HarnessLayout.LegsDirectoryName}/", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains($"Run '{ToolPackage.Command} init'", refusal.Message, StringComparison.Ordinal);
+        Assert.False(read, "the tree was read for a copy that was never made");
+
+        var variant = VariantKey.For(config, config.Legs["native"], harness.Platform.PlatformKey);
+
+        Assert.False(Directory.Exists(LegCopies.PathOf(temp.Path, variant)));
+    }
+
+    /// <summary>
+    /// A directory this tool did not make where a leg's copy is kept refuses the run, exit 13, in the words a host's
+    /// copy is refused - with no takeover offered, for none is: move it away, or run the leg in its tree - and the
+    /// directory is left as it was.
+    /// </summary>
+    [Fact]
+    public async Task ADirectoryThisToolDidNotMake_AtTheCopysPath_RefusesTheRunAndIsLeftAsItWas()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var token = TestContext.Current.CancellationToken;
+        var config = new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Projects = { new ProjectConfig { Name = "app", Type = "dotnet", Path = "." } },
+            Toolchains = { ["gcc"] = new ToolchainConfig { Platforms = [harness.Platform.PlatformKey] } },
+            Legs = { ["native"] = new LegConfig { Os = harness.Platform.PlatformKey, Processor = harness.Platform.Processor, Config = "debug", Project = "app", Toolchain = "gcc", LocalCopy = true } },
+            Worktrees = new WorktreeSettings { PathLimit = 1000 },
+        };
+
+        await harness.InitializeHarnessAsync(temp.Path, token, config);
+        await harness.CommitAllAsync(temp.Path, "initial", token);
+
+        var variant = VariantKey.For(config, config.Legs["native"], harness.Platform.PlatformKey);
+        var somebodys = LegCopies.PathOf(temp.Path, variant);
+
+        Directory.CreateDirectory(Path.Combine(somebodys, "mine"));
+        File.WriteAllText(Path.Combine(somebodys, "mine", "a.c"), "int a;\n");
+
+        var transports = LocalOnlyTransports(harness);
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly },
+            sync: SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports),
+            transports: transports,
+            loader: harness.ContextLoader);
+
+        Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
+        Assert.Contains($"'{somebodys}' on local exists and the harness did not create it", outcome.Message, StringComparison.Ordinal);
+        Assert.Contains("move it away, or run the leg with --in-place. Nothing was changed.", outcome.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("--adopt", outcome.Message, StringComparison.Ordinal);
+
+        Assert.Equal("int a;\n", await File.ReadAllTextAsync(Path.Combine(somebodys, "mine", "a.c"), token));
+        Assert.Equal(["mine"], Directory.GetFileSystemEntries(somebodys).Select(Path.GetFileName));
+    }
+
+    /// <summary>
+    /// A leg in place that ends inputs-moved names the remedy after its detail - the leg's key, the default, the option -
+    /// where the command could have run it on a copy; a leg that worked in a copy does not, nor a command that takes no
+    /// such option.
+    /// </summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task ALegInPlaceThatEndsInputsMoved_NamesTheRemedy_WhereTheCommandCouldHaveRunItOnACopy(bool inPlace, bool namesIt)
+
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLeg(harness);
+
+        var verdicts = await RunAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly, LocalTrees = inPlace ? LocalTrees.InPlace : LocalTrees.AsConfigured },
+            loader: LocalOnlyLoader(config, temp.Path),
+            work: _ => new LegEntry { Leg = "native", Verdict = LegVerdict.InputsMoved, Detail = "1 input changed: src/a.c" });
+
+        Assert.Equal("inputs-moved", verdicts["native"].Verdict);
+
+        if (namesIt)
+        {
+            Assert.EndsWith(
+                $"1 input changed: src/a.c; the leg worked in '{temp.Path}' itself - legs.native.localCopy, defaults.localCopy for every leg, "
+                + "or --local-copy for one run, runs it on a copy a later write does not reach",
+                verdicts["native"].Detail,
+                StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal("1 input changed: src/a.c", verdicts["native"].Detail);
+        }
+    }
+
+    /// <summary>The transports of a run that reaches no host: this machine's own, for its legs' copies.</summary>
+    private static ISyncTransportFactory LocalOnlyTransports(HarnessFactory harness)
+    {
+        var transports = Substitute.For<ISyncTransportFactory>();
+
+        transports.For(Arg.Any<HostReport>()).Returns(call => call.Arg<HostReport>().Host.Kind == HostKind.Local
+            ? (ISyncTransport)SyncKit.Transport(harness)
+            : throw new InvalidOperationException("this test reaches no host"));
+
+        return transports;
+    }
+
+    /// <summary>A loader that answers no copy: a run whose legs work in their trees, whatever configuration it is given.</summary>
+    private static IHarnessContextLoader LocalOnlyLoader(HarnessConfig config, string root) => HostDoubles.Loader(config, root);
+
+    /// <summary>A sync service that notes, in <paramref name="read"/>, that a tree was read through it.</summary>
+    private static ISyncService ReadBy(ISyncService sync, Action read)
+    {
+        var wrapped = Substitute.For<ISyncService>();
+
+        wrapped.ReadSourceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call => { read(); return sync.ReadSourceAsync(call.ArgAt<string>(0), call.ArgAt<CancellationToken>(1)); });
+
+        wrapped.SyncAsync(Arg.Any<SyncSource>(), Arg.Any<ISyncTransport>(), Arg.Any<string>(), Arg.Any<SyncOptions>(), Arg.Any<CancellationToken>())
+            .Returns(call => sync.SyncAsync(call.ArgAt<SyncSource>(0), call.ArgAt<ISyncTransport>(1), call.ArgAt<string>(2), call.ArgAt<SyncOptions>(3), call.ArgAt<CancellationToken>(4)));
+
+        return wrapped;
     }
 
     /// <summary>
@@ -2584,14 +2898,15 @@ public sealed class LegRunServiceTests
         IWslPageCache? pageCache = null,
         IRepositoryTrees? trees = null,
         CancellationToken? cancellationToken = null,
-        RunId? runId = null)
+        RunId? runId = null,
+        IHarnessContextLoader? loader = null)
     {
-        var loader = HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
+        var loading = loader ?? HostDoubles.Loader(config, tree ?? temp.Path, temp.Path);
         var run = runId ?? RunId.New();
 
         var service = new LegRunService(
-            loader,
-            new LegsService(loader, inspector, new KnownTrees(), harness.Platform, harness.Output),
+            loading,
+            new LegsService(loading, inspector, new KnownTrees(), harness.Platform, harness.Output),
             new LegExecutor(harness.Platform, harness.Output),
             runLock ?? new RunLock(harness.FileSystem, harness.Output, harness.Identity),
             logs ?? new LogOwnership(harness.FileSystem, harness.Output, harness.Identity),
@@ -2607,6 +2922,8 @@ public sealed class LegRunServiceTests
             trees ?? new KnownTrees(),
             new KeepAwake(keepAwake ?? new HeldProcesses(), harness.Output),
             developerEnvironments ?? NoDeveloperEnvironment(harness),
+            harness.GitClient,
+            harness.PathBudget,
             fileSystem ?? harness.FileSystem,
             harness.FilePermissions,
             harness.Platform,

@@ -64,6 +64,12 @@ public sealed record LegRunRequest(
     /// <c>violated</c>, which is 1.
     /// </summary>
     public int NothingRunsExit { get; init; } = LegsExit.Unavailable;
+
+    /// <summary>
+    /// Where the legs this machine runs itself work, for this run: as the configuration places each, or in place or in a
+    /// copy for them all. Never sent to a host: a host's legs work in its copies whatever it says.
+    /// </summary>
+    public LocalTrees LocalTrees { get; init; } = LocalTrees.AsConfigured;
 }
 
 /// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
@@ -125,6 +131,8 @@ public sealed class LegRunService(
     IRepositoryTrees trees,
     KeepAwake keepAwake,
     DeveloperEnvironmentProvider developerEnvironments,
+    Git.IGitClient gitClient,
+    Platform.IPathBudget pathBudget,
     IFileSystem fileSystem,
     IFilePermissions filePermissions,
     IHostPlatform platform,
@@ -144,6 +152,8 @@ public sealed class LegRunService(
     private readonly IRepositoryTrees _trees = trees;
     private readonly KeepAwake _keepAwake = keepAwake;
     private readonly DeveloperEnvironmentProvider _developerEnvironments = developerEnvironments;
+    private readonly Git.IGitClient _gitClient = gitClient;
+    private readonly Platform.IPathBudget _pathBudget = pathBudget;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IFilePermissions _filePermissions = filePermissions;
     private readonly IHostPlatform _platform = platform;
@@ -182,10 +192,10 @@ public sealed class LegRunService(
         // goes where a sync puts its tree whatever this command starts, so a run on what is already
         // staged finds it there.
         var report = await _legsService
-            .CheckAsync(request.Directory, request.LegNames, request.Workload, request.Here, cancellationToken)
+            .CheckAsync(request.Directory, request.LegNames, request.Workload, request.Here, request.LocalTrees, cancellationToken)
             .ConfigureAwait(false);
 
-        var placed = LegRunPlan.From(context, report, _platform, out var skipped);
+        var placed = LegRunPlan.From(context, report, _platform, _pathBudget, out var skipped);
         var factor = context.Config.Defaults.DurationWarningFactor;
 
         if (placed.Count == 0)
@@ -224,6 +234,26 @@ public sealed class LegRunService(
                 factor,
                 [$"logs: {runDirectory}"],
                 runDirectory);
+        }
+
+        // Before any copy is made: a tree whose .legs git does not ignore would have every copy a run made there committed
+        // by git add -A, so the run is refused naming init, with nothing made - as a sweep is for the workers it makes
+        // (SlotIgnored). Not asked on what is already staged, which makes nothing.
+        if (!request.UseStaged)
+        {
+            foreach (var tree in placed.Where(leg => leg.LocalCopy).GroupBy(leg => leg.TreeRoot, _platform.PathComparer()))
+            {
+                if (await SlotIgnored.RefusalAsync(
+                        _gitClient,
+                        tree.Key,
+                        $"{HarnessLayout.LegsDirectoryName}/{tree.First().Variant.CopyKey}",
+                        $"the copies of '{tree.Key}' its legs work in",
+                        cancellationToken)
+                    .ConfigureAwait(false) is { } unignored)
+                {
+                    throw new HarnessException(HarnessExit.Refused, $"{unignored} Nothing was run.");
+                }
+            }
         }
 
         // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
@@ -401,9 +431,10 @@ public sealed class LegRunService(
             // being unavailable. A file that moved since the run began raises as inputs-moved, the
             // verdict of this copy's legs alone, and nothing of them runs.
             // Marked with this run as the copy is finished, so each leg that takes it afterwards finds whether it still
-            // holds this run's reading.
+            // holds this run's reading. A leg's own copy on this machine is never taken over: a directory this tool did
+            // not make at its path is refused naming what a person can do, not --adopt.
             await _syncService
-                .SyncAsync(source, _transportFactory.For(leg.Host), leg.HostTreeRoot, new SyncOptions { Run = runId }, cancellationToken)
+                .SyncAsync(source, _transportFactory.For(leg.Host), leg.HostTreeRoot, new SyncOptions { Run = runId, Adoptable = !leg.LocalCopy }, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -862,17 +893,40 @@ public sealed class LegRunService(
             Floor = FloorOf(context, leg, request),
             Beside = Beside(await _trees.HereAsync(context, request.Here, cancellationToken).ConfigureAwait(false), leg),
         };
+
+        // A leg that works in a copy of its tree runs by the configuration and the actions of the reading: a context made
+        // for the copy, whose tree is the copy and whose machine state - values, secrets, the lock - stays where this
+        // machine keeps it. Records stay in the run's own directory, as they do for a host's leg.
+        HarnessContext runsIn = context;
+        var runsAs = working;
+
+        if (working.LocalCopy)
+        {
+            runsIn = _contextLoader.ForCopy(context, working.HostTreeRoot);
+        }
+
         var entry = await work(
-                new LegWork(working, context, runId, runDirectory, request.Time)
+                new LegWork(runsAs, runsIn, runId, runDirectory, request.Time)
                 {
-                    AdmitUnit = (unit, token) => AskAsync(context, working, request, runId, ledger, $"{working.Name}/{unit.Unit}", unit.Room, unit.Settle, token),
-                    Progress = message => ledger.Transition(working.Name, message),
+                    AdmitUnit = (unit, token) => AskAsync(context, runsAs, request, runId, ledger, $"{runsAs.Name}/{unit.Unit}", unit.Room, unit.Settle, token),
+                    Progress = message => ledger.Transition(runsAs.Name, message),
                     DeveloperEnvironment = setUp?.Fact,
                 },
                 cancellationToken)
             .ConfigureAwait(false);
 
-        return setUp is null ? entry : entry with { DeveloperEnvironment = setUp.Fact };
+        entry = setUp is null ? entry : entry with { DeveloperEnvironment = setUp.Fact };
+
+        // The remedy a leg in place that ended inputs-moved is owed: where the command could have run it on a copy, one
+        // name says how. Never for a leg that worked in one, nor under a command that takes no such option, whose reader
+        // the remedy would send nowhere.
+        return entry.Verdict == LegVerdict.InputsMoved && !working.LocalCopy && !working.Dispatched && request.LocalTrees != LocalTrees.InPlace
+            ? entry with
+            {
+                Detail = $"{entry.Detail}; the leg worked in '{working.TreeRoot}' itself - legs.{working.Name}.localCopy, "
+                    + "defaults.localCopy for every leg, or --local-copy for one run, runs it on a copy a later write does not reach",
+            }
+            : entry;
     }
 
     /// <summary>

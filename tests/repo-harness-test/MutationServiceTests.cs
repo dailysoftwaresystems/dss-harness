@@ -1369,6 +1369,56 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A sweep reads what the leg's own build fetched from where the leg's configuration places that build - the copy of
+    /// its tree in the tree's .legs where its key says one, never the tree's own - and makes no copy of its own: its
+    /// workers are already copies of one reading, kept in the tree itself.
+    /// </summary>
+    [Fact]
+    public void ASweepOfALegThatWorksInACopy_ReadsWhatTheCopysBuildFetched_AndMakesNoCopyOfItsOwn()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+
+        config.Legs["native"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Toolchain = "gcc", Project = "app", LocalCopy = true };
+
+        var (service, context) = Prepare(temp, config, harness: harness);
+
+        var leg = config.Legs["native"];
+        var variant = VariantKey.For(config, leg, "linux");
+        var copy = LegCopies.PathOf(temp.Path, variant);
+        var source = Directory.CreateDirectory(temp.Combine("vendor", "plumb")).FullName;
+
+        File.WriteAllText(Path.Combine(source, "CMakeLists.txt"), "add_library(plumb INTERFACE)\n");
+
+        var build = variant.DirectoryUnder(copy);
+
+        Directory.CreateDirectory(build);
+        File.WriteAllText(Path.Combine(build, "CMakeCache.txt"), $"FETCHCONTENT_SOURCE_DIR_PLUMB:PATH={source.Replace('\\', '/')}\n");
+
+        var placed = new PlacedLeg(
+            "native",
+            leg,
+            new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" },
+            config.Projects[0],
+            variant,
+            temp.Path,
+            temp.Path,
+            variant.DirectoryOn(HostId.Local, temp.Path),
+            config.Hosts.SettingsFor(HostId.Local),
+            Emulated: false);
+
+        var subject = service.Subject(new LegWork(placed, context, RunId.New(), temp.Path, Time: false), MutationService.SelfTestArms(null), force: false, new RepositoryTreesFound([]));
+
+        Assert.Equal([new FetchedSource("PLUMB", source.Replace('\\', '/'))], subject.Fetched.Found);
+        Assert.Equal(temp.Path, subject.TreeRoot);
+        Assert.Equal(MutationWorkers.Of(temp.Path, variant).Root, subject.Workers.Root);
+
+        // Only what the test made is in the tree's .legs: a sweep made no copy of its own.
+        Assert.Equal([copy], Directory.GetDirectories(Path.Combine(temp.Path, HarnessLayout.LegsDirectoryName)));
+    }
+
+    /// <summary>
     /// A configuration a sweep can read: one CMake project, a gcc toolchain with the Ninja generator, one leg on Linux,
     /// and the registry and its texts where <paramref name="settings"/> says, by default with report arguments.
     /// </summary>
@@ -1459,6 +1509,8 @@ public sealed class MutationServiceTests
             trees ?? new KnownTrees(),
             new KeepAwake(new HeldProcesses(), harness.Output),
             new DeveloperEnvironmentProvider(harness.Platform, processes, harness.FileSystem, harness.Output),
+            harness.GitClient,
+            harness.PathBudget,
             harness.FileSystem,
             harness.FilePermissions,
             harness.Platform,
@@ -1480,6 +1532,7 @@ public sealed class MutationServiceTests
             harness.Identity,
             harness.Platform,
             TimeProvider.System,
+            harness.Platform,
             harness.Output);
     }
 

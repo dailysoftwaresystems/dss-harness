@@ -30,6 +30,13 @@ public sealed record SyncOptions(bool DryRun = false, IReadOnlyList<string>? Ado
     public RunId? Run { get; init; }
 
     /// <summary>
+    /// Whether a directory at the copy's path that this tool did not make can be taken over: a host's copy can, with
+    /// <c>--adopt</c>; a leg's own, kept on this machine, cannot - no command that reaches one takes an adopt list for
+    /// it - and its refusal names what a person can do instead.
+    /// </summary>
+    public bool Adoptable { get; init; } = true;
+
+    /// <summary>
     /// The run whose artifacts to carry to each host instead of syncing the tree, or
     /// <see langword="null"/> for an ordinary sync.
     /// </summary>
@@ -498,8 +505,9 @@ public sealed class SyncService(
 
         // A copy starts no program on a host, so a host is given one whatever it has installed: a host
         // without cmake is still where a runner that builds nothing runs, and where its artifacts go.
+        // A sync reaches hosts only: this run's own legs work where they always do.
         var report = await _legsService
-            .CheckAsync(directory, legNames, Legs.LegWorkload.Copy, here: null, cancellationToken)
+            .CheckAsync(directory, legNames, Legs.LegWorkload.Copy, here: null, local: Legs.LocalTrees.InPlace, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         var hosts = report.Placements
@@ -848,7 +856,7 @@ public sealed class SyncService(
 
         if (!mine && !adopting && !options.DryRun)
         {
-            throw new HarnessException(HarnessExit.Refused, Unclaimed(transport, destinationRoot, plan, state, destination.Links, source.History));
+            throw new HarnessException(HarnessExit.Refused, Unclaimed(transport, destinationRoot, plan, state, destination.Links, source.History, options));
         }
 
         // Before a file is written or deleted there: a repository naming its objects another way can hold no commit of
@@ -915,7 +923,7 @@ public sealed class SyncService(
             {
                 _output.Info(
                     CommandName,
-                    Unclaimed(transport, destinationRoot, plan, state, destination.Links, source.History));
+                    Unclaimed(transport, destinationRoot, plan, state, destination.Links, source.History, options));
             }
 
             // What it would do to the copy's repository, as its plan says what it would do to the files.
@@ -937,7 +945,7 @@ public sealed class SyncService(
                 plan,
                 Verified: false,
                 created,
-                RequiresAdoption: !mine && !adopting)
+                RequiresAdoption: !mine && !adopting && options.Adoptable)
             {
                 OverTheBound = overTheBound,
             };
@@ -1859,7 +1867,8 @@ public sealed class SyncService(
         SyncPlan plan,
         CopyState state,
         IReadOnlyList<string> links,
-        Git.GitHistoryWanted? history)
+        Git.GitHistoryWanted? history,
+        SyncOptions options)
     {
         // An interrupted takeover is worse than an untouched directory, and the difference has to be
         // said: the list below is built from what is there now, and what an earlier run already
@@ -1891,11 +1900,29 @@ public sealed class SyncService(
             + "named here. Name anything that should stay in sync.neverTransfer first.";
 
         // Which verb is true depends on whether a takeover was ever begun, exactly as the opening
-        // does. Told that finishing is all that is left, somebody looking at a checkout nothing has
+        // does. Told that finishing is all that is left, somebody looking for a checkout nothing has
         // touched goes hunting for the run that started on it.
         var (verb, cost) = state == CopyState.Interrupted
             ? ("Finishing it", "would remove nothing further")
             : ("Taking it over", "would remove nothing that is there");
+
+        // A copy that cannot be adopted - a leg's own, on this machine - says what a person can do instead: for one of
+        // those, the way to run without it.
+        if (!options.Adoptable)
+        {
+            var remedy = "It is a directory on this machine: move it away, or run the leg with --in-place. Nothing was changed.";
+
+            return plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0
+                ? $"{opening} {remedy}"
+                : $"{opening} {remedy} It holds:\n  "
+                    + string.Join("\n  ", plan.DescribeLoss(links: links));
+        }
+
+        if (plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0)
+        {
+            return $"{opening} {verb} is {take}, and {cost}. "
+                + $"{configuration} Nothing has been changed by this run.";
+        }
 
         if (plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0)
         {

@@ -60,7 +60,8 @@ public sealed class HarnessFactory
             Output,
             new SyncedCopyToolCheck(PublishedVersions, RunningTool, CommandOrigin.Typed, Output));
         LocalTransport = Local(FileSystem);
-        WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport);
+        RunLock = new RunLock(FileSystem, Output, Identity);
+        WorktreeService = new WorktreeService(ContextLoader, GitClient, FileSystem, PathBudget, Platform, Output, HostCopies, LocalTransport, RunLock);
 
         AnchorRegistryLocator = new AnchorRegistryLocator(GitClient);
         AnchorRegistryLock = new NamedMutexAnchorRegistryLock(Platform, NamedMutexAnchorRegistryLock.DefaultTimeout);
@@ -88,7 +89,6 @@ public sealed class HarnessFactory
             new ManagedIgnoreCheck(GitClient, FileSystem, Platform, Output),
             Platform);
 
-        RunLock = new RunLock(FileSystem, Output, Identity);
         OrchestrationStore = new OrchestrationStore(FileSystem);
         OrchestrationLog = new OrchestrationLog(FileSystem, TimeProvider.System);
         Transcripts = TranscriptsOver(FileSystem);
@@ -114,7 +114,7 @@ public sealed class HarnessFactory
             Platform,
             Output,
             FilePermissions,
-            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, HostCopies, Local(fileSystem)),
+            new WorktreeService(ContextLoader, gitClient ?? GitClient, fileSystem, PathBudget, Platform, Output, HostCopies, Local(fileSystem), new RunLock(fileSystem, Output, Identity)),
             new RunLock(fileSystem, Output, Identity),
             AnchorRegistryLocator,
             anchors,

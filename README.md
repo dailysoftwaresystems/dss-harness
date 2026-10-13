@@ -238,6 +238,7 @@ its emulator - and is turned away there when that host lacks a program its comma
 
 ```json
 {
+  "defaults": { "localCopy": true },
   "hosts": {
     "wsl": { "Ubuntu": { "repositoryPath": "~/src/app" } },
     "ssh": { "mac-mini": { "repositoryPath": "~/src/app", "env": { "CCACHE_DIR": "/Users/dev/.cache/app-ccache" } } }
@@ -251,7 +252,7 @@ its emulator - and is turned away there when that host lacks a program its comma
   },
   "legs": {
     "linux-release": { "os": "linux", "processor": "x86_64", "config": "release" },
-    "mac-x64-release": { "os": "macos", "processor": "x86_64", "emulator": "rosetta", "config": "release" }
+    "mac-x64-release": { "os": "macos", "processor": "x86_64", "emulator": "rosetta", "config": "release", "localCopy": false }
   }
 }
 ```
@@ -261,6 +262,14 @@ dssharness legs                                       # every leg: where it runs
 dssharness legs --legs linux-release,mac-x64-release
 dssharness host-exec --ssh mac-mini -- verify-git
 ```
+
+Where this machine runs a leg itself, it works in its tree or in a copy of it kept in the tree's
+`.legs`: said by `--local-copy` or `--in-place` on the command for one run, then by the leg's own
+`localCopy` - `false` on a leg turns a `true` default off for it - then by `defaults.localCopy`,
+and by none of them, its tree. The copy is made from the run's one reading of the tree and kept
+warm between runs, so a fold, a commit or an edit while the leg runs ends nothing of the leg's;
+the first build in one starts cold, files git ignores are not in it, and `clean` removes it
+(`help legs`).
 
 No leg, `host-exec` or sync a host runs for this machine outlives the command that asked for it.
 Stopping that command ends its legs on every host at once; and a command killed where nothing

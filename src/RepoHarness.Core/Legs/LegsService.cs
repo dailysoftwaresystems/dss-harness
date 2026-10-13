@@ -35,6 +35,9 @@ public sealed record LegsReport(IReadOnlyList<LegPlacement> Placements, IReadOnl
     /// </summary>
     public HostId? Here { get; init; }
 
+    /// <summary>Where this run's own legs work, as the command asked: beside <see cref="Here"/>, so placement and room agree.</summary>
+    public LocalTrees LocalTrees { get; init; }
+
     /// <summary>
     /// Whether the check passed. A leg named with <c>--legs</c> that cannot run fails it, because it
     /// was asked for; one that was merely declared does not, because a switched-off machine is normal.
@@ -90,12 +93,14 @@ public sealed class LegsService(
     /// the only candidate for each of them and names the settings they run with; <see langword="null"/>
     /// where this machine places them itself.
     /// </param>
+    /// <param name="local">Where this run's own legs work, as the command asked.</param>
     /// <param name="cancellationToken">Stops the measuring.</param>
     public async Task<LegsReport> CheckAsync(
         string directory,
         IReadOnlyList<string>? legNames,
         LegWorkload workload,
         HostId? here = null,
+        LocalTrees local = LocalTrees.AsConfigured,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
@@ -115,7 +120,7 @@ public sealed class LegsService(
         // A leg the command does not build needs no room, so its build directory is not asked about and it is never
         // turned away for room: clean, above all, is how room is made.
         var trees = await TreesAsync(context, candidates, here, workload, cancellationToken).ConfigureAwait(false);
-        var room = LegRoom.Questions(context, candidates, here, _platform.PathComparison, workload, trees);
+        var room = LegRoom.Questions(context, candidates, here, _platform.PathComparison, workload, trees, local);
 
         // This machine costs nothing to reach, so it is measured first. Other hosts are measured only
         // for the legs it cannot take at all - the wrong machine, or an emulator that does not work
@@ -150,7 +155,8 @@ public sealed class LegsService(
             here,
             _platform.PathComparison,
             workload,
-            trees);
+            trees,
+            local);
 
         foreach (var note in roomUnchecked)
         {
@@ -163,7 +169,7 @@ public sealed class LegsService(
             _output.Warn(CommandName, $"leg '{placement.Leg.Name}' cannot run: {placement.Reason}");
         }
 
-        return new LegsReport(placements, [.. reports.Values], selection.Named) { Here = here };
+        return new LegsReport(placements, [.. reports.Values], selection.Named) { Here = here, LocalTrees = local };
     }
 
     /// <summary>

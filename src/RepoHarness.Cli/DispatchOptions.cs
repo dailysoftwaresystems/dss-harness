@@ -1,5 +1,7 @@
 using System.CommandLine;
 using RepoHarness.Core.Hosts;
+using RepoHarness.Core.Legs;
+using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 
 namespace RepoHarness.Cli;
@@ -39,13 +41,48 @@ internal static class DispatchOptions
     };
 
     /// <summary>
-    /// <c>--use-staged</c>, as each command that runs legs takes it: <paramref name="verb"/> what each host already holds,
-    /// without syncing again. One spelling for every such command, so none can say less than the others about the copy
-    /// it refuses.
+    /// <c>--use-staged</c>, as each command that runs legs takes it: <paramref name="verb"/> what each copy already
+    /// holds, without syncing again. One spelling for every such command, so none can say less than the others about the
+    /// copy it refuses.
     /// </summary>
     /// <param name="verb">What the command does with the copy, as its description starts: <c>Build</c>.</param>
     internal static Option<bool> UseStaged(string verb) => new("--use-staged")
     {
-        Description = $"{verb} what is already staged on each host, without syncing again. Legs on a copy a sync or a takeover began and did not finish, that is not there, or that holds no copy this tool made are inputs-moved.",
+        Description = $"{verb} what is already staged on each copy, without syncing again. Legs on a copy a sync or a takeover began and did not finish, that is not there, or that holds no copy this tool made are inputs-moved.",
     };
+
+    /// <summary>
+    /// <c>--local-copy</c>: every leg this machine runs itself works in a copy of its tree, for this run. One definition
+    /// for the three commands that take it, so none can place a leg differently from the others.
+    /// </summary>
+    internal static Option<bool> LocalCopy { get; } = new("--local-copy")
+    {
+        Description = "Every leg this machine runs itself works in a copy of its tree kept in the tree's .legs, for this run: over the leg's own localCopy and defaults.localCopy.",
+    };
+
+    /// <summary><c>--in-place</c>: every leg this machine runs itself works in its tree, for this run.</summary>
+    internal static Option<bool> InPlace { get; } = new("--in-place")
+    {
+        Description = "Every leg this machine runs itself works in its tree itself, for this run: over the leg's own localCopy and defaults.localCopy.",
+    };
+
+    /// <summary>
+    /// Where this run's own legs work, as the two options say it - or the refusal where they say opposite things, which is
+    /// about the command line alone and costs no configuration read to name.
+    /// </summary>
+    /// <param name="arguments">The command line.</param>
+    /// <exception cref="HarnessException">Both options were given (<see cref="HarnessExit.UsageError"/>).</exception>
+    internal static LocalTrees WhereWorkRuns(System.CommandLine.ParseResult arguments)
+    {
+        var copy = arguments.GetValue(LocalCopy);
+        var inPlace = arguments.GetValue(InPlace);
+
+        return copy && inPlace
+            ? throw new HarnessException(
+                HarnessExit.UsageError,
+                "--local-copy and --in-place say opposite things about where this run's own legs work. Give one.")
+            : copy ? LocalTrees.Copy
+            : inPlace ? LocalTrees.InPlace
+            : LocalTrees.AsConfigured;
+    }
 }

@@ -60,13 +60,15 @@ public static class LegRoom
     /// about, and one it does not build, or builds no tree of its own, has none worth asking about.
     /// </param>
     /// <param name="trees">The trees of the repository each host holds, where they were looked for.</param>
+    /// <param name="local">Where this run's own legs work, as the command asked: the room follows the leg to its copy.</param>
     public static IReadOnlyDictionary<HostId, RoomQuestions> Questions(
         HarnessContext context,
         IEnumerable<(SelectedLeg Leg, IReadOnlyList<HostId> Hosts)> candidates,
         HostId? here,
         StringComparison comparison,
         LegWorkload workload,
-        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees)
+        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees,
+        LocalTrees local = LocalTrees.AsConfigured)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(candidates);
@@ -86,7 +88,7 @@ public static class LegRoom
             {
                 // A host that declares nowhere to keep a copy is refused where the leg is placed on it; asked
                 // nothing here.
-                if (Paths(context, leg.Leg, host, here, comparison, sweeps, trees) is not { } paths)
+                if (Paths(context, leg.Leg, host, here, comparison, sweeps, trees, local) is not { } paths)
                 {
                     continue;
                 }
@@ -122,13 +124,15 @@ public static class LegRoom
     /// sweep, which builds none of the leg's tree, by none, since <see cref="Questions"/> asked no host about any.
     /// </param>
     /// <param name="trees">The trees of the repository each host holds, as <see cref="Questions"/> was given them.</param>
+    /// <param name="local">Where this run's own legs work, as the command asked.</param>
     public static (IReadOnlyList<LegPlacement> Placements, IReadOnlyList<string> Unchecked) Apply(
         HarnessContext context,
         IReadOnlyList<LegPlacement> placements,
         HostId? here,
         StringComparison comparison,
         LegWorkload workload,
-        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees)
+        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees,
+        LocalTrees local = LocalTrees.AsConfigured)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(placements);
@@ -143,7 +147,7 @@ public static class LegRoom
         for (var index = 0; index < placed.Count; index++)
         {
             if (placed[index] is not { Host: { } host } placement
-                || Need(context, placement.Leg, host, here, comparison, workload.On(placement.Leg.Leg.Os).AdmitsEachUnit, trees) is not { } need)
+                || Need(context, placement.Leg, host, here, comparison, workload.On(placement.Leg.Leg.Os).AdmitsEachUnit, trees, local) is not { } need)
             {
                 continue;
             }
@@ -253,9 +257,10 @@ public static class LegRoom
         HostId? here,
         StringComparison comparison,
         bool sweeps,
-        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees)
+        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees,
+        LocalTrees local)
     {
-        if (Paths(context, leg.Leg, host.Host, here, comparison, sweeps, trees) is not { } paths
+        if (Paths(context, leg.Leg, host.Host, here, comparison, sweeps, trees, local) is not { } paths
             || Answered(host, paths.Own) is not { } own
             || Answered(host, paths.Fills) is not { } fills
             || ExpectedBuildBytes(leg.Leg, own.RecordedBytes, paths.Siblings.Select(sibling => (sibling.Tree, Answered(host, sibling.Build)?.RecordedBytes)))
@@ -333,7 +338,9 @@ public static class LegRoom
     /// </summary>
     /// <remarks>
     /// The variant for the leg's own operating system: a host of another is never given the leg, so the variant
-    /// it would have there is never built.
+    /// it would have there is never built. Where the leg works in a copy of its tree, as its configuration or the
+    /// command places it, the paths are the copy's, as <see cref="LegTrees.For"/> resolves them - the same answer
+    /// placement gives, so the room is reckoned for the tree the build is in.
     /// </remarks>
     private static (string Main, string Own, string Fills, IReadOnlyList<(string Tree, string Build)> Siblings)? Paths(
         HarnessContext context,
@@ -342,13 +349,14 @@ public static class LegRoom
         HostId? here,
         StringComparison comparison,
         bool sweeps,
-        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees)
+        IReadOnlyDictionary<HostId, RepositoryTreesFound> trees,
+        LocalTrees local)
     {
         try
         {
             var variant = VariantKey.For(context.Config, leg, leg.Os);
             var main = LegTrees.On(context, host, context.Layout.MainCheckoutRoot, comparison);
-            var own = LegTrees.On(context, host, LegTrees.Here(context, leg, here), comparison);
+            var own = LegTrees.For(context, leg, variant, host, here, comparison, local).Work;
             var built = variant.DirectoryOn(host, own);
 
             // The trees as they were found there: on a host running a leg another machine sent it, the main checkout's copy
