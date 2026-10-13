@@ -278,7 +278,7 @@ public sealed class TestServiceTests
         var request = Request(temp, Child("All 1 tests passed"), excludeArg: "-LE", remoteExcludes: ["git-state"]) with
         {
             Excludes = ["slow"],
-            Remote = remote,
+            InCopy = remote,
         };
 
         var result = await Service(factory).RunAsync(Config(), request, TestContext.Current.CancellationToken);
@@ -300,14 +300,14 @@ public sealed class TestServiceTests
         temp.WriteFile(Fixture, "fixture");
 
         var service = Service(factory);
-        var remote = Request(temp, Child("All 1 tests passed"), excludeArg: "-LE", remoteExcludes: ["git-state", " "]) with { Remote = true };
+        var remote = Request(temp, Child("All 1 tests passed"), excludeArg: "-LE", remoteExcludes: ["git-state", " "]) with { InCopy = true };
 
         var overThem = Assert.Throws<HarnessException>(() => service.Check(Config(), remote with { Excludes = ["slow"] }));
         var overWhatWasAsked = Assert.Throws<HarnessException>(() => service.Check(Config(), remote with { Excludes = [""] }));
 
         Assert.Contains("refused over the test settings' remoteExcludes - git-state,   -", overThem.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("remoteExcludes", overWhatWasAsked.Message, StringComparison.Ordinal);
-        service.Check(Config(), remote with { Excludes = ["slow"], Remote = false });
+        service.Check(Config(), remote with { Excludes = ["slow"], InCopy = false });
     }
 
     /// <summary>
@@ -324,7 +324,7 @@ public sealed class TestServiceTests
         var ctest = new TestInvocation { Runner = "ctest", Args = ["--test-dir", "{buildDir}"], SuccessPattern = "tests passed" };
         var request = Request(temp, ctest, excludeArg: "-LE", labelArg: "-L", remoteExcludes: ["git-state"]) with { Labels = ["git-state"] };
 
-        var refusal = Assert.Throws<HarnessException>(() => service.Check(Config(), request with { Remote = true }));
+        var refusal = Assert.Throws<HarnessException>(() => service.Check(Config(), request with { InCopy = true }));
 
         Assert.Equal(HarnessExit.UsageError, refusal.ExitCode);
         Assert.StartsWith(

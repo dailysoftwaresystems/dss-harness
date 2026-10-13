@@ -821,6 +821,35 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A sweep reads the tree its leg's work happens in, and keeps its workers beside that tree - its own and its
+    /// self-test's alike - never the tree the command reads here, where the two are not one.
+    /// </summary>
+    [Fact]
+    public async Task ASweep_ReadsTheTreeItsLegsWorkHappensIn_AndKeepsItsWorkersBesideThatTree()
+    {
+        using var temp = new TempDirectory();
+        var config = Sweepable();
+        var (service, context) = Prepare(temp, config);
+        var arms = await service.ReadAsync(context, null, TestContext.Current.CancellationToken);
+        var variant = VariantKey.For(config, config.Legs["native"], "linux");
+        var host = new HostReport { Host = HostId.Local, Os = "linux", Processor = "x86_64" };
+        var works = temp.Combine("where", "it", "works");
+        var work = new LegWork(
+            new PlacedLeg("native", config.Legs["native"], host, config.Projects[0], variant, temp.Path, works, variant.DirectoryUnder(works), new LocalHostConfig(), Emulated: false),
+            context,
+            RunId.New(),
+            temp.Combine("runs", "r1"),
+            Time: false);
+
+        var subject = service.Subject(work, arms, force: false, new RepositoryTreesFound([new RepositoryTree(temp.Path, RepositoryTree.MainCheckout)]));
+        var selfTest = MutationService.SelfTestSubject(work, MutationService.SelfTestArms(null), force: false, temp.Combine("data", MutationFixture.DirectoryName));
+
+        Assert.Equal(works, subject.TreeRoot);
+        Assert.Equal(MutationWorkers.Of(works, variant), subject.Workers);
+        Assert.Equal(MutationWorkers.Of(works, variant, selfTest: true), selfTest.Workers);
+    }
+
+    /// <summary>
     /// A sweep of a leg whose own tree never built its variant on this machine counts its workers' builds by the most any
     /// other tree of the repository here recorded of it, naming whose: the main checkout's copy had never built it where a
     /// consumer's leg filled a disk, while three worktrees' copies beside it had.

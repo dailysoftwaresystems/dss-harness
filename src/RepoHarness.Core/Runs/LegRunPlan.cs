@@ -23,9 +23,11 @@ namespace RepoHarness.Core.Runs;
 /// </param>
 /// <param name="HostTreeRoot">
 /// The tree the work happens in, on the machine it happens on: the same as <paramref name="TreeRoot"/>
-/// for a local leg, and the host's own copy for every other. Every path that describes the work
-/// derives from this one, because a path derived from <paramref name="TreeRoot"/> for a remote leg
-/// names a directory on the machine that typed the command rather than on the one being measured.
+/// for a leg this machine runs in its tree, and a copy of that tree for every other - a host's own, or
+/// one kept beside the tree here (<see cref="LocalCopy"/>). Every path that describes the work
+/// derives from this one, because a path derived from <paramref name="TreeRoot"/> for a leg that works
+/// in a copy names a directory the work never touches: on a host, one on the machine that typed the
+/// command rather than on the one being measured.
 /// </param>
 /// <param name="BuildDirectory">Its variant-keyed build directory below <paramref name="HostTreeRoot"/>.</param>
 /// <param name="HostSettings">
@@ -55,8 +57,20 @@ public sealed record PlacedLeg(
     /// </remarks>
     public string TreeKey => CompositeKey.Of(Host.Host.ToString(), HostTreeRoot);
 
-    /// <summary>Whether the leg runs on another machine - a WSL distribution or an ssh host - from its copy of the tree there.</summary>
-    public bool Remote => Host.Host.Kind != HostKind.Local;
+    /// <summary>Whether the leg works in a copy of its tree kept beside the tree on this machine.</summary>
+    public bool LocalCopy { get; init; }
+
+    /// <summary>Whether another machine's process runs the leg's work: a WSL distribution's, or an ssh host's.</summary>
+    public bool Dispatched => Host.Host.Kind != HostKind.Local;
+
+    /// <summary>Whether this machine makes the tree the leg works in, by a sync from the run's reading of <see cref="TreeRoot"/>.</summary>
+    public bool Synced => Dispatched || LocalCopy;
+
+    /// <summary>
+    /// Whether the tree the work happens in is a copy a sync made, whichever machine made it: so also on the host a leg
+    /// was sent to, which is this machine to itself and <see cref="Named"/> as the host it is to the one that sent it.
+    /// </summary>
+    public bool InCopy => Named.Kind != HostKind.Local || LocalCopy;
 
     /// <summary>
     /// The host as the machine that typed the command names it: the one this leg landed on, or, where
@@ -143,7 +157,7 @@ public sealed record PlacedLeg(
 
         return new BuildRequest(
             Name,
-            TreeRoot,
+            HostTreeRoot,
             project,
             Variant,
             Host.Os ?? string.Empty,
@@ -257,7 +271,7 @@ public sealed record PlacedLeg(
 
     /// <summary>What the executor needs to schedule this leg.</summary>
     /// <remarks>
-    /// A local leg carries no tree key, because it needs no sync: the executor announces a transfer
+    /// A leg whose tree no sync makes carries no tree key: the executor announces a transfer
     /// for every leg that has one, and a leg working in the tree the command was typed in would
     /// otherwise report a transfer that never happened.
     /// </remarks>
@@ -265,8 +279,8 @@ public sealed record PlacedLeg(
     {
         Name = Name,
         BuildDirectory = BuildDirectory,
-        TreeKey = Remote ? TreeKey : string.Empty,
-        Tree = Remote ? $"'{HostTreeRoot}' on {Named}" : string.Empty,
+        TreeKey = Synced ? TreeKey : string.Empty,
+        Tree = Synced ? $"'{HostTreeRoot}' on {Named}" : string.Empty,
         Emulated = Emulated,
         MachineKey = Host.Host.MachineKey,
         Host = Named.ToString(),
@@ -411,7 +425,7 @@ public static class LegRunPlan
         var comparer = platform.PathComparer();
 
         var contested = placed
-            .Where(leg => leg.Remote)
+            .Where(leg => leg.Synced)
             .GroupBy(leg => leg.TreeKey, LegPlan.TreeKeyComparer)
             .Where(group => group.Select(leg => leg.TreeRoot).Distinct(comparer).Count() > 1)
             .Select(group =>

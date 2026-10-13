@@ -243,7 +243,7 @@ public sealed class LegRunService(
             // read for carrying then either.
             Func<string, CancellationToken, Task>? syncTree = null;
 
-            if (!request.UseStaged && placed.Any(leg => leg.Remote))
+            if (!request.UseStaged && placed.Any(leg => leg.Synced))
             {
                 var read = sources = await ReadSourcesAsync(placed, commandName, cancellationToken).ConfigureAwait(false);
 
@@ -351,7 +351,7 @@ public sealed class LegRunService(
     {
         var leg = placed.First(candidate => LegPlan.TreeKeyComparer.Equals(candidate.TreeKey, treeKey));
 
-        if (!leg.Remote)
+        if (!leg.Synced)
         {
             return;
         }
@@ -404,7 +404,7 @@ public sealed class LegRunService(
     }
 
     /// <summary>
-    /// Reads, once each, the trees the remote legs among <paramref name="placed"/> are synced from, all of them before
+    /// Reads, once each, the trees the legs among <paramref name="placed"/> that work in a synced copy are synced from, all of them before
     /// any leg's work, so every host's copy of a tree is made from the one reading (see
     /// <see cref="ISyncService.ReadSourceAsync"/>).
     /// </summary>
@@ -421,7 +421,7 @@ public sealed class LegRunService(
     {
         var comparer = _platform.PathComparer();
         var trees = placed
-            .Where(leg => leg.Remote)
+            .Where(leg => leg.Synced)
             .Select(leg => leg.TreeRoot)
             .Distinct(comparer)
             .ToList();
@@ -516,7 +516,7 @@ public sealed class LegRunService(
         // finish holds no tree a run began with, and its legs are inputs-moved, as a copy whose tree moved before it was
         // carried is - before a slot is taken, and nothing of them runs. Read by this machine, which would have synced it,
         // once per copy: a host is never told a run is on what is staged, since the staging is this machine's decision.
-        if (request.UseStaged && leg.Remote && request.Here is null)
+        if (request.UseStaged && leg.Synced && request.Here is null)
         {
             var mark = await stagedMarks
                 .GetOrAdd(leg.TreeKey, _ => new Lazy<Task<CopyMark>>(() => _transportFactory.For(leg.Host).ReadMarkAsync(leg.HostTreeRoot, cancellationToken)))
@@ -714,9 +714,9 @@ public sealed class LegRunService(
             (leg.Named.Kind == HostKind.Wsl ? context.Config.Hosts.Local : leg.HostSettings).Admission,
             context.Config.Defaults.Admission);
 
-    /// <summary>The trees of <paramref name="trees"/> but <paramref name="leg"/>'s own: the repository's other trees here.</summary>
+    /// <summary>The trees of <paramref name="trees"/> but the one <paramref name="leg"/> works in: the repository's other trees here.</summary>
     private RepositoryTreesFound Beside(RepositoryTreesFound trees, PlacedLeg leg)
-        => trees with { Trees = [.. trees.Trees.Where(tree => !PathContainment.AreSame(tree.Root, leg.TreeRoot, _platform.PathComparison))] };
+        => trees with { Trees = [.. trees.Trees.Where(tree => !PathContainment.AreSame(tree.Root, leg.HostTreeRoot, _platform.PathComparison))] };
 
     /// <summary>
     /// <paramref name="leg"/>'s line, reaching <paramref name="verdict"/> for <paramref name="detail"/> before its own work
@@ -742,13 +742,13 @@ public sealed class LegRunService(
         // would produce a verdict about the machine that typed the command, under the name of
         // the leg that was supposed to check a different one — which is the whole failure a
         // harness exists to prevent, wearing a green colour.
-        if (leg.Remote && request.Here is null)
+        if (leg.Dispatched && request.Here is null)
         {
             var ended = await _remoteLegs
                 .RunAsync(
                     commandName,
                     leg,
-                    request.RemoteArguments ?? [],
+                    [.. request.RemoteArguments ?? []],
                     runId,
                     cancellationToken)
                 .ConfigureAwait(false);

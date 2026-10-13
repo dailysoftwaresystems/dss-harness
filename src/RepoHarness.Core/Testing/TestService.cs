@@ -93,16 +93,17 @@ public sealed record TestRequest
 
     /// <summary>
     /// Exclusions the caller asked for, passed through the invocation's <c>excludeArg</c>: beside the
-    /// invocation's <c>remoteExcludes</c> on a leg in a host's copy - see <see cref="Remote"/> - because
+    /// invocation's <c>remoteExcludes</c> on a leg in a copy - see <see cref="InCopy"/> - because
     /// a leg reached through a transport legitimately runs a narrower suite than one running here.
     /// </summary>
     public IReadOnlyList<string> Excludes { get; init; } = [];
 
     /// <summary>
-    /// Whether the leg runs on a host reached through a transport - a WSL distribution or an ssh host -
-    /// in that host's copy of the repository, where the invocation's <c>remoteExcludes</c> are left out too.
+    /// Whether the tree the leg's tests run in is a copy a sync made (<see cref="Runs.PlacedLeg.InCopy"/>) - the copy
+    /// of the repository a WSL distribution or an ssh host keeps - where the invocation's <c>remoteExcludes</c> are
+    /// left out too: what they leave out is what reads the copy's own git state, which is not the tree's.
     /// </summary>
-    public bool Remote { get; init; }
+    public bool InCopy { get; init; }
 
     /// <summary>Labels the tests to run must carry, as the caller asked for them, passed through the invocation's <c>labelArg</c>.</summary>
     public IReadOnlyList<string> Labels { get; init; } = [];
@@ -426,7 +427,7 @@ public sealed class TestService(
             ProductProblem = request.ProductProblem,
             Compilers = built ? request.Compilers : CMakeToolchainReader.BeforeTheBuild(request.Project),
         };
-        IReadOnlyList<string> remote = request.Remote ? invocation.RemoteExcludes ?? [] : [];
+        IReadOnlyList<string> remote = request.InCopy ? invocation.RemoteExcludes ?? [] : [];
 
         TestCommand Given(IReadOnlyList<string> excludes)
             => TestInvocationResolver.CommandFor(invocation, cores.Value, request.Filter, excludes, paths, request.Labels, _fileSystem);

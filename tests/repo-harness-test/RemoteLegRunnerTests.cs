@@ -33,7 +33,7 @@ public sealed class RemoteLegRunnerTests
             "test",
             Leg(),
             ["--filter", "auth"],
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var request = Request(sent);
 
@@ -86,7 +86,7 @@ public sealed class RemoteLegRunnerTests
         var error = new StringWriter();
         var output = new ConsoleHarnessOutput(new StringWriter(), error, verbose);
 
-        await new RemoteLegRunner(hosts, output).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
+        await new RemoteLegRunner(hosts, output).RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(
             verbose
@@ -95,6 +95,35 @@ public sealed class RemoteLegRunnerTests
             Request(sent).Arguments);
         Assert.Equal(verbose, sent!.Arguments.Contains(HostAgentProtocol.VerboseOption));
         Assert.Equal(verbose, error.ToString().Contains("test: step 'compile': cc -c a.c", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// What a leg is given of its own follows the command's options, and an argument that carries bytes is sent as one,
+    /// which the host's command reads as their base64 text, as it reads every argument as text.
+    /// </summary>
+    [Fact]
+    public async Task ALegsOwnArguments_FollowTheCommands_AndOneCarryingBytesIsReadAsItsBase64Text()
+    {
+        HostCommand? sent = null;
+        byte[] carried = [0, 1, 2, 250, 251, 252, 253, 254, 255];
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            sent = command;
+            Answer(command, Ledger("passed", "412 tests", 2.5, 2.1, 412));
+
+            return HostResults.Finished(command, 0);
+        });
+
+        await Runner(hosts).RunAsync(
+            "test",
+            Leg(),
+            ["--filter", "auth", "--held", HostArgument.Carrying(carried)],
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["test", "--legs", "wsl-debug", "--json", RemoteLegRunner.HereOption, "wsl Example-Linux", "--filter", "auth", "--held", Convert.ToBase64String(carried)],
+            Request(sent).Arguments.Select(argument => argument.Text));
     }
 
     /// <summary>
@@ -116,7 +145,7 @@ public sealed class RemoteLegRunnerTests
         });
 
         await Runner(hosts).RunAsync("build", Leg(), [], run, TestContext.Current.CancellationToken);
-        await Runner(hosts).RunAsync("clean", Leg(), [], TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("clean", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal([run.Value, null], sent.Select(command => Request(command).RunId));
         Assert.DoesNotContain(run.Value, Request(sent[0]).Arguments);
@@ -150,9 +179,9 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        await Runner(hosts).RunAsync("build", wsl with { Host = wsl.Host with { DiskImageSpace = drive } }, [], TestContext.Current.CancellationToken);
-        await Runner(hosts).RunAsync("build", ssh, [], TestContext.Current.CancellationToken);
-        await Runner(hosts).RunAsync("build", wsl, [], TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", wsl with { Host = wsl.Host with { DiskImageSpace = drive } }, [], cancellationToken: TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", ssh, [], cancellationToken: TestContext.Current.CancellationToken);
+        await Runner(hosts).RunAsync("build", wsl, [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(["C:\\", null, null], sent.Select(command => Request(command).DiskImageDrive));
         Assert.DoesNotContain("C:\\", Request(sent[0]).Arguments);
@@ -182,7 +211,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        var entry = await Runner(hosts).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(runDirectory, entry.RunDirectory);
     }
@@ -210,7 +239,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        var entry = await Runner(hosts).RunAsync("run", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("run", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(skipped, entry.SkippedSteps);
     }
@@ -233,7 +262,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        var entry = await Runner(hosts).RunAsync("run", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("run", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(["prepare", "bench"], entry.RanSteps);
         Assert.Equal(["bench"], entry.ManualSteps);
@@ -260,7 +289,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        var entry = await Runner(hosts).RunAsync("run", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("run", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal([Kept], entry.KeptOutputs);
     }
@@ -320,7 +349,7 @@ public sealed class RemoteLegRunnerTests
         };
         var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
 
-        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, leg, [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, leg, [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(["charge-bound", "floor"], entry.Arms.Select(arm => arm.Arm));
 
@@ -361,7 +390,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        var entry = await Runner(hosts).RunAsync("build", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(tail, entry.LogTail);
     }
@@ -398,7 +427,7 @@ public sealed class RemoteLegRunnerTests
         };
         var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
 
-        var entry = await Runner(hosts).RunAsync("build", leg, [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("build", leg, [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(detail, entry.Detail);
         Assert.Equal(["connect mac.invalid: refused"], entry.LogTail);
@@ -423,7 +452,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, 0);
         });
 
-        var entry = await Runner(hosts).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2238, entry.TestCount);
         Assert.Equal("app", entry.Project);
@@ -451,7 +480,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.CommandFailed);
         });
 
-        var entry = await Runner(hosts).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(gnu, entry.Compilers);
 
@@ -481,7 +510,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.Success);
         });
 
-        var entry = await Runner(hosts).RunAsync("build", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(visualStudio, entry.DeveloperEnvironment);
 
@@ -516,7 +545,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, LegExit.NotAdmitted);
         });
 
-        var entry = await Runner(hosts).RunAsync("build", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(LegVerdict.NotAdmitted, entry.Verdict);
         Assert.Equal("wsl Example-Linux: not admitted after 1h00m waiting for one of this machine's 1 heavy-leg slot(s)", entry.Detail);
@@ -544,7 +573,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.CommandFailed);
         });
 
-        var entry = await Runner(hosts, harness).RunAsync("build", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts, harness).RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal((LegVerdict.Failed, "build exited 1"), (entry.Verdict, entry.Detail));
         Assert.Contains("build: wsl-debug: build: cmake --build", harness.StandardError.ToString(), StringComparison.Ordinal);
@@ -570,7 +599,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.Success);
         });
 
-        var entry = await Runner(hosts, harness).RunAsync("build", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts, harness).RunAsync("build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(LegVerdict.Passed, entry.Verdict);
         Assert.Contains(inner + Environment.NewLine + "the step's output goes on", harness.StandardError.ToString(), StringComparison.Ordinal);
@@ -589,7 +618,7 @@ public sealed class RemoteLegRunnerTests
         });
 
         var entry = await Runner(hosts).RunAsync(
-            "test", Leg(), [], TestContext.Current.CancellationToken);
+            "test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(LegVerdict.InputsMoved, entry.Verdict);
         Assert.Equal("2 inputs changed", entry.Detail);
@@ -603,7 +632,7 @@ public sealed class RemoteLegRunnerTests
         var hosts = new ScriptedHostCommands((_, _) => HostResults.Failed(255, "ssh: connection closed"));
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "test", Leg(), [], TestContext.Current.CancellationToken));
+            "test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.HostUnavailable, failure.ExitCode);
         Assert.Contains("never reported how it finished", failure.Message, StringComparison.Ordinal);
@@ -624,7 +653,7 @@ public sealed class RemoteLegRunnerTests
         };
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "test", leg, [], TestContext.Current.CancellationToken));
+            "test", leg, [], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.HostUnavailable, failure.ExitCode);
         Assert.Equal("ssh mac: the host could not be reached: ssh said ssh: Could not resolve hostname mac.local: No such host is known.", failure.Message);
@@ -636,7 +665,7 @@ public sealed class RemoteLegRunnerTests
         var hosts = new ScriptedHostCommands((_, command) => HostResults.Finished(command, 0));
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "build", Leg(), [], TestContext.Current.CancellationToken));
+            "build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.HostUnavailable, failure.ExitCode);
         Assert.Contains("without a ledger entry", failure.Message, StringComparison.Ordinal);
@@ -651,7 +680,7 @@ public sealed class RemoteLegRunnerTests
         var hosts = new ScriptedHostCommands((_, command) => HostResults.Finished(command, 11));
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "build", Leg(), [], TestContext.Current.CancellationToken));
+            "build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("exited 11", failure.Message, StringComparison.Ordinal);
     }
@@ -675,7 +704,7 @@ public sealed class RemoteLegRunnerTests
         });
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "run", Leg(), ["corpus"], TestContext.Current.CancellationToken));
+            "run", Leg(), ["corpus"], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(code, refusal.ExitCode);
         Assert.Equal(
@@ -689,7 +718,7 @@ public sealed class RemoteLegRunnerTests
         var hosts = new ScriptedHostCommands((_, command) => HostResults.Finished(command, HarnessExit.Refused));
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "run", Leg(), [], TestContext.Current.CancellationToken));
+            "run", Leg(), [], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
         Assert.EndsWith($"it exited {HarnessExit.Refused} and said nothing more", refusal.Message, StringComparison.Ordinal);
@@ -737,7 +766,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, code);
         });
 
-        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal((LegVerdict.Stopped, "2 arm(s): 1 passed, 1 stopped"), (entry.Verdict, entry.Detail));
         Assert.Equal([("charge-bound", LegVerdict.Passed), ("floor", LegVerdict.Stopped)], entry.Arms.Select(arm => (arm.Arm, arm.Verdict)));
@@ -767,7 +796,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, code);
         });
 
-        var entry = await Runner(hosts).RunAsync(CleanService.CommandName, Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync(CleanService.CommandName, Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HarnessExit.Refused, code);
         Assert.Equal((LegVerdict.RefusedLocked, "wsl Example-Linux: " + Why), (entry.Verdict, entry.Detail));
@@ -789,7 +818,7 @@ public sealed class RemoteLegRunnerTests
         });
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "build", Leg(), [], TestContext.Current.CancellationToken));
+            "build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.HostUnavailable, failure.ExitCode);
         Assert.EndsWith("exited 1 without a ledger entry for it, saying: no selected leg can run", failure.Message, StringComparison.Ordinal);
@@ -818,7 +847,7 @@ public sealed class RemoteLegRunnerTests
 
         var harness = new HarnessFactory();
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts, harness).RunAsync(
-            "run", Leg(), ["corpus"], TestContext.Current.CancellationToken));
+            "run", Leg(), ["corpus"], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(
             "wsl Example-Linux refused 'run' for leg 'wsl-debug': 'actions/corpus/corpus.yml' names 2 program(s) that may not run:"
@@ -856,7 +885,7 @@ public sealed class RemoteLegRunnerTests
         });
 
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts, harness).RunAsync(
-            "run", Leg(), ["corpus"], TestContext.Current.CancellationToken));
+            "run", Leg(), ["corpus"], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.EndsWith($"it exited {HarnessExit.Refused} and said nothing more", refusal.Message, StringComparison.Ordinal);
         Assert.Contains(
@@ -887,7 +916,7 @@ public sealed class RemoteLegRunnerTests
 
         var harness = new HarnessFactory();
         var refusal = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts, harness).RunAsync(
-            "run", Leg(), ["corpus"], TestContext.Current.CancellationToken));
+            "run", Leg(), ["corpus"], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(
             "wsl Example-Linux refused 'run' for leg 'wsl-debug': git does not ignore this action's 'artifacts/'. Nothing has run.",
@@ -916,7 +945,7 @@ public sealed class RemoteLegRunnerTests
         });
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "build", Leg(), [], TestContext.Current.CancellationToken));
+            "build", Leg(), [], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.EndsWith("saying: the directory '/home/dev/repo' does not exist", failure.Message, StringComparison.Ordinal);
     }
@@ -935,7 +964,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.Incomplete);
         });
 
-        var entry = await Runner(hosts).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
+        var entry = await Runner(hosts).RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(LegVerdict.SkippedToolMissing, entry.Verdict);
         Assert.Equal("wsl Example-Linux: 'cmake' is not installed there", entry.Detail);
@@ -948,7 +977,7 @@ public sealed class RemoteLegRunnerTests
             return HostResults.Finished(command, HarnessExit.Incomplete);
         });
 
-        var unexplained = await Runner(silent).RunAsync("test", Leg(), [], TestContext.Current.CancellationToken);
+        var unexplained = await Runner(silent).RunAsync("test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(string.Empty, unexplained.Detail);
     }
@@ -967,7 +996,7 @@ public sealed class RemoteLegRunnerTests
         });
 
         var entry = await Runner(hosts).RunAsync(
-            "test", Leg(), [], TestContext.Current.CancellationToken);
+            "test", Leg(), [], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(LegVerdict.Failed, entry.Verdict);
         Assert.Contains("expected '}'", entry.Detail, StringComparison.Ordinal);
@@ -985,7 +1014,7 @@ public sealed class RemoteLegRunnerTests
         };
 
         var failure = await Assert.ThrowsAsync<HarnessException>(() => Runner(hosts).RunAsync(
-            "test", unreachable, [], TestContext.Current.CancellationToken));
+            "test", unreachable, [], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HarnessExit.HostUnavailable, failure.ExitCode);
         Assert.Contains("it did not answer", failure.Message, StringComparison.Ordinal);

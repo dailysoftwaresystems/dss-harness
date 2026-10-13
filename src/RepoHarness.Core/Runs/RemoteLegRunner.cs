@@ -53,10 +53,21 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     private readonly IHostCommandRunner _hostCommands = hostCommands;
     private readonly IHarnessOutput _output = output;
 
-    /// <summary>Runs <paramref name="commandName"/> for one leg on its host, and returns its entry.</summary>
+    /// <summary>
+    /// Runs <paramref name="commandName"/> for one leg on its host, and returns its entry. A leg of <paramref name="run"/>
+    /// asking the host's heavy-leg slots there is recorded under that run, so the legs of one command wait for each
+    /// other's slots without that wait counting.
+    /// </summary>
     /// <param name="commandName">The command to run there, which is the one running here.</param>
-    /// <param name="leg">The placed leg: its host, and the host's copy of its tree, which sync made, that it runs in.</param>
-    /// <param name="arguments">The command's own options, without <c>--legs</c>, <c>--json</c>, <c>--here</c> or <c>--verbose</c>, which this adds.</param>
+    /// <param name="leg">
+    /// The placed leg, whose work another machine's process runs (<see cref="PlacedLeg.Dispatched"/>): its host, and the
+    /// host's copy of its tree, which sync made, that it runs in.
+    /// </param>
+    /// <param name="arguments">
+    /// The command's own options, then the leg's own - each text, or bytes that cross as their base64 text. Never
+    /// <c>--legs</c>, <c>--json</c>, <c>--here</c> or <c>--verbose</c>, which this adds.
+    /// </param>
+    /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
     /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
     /// <exception cref="HarnessException">
     /// The host could not be reached - its transport would not start - or never reported how the
@@ -66,29 +77,11 @@ public sealed class RemoteLegRunner(IHostCommandRunner hostCommands, IHarnessOut
     /// leg's line is carried on it (<see cref="LegEntry.EndsTheRun"/>), and ends the run once the
     /// line is recorded.
     /// </exception>
-    public Task<LegEntry> RunAsync(
-        string commandName,
-        PlacedLeg leg,
-        IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken = default)
-        => RunAsync(commandName, leg, arguments, run: null, cancellationToken);
-
-    /// <summary>
-    /// Runs <paramref name="commandName"/> for one leg of <paramref name="run"/> on its host, and returns its entry: a leg
-    /// there asking the host's heavy-leg slots is recorded under <paramref name="run"/>, so the legs of one command wait
-    /// for each other's slots without that wait counting.
-    /// </summary>
-    /// <param name="commandName">The command to run there, which is the one running here.</param>
-    /// <param name="leg">The placed leg: its host, and the host's copy of its tree, which sync made, that it runs in.</param>
-    /// <param name="arguments">The command's own options, without <c>--legs</c>, <c>--json</c>, <c>--here</c> or <c>--verbose</c>, which this adds.</param>
-    /// <param name="run">The run the leg is part of; <see langword="null"/> for a command that runs no leg of a run.</param>
-    /// <param name="cancellationToken">Stops the command on the host as well as here.</param>
-    /// <exception cref="HarnessException">As <see cref="RunAsync(string, PlacedLeg, IReadOnlyList{string}, CancellationToken)"/> raises.</exception>
     public async Task<LegEntry> RunAsync(
         string commandName,
         PlacedLeg leg,
-        IReadOnlyList<string> arguments,
-        RunId? run,
+        IReadOnlyList<HostArgument> arguments,
+        RunId? run = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandName);

@@ -360,7 +360,7 @@ internal static class RunCommand
         // one naming {buildDir} cannot come from two different tree roots. They do differ: a leg
         // placed on another machine re-invokes this there, where its own tree is the one that
         // resolves.
-        var buildDirectory = leg.Variant.DirectoryUnder(leg.TreeRoot);
+        var buildDirectory = leg.Variant.DirectoryUnder(leg.HostTreeRoot);
         var (product, productProblem) = leg.ProductFor(buildDirectory);
 
         return new RunnerRunRequest
@@ -377,8 +377,8 @@ internal static class RunCommand
             // A new segment each attempt, so resuming a run cannot record its work into the
             // attempt it is resuming.
             SegmentId = Guid.NewGuid().ToString("N")[..8],
-            TreeRoot = leg.TreeRoot,
-            WorkingDirectory = leg.TreeRoot,
+            TreeRoot = leg.HostTreeRoot,
+            WorkingDirectory = leg.HostTreeRoot,
             BuildDirectory = buildDirectory,
             Beside = leg.Beside,
             Built = built,

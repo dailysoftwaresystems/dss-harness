@@ -165,7 +165,7 @@ public sealed class CleanService(
         // The lock a build of this leg takes, so a build holding it is seen, and a build about to take it is kept out.
         var building = leg.BuildLock(RunId.New(), CommandName);
 
-        if (!leg.Remote)
+        if (!leg.Dispatched)
         {
             // The workers first, so the room the build directory's removal measures is the room once both are gone.
             var workers = await CleanWorkersAsync(context, leg, request.DryRun, cancellationToken).ConfigureAwait(false);
@@ -199,7 +199,7 @@ public sealed class CleanService(
         }
 
         return await _remoteLegs
-            .RunAsync(CommandName, leg, request.DryRun ? [DryRunOption] : [], cancellationToken)
+            .RunAsync(CommandName, leg, request.DryRun ? [DryRunOption] : [], cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }
 

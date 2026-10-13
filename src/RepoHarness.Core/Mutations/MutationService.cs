@@ -262,8 +262,8 @@ public sealed class MutationService(
 
         return new MutationSubject
         {
-            TreeRoot = leg.TreeRoot,
-            Workers = MutationWorkers.Of(leg.TreeRoot, leg.Variant),
+            TreeRoot = leg.HostTreeRoot,
+            Workers = MutationWorkers.Of(leg.HostTreeRoot, leg.Variant),
             Project = project,
             Fetched = FetchedSources.Of(_buildDirectoryGuard.Read(leg.BuildDirectory), _fileSystem),
             Tests = TestInvocationResolver.SettingsFor(work.Context.Config, leg.Leg, project),
@@ -327,7 +327,7 @@ public sealed class MutationService(
         return new MutationSubject
         {
             TreeRoot = directory,
-            Workers = MutationWorkers.Of(work.Leg.TreeRoot, work.Leg.Variant, selfTest: true),
+            Workers = MutationWorkers.Of(work.Leg.HostTreeRoot, work.Leg.Variant, selfTest: true),
             Project = MutationFixture.Project,
             Arms = ArmSelection.For(work.Leg.Name, arms.Registry, arms.Selected, arms.Scopes),
             Settings = MutationFixture.SettingsFor(work.Context.Config.Mutations),

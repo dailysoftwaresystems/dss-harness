@@ -148,7 +148,7 @@ internal static class TestCommand
         {
             Leg = leg.Name,
             ProgramDirectories = leg.Host.ProgramDirectories,
-            TreeRoot = leg.TreeRoot,
+            TreeRoot = leg.HostTreeRoot,
             BuildDirectory = leg.BuildDirectory,
             RunDirectory = work.RunDirectory,
             LegSettings = leg.Leg,
@@ -167,9 +167,9 @@ internal static class TestCommand
             Filter = filter,
             Excludes = excludes,
 
-            // The host the dispatching machine named, where this machine runs a leg for another: a host
+            // By the host the dispatching machine named, where this machine runs a leg for another: a host
             // reached through a transport runs it in a copy of its own.
-            Remote = leg.Named.Kind != HostKind.Local,
+            InCopy = leg.InCopy,
             Labels = labels,
             Emulated = leg.Emulated,
             Time = work.Time,
