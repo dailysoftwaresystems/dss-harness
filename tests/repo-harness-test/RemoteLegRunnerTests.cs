@@ -740,7 +740,7 @@ public sealed class RemoteLegRunnerTests
     [InlineData(HarnessExit.CommandFailed, false)]
     public async Task AHostsRefusalWithTheLegsLine_CarriesTheLine_AndEndsThisRunAsTheHostsDid(int code, bool refuses)
     {
-        const string Said = "The mutation worker's claim file '/home/dev/repo.mutation-357e24cw-2.claim.json' could not be written.";
+        const string Said = "The mutation worker's claim file '/home/dev/repo/.mutations/357e24cw-2.claim.json' could not be written.";
 
         var written = LedgerReport
             .From(

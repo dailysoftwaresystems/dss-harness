@@ -1,18 +1,18 @@
 namespace RepoHarness.Core.Sync;
 
 /// <summary>
-/// Which run is using a copy kept beside a tree, as whatever would remove the copy asks first: a mutation worker's copy
-/// is claimed by the sweep mutating it, and is not removed from under it. And what such a copy is named, which is all
-/// that tells what an unfinished removal of one left aside; what a line calls one; and how a line says one is held. One
-/// for each family of copies kept beside a tree, so whatever removes a family's copies says them in the family's words.
+/// Which run is using a copy kept in a tree, as whatever would remove the copy asks first: a mutation worker's copy is
+/// claimed by the sweep mutating it, and is not removed from under it. And what such a copy is named, which is all that
+/// tells what an unfinished removal of one left aside; what a line calls one; and how a line says one is held. One for
+/// each family of copies kept in a tree, so whatever removes a family's copies says them in the family's words.
 /// </summary>
 public interface ICopyClaims
 {
     /// <summary>
-    /// Whether <paramref name="name"/> is spelt as a copy of the family is: what follows the family's suffix in the name
-    /// of a directory beside the tree. What a removal left aside holds no marker any more, and is told by this alone.
+    /// Whether <paramref name="name"/> is spelt as a copy of the family is: the name of a directory in the tree's slot
+    /// for the family. What a removal left aside holds no marker any more, and is told by this alone.
     /// </summary>
-    /// <param name="name">What follows the family's suffix in a directory's name.</param>
+    /// <param name="name">A directory's name in the slot.</param>
     bool Names(string name);
 
     /// <summary>What a line calls one copy of the family, in the singular: <c>mutation worker</c>.</summary>

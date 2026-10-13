@@ -217,10 +217,10 @@ public interface ISyncTransport
     Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string repositoryPath, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Removes the mutation workers kept beside the tree at <paramref name="root"/> - each a copy of it a sweep made,
-    /// of whichever variant, named <c>&lt;root&gt;.mutation-&lt;name&gt;-&lt;n&gt;</c> - whether the tree itself is still there or
-    /// not, with what an unfinished removal of one left aside. A worker a sweep still running holds is left, as is one
-    /// whose removal stops at something held, and a directory nothing says the harness made; each is answered for.
+    /// Removes the mutation workers kept in the tree at <paramref name="root"/> - each a copy of it a sweep made, of
+    /// whichever variant, at <c>&lt;root&gt;/.mutations/&lt;name&gt;-&lt;n&gt;</c> - with what an unfinished removal of one
+    /// left aside. A worker a sweep still running holds is left, as is one whose removal stops at something held, and a
+    /// directory nothing says the harness made; each is answered for. A tree that is not there holds none.
     /// </summary>
     /// <param name="root">The tree the workers copy: a host's copy, or a tree on this machine.</param>
     /// <param name="measureOnly">Whether to say what would be removed, and remove nothing.</param>

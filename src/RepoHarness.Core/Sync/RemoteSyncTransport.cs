@@ -127,8 +127,8 @@ public sealed class RemoteSyncTransport(
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Asked from the home directory, as a copy's removal is: the tree the workers copy, and the directory it was kept
-    /// in, may be gone, and a host with none there answers that it removed none.
+    /// Asked from the home directory, as a copy's removal is: the tree the workers are kept in may be gone, and a host
+    /// with none there answers that it removed none.
     /// </remarks>
     public async Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
         => (await AskAsync<SyncWorkersAnswer>(
@@ -140,7 +140,7 @@ public sealed class RemoteSyncTransport(
                 .ConfigureAwait(false))?.Workers
             ?? throw new HarnessException(
                 HarnessExit.HostUnavailable,
-                $"{Host} did not answer which mutation workers beside '{root}' it removed.");
+                $"{Host} did not answer which mutation workers in '{root}' it removed.");
 
     /// <inheritdoc/>
     public async Task<SyncManifest> ReadManifestAsync(

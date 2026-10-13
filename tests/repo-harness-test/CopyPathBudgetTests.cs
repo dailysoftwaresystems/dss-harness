@@ -7,7 +7,7 @@ using RepoHarness.Core.Platform;
 namespace RepoHarness.Tests;
 
 /// <summary>
-/// Whether the build in a copy of a tree kept beside it fits this machine's path limit is reckoned in one place, as a
+/// Whether the build in a copy of a tree kept in it fits this machine's path limit is reckoned in one place, as a
 /// worktree's is: the copy, its variant's build directory below it, the longest path a build makes below that, and
 /// the margin, under the limit declared.
 /// </summary>
@@ -17,7 +17,7 @@ public sealed class CopyPathBudgetTests
 
     private static readonly VariantKey Variant = new("x86_64", "gcc", "debug", null);
 
-    private static readonly string Copy = Path.Combine(Path.GetTempPath(), "repo.mutation-357e24cw-1");
+    private static readonly string Copy = Path.Combine(Path.GetTempPath(), "repo", ".mutations", "357e24cw-1");
 
     /// <summary>What a build makes below its copy: a separator, the build root, a separator, the variant's directory, and the reserve.</summary>
     private static readonly int Below = 1 + VariantKey.BuildRootName.Length + 1 + Variant.DirectoryName.Length + Reserve;

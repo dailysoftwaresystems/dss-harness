@@ -4,13 +4,14 @@ using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Tests;
 
 /// <summary>
-/// The copies a leg's sweep keeps its workers in, against a real tree and real copies beside it: made and synced again by
+/// The copies a leg's sweep keeps its workers in, against a real tree and real copies kept in it: made and synced again by
 /// the sync that makes a host's copy, listed as a family of their own, claimed for one sweep at a time without being
 /// made, and removed only where a sync made them, their claims with them.
 /// </summary>
@@ -74,6 +75,68 @@ public sealed class WorkerCopiesTests
         Assert.Equal("object", await File.ReadAllTextAsync(built, cancellationToken));
     }
 
+    /// <summary>
+    /// A worker kept in its tree is a repository of its own, a self-test's as a sweep's: git and the harness asked there
+    /// answer for the worker - the files it tracks are those the copy was given, never what the tree around it tracks -
+    /// and the tree, whose init ignores the slot, sees nothing of it.
+    /// </summary>
+    [Fact]
+    public async Task AWorkerInItsTree_IsARepositoryOfItsOwn_ASelfTestsToo_AndTheTreeSeesNothingOfIt()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var copies = Copies(harness);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+        var selfTest = MutationWorkers.Of(tree, Variant, selfTest: true).PathOf(1);
+        var fixture = temp.Combine("fixture");
+
+        new MutationFixtureStore(harness.FileSystem, fixture).Write();
+
+        await copies.SyncAsync(await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken), worker, cancellationToken);
+        await copies.SyncAsync(MutationFixture.Reading(fixture), selfTest, cancellationToken);
+
+        Assert.Equal(Path.Combine(tree, HarnessLayout.MutationsDirectoryName), Path.GetDirectoryName(worker));
+        Assert.Equal(string.Empty, (await harness.GitClient.GetLocationAsync(worker, cancellationToken))!.Prefix);
+        Assert.Equal(string.Empty, (await harness.GitClient.GetLocationAsync(selfTest, cancellationToken))!.Prefix);
+        Assert.Contains("src/a.c", (await harness.GitClient.ListIndexAsync(worker, cancellationToken)).Select(entry => entry.Path));
+        Assert.Equal(
+            [.. MutationFixture.Files().Keys.Append(HarnessLayout.ConfigFileRelative.Replace('\\', '/')).Order(StringComparer.Ordinal)],
+            (await harness.GitClient.ListIndexAsync(selfTest, cancellationToken)).Select(entry => entry.Path).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(
+            (await harness.GitClient.ReadStatusAsync(tree, cancellationToken)).SelectMany(entry => entry.Paths),
+            path => path.Text.StartsWith(HarnessLayout.MutationsDirectoryName, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The reading of a tree a sweep's workers are synced from takes nothing of the tree's slots - neither a worker
+    /// kept in it nor a copy its legs work in - so no copy carries them, and the room a worker's copy is reckoned to need,
+    /// which is what that reading counts, is the tree's own files alone.
+    /// </summary>
+    [Fact]
+    public async Task AReadingOfATree_TakesNothingOfItsSlots_SoNoCopyCarriesThemNorCountsThem()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (harness, tree) = await PrepareAsync(temp, cancellationToken);
+        var worker = MutationWorkers.PathOf(tree, Variant, 1);
+
+        using var first = await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken);
+
+        await Copies(harness).SyncAsync(first, worker, cancellationToken);
+        temp.WriteFile(Path.GetRelativePath(temp.Path, Path.Combine(worker, "build", "a.o")), new string('o', 4096));
+        temp.WriteFile(Path.GetRelativePath(temp.Path, Path.Combine(tree, HarnessLayout.LegsDirectoryName, "357e24c", "src", "a.c")), "a leg's copy\n");
+
+        using var reading = await SyncKit.Service(harness).ReadSourceAsync(tree, cancellationToken);
+        var read = reading.Files.Entries;
+
+        Assert.Contains("src/a.c", read.Keys);
+        Assert.DoesNotContain(read.Keys, path => path.StartsWith(HarnessLayout.MutationsDirectoryName + "/", StringComparison.Ordinal));
+        Assert.DoesNotContain(read.Keys, path => path.StartsWith(HarnessLayout.LegsDirectoryName + "/", StringComparison.Ordinal));
+        Assert.Equal(first.Files.Entries.Keys.Order(StringComparer.Ordinal), read.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(first.Files.Entries.Values.Sum(entry => entry.Size), read.Values.Sum(entry => entry.Size));
+    }
+
     /// <summary>A directory where a worker would be that no sync made is somebody's: the sync refuses to make a worker of it.</summary>
     [Fact]
     public async Task ADirectoryNoSyncMade_IsNeverMadeAWorker()
@@ -112,7 +175,7 @@ public sealed class WorkerCopiesTests
         await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant, 1), cancellationToken);
         await copies.SyncAsync(reading, MutationWorkers.PathOf(tree, Variant with { Sanitizer = "asan" }, 1), cancellationToken);
         await copies.SyncAsync(reading, selfTest.PathOf(1), cancellationToken);
-        temp.WriteFile(Path.Combine(Path.GetFileName(MutationWorkers.PathOf(tree, Variant, 3)), "notes.txt"), "mine");
+        temp.WriteFile(Path.GetRelativePath(temp.Path, Path.Combine(MutationWorkers.PathOf(tree, Variant, 3), "notes.txt")), "mine");
         Directory.CreateDirectory(MutationWorkers.PathOf(tree, Variant, 10));
         Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-spare");
         Directory.CreateDirectory(tree + ".worktree-other");
@@ -133,12 +196,12 @@ public sealed class WorkerCopiesTests
     }
 
     /// <summary>
-    /// Every worker kept beside a tree is listed by its family and then its number, of whichever variant and a
-    /// self-test's among them - or those of the families asked for alone, no other weighed; a name spelt as no worker's
-    /// is none.
+    /// Every worker kept in a tree is listed by its family and then its number, of whichever variant and a self-test's
+    /// among them - or those of the families asked for alone, no other weighed; a name spelt as no worker's is none, and
+    /// a worker an earlier version of this tool kept beside the tree is not looked at.
     /// </summary>
     [Fact]
-    public async Task TheWorkersBesideATree_AreListedByFamilyThenNumber_OfTheFamiliesAskedFor()
+    public async Task TheWorkersInATree_AreListedByFamilyThenNumber_OfTheFamiliesAskedFor()
     {
         using var temp = new TempDirectory();
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -155,9 +218,10 @@ public sealed class WorkerCopiesTests
         await copies.SyncAsync(reading, selfTest.PathOf(1), cancellationToken);
         Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-spare");
         Directory.CreateDirectory(MutationWorkers.Of(tree, Variant).Root + "-01");
+        Directory.CreateDirectory(tree + ".mutation-" + MutationWorkers.Of(tree, Variant).Name + "-3");
         weighed.Weighed.Clear();
 
-        var every = await copies.ListBesideAsync(tree, _ => true, cancellationToken);
+        var every = await copies.ListInTreeAsync(tree, _ => true, cancellationToken);
         var own = MutationWorkers.Of(tree, Variant).Name;
         var others = MutationWorkers.Of(tree, sanitized).Name;
 
@@ -170,7 +234,7 @@ public sealed class WorkerCopiesTests
 
         weighed.Weighed.Clear();
 
-        var asked = await copies.ListBesideAsync(tree, family => family == others, cancellationToken);
+        var asked = await copies.ListInTreeAsync(tree, family => family == others, cancellationToken);
 
         Assert.Equal([MutationWorkers.PathOf(tree, sanitized, 1)], asked.Select(worker => worker.Path));
         Assert.Equal([Path.GetFileName(MutationWorkers.PathOf(tree, sanitized, 1))], weighed.Weighed.Select(Path.GetFileName));

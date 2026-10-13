@@ -16,7 +16,7 @@ namespace RepoHarness.Core.Worktrees;
 /// For each copy not yet dealt with, and so still recorded, the exit code its host, its lock or the record left it
 /// with: <see cref="HarnessExit.Refused"/> where a run holds it, or where it or the record was refused;
 /// <see cref="HarnessExit.HostUnavailable"/> where its host could not be asked; the code the host answered with
-/// where removing it failed there; and, where a mutation worker kept beside it keeps it, the code of what became of
+/// where removing it failed there; and, where a mutation worker kept in it keeps it, the code of what became of
 /// them (<see cref="WorkersRemoval.Verdict"/>).
 /// </param>
 /// <param name="Interrupted">
@@ -78,7 +78,7 @@ public interface IHostCopyRemover
 /// under it, and forgotten before that lock is let go. A copy not dealt with - its host cannot be asked, a run
 /// holds it, or removing it failed - stays recorded, so deleting the worktree again asks once more.
 /// <para>
-/// The mutation workers a host keeps beside the copy go first, since nothing would remove them once it is gone: each a
+/// The mutation workers a host keeps in the copy go first, each as a copy is removed, by its marker and its claim: each a
 /// copy of it a sweep there made. One still in use - a sweep still running there holds it - says the copy is, which
 /// then stays, and is still recorded.
 /// </para>
@@ -249,7 +249,7 @@ public sealed class HostCopyRemover(
 
                     var transport = _transports.For(report);
 
-                    // Asked about before any goes, as beside the worktree itself: a copy kept for a worker - one a sweep
+                    // Asked about before any goes, as in the worktree itself: a copy kept for a worker - one a sweep
                     // still running holds, or one that cannot be told - has lost nothing, a worker no sweep holds included.
                     var asked = await transport.RemoveWorkersAsync(entry.Path, measureOnly: true, cancellationToken).ConfigureAwait(false);
 
@@ -278,7 +278,7 @@ public sealed class HostCopyRemover(
                     return Stays(host, entry, ex.Message.TrimEnd('.') + Went(workers), ex.ExitCode);
                 }
 
-                var said = $"{host}: {Said(removal, entry)}{Beside(removal, workers)}";
+                var said = $"{host}: {Said(removal, entry)}{Workers(removal, workers)}";
 
                 // Forgotten before the lock is let go, so that no run of a worktree of this name can take the lock
                 // between the copy going and its entry going, make the copy again, and find it recorded already.
@@ -308,25 +308,30 @@ public sealed class HostCopyRemover(
             };
         }
 
-        // What was done about the mutation workers kept beside a copy, after what was done about the copy.
-        static string Beside(CopyRemoval removal, WorkersRemoval workers)
+        // What was done about the mutation workers kept in a copy, after what was done about the copy.
+        static string Workers(CopyRemoval removal, WorkersRemoval workers)
         {
             var gone = (workers.Removed.Count, removal) switch
             {
                 (0, _) => string.Empty,
-                (var count, CopyRemoval.Removed) => $", with the {ReportText.Counted(count, "mutation worker")} kept beside it, {DiskSpace.Size(workers.Bytes)}",
-                var (count, _) => $"; the {ReportText.Counted(count, "mutation worker")} kept beside it were removed, {DiskSpace.Size(workers.Bytes)}",
+                (var count, CopyRemoval.Removed) => $", with the {ReportText.Counted(count, "mutation worker")} kept in it, {DiskSpace.Size(workers.Bytes)}",
+                var (count, _) => $"; the {ReportText.Counted(count, "mutation worker")} kept in it were removed, {DiskSpace.Size(workers.Bytes)}",
             };
 
-            return workers.Left.Count == 0
-                ? gone
-                : $"{gone}; left beside it: {string.Join("; ", workers.Left.Select(worker => $"'{worker.Path}', {worker.Why.TrimEnd('.')}"))}";
+            // A copy removed whole took with it whatever was left in it: only a directory nothing says the harness made
+            // is left in a copy that is removed, since any other keeps it.
+            return (workers.Left.Count, removal) switch
+            {
+                (0, _) => gone,
+                (_, CopyRemoval.Removed) => $"{gone}; {string.Join("; ", workers.Left.Select(worker => WorktreeReports.WentWithItsTree(worker.Path)))}",
+                _ => $"{gone}; left in it: {string.Join("; ", workers.Left.Select(worker => $"'{worker.Path}', {worker.Why.TrimEnd('.')}"))}",
+            };
         }
 
         static (string, int?) Stays(HostId host, HostCopyEntry entry, string? why, int code)
             => ($"{host}: its copy at '{entry.Path}' stays, and is still recorded: {why?.TrimEnd('.') ?? "no reason was given"}", code);
 
-        // What of the mutation workers kept beside a copy keeps the copy, and the code that leaves the command with -
+        // What of the mutation workers kept in a copy keeps the copy, and the code that leaves the command with -
         // their removal's verdict's (WorkersRemoval.Verdict): one a sweep still running holds, which ends by waiting; one
         // that could not be removed, or told; or a removal of them that was stopped. Null where nothing of them does.
         static (string Why, int Code)? Keeps(WorkersRemoval workers)
@@ -334,9 +339,9 @@ public sealed class HostCopyRemover(
                 ? null
                 : (workers.Kept switch
                     {
-                        { As: WorkerLeftAs.Held } busy => $"a mutation worker kept beside it is in use - '{busy.Path}': {busy.Why}",
-                        { } stuck => $"a mutation worker kept beside it could not be removed - {stuck.Told()}",
-                        _ => "the removal of the mutation workers kept beside it was stopped before each had been dealt with",
+                        { As: WorkerLeftAs.Held } busy => $"a mutation worker kept in it is in use - '{busy.Path}': {busy.Why}",
+                        { } stuck => $"a mutation worker kept in it could not be removed - {stuck.Told()}",
+                        _ => "the removal of the mutation workers kept in it was stopped before each had been dealt with",
                     },
                     Verdicts.ExitCodeFor(workers.Verdict));
 
@@ -344,7 +349,7 @@ public sealed class HostCopyRemover(
         static string Went(WorkersRemoval workers)
             => workers.Removed.Count == 0
                 ? string.Empty
-                : $"; {ReportText.Counted(workers.Removed.Count, "mutation worker")} kept beside it were removed before that, {DiskSpace.Size(workers.Bytes)}";
+                : $"; {ReportText.Counted(workers.Removed.Count, "mutation worker")} kept in it were removed before that, {DiskSpace.Size(workers.Bytes)}";
     }
 
     /// <summary>Whether <paramref name="entry"/> names a path a worktree's copy is kept at: its own name, after the suffix.</summary>

@@ -82,6 +82,8 @@ public sealed class InitServiceTests
         Assert.True(File.Exists(temp.Combine(".harness-config", "config.json")));
         Assert.True(File.Exists(temp.Combine(".worktrees", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".orchestrators", ".gitkeep")));
+        Assert.True(File.Exists(temp.Combine(".mutations", ".gitkeep")));
+        Assert.True(File.Exists(temp.Combine(".legs", ".gitkeep")));
         Assert.Equal(".worktrees", harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path)).Worktrees.Root);
         Assert.True(File.Exists(temp.Combine(".harness-config", "sshItems", ".gitkeep")));
         Assert.True(File.Exists(temp.Combine(".harness-config", "wslDistros", ".gitkeep")));
@@ -368,16 +370,17 @@ public sealed class InitServiceTests
     }
 
     /// <summary>
-    /// The worktrees root, wherever it is configured, and the orchestrators directory are each kept in git by a
-    /// placeholder while everything made in them is ignored: a worktree's files, and an orchestrator's records. The
-    /// directory itself then reads as not ignored, as any directory holding a tracked file does - the cost accepted
+    /// The worktrees root, wherever it is configured, the orchestrators directory, and the slots a tree keeps its
+    /// mutation workers and its legs' copies in are each kept in git by a placeholder while everything made in them is
+    /// ignored: a worktree's files, an orchestrator's records, a worker - a repository of its own - and a leg's copy.
+    /// The directory itself then reads as not ignored, as any directory holding a tracked file does - the cost accepted
     /// with keeping it, pinned here so it is never mistaken for a rule gone missing.
     /// </summary>
     [Theory]
     [InlineData(null)]
     [InlineData(".harness-config/worktrees")]
     [InlineData("build/trees")]
-    public async Task TheWorktreesRootAndTheOrchestratorsDirectory_AreKeptInGit_AndEverythingMadeInThemIsIgnored(string? configuredRoot)
+    public async Task TheWorktreesRootTheOrchestratorsDirectoryAndEachSlot_AreKeptInGit_AndEverythingMadeInThemIsIgnored(string? configuredRoot)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -397,7 +400,13 @@ public sealed class InitServiceTests
         var tracked = (await harness.RunGitAsync(temp.Path, ["ls-files"], token)).OutputLines;
         var ignore = File.ReadAllText(temp.Combine(".gitignore"));
 
-        foreach (var (slot, made) in new[] { (root, "wt-a/src/main.c"), (HarnessLayout.OrchestratorsDirectoryName, "o1/agents/a1/agent.json") })
+        foreach (var (slot, made) in new[]
+        {
+            (root, "wt-a/src/main.c"),
+            (HarnessLayout.OrchestratorsDirectoryName, "o1/agents/a1/agent.json"),
+            (HarnessLayout.MutationsDirectoryName, "357e24cw-1/src/main.c"),
+            (HarnessLayout.LegsDirectoryName, "357e24c/src/main.c"),
+        })
         {
             Assert.Contains($"{slot}/.gitkeep", tracked);
             Assert.Contains($"/{slot}/*\n!/{slot}/.gitkeep\n", ignore, StringComparison.Ordinal);
@@ -459,11 +468,15 @@ public sealed class InitServiceTests
     }
 
     /// <summary>
-    /// A file in the orchestrators' directory that git no longer ignores - a branch whose rules predate init's - is refused
-    /// by sync like any other: records and transcripts would go into the next commit, and sync never passes that silently.
+    /// A file in the orchestrators' directory, or in a slot a tree keeps its copies in, that git no longer ignores - a
+    /// branch whose rules predate init's - is refused by sync like any other: records, transcripts and copies would go
+    /// into the next commit, and sync never passes that silently.
     /// </summary>
-    [Fact]
-    public async Task AFileInTheOrchestratorsDirectory_GitNoLongerIgnores_IsRefusedBySync()
+    [Theory]
+    [InlineData(HarnessLayout.OrchestratorsDirectoryName)]
+    [InlineData(HarnessLayout.MutationsDirectoryName)]
+    [InlineData(HarnessLayout.LegsDirectoryName)]
+    public async Task AFileInASlot_GitNoLongerIgnores_IsRefusedBySync(string slot)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
@@ -471,8 +484,8 @@ public sealed class InitServiceTests
 
         await harness.InitializeGitRepositoryAsync(temp.Path, token);
         await harness.InitService.InitializeAsync(temp.Path, token);
-        File.AppendAllText(temp.Combine(".gitignore"), $"!/{Core.Repository.HarnessLayout.OrchestratorsDirectoryName}/notes.txt\n");
-        temp.WriteFile(Path.Combine(Core.Repository.HarnessLayout.OrchestratorsDirectoryName, "notes.txt"), "a transcript's line");
+        File.AppendAllText(temp.Combine(".gitignore"), $"!/{slot}/notes.txt\n");
+        temp.WriteFile(Path.Combine(slot, "notes.txt"), "a transcript's line");
 
         var config = harness.ConfigStore.Load(HarnessFactory.ConfigPath(temp.Path));
         var exclusions = new Core.Sync.SyncExclusions(config.Sync, config.Worktrees.Root);
@@ -480,7 +493,7 @@ public sealed class InitServiceTests
         var refused = await Assert.ThrowsAsync<HarnessException>(() => exclusions.RefuseWhenNoLongerIgnoredAsync(harness.GitClient, temp.Path, token));
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains(Core.Repository.HarnessLayout.OrchestratorsDirectoryName, refused.Message, StringComparison.Ordinal);
+        Assert.StartsWith($"init's '{slot}' now holds files git neither ignores nor tracks.", refused.Message, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -566,6 +579,8 @@ public sealed class InitServiceTests
         Directory.CreateDirectory(temp.Combine(WorktreeSettings.SeededRoot, "wt-a", "nested"));
         File.WriteAllText(temp.Combine(WorktreeSettings.SeededRoot, "wt-a", "nested", "file.txt"), "x");
         temp.WriteFile(Path.Combine(HarnessLayout.OrchestratorsDirectoryName, "o1", "agents", "a1", "agent.json"), "{}");
+        temp.WriteFile(Path.Combine(HarnessLayout.MutationsDirectoryName, "357e24cw-1", "src", "main.c"), "int main;");
+        temp.WriteFile(Path.Combine(HarnessLayout.LegsDirectoryName, "357e24c", "src", "main.c"), "int main;");
         Directory.CreateDirectory(temp.Combine(".harness-config", "sshItems", "probe-host"));
         File.WriteAllText(temp.Combine(".harness-config", "sshItems", "probe-host", ".key"), "secret");
         Directory.CreateDirectory(temp.Combine(".harness-config", "wslDistros", "probe-distro"));
@@ -584,6 +599,10 @@ public sealed class InitServiceTests
         Assert.Contains($"{WorktreeSettings.SeededRoot}/.gitkeep", files);
         Assert.Contains(".orchestrators/.gitkeep", files);
         Assert.DoesNotContain(files, file => file.StartsWith(".orchestrators/o1", StringComparison.Ordinal));
+        Assert.Contains(".mutations/.gitkeep", files);
+        Assert.DoesNotContain(files, file => file.StartsWith(".mutations/357e24cw-1", StringComparison.Ordinal));
+        Assert.Contains(".legs/.gitkeep", files);
+        Assert.DoesNotContain(files, file => file.StartsWith(".legs/357e24c", StringComparison.Ordinal));
         Assert.Contains(".harness-config/sshItems/.gitkeep", files);
         Assert.Contains(".harness-config/wslDistros/.gitkeep", files);
         Assert.Contains(".harness-config/runner/.env/.gitkeep", files);

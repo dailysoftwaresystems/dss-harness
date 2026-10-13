@@ -11,6 +11,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Orchestration;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -928,12 +929,16 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            $"Each leg is swept in worker copies of its tree, kept beside it as <tree>{HostCopies.MutationSuffix}<key>{WorkerFamily.OwnMark}-<n>, numbered "
+            $"Each leg is swept in worker copies of its tree, kept in it as <tree>/{HarnessLayout.MutationsDirectoryName}/<key>{WorkerFamily.OwnMark}-<n>, numbered "
             + "from 1: as many as workers, never more than the leg has arms to drive, and one in a WSL distribution. The key "
             + $"is the first {VariantKey.CopyKeyLength} hexadecimal digits of the SHA-256 of the leg's variant, as its build "
-            + "directory is named: a worker's name adds twenty characters to its tree's path whatever the variant is "
-            + "called, since a worker is built as deep as the tree and a machine whose paths are bounded has no more to "
-            + "spare, and the lines of a sweep and of a clean say which leg a worker is. Before every "
+            + $"directory is named: its first worker adds {ReportText.Counted(WorkerFamily.AddedToItsTreesPath, "character")} to its tree's path "
+            + "whatever the variant is called, since a worker is built as deep as the tree and a machine whose paths are bounded "
+            + "has no more to spare, and the lines of a sweep and of a clean say which leg a worker is. Each is a repository "
+            + $"of its own, as every copy a sync makes is, and init keeps {HarnessLayout.MutationsDirectoryName} in git and "
+            + "everything made in it out: a sweep in a tree where git does not ignore what it would make there is refused "
+            + $"({HarnessExit.Refused}), naming init, with nothing made - asked on the machine that makes the workers, so a "
+            + "host answers for its own copy. Before every "
             + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
             + "killed sweep left mutated is put back - and built whole before it drives an arm. The tree itself is only "
             + "ever read.");
@@ -956,7 +961,8 @@ internal static class HelpCommand
             + "buildSpaceGiB where it declares one, else to what the leg's own build last recorded, else to the most any "
             + "other tree of the repository on its machine recorded of it - and whose build stays within the path limit, "
             + "reckoned as a worktree's is; where not even the first does, the leg is skipped-unavailable, saying why, and "
-            + "one that runs fewer says how many of those it wanted, and what keeps each of the rest out. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it, and "
+            + "one that runs fewer says how many of those it wanted, and what keeps each of the rest out. A worker is claimed while a sweep uses it, in <worker>.claim.json beside it in "
+            + $"{HarnessLayout.MutationsDirectoryName}, and "
             + "a claim whose sweep died is released and said. Workers an earlier sweep left beyond the count workers allows "
             + "are removed before the sweep plans, so lowering it frees their room, and a directory under a worker's name "
             + "that no sync made is said and left.");
@@ -964,15 +970,16 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "The workers go with their tree. clean removes a leg's with its build directory - its self-test's too, and "
-            + "those of a variant no leg of that host and tree builds any more - and where a host holds no copy of the "
-            + "tree, the host is asked to remove the workers left beside where it was. delete-worktree and delete-agent "
-            + "remove the workers kept beside the worktree first, here and beside each host's copy of it; a worker a "
+            + "those of a variant no leg of that host and tree builds any more. delete-worktree and delete-agent "
+            + "remove the workers kept in the worktree first, here and in each host's copy of it; a worker a "
             + "sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended, and one that "
             + "cannot be removed keeps it as a failure until that is put right - or --force "
-            + "deletes the worktree and leaves that worker, which deleting it again then removes, as deleting an "
-            + "agent whose worktree is gone already removes those left beside it. A worker is no "
-            + "worktree, though it holds a repository of its own: list-worktree passes over it, and says one whose "
-            + "worktree is gone.");
+            + "deletes the worktree with that worker in it. A directory there under a worker's name that no sync made goes "
+            + "with the worktree, or the host's copy, as everything else in it does, and is said. No copy of a tree carries "
+            + "its workers, and a sync into a host's "
+            + "copy never deletes that copy's own. Workers an earlier version of this tool kept beside a tree, as "
+            + "<tree>.mutation-<key><mark>-<n>, are known to nothing here: nothing lists, counts or removes them, and they "
+            + "are yours to delete.");
         builder.AppendLine();
         builder.AppendLine("An arm's turn");
         builder.AppendLine();
@@ -994,7 +1001,7 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "Whatever fails is kept to what it failed in. A worker that cannot be made is retired alone, saying why, and "
-            + "the workers beside it drive every arm. An arm whose driving ends in a failure is given the verdict that "
+            + "the other workers drive every arm. An arm whose driving ends in a failure is given the verdict that "
             + "failure comes to - poisoned where nobody named it - and a binary whose control cannot be built and run stops "
             + "its own arms and no other. Once its machine does not admit one arm, the sweep asks it for no other: every "
             + "arm left is not-admitted at once, naming the arm refused, rather than each waiting as long again.");
@@ -1064,8 +1071,8 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             $"The fixture is written where this tool keeps its own data, <user data>/{ToolPackage.Command}/{MutationFixture.DirectoryName}, "
-            + "only where it differs. Its workers are kept beside the leg's own tree, as a sweep's are, in a family of "
-            + $"their own - <tree>{HostCopies.MutationSuffix}<key>{WorkerFamily.SelfTestMark}-<n>, a few megabytes each - so they are "
+            + "only where it differs. Its workers are kept in the leg's own tree, as a sweep's are, in a family of "
+            + $"their own - <tree>/{HarnessLayout.MutationsDirectoryName}/<key>{WorkerFamily.SelfTestMark}-<n>, a few megabytes each - so they are "
             + "that repository's: counted by its room, built by its toolchain, and removed by a clean of the leg, and "
             + "with its worktree or its host's copy. A self-test is placed by no room a build of the leg's tree needs, "
             + "its workers' paths are reckoned by the fixture's own longest, and a leg on a host is self-tested there "
@@ -1734,12 +1741,12 @@ internal static class HelpCommand
         builder.AppendLine();
         builder.AppendLine("clean removes each selected leg's build directory where the leg runs: in this");
         builder.AppendLine("machine's tree, or in a WSL distribution's or an ssh host's copy of the tree it is");
-        builder.AppendLine("typed in. The mutation workers a sweep of the leg keeps beside that tree go with");
+        builder.AppendLine("typed in. The mutation workers a sweep of the leg keeps in that tree go with");
         builder.AppendLine("it - its self-test's too, and those of a variant no leg there builds any more -");
         builder.AppendLine("under the lock a sweep takes: one a live sweep claims is kept, one that cannot be");
         builder.AppendLine("removed fails the leg, which still says what went, and a directory under a worker's");
-        builder.AppendLine("name that no sync made is said and left ('help mutations'). Where a host holds no");
-        builder.AppendLine("copy of the tree, it is asked to remove the workers left beside where the copy was.");
+        builder.AppendLine("name that no sync made is said and left ('help mutations'). A host holding no copy");
+        builder.AppendLine("of the tree holds nothing of it to remove.");
         builder.AppendLine();
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug,linux-arm64-release");
         builder.AppendLine($"  {ToolPackage.Command} clean --legs linux-arm64-debug --dry-run");
@@ -1754,8 +1761,8 @@ internal static class HelpCommand
         builder.AppendLine("what each holds and removes nothing; --json carries both as each leg's 'space',");
         builder.AppendLine("with its mutation workers' as 'workerBytes': what was removed of them - 0 where");
         builder.AppendLine("every one there was kept - or, in a dry run, what is there. A leg whose build");
-        builder.AppendLine("directory was not measured - a link, locked, not removable, or on a host holding no");
-        builder.AppendLine("copy of the tree - carries a space saying its workers alone, where any is there.");
+        builder.AppendLine("directory was not measured - a link, locked or not removable - carries a space");
+        builder.AppendLine("saying its workers alone, where any is there.");
         builder.AppendLine();
         builder.AppendLine("A host whose DssHarness is older than this machine's is updated first, as for any");
         builder.AppendLine("command, and the update needs room: a host that is both full and behind has to be");
@@ -1888,14 +1895,14 @@ internal static class HelpCommand
         builder.AppendLine();
         AppendWrapped(
             builder,
-            "The mutation workers kept beside a worktree ('help mutations') go before it, once every check has passed. "
-            + $"They are asked about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), "
+            "The mutation workers kept in a worktree ('help mutations') go before it. They are asked about before anything "
+            + $"of it is removed or looked through: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), "
             + $"and one that cannot be removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as "
             + "workers that cannot be looked for do, with nothing removed. A sweep that takes one meanwhile keeps the worktree as "
             + "well, and so does one whose removal then fails, the others gone by then, which is said. An interruption as they go "
-            + $"says which went, and that the worktree is whole ({HarnessExit.Cancelled}). --force deletes the worktree and leaves a "
-            + "worker that is held or could not be removed, saying so; deleting the worktree again removes it once nothing keeps "
-            + "it. A worktree whose own removal then fails, or is stopped, says which workers went before it. Beside a host's copy "
+            + $"says which went, and that nothing else of the worktree was removed ({HarnessExit.Cancelled}). --force deletes the "
+            + "worktree with every worker in it, one held or one that could not be removed among them, saying which went with "
+            + "it. A worktree whose own removal then fails, or is stopped, says which workers went before it. In a host's copy "
             + "they are asked about first as well, and a copy kept once some had gone says which went.");
         builder.AppendLine();
         AppendWrapped(
@@ -2165,7 +2172,7 @@ internal static class HelpCommand
         AppendWrapped(
             builder,
             "Seeding. create-agent hands the agent the main tree's uncommitted state - every path git status lists, off the "
-            + "worktrees root, .git and .orchestrators: each changed file copied into its worktree, each deletion made there - and "
+            + "worktrees root, .git, .orchestrators, .mutations and .legs: each changed file copied into its worktree, each deletion made there - and "
             + "records what it was handed, each file with its digest. An untracked directory git will not look into, a repository "
             + "of its own, is named and not handed; --empty hands it nothing. A symbolic link among it is refused before the "
             + "worktree is made, so nothing is left behind. seed-agent does it again, refused over changes of the agent's own - a "
@@ -2338,6 +2345,12 @@ internal static class HelpCommand
         builder.AppendLine("                                     orchestrator and its agents keep, in the main");
         builder.AppendLine("                                     checkout, and never sent to a host by sync");
         builder.AppendLine($"                                     ('{ToolPackage.Command} help orchestrators')");
+        builder.AppendLine($"  {HarnessLayout.MutationsDirectoryName}/                       contents ignored, .gitkeep tracked; the tree's");
+        builder.AppendLine("                                     mutation workers, in every tree, never sent to");
+        builder.AppendLine($"                                     a host by sync ('{ToolPackage.Command} help mutations')");
+        builder.AppendLine($"  {HarnessLayout.LegsDirectoryName}/                            contents ignored, .gitkeep tracked; the copies");
+        builder.AppendLine("                                     of the tree its legs work in, in every tree,");
+        builder.AppendLine("                                     never sent to a host by sync");
         builder.AppendLine($"  {HarnessLayout.RunsDirectoryRelative}/              ignored; one directory of records per run, in");
         builder.AppendLine("                                     the tree that ran it");
         builder.AppendLine("  .harness-config/lock.json          ignored; records in-progress runs");
@@ -2370,10 +2383,11 @@ internal static class HelpCommand
         builder.AppendLine("named too, though git itself names none for the files below it. A path git will");
         builder.AppendLine("not answer about - one beyond a symbolic link - is named with git's reason, and the");
         builder.AppendLine("rest are still asked. runs is ignored by name, with no trailing slash, so one kept");
-        builder.AppendLine("on another disk through a link is ignored as the link it is. The worktrees root and");
-        builder.AppendLine("the orchestrators directory are kept in git by their placeholders, so each reads as");
-        builder.AppendLine("not ignored itself while everything made in it is, and neither can be a link: init");
-        builder.AppendLine("names one it finds, and writes nothing through it. Sync withholds both by name.");
+        builder.AppendLine("on another disk through a link is ignored as the link it is. The worktrees root,");
+        builder.AppendLine($"the orchestrators directory, {HarnessLayout.MutationsDirectoryName} and {HarnessLayout.LegsDirectoryName} are kept in git by their");
+        builder.AppendLine("placeholders, so each reads as not ignored itself while everything made in it is,");
+        builder.AppendLine("and none can be a link: init names one it finds, and writes nothing through it.");
+        builder.AppendLine("Sync withholds each by name.");
         builder.AppendLine();
         builder.AppendLine("init writes the tree it runs in, a worktree's own included: its configuration - a");
         builder.AppendLine("copy of the main checkout's, where the worktree was running on that one - its");

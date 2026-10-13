@@ -24,7 +24,7 @@ namespace RepoHarness.Core.Mutations;
 /// <para>
 /// Kept among this user's own data for this tool (<see cref="MutationFixtureStore"/>): a fixture written once is the one
 /// every later self-test on the machine finds, whichever repository asks. Each file is written only where it differs, so
-/// a self-test of the same build of this tool leaves it as it was. Its workers are kept apart from it, beside the tree of
+/// a self-test of the same build of this tool leaves it as it was. Its workers are kept apart from it, in the tree of
 /// the leg self-tested (<see cref="WorkerFamily.SelfTestMark"/>): they are that repository's, built by its toolchain,
 /// their builds warm for its next self-test, and removed with its own.
 /// </para>

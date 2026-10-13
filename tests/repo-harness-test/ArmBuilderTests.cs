@@ -150,7 +150,7 @@ public sealed class ArmBuilderTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var worker = temp.Combine("tree.mutation-357e24cw-1");
+        var worker = temp.Combine("tree", ".mutations", "357e24cw-1");
         var build = Variant.DirectoryUnder(worker);
         var ninja = temp.Combine("tools", "ninja");
 
@@ -190,7 +190,7 @@ public sealed class ArmBuilderTests
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
-        var worker = temp.Combine("tree.mutation-357e24cw-1");
+        var worker = temp.Combine("tree", ".mutations", "357e24cw-1");
         var build = Variant.DirectoryUnder(worker);
         var path = Path.Combine(build, file.Replace('/', Path.DirectorySeparatorChar));
 

@@ -1880,7 +1880,7 @@ public sealed class MutationLegRunnerTests
         var turned = await deep.RunAsync([DepthType]);
 
         Assert.Equal(LegVerdict.SkippedUnavailable, turned.Verdict);
-        Assert.StartsWith($"worker 1 would be kept at '{deep.Worker(1)}', where its build needs paths of ", turned.Detail, StringComparison.Ordinal);
+        Assert.StartsWith($"worker 1 would be kept at '{deep.Worker(1)}', in the tree's .mutations, two characters deeper than a worker an earlier version of this tool kept beside the tree, where its build needs paths of ", turned.Detail, StringComparison.Ordinal);
         Assert.Contains(
             " characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under 40: keep the tree at a "
             + "shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones; 1 arm(s): 1 skipped-unavailable",
@@ -1895,7 +1895,8 @@ public sealed class MutationLegRunnerTests
         var fewer = await second.RunAsync([ChargeBound, DepthType]);
 
         Assert.Equal(
-            $"2 arm(s): 2 passed; 1 of 2 workers: worker 2 would be kept at '{second.Worker(2)}', where its build needs paths of 300 characters, "
+            $"2 arm(s): 2 passed; 1 of 2 workers: worker 2 would be kept at '{second.Worker(2)}', "
+            + "in the tree's .mutations, two characters deeper than a worker an earlier version of this tool kept beside the tree, where its build needs paths of 300 characters, "
             + "as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under 260: keep the tree at a shorter "
             + "path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);
@@ -1920,7 +1921,8 @@ public sealed class MutationLegRunnerTests
 
         Assert.Equal(
             $"3 arm(s): 3 passed; 1 of 3 workers: running 2 needs ~{DiskSpace.Size(2 * ((1L << 30) + copy))}, each worker's build as declared; "
-            + $"{DiskSpace.Size((1L << 30) + copy + 100)} free on '/data'; and worker 3 would be kept at '{tight.Worker(3)}', where its "
+            + $"{DiskSpace.Size((1L << 30) + copy + 100)} free on '/data'; and worker 3 would be kept at '{tight.Worker(3)}', "
+            + "in the tree's .mutations, two characters deeper than a worker an earlier version of this tool kept beside the tree, where its "
             + "build needs paths of 300 characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under "
             + "260: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);

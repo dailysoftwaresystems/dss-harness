@@ -98,16 +98,22 @@ public sealed class CleanServiceTests
         Assert.DoesNotContain(temp.Path, leg.GetProperty("detail").GetString()!, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>A dry run says what each build directory holds and the room beside it, and removes nothing.</summary>
+    /// <summary>
+    /// A dry run says what each build directory holds and the room beside it, and removes nothing. What it measures of
+    /// the build directory never reaches the tree's slot for workers: a worker's build there is counted as the worker's
+    /// alone.
+    /// </summary>
     [Fact]
     public async Task ADryRun_SaysWhatTheBuildDirectoryHolds_AndRemovesNothing()
     {
         using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
         var harness = new HarnessFactory();
         var config = OneLocalLeg(harness);
         var directory = BuildDirectory(temp, harness, config);
         var file = Written(Path.Combine(directory, "a.o"));
         File.WriteAllText(file, new string('a', 2048));
+        workers.Made(Variant(harness, config), 1, 4096);
 
         var (outcome, leg) = await CleanAsync(temp, harness, config, dryRun: true);
 
@@ -115,6 +121,7 @@ public sealed class CleanServiceTests
         Assert.StartsWith($"2 KiB in '{directory}'; ", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
         Assert.False(leg.GetProperty("space").GetProperty("removed").GetBoolean());
         Assert.Equal(2048, leg.GetProperty("space").GetProperty("buildBytes").GetInt64());
+        Assert.Equal(Workers.Holding(4096), leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
         Assert.True(File.Exists(file));
     }
 
@@ -284,6 +291,33 @@ public sealed class CleanServiceTests
     }
 
     /// <summary>
+    /// A host holding no copy of the tree holds none of its mutation workers either - they were kept in the copy - so it
+    /// is asked to remove none, in a dry run or not: what an earlier version of this tool left beside where the copy was
+    /// is known to nothing here, and is a person's to delete.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ALegOnAHostWithNoCopyOfTheTree_AsksTheHostToRemoveNoWorker(bool dryRun)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var transport = Substitute.For<ISyncTransport>();
+        var transports = Substitute.For<ISyncTransportFactory>();
+
+        transport.RootExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
+        transports.For(Arg.Any<HostReport>()).Returns(transport);
+
+        var (outcome, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), dryRun: dryRun, transports: transports);
+
+        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
+        Assert.Equal("passed", leg.GetProperty("verdict").GetString());
+        Assert.Equal($"nothing to remove: ssh {HostName} holds no copy of this tree at '{HostTree}'", leg.GetProperty("detail").GetString());
+        Assert.False(leg.TryGetProperty("space", out _));
+        await transport.DidNotReceiveWithAnyArgs().RemoveWorkersAsync(default!, default, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
     /// A run of this machine building a leg on a host holds this machine's lock for it: the leg is
     /// refused-locked here, and neither the host nor its copy is asked anything.
     /// </summary>
@@ -310,7 +344,7 @@ public sealed class CleanServiceTests
     }
 
     /// <summary>
-    /// The mutation workers a leg's sweeps keep beside its tree are removed with its build directory, each named, and
+    /// The mutation workers a leg's sweeps keep in its tree are removed with its build directory, each named, and
     /// what they held counted; a claim a dead sweep left on one is released, and said, with it. Another leg's workers,
     /// and what an earlier removal of them left aside, are not this leg's to remove - its own aside is.
     /// </summary>
@@ -436,7 +470,7 @@ public sealed class CleanServiceTests
 
     /// <summary>
     /// A variant only legs elsewhere build - on a host, in a distribution, or bound to another worktree - keeps its
-    /// workers beside its own tree there: ones of its name beside this tree are no leg's here, and go with a clean of
+    /// workers in its own tree there: ones of its name in this tree are no leg's here, and go with a clean of
     /// a leg that is.
     /// </summary>
     [Fact]
@@ -569,7 +603,7 @@ public sealed class CleanServiceTests
         var config = OneLocalLeg(harness);
         var worker = workers.Made(Variant(harness, config), 1, 10);
 
-        var (outcome, leg) = await CleanAsync(temp, harness, config, fileSystem: new CannotList(harness.FileSystem, Path.GetDirectoryName(temp.Path)!, denied));
+        var (outcome, leg) = await CleanAsync(temp, harness, config, fileSystem: new CannotList(harness.FileSystem, Path.Combine(temp.Path, HarnessLayout.MutationsDirectoryName), denied));
 
         Assert.Equal("failed", leg.GetProperty("verdict").GetString());
         Assert.EndsWith("; its mutation workers could not be listed: the disk would not say", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
@@ -705,102 +739,6 @@ public sealed class CleanServiceTests
     }
 
     /// <summary>
-    /// A leg on a host that holds no copy of the tree has no build directory there, and nothing that could run a clean:
-    /// the host is asked instead to remove the mutation workers a sweep left beside where the copy was - or, in a dry
-    /// run, to measure them - and the leg says what went, and what a sweep still running there kept.
-    /// </summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ALegOnAHostWithNoCopyOfTheTree_HasTheWorkersLeftBesideItRemoved(bool dryRun)
-    {
-        using var temp = new TempDirectory();
-        var harness = new HarnessFactory();
-        var hosts = new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command));
-        var transport = Substitute.For<ISyncTransport>();
-        var transports = Substitute.For<ISyncTransportFactory>();
-        var gone = HostTree + ".mutation-aa1fa54w-1";
-        var held = HostTree + ".mutation-aa1fa54w-2";
-
-        transport.RootExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
-        transport.RemoveWorkersAsync(HostTree, dryRun, Arg.Any<CancellationToken>()).Returns(new WorkersRemoval(
-            [new WorkerRemoved(gone, 3L << 30)],
-            [new WorkerLeft(held, "a sweep still running holds it: pid 4242, run 20261007-101500-abcd", WorkerLeftAs.Held)]));
-        transports.For(Arg.Any<HostReport>()).Returns(transport);
-
-        var (outcome, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), hosts: hosts, dryRun: dryRun, transports: transports);
-
-        Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
-        Assert.Equal(
-            $"nothing to remove: ssh {HostName} holds no copy of this tree at '{HostTree}'; "
-            + (dryRun ? $"1 mutation worker(s) left beside where it was: 3 GiB in '{gone}'" : $"removed 1 mutation worker(s) left beside where it was, 3 GiB: '{gone}'")
-            + $"; '{held}' was left: a sweep still running holds it: pid 4242, run 20261007-101500-abcd",
-            leg.GetProperty("detail").GetString());
-        Assert.Equal(3L << 30, leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
-        Assert.NotEqual(HarnessExit.Success, outcome.ExitCode);
-        Assert.Empty(hosts.Calls);
-        await transport.Received(1).RemoveWorkersAsync(HostTree, dryRun, Arg.Any<CancellationToken>());
-    }
-
-    /// <summary>
-    /// A worker left beside where the copy was that could not be removed fails the leg, saying why: nothing holds it
-    /// that waiting would end, so it is never refused-locked - which one a sweep still running holds is. Either way the
-    /// leg carries what was removed of its workers, 0 where every one there was kept.
-    /// </summary>
-    [Theory]
-    [InlineData(WorkerLeftAs.NotRemoved, "failed")]
-    [InlineData(WorkerLeftAs.Held, "refused-locked")]
-    public async Task ALegOnAHostWithNoCopyOfTheTree_WhoseWorkerWasKept_SaysWhetherWaitingEndsIt(WorkerLeftAs keptAs, string verdict)
-    {
-        using var temp = new TempDirectory();
-        var harness = new HarnessFactory();
-        var transport = Substitute.For<ISyncTransport>();
-        var transports = Substitute.For<ISyncTransportFactory>();
-        var kept = HostTree + ".mutation-aa1fa54w-1";
-
-        transport.RootExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
-        transport.RemoveWorkersAsync(HostTree, false, Arg.Any<CancellationToken>()).Returns(new WorkersRemoval([], [new WorkerLeft(kept, "why it was kept", keptAs)]));
-        transports.For(Arg.Any<HostReport>()).Returns(transport);
-
-        var (outcome, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), transports: transports);
-
-        Assert.Equal(verdict, leg.GetProperty("verdict").GetString());
-        Assert.Equal(
-            $"nothing to remove: ssh {HostName} holds no copy of this tree at '{HostTree}'; '{kept}' was left: why it was kept",
-            leg.GetProperty("detail").GetString());
-        Assert.Equal(0, leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
-        Assert.Equal(Verdicts.ExitCodeFor(Verdicts.Parse(verdict)!.Value), outcome.ExitCode);
-    }
-
-    /// <summary>
-    /// A removal of the workers left beside where the copy was that was stopped there leaves the leg stopped, saying
-    /// so with what went before it, which the leg still carries.
-    /// </summary>
-    [Fact]
-    public async Task ALegOnAHostWithNoCopyOfTheTree_WhoseRemovalWasStopped_IsStopped_SayingWhatWent()
-    {
-        using var temp = new TempDirectory();
-        var harness = new HarnessFactory();
-        var transport = Substitute.For<ISyncTransport>();
-        var transports = Substitute.For<ISyncTransportFactory>();
-        var gone = HostTree + ".mutation-aa1fa54w-1";
-
-        transport.RootExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
-        transport.RemoveWorkersAsync(HostTree, false, Arg.Any<CancellationToken>())
-            .Returns(new WorkersRemoval([new WorkerRemoved(gone, 3L * 1024 * 1024 * 1024)], []) { Interrupted = true });
-        transports.For(Arg.Any<HostReport>()).Returns(transport);
-
-        var (_, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), transports: transports);
-
-        Assert.Equal("stopped", leg.GetProperty("verdict").GetString());
-        Assert.Equal(
-            $"nothing to remove: ssh {HostName} holds no copy of this tree at '{HostTree}'; removed 1 mutation worker(s) left beside where it was, "
-            + $"3 GiB: '{gone}'; the removal was stopped before each had been dealt with",
-            leg.GetProperty("detail").GetString());
-        Assert.Equal(3L * 1024 * 1024 * 1024, leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
-    }
-
-    /// <summary>
     /// A leg whose build directory is not measured - a link, left alone - still carries what was removed of its mutation
     /// workers: its space says them alone, and nothing of the directory.
     /// </summary>
@@ -826,36 +764,6 @@ public sealed class CleanServiceTests
         Assert.Equal(Workers.Holding(10), space.GetProperty("workerBytes").GetInt64());
         Assert.Equal((0, false), (space.GetProperty("buildBytes").GetInt64(), space.GetProperty("removed").GetBoolean()));
         Assert.False(space.TryGetProperty("disk", out var disk) && disk.ValueKind != JsonValueKind.Null);
-    }
-
-    /// <summary>
-    /// A directory left beside where the copy was that is nothing the harness may remove keeps nothing: it is said, the
-    /// leg has passed, and what was removed of its workers is 0, as where each was kept.
-    /// </summary>
-    [Fact]
-    public async Task ALegOnAHostWithNoCopyOfTheTree_SaysADirectoryNobodyMade_AndHasPassed()
-    {
-        using var temp = new TempDirectory();
-        var harness = new HarnessFactory();
-        var transport = Substitute.For<ISyncTransport>();
-        var transports = Substitute.For<ISyncTransportFactory>();
-        var somebodys = HostTree + ".mutation-notes";
-
-        transport.RootExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
-        transport.RemoveWorkersAsync(HostTree, false, Arg.Any<CancellationToken>()).Returns(new WorkersRemoval(
-            [],
-            [new WorkerLeft(somebodys, "nothing there says the harness made it, so it is yours to remove", WorkerLeftAs.Somebodys)]));
-        transports.For(Arg.Any<HostReport>()).Returns(transport);
-
-        var (outcome, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), transports: transports);
-
-        Assert.Equal(HarnessExit.Success, outcome.ExitCode);
-        Assert.Equal("passed", leg.GetProperty("verdict").GetString());
-        Assert.Equal(
-            $"nothing to remove: ssh {HostName} holds no copy of this tree at '{HostTree}'; '{somebodys}' was left: "
-            + "nothing there says the harness made it, so it is yours to remove",
-            leg.GetProperty("detail").GetString());
-        Assert.Equal(0, leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
     }
 
     /// <summary>A dry run says what each worker holds, and what an earlier removal left aside, and removes none of it.</summary>
@@ -937,8 +845,8 @@ public sealed class CleanServiceTests
         => VariantKey.For(config, config.Legs.Single().Value, harness.Platform.PlatformKey);
 
     /// <summary>
-    /// Mutation workers beside a test's tree - outside its directory, as a worker is beside its tree - removed once the
-    /// test is done, with whatever a removal left aside.
+    /// Mutation workers in a test's tree, in its slot for them, removed once the test is done, with whatever a removal
+    /// left aside.
     /// </summary>
     private sealed class Workers(TempDirectory temp) : IDisposable
     {
@@ -981,8 +889,8 @@ public sealed class CleanServiceTests
         public string Aside(VariantKey variant, int number, int bytes) => Aside(temp.Path, variant, number, bytes);
 
         /// <summary>
-        /// What an earlier removal left aside of worker <paramref name="number"/> of another tree beside this one, whose
-        /// name starts as this tree's does and goes on.
+        /// What an earlier removal left aside of worker <paramref name="number"/> of another tree beside this one, in that
+        /// tree's own slot, whose name starts as this tree's does and goes on.
         /// </summary>
         public string AnotherTreesAside(VariantKey variant, int number, int bytes) => Aside(temp.Path + "x", variant, number, bytes);
 

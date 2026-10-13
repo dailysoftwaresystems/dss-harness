@@ -612,8 +612,9 @@ public sealed class ConfigStoreTests
     }
 
     /// <summary>
-    /// A worktrees root that is git's own directory or the orchestrators directory, or is inside either, is refused:
-    /// worktrees made there would mix with git's records or an orchestrator's.
+    /// A worktrees root that is git's own directory, the orchestrators directory or a slot a tree keeps its own copies
+    /// in, or is inside one, is refused: worktrees made there would mix with git's records, an orchestrator's, or a
+    /// sweep's workers and a leg's copies.
     /// </summary>
     [Theory]
     [InlineData(".orchestrators")]
@@ -621,7 +622,11 @@ public sealed class ConfigStoreTests
     [InlineData(".Orchestrators")]
     [InlineData(".git")]
     [InlineData(".git/worktrees")]
-    public void Load_RejectsAWorktreesRootThatIsOrIsInsideGitOrTheOrchestratorsDirectory(string root)
+    [InlineData(".mutations")]
+    [InlineData(".mutations/trees")]
+    [InlineData(".legs")]
+    [InlineData(".Legs/trees")]
+    public void Load_RejectsAWorktreesRootThatIsOrIsInsideGitTheOrchestratorsDirectoryOrASlot(string root)
     {
         var exception = LoadInvalid($$"""{ "worktrees": { "root": "{{root}}" } }""");
 

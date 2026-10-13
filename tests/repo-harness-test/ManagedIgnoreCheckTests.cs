@@ -210,6 +210,8 @@ public sealed class ManagedIgnoreCheckTests
             [
                 $"{WorktreeSettings.SeededRoot}/.gitkeep",
                 ".orchestrators/.gitkeep",
+                ".mutations/.gitkeep",
+                ".legs/.gitkeep",
                 ".harness-config/sshItems/.gitkeep",
                 ".harness-config/wslDistros/.gitkeep",
                 ".harness-config/runner/.env/.gitkeep",
@@ -483,12 +485,17 @@ public sealed class ManagedIgnoreCheckTests
     }
 
     /// <summary>
-    /// A worktrees root kept on another disk through a link: git keeps nothing behind a link, so init writes no
-    /// placeholder through it and names it, and git lists the link as an untracked entry - the cost accepted with a
-    /// root git keeps in the repository, where a root ignored whole was ignored whatever it was.
+    /// A slot at the top of the tree - the worktrees root, the orchestrators directory, or one a tree keeps its copies
+    /// in - kept on another disk through a link: git keeps nothing behind a link, so init writes no placeholder through
+    /// it and names it, and git lists the link as an untracked entry - the cost accepted with a slot git keeps in the
+    /// repository, where one ignored whole was ignored whatever it was.
     /// </summary>
-    [Fact]
-    public async Task ALinkedWorktreesRoot_IsNamedByInit_AndNothingIsWrittenThroughIt()
+    [Theory]
+    [InlineData(WorktreeSettings.SeededRoot)]
+    [InlineData(HarnessLayout.OrchestratorsDirectoryName)]
+    [InlineData(HarnessLayout.MutationsDirectoryName)]
+    [InlineData(HarnessLayout.LegsDirectoryName)]
+    public async Task ALinkedSlot_IsNamedByInit_AndNothingIsWrittenThroughIt(string slot)
     {
         using var temp = new TempDirectory();
         using var elsewhere = new TempDirectory();
@@ -496,19 +503,19 @@ public sealed class ManagedIgnoreCheckTests
         var token = TestContext.Current.CancellationToken;
 
         await harness.InitializeGitRepositoryAsync(temp.Path, token);
-        Link(temp.Combine(WorktreeSettings.SeededRoot), Directory.CreateDirectory(Path.Combine(elsewhere.Path, "worktrees")).FullName);
+        Link(temp.Combine(slot), Directory.CreateDirectory(Path.Combine(elsewhere.Path, "slot")).FullName);
 
         var outcome = await harness.InitService.InitializeAsync(temp.Path, token);
 
         Assert.True(outcome.Succeeded, outcome.Message);
         Assert.Contains(
-            $"note    '{WorktreeSettings.SeededRoot}' is a link, and git keeps nothing behind one: no placeholder was written through it",
+            $"note    '{slot}' is a link, and git keeps nothing behind one: no placeholder was written through it",
             outcome.Details ?? []);
-        Assert.False(File.Exists(Path.Combine(elsewhere.Path, "worktrees", ".gitkeep")));
+        Assert.False(File.Exists(Path.Combine(elsewhere.Path, "slot", ".gitkeep")));
 
-        var status = await harness.RunGitAsync(temp.Path, ["status", "--porcelain", "--untracked-files=all", "--", WorktreeSettings.SeededRoot], token);
+        var status = await harness.RunGitAsync(temp.Path, ["status", "--porcelain", "--untracked-files=all", "--", slot], token);
 
-        Assert.Equal($"?? {WorktreeSettings.SeededRoot}", status.StandardOutput.Trim());
+        Assert.Equal($"?? {slot}", status.StandardOutput.Trim());
     }
 
     /// <summary>

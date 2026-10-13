@@ -471,6 +471,53 @@ public sealed class InputFingerprintTests
     }
 
     /// <summary>
+    /// A watch never goes into what a tree keeps in its slots: a slot tracked for its placeholder alone is watched for its
+    /// own entries, and with a real watch a sweep's worker building there, or a leg's copy written there, is never heard,
+    /// so the leg's own work is never voided for a copy of it.
+    /// </summary>
+    [Fact]
+    public async Task AWatch_NeverGoesIntoTheCopiesATreeKeepsInItsSlots()
+    {
+        using var temp = new TempDirectory();
+        string[] inputs = [".mutations/.gitkeep", ".legs/.gitkeep", "src/a.c"];
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, string.Empty);
+        }
+
+        Directory.CreateDirectory(temp.Combine(".mutations", "357e24cw-1", "build"));
+        Directory.CreateDirectory(temp.Combine(".legs", "357e24c", "build"));
+
+        using (var scripted = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, new ScriptedWatchKind()))
+        {
+            Assert.Equal(
+                [new WatchTarget(temp.Path, NamesOnly: true), new(temp.Combine(".legs")), new(temp.Combine(".mutations")), new(temp.Combine("src"))],
+                scripted.Watched);
+        }
+
+        var fingerprint = Create();
+        var before = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+        var heard = new ConcurrentQueue<string>();
+
+        using var watch = Watching(() => fingerprint.Watch(temp.Path, inputs, before, heard.Enqueue));
+
+        temp.WriteFile(".mutations/357e24cw-1/build/obj.o", "a worker's build");
+        temp.WriteFile(".legs/357e24c/build/obj.o", "a leg's copy's build");
+        temp.WriteFile("src/a.c", "edited");
+        await WaitForAsync(watch, "src/a.c", TestContext.Current.CancellationToken);
+
+        var after = await fingerprint.TakeAsync(temp.Path, inputs, TestContext.Current.CancellationToken);
+
+        // Heard in order: word of either write, had the watch been told of it, came before word of the edit after both.
+        Assert.DoesNotContain(
+            heard,
+            path => path.StartsWith(".mutations/357e24cw-1/", StringComparison.Ordinal) || path.StartsWith(".legs/357e24c/", StringComparison.Ordinal));
+        Assert.Equal(["src/a.c"], watch.Changed);
+        Assert.Equal(InputChange.Moved, InputFingerprint.Compare(before, after, watch).Change);
+    }
+
+    /// <summary>
     /// Only past the watches the tool allows itself is a top-level directory watched all the way down - the one whose
     /// inputs spread over the most directories first - so a tree whose sources fill many directories is watched as it was,
     /// and a directory beside them tracked for one placeholder still costs one shallow watch.

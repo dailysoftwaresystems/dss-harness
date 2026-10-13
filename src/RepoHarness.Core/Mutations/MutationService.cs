@@ -2,6 +2,7 @@ using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
@@ -65,6 +66,7 @@ internal sealed record SweepArms(MutationRegistry Registry, IReadOnlyList<Mutati
 /// </remarks>
 public sealed class MutationService(
     IHarnessContextLoader contextLoader,
+    IGitClient gitClient,
     LegRunService legRuns,
     ISyncService syncService,
     LocalSyncTransport localTransport,
@@ -103,6 +105,7 @@ public sealed class MutationService(
     public static LegWorkload SelfTestWorkload { get; } = Workload with { BuildsTheLegsTree = false };
 
     private readonly IHarnessContextLoader _contextLoader = contextLoader;
+    private readonly IGitClient _gitClient = gitClient;
     private readonly LegRunService _legRuns = legRuns;
     private readonly ISyncService _syncService = syncService;
     private readonly LocalSyncTransport _localTransport = localTransport;
@@ -178,8 +181,8 @@ public sealed class MutationService(
                     request.Here,
                     RemoteArguments(request.ArmNames, request.SelfTest))
                 {
-                    // A self-test takes the leg's own sweep lock, as a sweep of the leg does: its workers are kept beside
-                    // the leg's tree as a sweep's are, in a family of their own, and a clean of the leg takes both under it.
+                    // A self-test takes the leg's own sweep lock, as a sweep of the leg does: its workers are kept in the
+                    // leg's tree as a sweep's are, in a family of their own, and a clean of the leg takes both under it.
                     Workload = request.SelfTest ? SelfTestWorkload : Workload,
                     Lock = MutationWorkers.SweepLock,
                     NothingRunsExit = NothingRuns,
@@ -239,7 +242,28 @@ public sealed class MutationService(
                 + $"{measured} alone: {why}");
         }
 
-        return await runner.RunAsync(Subject(work, arms, force, beside), work, cancellationToken).ConfigureAwait(false);
+        var subject = Subject(work, arms, force, beside);
+
+        await RefuseUnignoredAsync(subject.Workers, cancellationToken).ConfigureAwait(false);
+
+        return await runner.RunAsync(subject, work, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Refuses a sweep whose workers git would not ignore in the tree they are kept in, before anything is made: asked on
+    /// the machine that makes them, so a host answers for its own copy (<see cref="SlotIgnored"/>).
+    /// </summary>
+    /// <param name="workers">The family of workers the sweep keeps.</param>
+    /// <param name="cancellationToken">Stops the asking.</param>
+    /// <exception cref="HarnessException">git does not ignore them (<see cref="HarnessExit.Refused"/>), or could not be asked.</exception>
+    private async Task RefuseUnignoredAsync(WorkerFamily workers, CancellationToken cancellationToken)
+    {
+        var probe = $"{HarnessLayout.MutationsDirectoryName}/{workers.Name}-1";
+
+        if (await SlotIgnored.RefusalAsync(_gitClient, workers.TreeRoot, probe, $"the mutation workers a sweep makes in '{workers.TreeRoot}'", cancellationToken).ConfigureAwait(false) is { } unignored)
+        {
+            throw new HarnessException(HarnessExit.Refused, $"{unignored} Nothing was swept.");
+        }
     }
 
     /// <summary>
@@ -291,7 +315,7 @@ public sealed class MutationService(
 
     /// <summary>
     /// Self-tests <paramref name="work"/>'s leg: the fixture written where this machine keeps this tool's own data, and
-    /// swept as the leg builds, in workers kept beside the leg's own tree.
+    /// swept as the leg builds, in workers kept in the leg's own tree.
     /// </summary>
     /// <exception cref="HarnessException">
     /// This machine has nowhere of this user's own to keep the fixture, or it could not be written there
@@ -300,11 +324,14 @@ public sealed class MutationService(
     private async Task<LegEntry> SelfTestAsync(MutationLegRunner runner, LegWork work, SweepArms arms, bool force, CancellationToken cancellationToken)
     {
         var directory = _fixtures.Directory;
+        var subject = SelfTestSubject(work, arms, force, directory);
+
+        await RefuseUnignoredAsync(subject.Workers, cancellationToken).ConfigureAwait(false);
 
         work.Progress($"writing the self-test's fixture to '{directory}'");
         _fixtures.Write();
 
-        return await runner.RunAsync(SelfTestSubject(work, arms, force, directory), work, cancellationToken).ConfigureAwait(false);
+        return await runner.RunAsync(subject, work, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -315,11 +342,13 @@ public sealed class MutationService(
     /// copy's own size is planned with.
     /// </summary>
     /// <remarks>
-    /// Its workers are copies of the fixture kept beside the leg's own tree, in the self-test's family of that tree's
+    /// Its workers are copies of the fixture kept in the leg's own tree, in the self-test's family of that tree's
     /// workers: one fixture serves every repository on the machine, and workers kept beside it were shared by all of
     /// them - one repository's toolchain refusing the build directory another's had made - with nothing to remove them.
-    /// Beside the leg's tree they are that repository's, counted by its room, and go with a clean of the leg, and with
-    /// its worktree or its host's copy.
+    /// In the leg's tree they are that repository's, counted by its room, and go with a clean of the leg, and with its
+    /// worktree or its host's copy. Each is a repository of its own, as every copy a sync makes is, holding the fixture's
+    /// files staged: so the files git tracks there, which a worker's build watches, are the fixture's, and never what the
+    /// tree around it tracks.
     /// </remarks>
     internal static MutationSubject SelfTestSubject(LegWork work, SweepArms arms, bool force, string directory)
     {

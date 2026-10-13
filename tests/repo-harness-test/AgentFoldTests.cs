@@ -1,6 +1,7 @@
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -309,6 +310,34 @@ public sealed class AgentFoldTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains("  'nested' is a directory in the agent's worktree - a submodule, or a repository of its own - and a fold moves files only", refused.Details!);
+    }
+
+    /// <summary>
+    /// What an agent's worktree keeps in its slots - a sweep's workers, each a repository of its own, and the copies its
+    /// legs work in - is no work of the agent's: a fold weighs none of it, so neither a repository there nor a file is
+    /// refused or written, and the agent's own work goes in.
+    /// </summary>
+    [Fact]
+    public async Task WhatAnAgentsSlotsHold_IsNeverWeighed_AWorkersRepositoryAmongIt()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var worker = Directory.CreateDirectory(HarnessLayout.InSlot(worktree, HarnessLayout.MutationsDirectoryName, "357e24cw-1")).FullName;
+
+        await kit.Harness.InitializeGitRepositoryAsync(worker, TestContext.Current.CancellationToken);
+        OrchestrationKit.Write(worktree, ".legs/357e24c/src/a.c", "a leg's copy\n");
+        OrchestrationKit.Write(worktree, "new.txt", "new\n");
+
+        var dry = await kit.FoldAsync("ag", apply: false);
+        var applied = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.StartsWith("dry run: folding agent 'ag' of 'o1' writes 1 path(s) into the main tree, removes 0", dry.Message);
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("new\n", OrchestrationKit.Read(kit.Main, "new.txt"));
+        Assert.False(Directory.Exists(Path.Combine(kit.Main, HarnessLayout.MutationsDirectoryName, "357e24cw-1")));
+        Assert.False(Directory.Exists(Path.Combine(kit.Main, HarnessLayout.LegsDirectoryName, "357e24c")));
     }
 
     /// <summary>A path of the agent's that leads, in the main tree, through a link out of it is never written through.</summary>

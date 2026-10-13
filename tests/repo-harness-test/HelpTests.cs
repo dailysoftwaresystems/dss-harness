@@ -268,8 +268,19 @@ public sealed partial class HelpTests
             $"an unknown one is refused ({HarnessExit.UsageError}) - once the registry itself can be swept: its own problems are listed "
             + "first, every one of them, whatever --arms names.",
             "ARMS, below the table, names each arm selected that did not pass, and why;",
+            "Each leg is swept in worker copies of its tree, kept in it as <tree>/.mutations/<key>w-<n>, numbered from 1:",
+            "directory is named: its first worker adds 22 character(s) to its tree's path whatever the variant is called,",
+            "Each is a repository of its own, as every copy a sync makes is, and init keeps .mutations in git and everything made in "
+            + $"it out: a sweep in a tree where git does not ignore what it would make there is refused ({HarnessExit.Refused}), naming "
+            + "init, with nothing made - asked on the machine that makes the workers, so a host answers for its own copy.",
+            "A worker is claimed while a sweep uses it, in <worker>.claim.json beside it in .mutations,",
             "a worker a sweep still running holds keeps its worktree, or its host's copy, until the sweep has ended, and one that "
-            + "cannot be removed keeps it as a failure until that is put right - or --force deletes the worktree and leaves that worker,",
+            + "cannot be removed keeps it as a failure until that is put right - or --force deletes the worktree with that worker in it. "
+            + "A directory there under a worker's name that no sync made goes with the worktree, or the host's copy, as everything "
+            + "else in it does, and is said. No copy of a tree carries its workers, and a sync into a host's copy never deletes that "
+            + "copy's own. Workers an earlier version of this tool kept beside a tree, as <tree>.mutation-<key><mark>-<n>, are known "
+            + "to nothing here: nothing lists, counts or removes them, and they are yours to delete.",
+            "Its workers are kept in the leg's own tree, as a sweep's are, in a family of their own - <tree>/.mutations/<key>s-<n>,",
             "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
             + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
             + "of its own - a worker's rebuilt from clean with it.",
@@ -996,11 +1007,12 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The layout topic says the worktrees root and the orchestrators directory are kept in git by their placeholders
-    /// with everything made in them ignored, what that costs, and that sync withholds both.
+    /// The layout topic says the worktrees root, the orchestrators directory and the slots a tree keeps its copies in
+    /// are kept in git by their placeholders with everything made in them ignored, what that costs, and that sync
+    /// withholds each.
     /// </summary>
     [Fact]
-    public async Task LayoutTopic_SaysTheWorktreesRootAndTheOrchestratorsDirectoryAreKeptInGit()
+    public async Task LayoutTopic_SaysTheWorktreesRootTheOrchestratorsDirectoryAndEachSlotAreKeptInGit()
     {
         var result = await CliRunner.RunAsync(["help", "layout"], TestContext.Current.CancellationToken);
         var text = Words(result.StandardOutput);
@@ -1010,9 +1022,13 @@ public sealed partial class HelpTests
             ".worktrees/ contents ignored, .gitkeep tracked; the worktrees, at worktrees.root, which init writes as this",
             ".orchestrators/ contents ignored, .gitkeep tracked; what each orchestrator and its agents keep, in the main checkout, "
                 + "and never sent to a host by sync",
-            "The worktrees root and the orchestrators directory are kept in git by their placeholders, so each reads as not ignored "
-                + "itself while everything made in it is, and neither can be a link: init names one it finds, and writes nothing "
-                + "through it. Sync withholds both by name.",
+            ".mutations/ contents ignored, .gitkeep tracked; the tree's mutation workers, in every tree, never sent to a host by "
+                + "sync ('dssharness help mutations')",
+            ".legs/ contents ignored, .gitkeep tracked; the copies of the tree its legs work in, in every tree, never sent to a "
+                + "host by sync",
+            "The worktrees root, the orchestrators directory, .mutations and .legs are kept in git by their placeholders, so each "
+                + "reads as not ignored itself while everything made in it is, and none can be a link: init names one it finds, and "
+                + "writes nothing through it. Sync withholds each by name.",
         })
         {
             Assert.Contains(said, text, StringComparison.Ordinal);
@@ -1064,24 +1080,25 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
-    /// The worktrees topic says what becomes of the mutation workers kept beside a worktree that is deleted: asked about
-    /// before any goes, so a worktree kept for one removes nothing; which code each one kept leaves it with; what an
-    /// interruption says; what --force leaves; and that a host's copy is treated as the worktree is.
+    /// The worktrees topic says what becomes of the mutation workers kept in a worktree that is deleted: asked about
+    /// before anything of it is removed, so a worktree kept for one removes nothing; which code each one kept leaves it
+    /// with; what an interruption says; that --force deletes every worker with the worktree; and that a host's copy is
+    /// treated as the worktree is.
     /// </summary>
     [Fact]
-    public async Task WorktreesTopic_SaysWhatBecomesOfTheMutationWorkersBesideAWorktree()
+    public async Task WorktreesTopic_SaysWhatBecomesOfTheMutationWorkersInAWorktree()
     {
         var result = await CliRunner.RunAsync(["help", "worktrees"], TestContext.Current.CancellationToken);
 
         Assert.Contains(
-            "The mutation workers kept beside a worktree ('help mutations') go before it, once every check has passed. They are asked "
-            + $"about before any goes: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), and one that cannot be "
-            + $"removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as workers that cannot be looked for "
-            + "do, with nothing removed. A sweep that takes one meanwhile keeps the worktree as well, and so does one whose removal then "
-            + "fails, the others gone by then, which is said. An interruption as they go says which went, and that the worktree is whole "
-            + $"({HarnessExit.Cancelled}). --force deletes the worktree and leaves a worker that is held or could not be removed, saying "
-            + "so; deleting the worktree again removes it once nothing keeps it. A worktree whose own removal then fails, or is stopped, "
-            + "says which workers went before it. Beside a host's copy they are asked about first as well, and a copy kept once some had "
+            "The mutation workers kept in a worktree ('help mutations') go before it. They are asked about before anything of it is "
+            + $"removed or looked through: one a sweep still running holds keeps the worktree ({HarnessExit.Refused}), and one that cannot "
+            + $"be removed, or told for the harness's, keeps it as a failure ({HarnessExit.CommandFailed}), as workers that cannot be looked "
+            + "for do, with nothing removed. A sweep that takes one meanwhile keeps the worktree as well, and so does one whose removal "
+            + "then fails, the others gone by then, which is said. An interruption as they go says which went, and that nothing else of "
+            + $"the worktree was removed ({HarnessExit.Cancelled}). --force deletes the worktree with every worker in it, one held or one "
+            + "that could not be removed among them, saying which went with it. A worktree whose own removal then fails, or is stopped, "
+            + "says which workers went before it. In a host's copy they are asked about first as well, and a copy kept once some had "
             + "gone says which went.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
@@ -1488,8 +1505,8 @@ public sealed partial class HelpTests
         Assert.Contains("Commands that build nothing - sync, clean - need no room.", text, StringComparison.Ordinal);
         Assert.Contains(
             "with its mutation workers' as 'workerBytes': what was removed of them - 0 where every one there was kept - or, in a dry "
-            + "run, what is there. A leg whose build directory was not measured - a link, locked, not removable, or on a host holding "
-            + "no copy of the tree - carries a space saying its workers alone, where any is there.",
+            + "run, what is there. A leg whose build directory was not measured - a link, locked or not removable - carries a space "
+            + "saying its workers alone, where any is there.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1497,6 +1514,8 @@ public sealed partial class HelpTests
             + "under a worker's name that no sync made is said and left",
             text,
             StringComparison.Ordinal);
+        Assert.Contains("The mutation workers a sweep of the leg keeps in that tree go with it", text, StringComparison.Ordinal);
+        Assert.Contains("A host holding no copy of the tree holds nothing of it to remove.", text, StringComparison.Ordinal);
         Assert.Contains("legs -v' says the room on each host it measured", text, StringComparison.Ordinal);
     }
 

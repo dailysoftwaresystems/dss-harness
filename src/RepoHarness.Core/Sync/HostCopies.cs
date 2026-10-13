@@ -12,13 +12,6 @@ using RepoHarness.Core.Worktrees;
 namespace RepoHarness.Core.Sync;
 
 /// <summary>
-/// One family of copies kept beside a tree: each a directory named <c>&lt;tree&gt;&lt;suffix&gt;&lt;name&gt;</c>.
-/// </summary>
-/// <param name="Suffix">What a copy of the family adds to its tree's name, before its own.</param>
-/// <param name="Names">Whether what follows the suffix in a directory's name is spelt as a copy of the family is.</param>
-public sealed record BesideFamily(string Suffix, Func<string, bool> Names);
-
-/// <summary>
 /// Which of a host's copies of the repository a tree is kept in: the main checkout's at the repositoryPath the
 /// host declares, and each worktree's in a copy of its own beside it, so that trees do not share a copy, or the
 /// lock on it. A worktree made elsewhere under the name of one that has a copy is refused that copy while the
@@ -41,74 +34,9 @@ public static partial class HostCopies
     public const string WorktreeSuffix = ".worktree-";
 
     /// <summary>
-    /// What a mutation worker's copy adds to the tree it is a copy of, before the worker's name: a family of copies of
-    /// its own, beside the tree. No worktree's copy is named into it, since a copy's name holds no dot
-    /// (<see cref="IsCopyName"/>); and a worker kept beside a worktree's copy, whose name goes on from that copy's, is
-    /// spelt as no copy's name and so never listed as a worktree's copy.
-    /// </summary>
-    public const string MutationSuffix = ".mutation-";
-
-    /// <summary>
-    /// The families of copies kept beside a tree on the machine that works in them, each a copy of that tree a sync made:
-    /// a sweep's mutation workers. What tells such a copy from a worktree, and its tree from its name, asks these, so a
-    /// family is added in one place.
-    /// </summary>
-    public static IReadOnlyList<BesideFamily> BesideFamilies { get; } =
-    [
-        new(MutationSuffix, name => Mutations.MutationWorkers.Named(name) is not null),
-    ];
-
-    /// <summary>
-    /// The name of the tree a directory named <paramref name="name"/> is a copy kept beside - what comes before the last
-    /// of a family's suffix in it, where what follows is spelt as a copy of that family is - or <see langword="null"/>
-    /// where it is named as no such copy. So a mutation worker kept beside a worktree, a copy with a repository of its
-    /// own, is never taken for a worktree, and a tree whose own name holds the suffix is still told from its copies.
-    /// </summary>
-    /// <param name="name">A directory's own name, with no path before it.</param>
-    public static string? TreeOfBesideCopy(string name)
-    {
-        ArgumentNullException.ThrowIfNull(name);
-
-        foreach (var family in BesideFamilies)
-        {
-            var at = name.LastIndexOf(family.Suffix, StringComparison.Ordinal);
-
-            if (at > 0 && family.Names(name[(at + family.Suffix.Length)..]))
-            {
-                return name[..at];
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// The trees that have a copy kept beside them in <paramref name="directory"/>, by the names of their own
-    /// directories there: each once, however many copies it has, in order; none where the directory is not there. Told
-    /// by name alone (<see cref="TreeOfBesideCopy"/>): whether a directory so named is one a sync made is what removing
-    /// a tree's copies reads, and says.
-    /// </summary>
-    /// <param name="fileSystem">Lists the directory.</param>
-    /// <param name="directory">The directory trees and their copies are kept in, side by side.</param>
-    public static IReadOnlyList<string> TreesWithCopiesBesideIn(IFileSystem fileSystem, string directory)
-    {
-        ArgumentNullException.ThrowIfNull(fileSystem);
-        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
-
-        return !fileSystem.DirectoryExists(directory)
-            ? []
-            : [.. fileSystem.EnumerateDirectories(directory)
-                .Select(found => TreeOfBesideCopy(Path.GetFileName(Path.TrimEndingDirectorySeparator(found))))
-                .OfType<string>()
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)];
-    }
-
-    /// <summary>
     /// Whether <paramref name="name"/> is spelt as the name a tree's copies are kept under (<see cref="NameOf"/>):
     /// lower-case letters and digits, joined by hyphens. What follows <see cref="WorktreeSuffix"/> spelt any other way
-    /// is no worktree's copy - a mutation worker kept beside one, above all, whose name goes on with
-    /// <see cref="MutationSuffix"/>.
+    /// is no worktree's copy.
     /// </summary>
     /// <param name="name">What follows the suffix in a directory's name.</param>
     public static bool IsCopyName(string name)
@@ -172,8 +100,8 @@ public static partial class HostCopies
     /// The copy of the <paramref name="family"/> kept under <paramref name="name"/> beside <paramref name="root"/>:
     /// <c>&lt;root&gt;&lt;family&gt;&lt;name&gt;</c>.
     /// </summary>
-    /// <param name="root">What the copies are kept beside: the host's main copy, or the tree a worker copies.</param>
-    /// <param name="family">The family's suffix: <see cref="WorktreeSuffix"/> or <see cref="MutationSuffix"/>.</param>
+    /// <param name="root">What the copies are kept beside: the host's main copy.</param>
+    /// <param name="family">The family's suffix: <see cref="WorktreeSuffix"/>.</param>
     /// <param name="name">The name the copy is kept under.</param>
     public static string InFamily(string root, string family, string name)
     {

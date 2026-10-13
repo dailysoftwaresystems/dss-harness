@@ -5,7 +5,7 @@ using RepoHarness.Core.Platform;
 namespace RepoHarness.Core.Legs;
 
 /// <summary>
-/// Whether the build in a copy of a tree kept beside that tree stays within this machine's path limit: said once, for
+/// Whether the build in a copy of a tree kept in that tree's slot stays within this machine's path limit: said once, for
 /// every such copy a variant is built in.
 /// </summary>
 /// <remarks>

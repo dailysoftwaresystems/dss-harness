@@ -4,8 +4,8 @@ namespace RepoHarness.Core.Repository;
 
 /// <summary>
 /// The paths of a tree that are never moved into another tree, whatever git says of them: git's own directory, what
-/// orchestrators keep, and where worktrees are made. Sync withholds them from every host's copy, and an agent is never
-/// seeded with them nor folded back from them.
+/// orchestrators keep, the tree's own copies - its mutation workers and the copies its legs work in - and where worktrees
+/// are made. Sync withholds them from every copy, and an agent is never seeded with them nor folded back from them.
 /// </summary>
 /// <remarks>
 /// Asserted where the moving happens rather than left to the ignore rules, which a repository can edit away: without a

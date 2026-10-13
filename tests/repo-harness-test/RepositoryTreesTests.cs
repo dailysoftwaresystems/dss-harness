@@ -60,7 +60,8 @@ public sealed class RepositoryTreesTests
     /// <summary>
     /// On a host running legs another machine sent it, the trees are its copy of the main checkout, where the configuration
     /// says this host keeps it, and each worktree's copy beside it, spelt as the configuration spells the main copy - and no
-    /// directory beside it named otherwise: a mutation worker kept beside a copy, or a name no worktree's copy is kept under.
+    /// directory beside it named otherwise: a mutation worker an earlier version of this tool kept beside a copy, or a name
+    /// no worktree's copy is kept under.
     /// </summary>
     [Fact]
     public async Task OnAHostRunningLegsItWasSent_TheTreesAreItsMainCopyAndTheWorktreesCopiesBesideIt()

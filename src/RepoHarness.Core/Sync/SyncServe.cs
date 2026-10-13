@@ -270,9 +270,9 @@ public static class SyncServe
     public const string ListCopies = "list-copies";
 
     /// <summary>
-    /// Removes the mutation workers kept beside the tree its root names, whether that tree is still there or not, as
-    /// removing the tree's copy asks first, and a clean of a leg whose copy is gone: <c>remove-workers &lt;root&gt;</c>,
-    /// and <see cref="MeasureOnly"/> after it to say what would go and remove nothing.
+    /// Removes the mutation workers kept in the tree its root names - none where that tree is not there - as removing
+    /// the tree's copy asks first, and a clean of a leg: <c>remove-workers &lt;root&gt;</c>, and
+    /// <see cref="MeasureOnly"/> after it to say what would go and remove nothing.
     /// </summary>
     public const string RemoveWorkers = "remove-workers";
 
@@ -616,12 +616,12 @@ public enum CopyRemoval
     NotACopy,
 }
 
-/// <summary>What removing the mutation workers kept beside a tree did.</summary>
+/// <summary>What removing the mutation workers kept in a tree did.</summary>
 /// <param name="Workers">Each worker removed, and each left.</param>
 public sealed record SyncWorkersAnswer(WorkersRemoval Workers);
 
 /// <summary>
-/// What removing the mutation workers kept beside a tree did or, asked only to measure, would do: each copy of the
+/// What removing the mutation workers kept in a tree did or, asked only to measure, would do: each copy of the
 /// family a sync made is removed, with what an unfinished removal of one left aside, and every other directory of the
 /// family is left, saying why.
 /// </summary>
@@ -629,7 +629,7 @@ public sealed record SyncWorkersAnswer(WorkersRemoval Workers);
 /// <param name="Left">Each directory of the family left where it is, and why.</param>
 public sealed record WorkersRemoval(IReadOnlyList<WorkerRemoved> Removed, IReadOnlyList<WorkerLeft> Left)
 {
-    /// <summary>No worker beside the tree, so nothing removed and nothing left.</summary>
+    /// <summary>No worker in the tree, so nothing removed and nothing left.</summary>
     public static WorkersRemoval None { get; } = new([], []);
 
     /// <summary>

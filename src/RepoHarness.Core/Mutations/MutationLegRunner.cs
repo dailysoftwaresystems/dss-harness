@@ -9,6 +9,7 @@ using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Legs;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
 using RepoHarness.Core.Sync;
@@ -27,7 +28,7 @@ internal sealed record MutationSubject
     public required string TreeRoot { get; init; }
 
     /// <summary>
-    /// Where the workers are kept: the family of copies beside the leg's own tree its variant's sweeps keep, or its
+    /// Where the workers are kept: the family of copies in the leg's own tree its variant's sweeps keep, or its
     /// self-test's.
     /// </summary>
     public required WorkerFamily Workers { get; init; }
@@ -86,7 +87,7 @@ internal sealed record MutationSubject
 }
 
 /// <summary>
-/// Sweeps one leg's arms: reads its tree once, makes the workers that fit beside it, controls each test binary unmutated,
+/// Sweeps one leg's arms: reads its tree once, makes the workers that fit in it, controls each test binary unmutated,
 /// and drives every arm through its mutation, its build, the rebuild's witness and its run or its paired control, putting
 /// each site back as it was - and returns the leg's line, its arms beneath it.
 /// </summary>
@@ -320,7 +321,7 @@ internal sealed class MutationLegRunner(
                 }
             }
 
-            // A worker that could not be made is the leg's own failure only where no worker was made: one made beside it drove
+            // A worker that could not be made is the leg's own failure only where no worker was made: another made drove
             // the arms, and the leg says the sweep ran with fewer.
             var own = _own.ToList();
 
@@ -692,7 +693,10 @@ internal sealed class MutationLegRunner(
                 : _subject.PathReserve is { } reserve ? $"as the {reserve} its project's build makes below its build directory and worktrees.pathBudgetMargin reckon them"
                 : "as worktrees.pathBudgetReserve and pathBudgetMargin reckon them";
 
-            return $"worker {number} would be kept at '{Worker(number)}', where its build needs paths of {budget.RequiredLength} "
+            // Where the tree fitted a worker kept beside it and no longer fits one kept in it, the two characters are why.
+            return $"worker {number} would be kept at '{Worker(number)}', in the tree's {HarnessLayout.MutationsDirectoryName}, two characters "
+                + "deeper than a worker an earlier version of this tool kept beside the tree, "
+                + $"where its build needs paths of {budget.RequiredLength} "
                 + $"characters, {reckoned}, and every path must stay under {budget.Limit}: keep the tree at a shorter path, or set "
                 + "worktrees.pathLimit where every tool its build runs takes longer ones";
         }
@@ -887,7 +891,7 @@ internal sealed class MutationLegRunner(
             catch (Exception ex) when (!Stops(ex, cancellationToken) && !EndsTheRun(ex))
             {
                 // This worker's alone, whatever it is: the disk full as its copy is written or its build recorded is no
-                // reason to lose what the workers beside it judge.
+                // reason to lose what the other workers judge.
                 var failure = Failure(ex, "it could not be made");
 
                 Unmade(number, failure.Verdict, failure.Detail);

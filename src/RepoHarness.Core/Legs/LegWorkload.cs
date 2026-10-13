@@ -82,7 +82,7 @@ public sealed record LegWorkload(bool Build, bool Test, IReadOnlyList<string> Pr
     public bool AdmitsEachUnit { get; init; }
 
     /// <summary>
-    /// Whether what the command builds is the leg's own tree - its build directory, or the first worker beside it of a
+    /// Whether what the command builds is the leg's own tree - its build directory, or the first worker in it of a
     /// sweep of its arms - whose room each host is asked about, and the leg placed by. A self-test of the sweep builds
     /// instead the fixture this tool carries, a few megabytes kept among this tool's own data on whichever machine runs
     /// the leg, which no host is asked about and no build of the leg says the size of: each of its workers is measured

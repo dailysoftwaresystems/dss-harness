@@ -143,16 +143,55 @@ public sealed record HarnessLayout(string RepositoryRoot, string MainCheckoutRoo
     public const string OrchestratorsDirectoryName = ".orchestrators";
 
     /// <summary>
+    /// The directory at the root of a tree where its mutation workers are kept: each a copy of the tree a sweep of one of
+    /// its legs made, <c>&lt;tree&gt;/.mutations/&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>, which goes with the tree.
+    /// </summary>
+    public const string MutationsDirectoryName = ".mutations";
+
+    /// <summary>
+    /// The directory at the root of a tree where the copies of it its legs work in are kept,
+    /// <c>&lt;tree&gt;/.legs/&lt;key&gt;</c>, which go with the tree.
+    /// </summary>
+    public const string LegsDirectoryName = ".legs";
+
+    /// <summary>
     /// The directories at the root of a tree whose contents git ignores while a <see cref="GitKeepFileName"/> keeps
-    /// each in git, relative to the root with forward separators: where worktrees are made, and where orchestrators
-    /// keep what they hold. A clone then arrives with both in place, and nothing made in them is ever committed.
+    /// each in git, relative to the root with forward separators: where worktrees are made, where orchestrators keep
+    /// what they hold, and where the tree's own copies are kept - its mutation workers, and the copies its legs work in.
+    /// A clone then arrives with each in place, and nothing made in them is ever committed.
     /// </summary>
     /// <param name="worktreesRoot">The configured worktrees root.</param>
     public static IReadOnlyList<string> RootSlots(string worktreesRoot)
     {
         ArgumentNullException.ThrowIfNull(worktreesRoot);
 
-        return [.. new[] { PathPatterns.Normalize(worktreesRoot), OrchestratorsDirectoryName }.Distinct(StringComparer.Ordinal)];
+        return
+        [
+            .. new[] { PathPatterns.Normalize(worktreesRoot), OrchestratorsDirectoryName, MutationsDirectoryName, LegsDirectoryName }
+                .Distinct(StringComparer.Ordinal),
+        ];
+    }
+
+    /// <summary>
+    /// Where the copy kept under <paramref name="name"/> in the slot <paramref name="slot"/> of <paramref name="tree"/>
+    /// is: <c>&lt;tree&gt;/&lt;slot&gt;/&lt;name&gt;</c>, joined by the separator the tree's own path is spelt with, so a
+    /// tree another machine keeps names its copies as that machine spells a path.
+    /// </summary>
+    /// <param name="tree">The tree, as the machine that keeps it spells it.</param>
+    /// <param name="slot">The slot: <see cref="MutationsDirectoryName"/> or <see cref="LegsDirectoryName"/>.</param>
+    /// <param name="name">The name the copy is kept under there.</param>
+    public static string InSlot(string tree, string slot, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(slot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var root = tree.TrimEnd('/', '\\');
+        var separator = root.Contains('/', StringComparison.Ordinal) ? '/'
+            : root.Contains('\\', StringComparison.Ordinal) ? '\\'
+            : Path.DirectorySeparatorChar;
+
+        return root + separator + slot + separator + name;
     }
 
     /// <summary>

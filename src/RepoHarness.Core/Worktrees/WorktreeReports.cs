@@ -171,6 +171,13 @@ public static class WorktreeReports
         _ => $"its marker cannot be read: {copy.Problem?.TrimEnd('.')}",
     };
 
+    /// <summary>
+    /// What is said of a directory under a mutation worker's name that nothing says the harness made, once the tree it
+    /// was kept in is gone: kept in that tree, it was the tree's, and went with it as everything else the tree held.
+    /// </summary>
+    /// <param name="path">Where it was.</param>
+    internal static string WentWithItsTree(string path) => $"'{path}', named as a mutation worker though nothing says the harness made it, went with it";
+
     private static JsonObject Document(IReadOnlyList<WorktreeListing> worktrees, HostCopyListing copies)
     {
         var document = new JsonObject

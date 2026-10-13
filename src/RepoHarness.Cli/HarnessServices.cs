@@ -194,7 +194,7 @@ internal static class HarnessServices
         services.AddSingleton<IManifestBuilder, ManifestBuilder>();
 
         // What keeps a mutation worker's copy from being removed from under the sweep mutating it, wherever the workers
-        // kept beside a tree are removed with it: here, or on the host serving a removal.
+        // kept in a tree are removed with it: here, or on the host serving a removal.
         services.AddSingleton(provider => MutationWorkers.CopyClaims(
             provider.GetRequiredService<IFileSystem>(),
             provider.GetRequiredService<IHarnessOutput>(),

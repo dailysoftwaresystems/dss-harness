@@ -219,9 +219,10 @@ public static partial class HarnessConfigValidator
             problems.Add("worktrees.root cannot be the repository root itself");
         }
 
-        // Two directories the harness keeps apart from the worktrees: git's own, and the one orchestrators keep what they
-        // hold in, beside which their agents' worktrees are made. A root that is either, or inside either, would mix
-        // them. Compared ignoring case: on Windows and macOS the two spellings are one directory.
+        // The directories the harness keeps apart from the worktrees: git's own, the one orchestrators keep what they
+        // hold in, beside which their agents' worktrees are made, and the two a tree keeps its own copies in. A root that
+        // is one, or inside one, would mix them. Compared ignoring case: on Windows and macOS the two spellings are one
+        // directory.
         var root = Repository.PathPatterns.Normalize(worktrees.Root);
 
         foreach (var kept in SyncConfig.NeverTransferFloor)
@@ -1431,7 +1432,7 @@ public static partial class HarnessConfigValidator
         [
             (Build.VariantKey.BuildRootName, "where every leg's build is kept: a build stays incremental, and a run that builds first would delete what it had just built"),
             (Repository.HarnessLayout.DirectoryName, "the harness's own, holding the run's configuration, its actions and its records"),
-            .. Repository.TreeFloor.Of(config.Worktrees.Root).Select(floor => (floor, "which a tree never moves: git's own, what orchestrators keep, or where worktrees are made")),
+            .. Repository.TreeFloor.Of(config.Worktrees.Root).Select(floor => (floor, "which a tree never moves: git's own, what orchestrators keep, the tree's own copies, or where worktrees are made")),
         ];
 
         static bool Within(string path, string directory)

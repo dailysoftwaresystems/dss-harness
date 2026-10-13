@@ -33,7 +33,7 @@ public sealed record CleanRequest(
 
 /// <summary>
 /// Removes each selected leg's build directory wherever the leg runs - this machine, a WSL distribution's
-/// copy, an ssh host's copy - with the mutation workers its sweeps keep beside its tree, or, asked for a dry
+/// copy, an ssh host's copy - with the mutation workers its sweeps keep in its tree, or, asked for a dry
 /// run, says what each holds and the room left beside it.
 /// </summary>
 /// <remarks>
@@ -51,8 +51,8 @@ public sealed record CleanRequest(
 /// which nothing else would ever remove - another leg's are that leg's. Each variant's go under the lock a sweep of
 /// it takes: a sweep running keeps every worker of its variant from it, and a worker a live sweep still claims is
 /// kept; one whose sweep died holding it is released first, and said. A directory under a worker's name that no sync
-/// made is said and left. Where a host holds no copy of the tree, nothing there can run a clean, and the host is
-/// asked to remove the workers left beside where the copy was.
+/// made is said and left. Where a host holds no copy of the tree, it holds nothing of it to remove: the workers kept
+/// there were in the copy.
 /// </para>
 /// </remarks>
 public sealed class CleanService(
@@ -192,9 +192,10 @@ public sealed class CleanService(
         // refuses one for a copy that is not there as a host it could not run it on.
         var transport = _transports.For(leg.Host);
 
+        // A host holding no copy of the tree holds nothing of it to remove: the workers a sweep kept there were in the copy.
         if (!await transport.RootExistsAsync(leg.HostTreeRoot, cancellationToken).ConfigureAwait(false))
         {
-            return await CleanBesideNoCopyAsync(transport, leg, request.DryRun, cancellationToken).ConfigureAwait(false)
+            return leg.Entry(LegVerdict.Passed, $"nothing to remove: {leg.Named} holds no copy of this tree at '{leg.HostTreeRoot}'")
                 with { Duration = Stopwatch.GetElapsedTime(started) };
         }
 
@@ -204,42 +205,8 @@ public sealed class CleanService(
     }
 
     /// <summary>
-    /// What a leg on a host that holds no copy of its tree has removed, or measured: the mutation workers a sweep left
-    /// beside where the copy was, which the host is asked for, since nothing there can run a clean.
-    /// </summary>
-    private static async Task<LegEntry> CleanBesideNoCopyAsync(ISyncTransport transport, PlacedLeg leg, bool dryRun, CancellationToken cancellationToken)
-    {
-        var workers = await transport.RemoveWorkersAsync(leg.HostTreeRoot, dryRun, cancellationToken).ConfigureAwait(false);
-        var said = new List<string> { $"nothing to remove: {leg.Named} holds no copy of this tree at '{leg.HostTreeRoot}'" };
-
-        if (workers.Removed.Count > 0)
-        {
-            said.Add(dryRun
-                ? $"{ReportText.Counted(workers.Removed.Count, "mutation worker")} left beside where it was: {string.Join(", ", workers.Removed.Select(worker => $"{DiskSpace.Size(worker.Bytes)} in '{worker.Path}'"))}"
-                : $"removed {ReportText.Counted(workers.Removed.Count, "mutation worker")} left beside where it was, {DiskSpace.Size(workers.Bytes)}: {string.Join(", ", workers.Removed.Select(worker => $"'{worker.Path}'"))}");
-        }
-
-        said.AddRange(workers.Left.Select(worker => $"'{worker.Path}' was left: {worker.Why.TrimEnd('.')}"));
-
-        if (workers.Interrupted)
-        {
-            said.Add("the removal was stopped before each had been dealt with");
-        }
-
-        // Each one kept says what it is: only one a sweep holds ends by waiting, as a lock does; one that could not be
-        // removed has failed; and a removal that was stopped has stopped.
-        var entry = leg.Entry(workers.Verdict, string.Join("; ", said));
-
-        // Wherever anything named as a worker of the leg's was found there, as on this machine: 0 where each was left.
-        return workers.Removed.Count + workers.Left.Count == 0
-            ? entry
-            : entry with { Space = WorkersAlone(leg.Variant.DirectoryOn(leg.Host.Host, leg.HostTreeRoot)) with { WorkerBytes = workers.Bytes } };
-    }
-
-    /// <summary>
-    /// The space of a leg whose build directory was not measured - a link, locked, not removable, or on a host holding
-    /// no copy of the tree - which says its mutation workers alone: nothing of the directory at
-    /// <paramref name="directory"/>, and no room.
+    /// The space of a leg whose build directory was not measured - a link, locked, or not removable - which says its
+    /// mutation workers alone: nothing of the directory at <paramref name="directory"/>, and no room.
     /// </summary>
     private static BuildSpace WorkersAlone(string directory) => new(directory, 0, Removed: false, Disk: null);
 
@@ -322,13 +289,13 @@ public sealed class CleanService(
         }
     }
 
-    /// <summary>What a clean did with the mutation workers a leg keeps beside its tree.</summary>
+    /// <summary>What a clean did with the mutation workers a leg keeps in its tree.</summary>
     /// <param name="Verdict">What was done, as the leg's line says it.</param>
     /// <param name="Bytes">What was removed of them - 0 where every one there was kept - or, in a dry run, what is there.</param>
     private sealed record WorkersCleaned(ReachedVerdict Verdict, long Bytes);
 
     /// <summary>
-    /// Removes, or measures, the mutation workers a leg on this machine keeps beside its tree - its own variant's, its
+    /// Removes, or measures, the mutation workers a leg on this machine keeps in its tree - its own variant's, its
     /// self-test's, and those of any variant no leg of its host and tree builds any more - each variant's under the lock
     /// a sweep of it takes: what was done, or <see langword="null"/> where there is none of them.
     /// </summary>
@@ -345,8 +312,8 @@ public sealed class CleanService(
 
         try
         {
-            asides = _localTransport.AsidesBeside(leg.HostTreeRoot, HostCopies.MutationSuffix, name => MutationWorkers.Named(name) is { } worker && Cleaned(worker.Family));
-            workers = await _workers.ListBesideAsync(leg.HostTreeRoot, Cleaned, cancellationToken).ConfigureAwait(false);
+            asides = _localTransport.AsidesInSlot(leg.HostTreeRoot, HarnessLayout.MutationsDirectoryName, name => MutationWorkers.Named(name) is { } worker && Cleaned(worker.Family));
+            workers = await _workers.ListInTreeAsync(leg.HostTreeRoot, Cleaned, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -492,7 +459,7 @@ public sealed class CleanService(
 
     /// <summary>
     /// The variants the other legs configured for <paramref name="leg"/>'s host and tree build, by the keys their
-    /// workers are named by: whose mutation workers beside that tree are theirs to clean, and never this leg's.
+    /// workers are named by: whose mutation workers in that tree are theirs to clean, and never this leg's.
     /// </summary>
     private static IReadOnlySet<string> OtherLegsKeys(HarnessConfig config, PlacedLeg leg)
         => config.Legs.Values

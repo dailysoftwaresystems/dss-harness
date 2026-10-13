@@ -110,7 +110,7 @@ public sealed class CheckMutationsEndToEndTests
     /// <summary>
     /// A self-test sweeps the fixture this tool carries through the leg's own toolchain, in a repository declaring no arm
     /// of its own: every arm reaches the verdict it is designed to reach, each passed saying so, and the leg passes. The
-    /// fixture is written among this user's own data for this tool; its workers are kept beside the leg's own tree, never
+    /// fixture is written among this user's own data for this tool; its workers are kept in the leg's own tree, never
     /// beside the fixture, and a clean of the leg removes them.
     /// </summary>
     [Fact]

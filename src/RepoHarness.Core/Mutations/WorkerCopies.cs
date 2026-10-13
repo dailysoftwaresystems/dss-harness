@@ -1,12 +1,13 @@
 using RepoHarness.Core.Execution;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Output;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Core.Mutations;
 
-/// <summary>One worker's copy, as a listing of the copies beside a tree finds it.</summary>
+/// <summary>One worker's copy, as a listing of the copies kept in a tree finds it.</summary>
 /// <param name="Family">Its family: its variant's, or its self-test's.</param>
 /// <param name="Number">The worker's number.</param>
 /// <param name="Found">The copy as the listing found it: where it is, what its files hold, and what its marker says.</param>
@@ -32,7 +33,7 @@ public sealed record WorkerCopy(WorkerFamily Family, int Number, HostCopyFound F
 internal interface IWorkerCopies
 {
     /// <summary>The workers of <paramref name="family"/>, by number.</summary>
-    /// <param name="family">The family: a variant's workers beside a tree, or its self-test's.</param>
+    /// <param name="family">The family: a variant's workers in a tree, or its self-test's.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
     Task<IReadOnlyList<WorkerCopy>> ListAsync(WorkerFamily family, CancellationToken cancellationToken);
 
@@ -217,23 +218,23 @@ internal sealed class WorkerCopies(
     {
         ArgumentNullException.ThrowIfNull(family);
 
-        return [.. (await ListBesideAsync(family.TreeRoot, name => string.Equals(name, family.Name, StringComparison.Ordinal), cancellationToken).ConfigureAwait(false))];
+        return [.. (await ListInTreeAsync(family.TreeRoot, name => string.Equals(name, family.Name, StringComparison.Ordinal), cancellationToken).ConfigureAwait(false))];
     }
 
     /// <summary>
-    /// The workers kept beside <paramref name="treeRoot"/> in each family <paramref name="families"/> takes by its name -
-    /// a variant's, or a self-test's - by family and then by number. A directory of the mutation family spelt as no
-    /// worker is none, and one of a family not taken is not weighed.
+    /// The workers kept in <paramref name="treeRoot"/> in each family <paramref name="families"/> takes by its name - a
+    /// variant's, or a self-test's - by family and then by number. A directory in the slot spelt as no worker is none,
+    /// and one of a family not taken is not weighed.
     /// </summary>
-    /// <param name="treeRoot">The tree the workers are kept beside.</param>
+    /// <param name="treeRoot">The tree the workers are kept in.</param>
     /// <param name="families">Whether a family, by the name its workers are kept under, is among those listed.</param>
     /// <param name="cancellationToken">Stops the listing.</param>
-    public async Task<IReadOnlyList<WorkerCopy>> ListBesideAsync(string treeRoot, Func<string, bool> families, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<WorkerCopy>> ListInTreeAsync(string treeRoot, Func<string, bool> families, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(families);
 
         var found = await _transport
-            .ListCopiesAsync(treeRoot, HostCopies.MutationSuffix, name => MutationWorkers.Named(name) is { } worker && families(worker.Family), cancellationToken)
+            .ListInSlotAsync(treeRoot, HarnessLayout.MutationsDirectoryName, name => MutationWorkers.Named(name) is { } worker && families(worker.Family), cancellationToken)
             .ConfigureAwait(false);
 
         return

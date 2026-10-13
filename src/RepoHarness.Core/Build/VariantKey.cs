@@ -45,7 +45,7 @@ public sealed record VariantKey(string Processor, string Toolchain, string Confi
     private const string CopyKeyDigits = "0123456789abcdef";
 
     /// <summary>
-    /// The key the copies of a tree kept beside it for this variant are named by - a sweep's mutation workers: the first
+    /// The key the copies of a tree kept in it for this variant are named by - a sweep's mutation workers: the first
     /// <see cref="CopyKeyLength"/> hexadecimal digits, in lower case, of the SHA-256 of <see cref="DirectoryName"/>.
     /// </summary>
     /// <remarks>

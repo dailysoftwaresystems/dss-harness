@@ -3,7 +3,6 @@ using RepoHarness.Core.Git;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
-using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Core.Worktrees;
 
@@ -36,6 +35,18 @@ internal sealed record WorktreeIdentity(WorktreeMembership Membership, string? A
 /// <param name="Commits">Commits on its HEAD or branches that no remote-tracking ref or tag contains.</param>
 /// <param name="HasStash">Whether its repository holds a stash.</param>
 internal sealed record SubmoduleLoss(string Path, int Commits, bool HasStash);
+
+/// <summary>What is below a directory under the worktrees root that is no worktree itself.</summary>
+/// <param name="Worktrees">The address of each worktree git records below it.</param>
+/// <param name="Unrecorded">
+/// In an orchestrator's directory, each directory directly in it holding a .git entry of its own that git records no
+/// worktree at, as this machine spells it: a person's to look in and delete.
+/// </param>
+internal sealed record WorktreesBelow(IReadOnlyList<string> Worktrees, IReadOnlyList<string> Unrecorded)
+{
+    /// <summary>Whether anything is below it that deleting it would delete with it.</summary>
+    public bool Any => Worktrees.Count + Unrecorded.Count > 0;
+}
 
 /// <summary>Everything that stops a worktree being deleted without --force, found before anything is touched.</summary>
 /// <param name="Changes">Paths with uncommitted changes, including edits status cannot see.</param>
@@ -186,12 +197,11 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     }
 
     /// <summary>
-    /// The addresses of the worktrees below <paramref name="path"/>, which is not one itself: each git records strictly
-    /// inside it, and - in the directory named for an orchestrator - each directory directly in it holding a .git entry of
-    /// its own, whether git still records it or not, since an orchestrator's directory holds its agents' worktrees and
-    /// what goes with them. Anywhere else such a directory is a worktree's own submodule or nested repository, not a
-    /// worktree. A mutation worker kept beside an agent's worktree is a copy with a repository of its own, and none
-    /// either: it goes with its agent.
+    /// What is below <paramref name="path"/>, which is not a worktree itself: the address of each worktree git records
+    /// strictly inside it, and - in the directory named for an orchestrator - each directory directly in it holding a
+    /// .git entry of its own that git records no worktree at, since an orchestrator's directory holds its agents'
+    /// worktrees and nothing else. Anywhere else such a directory is a worktree's own submodule or nested repository, not
+    /// a worktree.
     /// </summary>
     /// <param name="mainCheckoutRoot">The main checkout, whose list is read.</param>
     /// <param name="worktreesDirectory">The worktrees root, which the addresses are relative to.</param>
@@ -202,7 +212,7 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     /// git could not list its worktrees, or the directory could not be looked in (<see cref="HarnessExit.CommandFailed"/>):
     /// never read as no worktree below it.
     /// </exception>
-    public async Task<IReadOnlyList<string>> FindWorktreesBelowAsync(
+    public async Task<WorktreesBelow> FindWorktreesBelowAsync(
         string mainCheckoutRoot,
         string worktreesDirectory,
         string path,
@@ -211,28 +221,24 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     {
         var found = new SortedSet<string>(StringComparer.Ordinal);
         var resolved = ResolveLinks(path);
+        IReadOnlyList<string> holdingGit = [];
 
         if (orchestrators)
         {
-            IEnumerable<string> children;
-
             try
             {
-                children = [.. _fileSystem.EnumerateDirectories(path)];
+                holdingGit = [.. _fileSystem.EnumerateDirectories(path).Where(child => HoldsOwnGit(_fileSystem, child)).Order(StringComparer.Ordinal)];
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 throw CouldNotBeLookedIn(path, ex);
             }
-
-            foreach (var child in children.Where(child => HoldsOwnGit(_fileSystem, child) && !IsCopyBeside(child)))
-            {
-                found.Add(AddressOf(worktreesDirectory, child));
-            }
         }
 
         // A list git could not give is not an empty one: raised, never read as no worktree below.
-        foreach (var worktree in await _gitClient.ListWorktreesAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false))
+        var listed = await _gitClient.ListWorktreesAsync(mainCheckoutRoot, cancellationToken).ConfigureAwait(false);
+
+        foreach (var worktree in listed)
         {
             if (!worktree.IsMain && PathContainment.IsStrictlyInside(resolved, worktree.Path, _platform.PathComparison))
             {
@@ -240,7 +246,11 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
             }
         }
 
-        return [.. found];
+        // Each git does not record is told apart, whatever its name: nothing here can say what it holds, so it is a
+        // person's to look in and delete - what a removal left, or a copy an earlier version of this tool kept there.
+        return new WorktreesBelow(
+            [.. found],
+            [.. holdingGit.Where(child => RecordAt(listed, ResolveLinks(child)) is null)]);
 
         string AddressOf(string root, string tree)
             => WorktreeAddress.OfTree(root, tree, _platform.PathComparison)?.Name
@@ -261,12 +271,26 @@ internal sealed class WorktreeInspector(IGitClient gitClient, IFileSystem fileSy
     }
 
     /// <summary>
-    /// Whether <paramref name="directory"/> is named as a copy kept beside a tree is - a mutation worker: a copy of the
-    /// tree, never a worktree.
+    /// Why a directory under the worktrees root holding a .git entry of its own that git records no worktree at is there,
+    /// as every line that meets one says it: told by what it holds, never by its name.
     /// </summary>
-    /// <param name="directory">The directory.</param>
-    public static bool IsCopyBeside(string directory)
-        => HostCopies.TreeOfBesideCopy(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))) is not null;
+    public const string UnrecordedWhy =
+        "what a removal leaves when git's record goes and something in the directory could not, or a copy an earlier version of this tool kept beside a worktree";
+
+    /// <summary>
+    /// What is said of <paramref name="directories"/>, each holding a .git entry of its own that git records no worktree
+    /// at, wherever a command that would not go on past them meets them: what they are, and that they are a person's to
+    /// look in and delete, since nothing here can tell what they hold.
+    /// </summary>
+    /// <param name="directories">The directories, as this machine spells them.</param>
+    public static string SaidUnrecorded(IReadOnlyList<string> directories)
+    {
+        ArgumentNullException.ThrowIfNull(directories);
+
+        return $"git records no worktree at {ReportText.Listed([.. directories.Select(directory => $"'{directory}'")])}, though "
+            + (directories.Count == 1 ? "it holds" : "each holds")
+            + $" a .git entry of its own - {UnrecordedWhy}. Look inside {(directories.Count == 1 ? "it" : "each")} for anything wanted, then delete it";
+    }
 
     /// <summary>The worktree among <paramref name="worktrees"/> recorded at <paramref name="resolvedPath"/>, never the main one.</summary>
     /// <param name="worktrees">git's list.</param>

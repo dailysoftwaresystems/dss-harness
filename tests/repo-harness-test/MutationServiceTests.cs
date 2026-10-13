@@ -821,11 +821,59 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
-    /// A sweep reads the tree its leg's work happens in, and keeps its workers beside that tree - its own and its
+    /// A sweep, or a self-test, in a tree whose git does not ignore what it would make in the slot its workers are kept
+    /// in - a branch whose rules predate init's - is refused before anything is made, naming init, and the run ends
+    /// there: a worker committed by <c>git add -A</c> would travel to every clone. It is asked of the tree on the machine
+    /// that makes the workers, a host sweeping one leg of a run as this machine. Once the rule is there, the same sweep
+    /// goes on to read the tree its workers are synced from.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ASweepInATreeWhoseGitDoesNotIgnoreItsWorkers_IsRefusedNamingInit_WithNothingMade(bool selfTest, bool onAHost)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+
+        config.Hosts.Wsl["Example-Linux"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" };
+
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "x86_64" });
+        var (service, _) = Prepare(temp, config, harness: harness, inspector: inspector);
+        var request = new MutationRequest(temp.Path, ["native"], null, Here: onAHost ? HostId.Wsl("Example-Linux") : null, SelfTest: selfTest);
+
+        // Rules that predate init's: they ignore the build, and nothing of the slot.
+        temp.WriteFile(".gitignore", "/build/\n");
+
+        var refusal = await service.RunAsync(request, RunId.New(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
+        Assert.StartsWith($"git does not ignore '{HarnessLayout.MutationsDirectoryName}/", refusal.Message, StringComparison.Ordinal);
+        Assert.EndsWith(
+            $"{(selfTest ? WorkerFamily.SelfTestMark : WorkerFamily.OwnMark)}-1', so the mutation workers a sweep makes in '{temp.Path}' would be committed. "
+            + $"Run 'dssharness init', which keeps {HarnessLayout.MutationsDirectoryName} in git and everything made in it out. Nothing was swept.",
+            refusal.Message,
+            StringComparison.Ordinal);
+        Assert.False(Directory.Exists(temp.Combine(HarnessLayout.MutationsDirectoryName)), "a refused sweep made a worker");
+        Assert.False(Directory.Exists(Fixture(temp)), "a refused self-test wrote its fixture");
+        Assert.DoesNotContain("worker 1", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+
+        IgnoreTheSlots(temp.Path);
+
+        var swept = await service.RunAsync(request, RunId.New(), TestContext.Current.CancellationToken);
+
+        // Past the refusal, to the tree its workers are synced from: what it then comes to is no business of this test's.
+        Assert.NotEqual(HarnessExit.Refused, swept.ExitCode);
+        Assert.Contains("', once for every worker", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A sweep reads the tree its leg's work happens in, and keeps its workers in that tree - its own and its
     /// self-test's alike - never the tree the command reads here, where the two are not one.
     /// </summary>
     [Fact]
-    public async Task ASweep_ReadsTheTreeItsLegsWorkHappensIn_AndKeepsItsWorkersBesideThatTree()
+    public async Task ASweep_ReadsTheTreeItsLegsWorkHappensIn_AndKeepsItsWorkersInThatTree()
     {
         using var temp = new TempDirectory();
         var config = Sweepable();
@@ -963,7 +1011,7 @@ public sealed class MutationServiceTests
     /// A self-test of a leg sweeps the fixture kept where it was written, as the leg's variant builds it: the fixture's
     /// project, settings and arms, its binary run in its worker with nothing of the leg's tests, each worker's paths
     /// reckoned by the fixture's own build, nothing said of what a build of it comes to, and each arm held to its design.
-    /// Its workers are kept beside the leg's own tree, in the self-test's family - so two repositories self-testing with
+    /// Its workers are kept in the leg's own tree, in the self-test's family - so two repositories self-testing with
     /// one fixture never share a worker, and each one's are removed with its tree.
     /// </summary>
     [Fact]
@@ -987,7 +1035,7 @@ public sealed class MutationServiceTests
 
         Assert.Equal(fixture, subject.TreeRoot);
         Assert.Equal(MutationWorkers.Of(temp.Path, variant, selfTest: true), subject.Workers);
-        Assert.Equal(temp.Path + ".mutation-" + variant.CopyKey + "s-1", subject.Workers.PathOf(1));
+        Assert.Equal(HarnessLayout.InSlot(temp.Path, HarnessLayout.MutationsDirectoryName, variant.CopyKey + "s-1"), subject.Workers.PathOf(1));
 
         var elsewhere = temp.Combine("another", "repository");
         var theirs = MutationService.SelfTestSubject(
@@ -1002,7 +1050,7 @@ public sealed class MutationServiceTests
             fixture);
 
         Assert.Equal(fixture, theirs.TreeRoot);
-        Assert.Equal(elsewhere + ".mutation-" + variant.CopyKey + "s-1", theirs.Workers.PathOf(1));
+        Assert.Equal(HarnessLayout.InSlot(elsewhere, HarnessLayout.MutationsDirectoryName, variant.CopyKey + "s-1"), theirs.Workers.PathOf(1));
         Assert.Equal((MutationFixture.DirectoryName, "cmake", "."), (subject.Project.Name, subject.Project.Type, subject.Project.Path));
         Assert.Equal(MutationFixture.Project.BuildOutputs, subject.Project.BuildOutputs);
         Assert.Null(subject.Tests);
@@ -1055,6 +1103,8 @@ public sealed class MutationServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var config = Sweepable(new MutationSettings());
+
+        InitRepository(temp.Path);
 
         config.Projects.Add(new ProjectConfig { Name = "tool", Type = "dotnet", Path = "tool.sln" });
         config.Legs["dotnet"] = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", Toolchain = "gcc", Project = "tool" };
@@ -1175,6 +1225,7 @@ public sealed class MutationServiceTests
 
         return new MutationService(
             loader,
+            git ?? harness.GitClient,
             legRuns,
             SyncKit.Service(harness, loader, git: git),
             SyncKit.Transport(harness),
@@ -1192,10 +1243,12 @@ public sealed class MutationServiceTests
 
     /// <summary>
     /// Makes <paramref name="directory"/> a repository of its own, as every tree a sweep reads is: what a sync withholds
-    /// from a copy is asked of git there.
+    /// from a copy is asked of git there; and one whose git ignores what is made in its slots, as init has it do.
     /// </summary>
     private static void InitRepository(string directory)
     {
+        IgnoreTheSlots(directory);
+
         using var git = Process.Start(new ProcessStartInfo("git", ["init", "--quiet", "."])
         {
             WorkingDirectory = directory,
@@ -1210,6 +1263,12 @@ public sealed class MutationServiceTests
 
         Assert.True(git.ExitCode == 0, said);
     }
+
+    /// <summary>Writes the rules init writes for the slots a tree keeps its copies in, as the tree's whole ignore file.</summary>
+    private static void IgnoreTheSlots(string directory)
+        => File.WriteAllText(
+            Path.Combine(directory, ".gitignore"),
+            string.Concat(new[] { HarnessLayout.MutationsDirectoryName, HarnessLayout.LegsDirectoryName }.Select(slot => $"/{slot}/*\n!/{slot}/{HarnessLayout.GitKeepFileName}\n")));
 
     /// <summary>Where the service <see cref="Service"/> builds over <paramref name="temp"/> keeps a self-test's fixture.</summary>
     private static string Fixture(TempDirectory temp) => temp.Combine("state", MutationFixture.DirectoryName);

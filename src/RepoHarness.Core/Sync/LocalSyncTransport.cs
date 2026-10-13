@@ -33,7 +33,7 @@ public sealed class LocalSyncTransport(
     private readonly IGitClient _gitClient = gitClient;
 
     /// <summary>
-    /// Which run is using a copy kept beside a tree, asked before a mutation worker is removed, and what a worker is
+    /// Which run is using a copy kept in a tree, asked before a mutation worker is removed, and what a worker is
     /// named. Never optional: a transport built without it would remove a worker from under the sweep mutating it.
     /// </summary>
     private readonly ICopyClaims _claims = claims ?? throw new ArgumentNullException(nameof(claims));
@@ -356,37 +356,44 @@ public sealed class LocalSyncTransport(
         => ListCopiesAsync(repositoryPath, HostCopies.WorktreeSuffix, HostCopies.IsCopyName, cancellationToken);
 
     /// <summary>
-    /// The copies of <paramref name="family"/> kept beside <paramref name="root"/> - each directory named
-    /// <c>&lt;root&gt;&lt;family&gt;&lt;name&gt;</c> - as <see cref="ListCopiesAsync(string, CancellationToken)"/> lists a
-    /// host's worktree copies, which are one such family: told by name, each weighed by its files, in the order of their
-    /// names. None where the directory they would be kept in is not there.
-    /// </summary>
-    /// <param name="root">What the copies are kept beside: the main copy, or the tree a mutation worker copies.</param>
-    /// <param name="family">The family's suffix: <see cref="HostCopies.WorktreeSuffix"/> or <see cref="HostCopies.MutationSuffix"/>.</param>
-    /// <param name="cancellationToken">Stops the listing between copies.</param>
-    public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string root, string family, CancellationToken cancellationToken = default)
-        => ListCopiesAsync(root, family, _ => true, cancellationToken);
-
-    /// <summary>
     /// The copies of <paramref name="family"/> kept beside <paramref name="root"/> whose names <paramref name="named"/>
-    /// takes, in the order of their names: a directory under any other name is none of the family's, and is not weighed.
+    /// takes - each directory named <c>&lt;root&gt;&lt;family&gt;&lt;name&gt;</c> - as
+    /// <see cref="ListCopiesAsync(string, CancellationToken)"/> lists a host's worktree copies, which are such a family:
+    /// told by name, each weighed by its files, in the order of their names. A directory under any other name is none of
+    /// the family's, and is not weighed; none is listed where the directory they would be kept in is not there.
     /// </summary>
-    /// <param name="root">What the copies are kept beside.</param>
-    /// <param name="family">The family's suffix.</param>
+    /// <param name="root">What the copies are kept beside: the main copy.</param>
+    /// <param name="family">The family's suffix: <see cref="HostCopies.WorktreeSuffix"/>.</param>
     /// <param name="named">Whether what follows the suffix in a directory's name is the name of a copy to list.</param>
     /// <param name="cancellationToken">Stops the listing between copies.</param>
     public Task<IReadOnlyList<HostCopyFound>> ListCopiesAsync(string root, string family, Func<string, bool> named, CancellationToken cancellationToken = default)
+        => Task.FromResult(Weighed(CopiesBeside(root, family, named), cancellationToken));
+
+    /// <summary>
+    /// The copies kept in the slot <paramref name="slot"/> of the tree at <paramref name="tree"/> whose names
+    /// <paramref name="named"/> takes - each directory <c>&lt;tree&gt;/&lt;slot&gt;/&lt;name&gt;</c> - told by name, each
+    /// weighed by its files, in the order of their names. None where the tree keeps no such slot.
+    /// </summary>
+    /// <param name="tree">The tree the copies are of, as the configuration spells it.</param>
+    /// <param name="slot">The slot: <see cref="HarnessLayout.MutationsDirectoryName"/>.</param>
+    /// <param name="named">Whether a directory's name in the slot is the name of a copy to list.</param>
+    /// <param name="cancellationToken">Stops the listing between copies.</param>
+    public Task<IReadOnlyList<HostCopyFound>> ListInSlotAsync(string tree, string slot, Func<string, bool> named, CancellationToken cancellationToken = default)
+        => Task.FromResult(Weighed(CopiesInSlot(tree, slot, named), cancellationToken));
+
+    /// <summary>Each of <paramref name="copies"/>, weighed, with what its marker says.</summary>
+    private IReadOnlyList<HostCopyFound> Weighed(IReadOnlyList<(string Name, string Path, string Directory)> copies, CancellationToken cancellationToken)
     {
         var found = new List<HostCopyFound>();
 
-        foreach (var copy in CopiesBeside(root, family, named))
+        foreach (var copy in copies)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             found.Add(Found(copy.Name, copy.Path, copy.Directory));
         }
 
-        return Task.FromResult<IReadOnlyList<HostCopyFound>>(found);
+        return found;
     }
 
     /// <summary>
@@ -402,27 +409,50 @@ public sealed class LocalSyncTransport(
     /// <exception cref="UnauthorizedAccessException">The directory they are kept in could not be looked in.</exception>
     public IReadOnlyList<(string Name, string Path, string Directory)> CopiesBeside(string root, string family, Func<string, bool> named)
     {
-        ArgumentNullException.ThrowIfNull(named);
-
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         ArgumentException.ThrowIfNullOrWhiteSpace(family);
 
-        if (Beside(root, family) is not { } beside)
+        return CopiesIn(Beside(root, family), named);
+    }
+
+    /// <summary>
+    /// The copies kept in the slot <paramref name="slot"/> of <paramref name="tree"/> whose names <paramref name="named"/>
+    /// takes, in the order of their names - but none weighed.
+    /// </summary>
+    /// <param name="tree">The tree the copies are of, as the configuration spells it.</param>
+    /// <param name="slot">The slot.</param>
+    /// <param name="named">Whether a directory's name in the slot is the name of a copy to list.</param>
+    /// <returns>Each copy's name, where it is as the configuration spells it, and where it is as this machine does.</returns>
+    /// <exception cref="IOException">The slot could not be looked in.</exception>
+    /// <exception cref="UnauthorizedAccessException">The slot could not be looked in.</exception>
+    public IReadOnlyList<(string Name, string Path, string Directory)> CopiesInSlot(string tree, string slot, Func<string, bool> named)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tree);
+        ArgumentException.ThrowIfNullOrWhiteSpace(slot);
+
+        return CopiesIn(InSlot(tree, slot), named);
+    }
+
+    /// <summary>The copies kept at <paramref name="place"/> whose names <paramref name="named"/> takes, in the order of their names; none where it is not there.</summary>
+    private IReadOnlyList<(string Name, string Path, string Directory)> CopiesIn(CopyPlace? place, Func<string, bool> named)
+    {
+        ArgumentNullException.ThrowIfNull(named);
+
+        if (place is not { } kept)
         {
             return [];
         }
 
-        var prefix = beside.Prefix;
         var found = new List<(string Name, string Path, string Directory)>();
 
-        foreach (var directory in _fileSystem.EnumerateDirectories(beside.Parent))
+        foreach (var directory in _fileSystem.EnumerateDirectories(kept.Directory))
         {
             var leaf = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
 
-            if (leaf.Length > prefix.Length && leaf.StartsWith(prefix, StringComparison.Ordinal) && named(leaf[prefix.Length..]))
+            if (leaf.Length > kept.Prefix.Length && leaf.StartsWith(kept.Prefix, StringComparison.Ordinal) && named(leaf[kept.Prefix.Length..]))
             {
-                var name = leaf[prefix.Length..];
-                found.Add((name, HostCopies.InFamily(root, family, name), directory));
+                var name = leaf[kept.Prefix.Length..];
+                found.Add((name, kept.PathOf(name), directory));
             }
         }
 
@@ -430,18 +460,44 @@ public sealed class LocalSyncTransport(
     }
 
     /// <summary>
-    /// Where the copies of <paramref name="family"/> beside <paramref name="root"/> are kept, and what the name of each
-    /// starts with: the directory the root is in, and the root's own name followed by the family's suffix. Or
-    /// <see langword="null"/> where that directory is not there, which keeps none.
+    /// Where a family of copies is kept on this machine: the directory, what the name of each starts with there, and
+    /// where a copy kept under a name is as the configuration spells it.
+    /// </summary>
+    /// <param name="Directory">The directory the copies are in, as this machine spells it.</param>
+    /// <param name="Prefix">What the name of each starts with, before the name it is kept under.</param>
+    /// <param name="PathOf">Where the copy kept under a name is, as the configuration spells it.</param>
+    private sealed record CopyPlace(string Directory, string Prefix, Func<string, string> PathOf);
+
+    /// <summary>
+    /// Where the copies of <paramref name="family"/> beside <paramref name="root"/> are kept: the directory the root is in,
+    /// each named with the root's own name followed by the family's suffix. Or <see langword="null"/> where that directory
+    /// is not there, which keeps none.
     /// </summary>
     /// <param name="root">What the copies are kept beside.</param>
     /// <param name="family">The family's suffix.</param>
-    private (string Parent, string Prefix)? Beside(string root, string family)
+    private CopyPlace? Beside(string root, string family)
     {
         var main = Path.TrimEndingDirectorySeparator(Home(root));
         var parent = Path.GetDirectoryName(main);
 
-        return string.IsNullOrEmpty(parent) || !_fileSystem.DirectoryExists(parent) ? null : (parent, Path.GetFileName(main) + family);
+        return string.IsNullOrEmpty(parent) || !_fileSystem.DirectoryExists(parent)
+            ? null
+            : new CopyPlace(parent, Path.GetFileName(main) + family, name => HostCopies.InFamily(root, family, name));
+    }
+
+    /// <summary>
+    /// Where the copies kept in the slot <paramref name="slot"/> of <paramref name="tree"/> are: the slot, each named as
+    /// it is kept. Or <see langword="null"/> where the tree keeps no such slot, which holds none.
+    /// </summary>
+    /// <param name="tree">The tree the copies are of.</param>
+    /// <param name="slot">The slot.</param>
+    private CopyPlace? InSlot(string tree, string slot)
+    {
+        var directory = Path.Combine(Home(tree), slot);
+
+        return _fileSystem.DirectoryExists(directory)
+            ? new CopyPlace(directory, string.Empty, name => HarnessLayout.InSlot(tree, slot, name))
+            : null;
     }
 
     /// <summary>Why a worker a removal was stopped in was left, as its line says it.</summary>
@@ -452,7 +508,8 @@ public sealed class LocalSyncTransport(
     /// <para>
     /// Each worker is removed as a copy is, by its marker, so one a removal stopped in is still the harness's to remove
     /// when asked again. What a removal left aside (<see cref="RemovalAside"/>) was a worker a sync made, renamed with
-    /// nothing sweeping in it, and goes whatever it still holds.
+    /// nothing sweeping in it, and goes whatever it still holds. Only the tree's own slot is looked in: nothing of the
+    /// harness's is kept beside a tree.
     /// </para>
     /// <para>
     /// Everything is listed before anything goes, so a listing that fails has removed nothing - and is raised naming
@@ -464,20 +521,20 @@ public sealed class LocalSyncTransport(
     /// </para>
     /// </remarks>
     public Task<WorkersRemoval> RemoveWorkersAsync(string root, bool measureOnly = false, CancellationToken cancellationToken = default)
-        => RemoveBesideAsync(root, HostCopies.MutationSuffix, _claims, measureOnly, cancellationToken);
+        => RemoveInSlotAsync(root, HarnessLayout.MutationsDirectoryName, _claims, measureOnly, cancellationToken);
 
     /// <summary>
-    /// Removes the copies of <paramref name="family"/> kept beside the tree at <paramref name="root"/>, with what an
+    /// Removes the copies kept in the slot <paramref name="slot"/> of the tree at <paramref name="tree"/>, with what an
     /// unfinished removal of one left aside - or, asked only to measure, says what it would remove and what it would
-    /// leave, and removes nothing. The one removal there is of copies kept beside a tree, whichever family they are of:
+    /// leave, and removes nothing. The one removal there is of copies kept in a tree, whichever slot they are in:
     /// <see cref="RemoveWorkersAsync"/> is this, of the mutation workers, by the claims the transport was built with.
     /// </summary>
-    /// <param name="root">The tree the copies are of.</param>
-    /// <param name="family">The family's suffix (<see cref="HostCopies.BesideFamilies"/>).</param>
+    /// <param name="tree">The tree the copies are of.</param>
+    /// <param name="slot">The slot they are kept in: <see cref="HarnessLayout.MutationsDirectoryName"/>.</param>
     /// <param name="claims">The family's claims: what a copy of it is named, which run holds one, and how that is said.</param>
     /// <param name="measureOnly">Whether to say what would be removed, and what left, and remove nothing.</param>
     /// <param name="cancellationToken">Stops the removal between copies.</param>
-    public async Task<WorkersRemoval> RemoveBesideAsync(string root, string family, ICopyClaims claims, bool measureOnly = false, CancellationToken cancellationToken = default)
+    public async Task<WorkersRemoval> RemoveInSlotAsync(string tree, string slot, ICopyClaims claims, bool measureOnly = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(claims);
 
@@ -491,12 +548,12 @@ public sealed class LocalSyncTransport(
 
             try
             {
-                copies = await ListCopiesAsync(root, family, cancellationToken).ConfigureAwait(false);
-                asides = AsidesBeside(root, family, claims.Names);
+                copies = await ListInSlotAsync(tree, slot, claims.Names, cancellationToken).ConfigureAwait(false);
+                asides = AsidesInSlot(tree, slot, claims.Names);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                throw WorktreeInspector.CouldNotBeLookedIn(Beside(root, family)?.Parent ?? root, ex);
+                throw WorktreeInspector.CouldNotBeLookedIn(Path.Combine(Home(tree), slot), ex);
             }
 
             foreach (var copy in copies)
@@ -603,30 +660,28 @@ public sealed class LocalSyncTransport(
     }
 
     /// <summary>
-    /// What an unfinished removal of the copies of <paramref name="family"/> beside <paramref name="root"/> left aside:
-    /// each directory beside it named as the aside (<see cref="RemovalAside"/>) of a copy of that family whose name
+    /// What an unfinished removal of the copies kept in the slot <paramref name="slot"/> of <paramref name="tree"/> left
+    /// aside: each directory in the slot named as the aside (<see cref="RemovalAside"/>) of a copy whose name
     /// <paramref name="named"/> takes, in the order of their names. Told by name alone, as nothing else is left to tell
-    /// one by: so only what is spelt as a copy of the family is one, and a directory named any other way is nobody's to
+    /// one by: so only what is spelt as a copy of the slot's is one, and a directory named any other way is nobody's to
     /// remove.
     /// </summary>
-    /// <param name="root">The tree the copies are of.</param>
-    /// <param name="family">The family's suffix.</param>
-    /// <param name="named">Whether what follows the family's suffix is the name of a copy the caller removes.</param>
-    public IReadOnlyList<string> AsidesBeside(string root, string family, Func<string, bool> named)
+    /// <param name="tree">The tree the copies are of.</param>
+    /// <param name="slot">The slot.</param>
+    /// <param name="named">Whether a name in the slot is the name of a copy the caller removes.</param>
+    public IReadOnlyList<string> AsidesInSlot(string tree, string slot, Func<string, bool> named)
     {
         ArgumentNullException.ThrowIfNull(named);
 
-        if (Beside(root, family) is not var (parent, prefix))
+        if (InSlot(tree, slot) is not { } kept)
         {
             return [];
         }
 
         return
         [
-            .. _fileSystem.EnumerateDirectories(parent)
-                .Where(directory => RemovalAside.Was(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))) is { } was
-                    && was.StartsWith(prefix, StringComparison.Ordinal)
-                    && named(was[prefix.Length..]))
+            .. _fileSystem.EnumerateDirectories(kept.Directory)
+                .Where(directory => RemovalAside.Was(Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))) is { } was && named(was))
                 .Order(StringComparer.Ordinal),
         ];
     }
