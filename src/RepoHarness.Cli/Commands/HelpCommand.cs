@@ -2144,8 +2144,8 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
         builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]... [--apply]");
-        builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] [{FoldAllowances.SettledOption} <path>]...");
         var paths = $"[{FoldAllowances.MergeOption} <path>]... [{FoldAllowances.SettledOption} <path>]...";
+        builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] {paths}");
         var rows = $"[{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
         builder.AppendLine($"  {command} {AgentService.FoldCommand} <o> <a> [--apply] {paths}");
         builder.AppendLine($"      {rows}");
@@ -2200,15 +2200,21 @@ internal static class HelpCommand
             + "and refresh-agent hands it any of those the main tree moved since. A path it changed that the main tree committed a "
             + "change to since - an edit, a deletion, or anything of its own where the main tree committed a file, ignored or "
             + "staged included - refuses the move, nothing changed, unless --settled <path> names it: you reconciled its copy by "
-            + "hand, and it stays as its own change on the new base. A file it made that is the very file the main tree "
+            + "hand, and it stays as its own change on the new base. Where a three-way merge of the two is clean - git's, from what "
+            + $"the old base held, of the new base's version and the agent's - {FoldAllowances.MergeOption} <path>, once for each, "
+            + "writes it into the agent's worktree as its own change on the new base, whether it can be run merged with its "
+            + "content: it is never taken unasked, and a clean textual merge proves nothing about the program. Nothing is recorded "
+            + "for it: its fold weighs it against the new base. The refusal says what a merge of each such path gives, and names "
+            + "the command that takes the clean ones. A file it made that is the very file the main tree "
             + "committed there - the same content as git compares it, and the same mode where git trusts one - is no such "
             + "change: it is listed as held as the new base holds it already, and nothing is written. Whatever of the agent's "
             + "what comes in would go over refuses the move too: a file or a link where the new base holds a directory, and what it keeps - its own, settled "
             + "or shared - in a directory where the new base holds a file, or a submodule's entry that would hide it from git; each "
             + "is named, with what to do. Its record names where the move goes before anything is written, then the new base's "
             + "paths are written, HEAD and the index move, and its record names the new base: a move that stopped part way, exit "
-            + $"{HarnessExit.Incomplete}, is finished where it was going by running it again, what it wrote held as the new base "
-            + "holds it, and every other command refuses the agent until then, saying so. Only such a move is ever finished, and "
+            + $"{HarnessExit.Incomplete}, is finished where it was going by running it again - the command its last words name, "
+            + "with every option the move was given - what it wrote held as the new base holds it, and every other command refuses "
+            + "the agent until then, saying so. Only such a move is ever finished, and "
             + "only from its base or where it goes: a HEAD moved by hand - back, forward or beside its base - or naming no commit "
             + "is never taken for one, and each command refuses it, saying how to put it back; a commit made inside the agent is "
             + "said to be one, and where git cannot say which a HEAD is, each says so and fails, never guessing.");

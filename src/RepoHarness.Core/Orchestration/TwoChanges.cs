@@ -151,6 +151,9 @@ internal sealed record NoMerge
     /// <param name="why">git's words.</param>
     public static NoMerge NotMerged(string why) => new($"git would not merge it - {why.TrimEnd('.')}");
 
+    /// <summary>One of its versions is a link, which is no file to merge: what it leads to is its content.</summary>
+    public static NoMerge Link { get; } = new("one of its versions is a link, and only files are merged");
+
     /// <summary>git could not bring the merged bytes to the form a checkout writes.</summary>
     /// <param name="why">git's words.</param>
     public static NoMerge NotCheckedOut(string why) => new($"git could not write the merge as it would check it out - {why.TrimEnd('.')}");
@@ -256,15 +259,23 @@ internal sealed record TwoChangeOffer
 /// <param name="Executable">Whether it can be run; never on a platform that keeps no such bit.</param>
 public readonly record struct FileIdentity(string Digest, bool Executable);
 
+/// <summary>A copy a merge is written over: the file, the tree it is in, and what it was when it was weighed.</summary>
+/// <param name="File">The file.</param>
+/// <param name="Tree">The tree it is in, as a stop names it.</param>
+/// <param name="Weighed">What it was when it was weighed: what the merge may be written over, and nothing else.</param>
+public sealed record MergeTarget(string File, string Tree, FileIdentity Weighed);
+
 /// <summary>A path merged three ways, as a plan holds it until it is written.</summary>
 /// <param name="Path">The path.</param>
-/// <param name="Working">The merged bytes, as the tree they are written into holds them.</param>
+/// <param name="Working">The merged bytes, as the trees they are written into hold them.</param>
 /// <param name="Digest">Their SHA-256.</param>
 /// <param name="Executable">Whether the merged file can be run.</param>
 /// <param name="Listed">The clause after the path in the list of merged paths.</param>
-/// <param name="MainWeighed">What the main tree's file was when it was weighed: what the merge may be written over.</param>
-/// <param name="AgentWeighed">What the agent's file was when it was weighed.</param>
-public sealed record MergedPath(string Path, byte[] Working, string Digest, bool Executable, string Listed, FileIdentity MainWeighed, FileIdentity AgentWeighed);
+/// <param name="Into">
+/// The copies the merge is written over, in the order they are written: the main tree's and then the agent's for a fold,
+/// the agent's alone for a move of its base.
+/// </param>
+public sealed record MergedPath(string Path, byte[] Working, string Digest, bool Executable, string Listed, IReadOnlyList<MergeTarget> Into);
 
 /// <summary>
 /// The one place a path both trees changed is resolved, for every command that meets one: what a three-way merge of its

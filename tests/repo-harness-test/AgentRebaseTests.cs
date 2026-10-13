@@ -83,7 +83,10 @@ public sealed class AgentRebaseTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains("cannot move", refused.Message);
-        Assert.Contains($"  'b.txt': the agent changed it, and the main tree committed a change to it since the agent's base {ReportText.Commit(from)}", refused.Details!);
+        Assert.Contains(
+            $"  'b.txt': the agent changed it, and the main tree committed a change to it since the agent's base {ReportText.Commit(from)}; a three-way merge of "
+            + "the two conflicts in 1 place(s), shown below: reconcile it by hand, then --settled b.txt",
+            refused.Details!);
         Assert.Contains(refused.Details!, line => line.Contains("--settled <path>", StringComparison.Ordinal));
         Assert.Equal(from, kit.Record("ag").Base);
         Assert.Equal(from, await HeadAsync(worktree));
@@ -347,7 +350,7 @@ public sealed class AgentRebaseTests
         {
             ResetFailure = new HarnessException(HarnessExit.CommandFailed, "fatal: Unable to create 'index.lock': File exists."),
         };
-        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
 
         foreach (var outcome in await EveryCommandButTheMoveAsync(kit))
@@ -612,7 +615,7 @@ public sealed class AgentRebaseTests
             InsteadOfRun = arguments => arguments[0] == "update-ref" ? new Core.Git.GitCommandResult(1, string.Empty, "fatal: cannot lock ref") : null,
         };
 
-        var applied = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var applied = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
         Assert.Contains("its base is recorded in its record, and could not be in git's record of the worktree: fatal: cannot lock ref", applied.Details!);
@@ -725,7 +728,7 @@ public sealed class AgentRebaseTests
             ResetFailure = new HarnessException(HarnessExit.CommandFailed, "fatal: Unable to create 'index.lock': File exists."),
         };
 
-        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
         Assert.Equal(
@@ -775,11 +778,14 @@ public sealed class AgentRebaseTests
             },
         };
 
-        var refused = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var refused = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.Equal(2, measured);
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Contains($"  'b.txt': the agent changed it, and the main tree committed a change to it since the agent's base {ReportText.Commit(from)}", refused.Details!);
+        Assert.Contains(
+            $"  'b.txt': the agent changed it, and the main tree committed a change to it since the agent's base {ReportText.Commit(from)}; a three-way merge of "
+            + "the two conflicts in 1 place(s), shown below: reconcile it by hand, then --settled b.txt",
+            refused.Details!);
         Assert.Equal("two\nagent edit meanwhile\n", OrchestrationKit.Read(worktree, "b.txt"));
         Assert.Equal(from, kit.Record("ag").Base);
     }
@@ -806,7 +812,7 @@ public sealed class AgentRebaseTests
         };
         Assert.Equal(
             HarnessExit.Incomplete,
-            (await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token)).ExitCode);
+            (await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token)).ExitCode);
         OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\ncommitted later\n");
         OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted later\n");
         await kit.Harness.CommitAllAsync(kit.Main, "the next wave", Token);
@@ -855,7 +861,7 @@ public sealed class AgentRebaseTests
         foreach (var outcome in new[]
         {
             await agents.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, Token),
-            await agents.RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token),
+            await agents.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token),
         })
         {
             Assert.Equal(HarnessExit.CommandFailed, outcome.ExitCode);
@@ -1128,7 +1134,7 @@ public sealed class AgentRebaseTests
         }
 
         var unreadable = new UnlookableFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "docs", "new.md"));
-        var unread = await kit.Harness.Agents(unreadable, kit.Harness.AnchorRegistryService, kit.Harness.GitClient).RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var unread = await kit.Harness.Agents(unreadable, kit.Harness.AnchorRegistryService, kit.Harness.GitClient).RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.Equal(HarnessExit.CommandFailed, unread.ExitCode);
         Assert.Equal(
@@ -1152,6 +1158,336 @@ public sealed class AgentRebaseTests
         Assert.False(File.Exists(Path.Combine(worktree, "docs", "new.md")));
     }
 
+    /// <summary>The closing paragraph of a refused move: how a path both changed is let through.</summary>
+    private const string BothChangedParagraph =
+        "A path the agent changed that the main tree committed a change to since is two changes of one file. Where a three-way merge of the two "
+        + "is clean, --merge <path> writes it into the agent's worktree as its own change on the new base: it is never taken unasked, and a clean "
+        + "textual merge proves nothing about the program. Otherwise reconcile the agent's copy with what the main tree committed by hand, then "
+        + "run again naming the path with --settled <path>, which keeps its copy as its own change on the new base. Neither is a --force.";
+
+    /// <summary>The file the agent and the main tree both change.</summary>
+    private const string Both = "src/m.txt";
+
+    /// <summary>
+    /// An agent made at a commit that holds <see cref="Both"/>, which it then changes as <paramref name="agent"/> says while
+    /// the main tree commits it as <paramref name="main"/> says.
+    /// </summary>
+    private static async Task<(OrchestrationKit Kit, string Worktree, string From)> BothChangedAsync(TempDirectory temp, string agent, string main)
+    {
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "a file two will change", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, Both, agent);
+        OrchestrationKit.Write(kit.Main, Both, main);
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree's change", Token);
+
+        return (kit, worktree, kit.Record("ag").Base!);
+    }
+
+    private static RebaseRequest Merging(params string[] paths) => new() { Merge = paths };
+
+    /// <summary>
+    /// A path the agent changed that the main tree committed a change to still refuses the move, dry run or not: its line
+    /// says what a three-way merge of the two gives, and the last of the refusal's lines names the command that takes it.
+    /// Measured and said, it is never taken unasked.
+    /// </summary>
+    [Fact]
+    public async Task APathBothChanged_StillRefusesTheMove_AndItsLineSaysTheMergeIsClean_AndNamesTheCommandThatTakesIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree, from) = await BothChangedAsync(temp, AgentFoldMergeTests.Text((2, "AGENT 2")), AgentFoldMergeTests.Text((9, "MAIN 9")));
+
+        foreach (var apply in new[] { false, true })
+        {
+            var refused = await RebaseAsync(kit, apply);
+
+            Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+            Assert.Contains(
+                $"  '{Both}': the agent changed it, and the main tree committed a change to it since the agent's base {ReportText.Commit(from)}; a three-way merge of "
+                + $"the two is clean - 1 hunk(s) from the agent, 1 from the main tree - and --merge {Both} writes it",
+                refused.Details!);
+            Assert.Contains(BothChangedParagraph, refused.Details!);
+            Assert.Contains($"to merge the 1 path(s) that merge clean: '{ToolPackage.Command} rebase-agent o1 ag --merge {Both}'", refused.Details!);
+            Assert.Equal(AgentFoldMergeTests.Text((2, "AGENT 2")), OrchestrationKit.Read(worktree, Both));
+            Assert.Equal(from, kit.Record("ag").Base);
+            Assert.Equal(from, await HeadAsync(worktree));
+        }
+    }
+
+    /// <summary>The line that names the command taking every clean merge keeps every path the move was told to merge or keep.</summary>
+    [Fact]
+    public async Task TheLineNamingEveryCleanMerge_KeepsEveryOptionTheMoveWasGiven()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        const string Other = "src/n.txt";
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text());
+        OrchestrationKit.Write(kit.Main, Other, AgentFoldMergeTests.Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "two files two will change", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+
+        foreach (var path in new[] { Both, Other })
+        {
+            OrchestrationKit.Write(worktree, path, AgentFoldMergeTests.Text((2, "AGENT 2")));
+            OrchestrationKit.Write(kit.Main, path, AgentFoldMergeTests.Text((9, "MAIN 9")));
+        }
+
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree's changes", Token);
+
+        var refused = await RebaseAsync(kit, apply: false, new RebaseRequest { Merge = [Both], Settled = ["b.txt"] });
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            $"to merge the 1 path(s) that merge clean: '{ToolPackage.Command} rebase-agent o1 ag --merge {Both} --merge {Other} --settled b.txt'",
+            refused.Details![^1]);
+    }
+
+    /// <summary>
+    /// Named with --merge, a clean merge is written into the agent's worktree as its own change on the new base, listed
+    /// before what comes in, and nothing is recorded for it: its fold weighs it against the new base and writes it.
+    /// </summary>
+    [Fact]
+    public async Task NamedToBeMerged_ItIsWrittenAsTheAgentsOwnChangeOnTheNewBase_AndNothingIsRecorded()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree, _) = await BothChangedAsync(
+            temp,
+            AgentFoldMergeTests.Text((2, "AGENT 2")),
+            AgentFoldMergeTests.Text((9, "MAIN 9"), (11, "MAIN 11")));
+        var to = await HeadAsync(kit.Main);
+        var seeded = File.ReadAllText(kit.Layout.SeedFile("ag"));
+        var merged = AgentFoldMergeTests.Text((2, "AGENT 2"), (9, "MAIN 9"), (11, "MAIN 11"));
+
+        var dry = await RebaseAsync(kit, apply: false, Merging(Both));
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal(
+            [
+                "1 path(s) it changed that the main tree committed a change to, merged three-way, to write into its worktree as its own change on the "
+                + "new base - a clean textual merge proves nothing about the program:",
+                $"  {Both}   (--merge: 1 hunk(s) from the agent, 2 from the main tree)",
+                "the agent's session must read these again before it writes them: a write made from what it held before would fold as its change, "
+                + "over what the main tree brought",
+                "0 path(s) the main tree committed since come into its worktree as git holds them:",
+            ],
+            dry.Details);
+        Assert.Equal(AgentFoldMergeTests.Text((2, "AGENT 2")), OrchestrationKit.Read(worktree, Both));
+
+        var applied = await RebaseAsync(kit, apply: true, Merging(Both));
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.StartsWith(
+            "1 path(s) it changed that the main tree committed a change to, merged three-way, written into its worktree as its own change on the new base",
+            applied.Details![0],
+            StringComparison.Ordinal);
+        Assert.Equal(merged, OrchestrationKit.Read(worktree, Both));
+        Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Equal(to, await HeadAsync(worktree));
+        Assert.Equal(seeded, File.ReadAllText(kit.Layout.SeedFile("ag")));
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.Contains($"  {Both}   (not handed to it, nor folded before)", folded.Details!);
+        Assert.Equal(merged, OrchestrationKit.Read(kit.Main, Both));
+    }
+
+    /// <summary>A merge that conflicts is never taken, though --merge names it: the move is refused, and the conflicts are shown.</summary>
+    [Fact]
+    public async Task APathWhoseMergeConflicts_RefusesTheMove_ThoughItIsNamedToBeMerged_AndItsConflictsAreShown()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree, from) = await BothChangedAsync(temp, AgentFoldMergeTests.Text((9, "AGENT 9")), AgentFoldMergeTests.Text((9, "MAIN 9")));
+
+        var refused = await RebaseAsync(kit, apply: true, Merging(Both));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            $"  '{Both}': the agent changed it, and the main tree committed a change to it since the agent's base {ReportText.Commit(from)}; a three-way merge of "
+            + $"the two conflicts in 1 place(s), shown below: reconcile it by hand, then --settled {Both}",
+            refused.Details!);
+        Assert.Contains($"conflicts of '{Both}', 1 place(s) - as the main tree holds it, as both trees held it, as the agent holds it:", refused.Details!);
+        Assert.Contains("  <<<<<<< the main tree", refused.Details!);
+        Assert.DoesNotContain(refused.Details!, line => line.StartsWith("to merge the", StringComparison.Ordinal));
+        Assert.Equal(AgentFoldMergeTests.Text((9, "AGENT 9")), OrchestrationKit.Read(worktree, Both));
+        Assert.Equal(from, kit.Record("ag").Base);
+    }
+
+    /// <summary>
+    /// A --merge naming a path the two commits hold alike merges nothing, and is refused as the misspelling it most likely
+    /// is; one naming a path they hold differently that the agent did not change is let stand, so the line that finishes a
+    /// stopped move runs whatever that move wrote. A path named both to be merged and as settled is a usage error.
+    /// </summary>
+    [Fact]
+    public async Task AStrayMerge_IsRefused_AndAPathNamedBothToBeMergedAndAsSettled_IsAUsageError()
+    {
+        using var temp = new TempDirectory();
+        var (kit, _, _) = await BothChangedAsync(temp, AgentFoldMergeTests.Text((2, "AGENT 2")), AgentFoldMergeTests.Text((9, "MAIN 9")));
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a file the agent did not change", Token);
+
+        var stray = await RebaseAsync(kit, apply: false, Merging(Both, "b.txt", "src/typo.txt"));
+
+        Assert.Equal(HarnessExit.Refused, stray.ExitCode);
+        Assert.Equal(
+            [
+                "  --merge 'src/typo.txt' names no path the agent changed that the main tree committed a change to since, so it merges nothing: check its spelling",
+            ],
+            stray.Details!.Where(line => line.Contains("--merge '", StringComparison.Ordinal)));
+        Assert.DoesNotContain(stray.Details!, line => line.Contains("'b.txt'", StringComparison.Ordinal));
+
+        var usage = await RebaseAsync(kit, apply: false, new RebaseRequest { Merge = [Both], Settled = [$"{Both}/"] });
+
+        Assert.Equal(HarnessExit.UsageError, usage.ExitCode);
+        Assert.Equal($"'{Both}' is named with both --merge and --settled: a path is merged for you, or it was reconciled by hand, never both.", usage.Message);
+
+        var unnameable = await RebaseAsync(kit, apply: false, Merging("../outside.txt"));
+
+        Assert.Equal(HarnessExit.UsageError, unnameable.ExitCode);
+        Assert.Contains("--merge", unnameable.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A move that stops part way names the whole command that finishes it - every path it was told to merge or keep - and
+    /// running that finishes it, the merged file merged again to the same bytes.
+    /// </summary>
+    [Fact]
+    public async Task AMoveThatStopsPartWay_NamesEveryOptionItWasGiven_AndRunningThatFinishesIt()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree, from) = await BothChangedAsync(temp, AgentFoldMergeTests.Text((2, "AGENT 2")), AgentFoldMergeTests.Text((9, "MAIN 9")));
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "a file both change", Token);
+        var to = await HeadAsync(kit.Main);
+        var merged = AgentFoldMergeTests.Text((2, "AGENT 2"), (9, "MAIN 9"));
+        var request = new RebaseRequest { Merge = [Both], Settled = ["b.txt"] };
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            ResetFailure = new HarnessException(HarnessExit.CommandFailed, "fatal: Unable to create 'index.lock': File exists."),
+        };
+
+        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", request, apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Equal(
+            $"Moving the base of agent 'ag' of 'o1' from {ReportText.Commit(from)} to the main tree's HEAD {ReportText.Commit(to)} stopped part way: "
+            + "fatal: Unable to create 'index.lock': File exists. Its worktree may hold part of what the new base brings; run "
+            + $"'{ToolPackage.Command} rebase-agent o1 ag --apply --merge {Both} --settled b.txt' again once that is dealt with, and it finishes it.",
+            stopped.Message);
+        Assert.Equal(merged, OrchestrationKit.Read(worktree, Both));
+        Assert.Equal(from, await HeadAsync(worktree));
+
+        var finished = await RebaseAsync(kit, apply: true, request);
+
+        Assert.True(finished.Succeeded, OrchestrationKit.Describe(finished));
+        Assert.Equal(merged, OrchestrationKit.Read(worktree, Both));
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.Equal(to, kit.Record("ag").Base);
+        Assert.Null(kit.Record("ag").Moving);
+    }
+
+    /// <summary>
+    /// The agent's file is asked to be what was weighed before the merge is written over it: one its session saved
+    /// meanwhile stops the move part way, and is never written over.
+    /// </summary>
+    [Fact]
+    public async Task AMergedFileTheAgentChangedAfterItWasWeighed_StopsTheMove_AndIsNotWrittenOver()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree, from) = await BothChangedAsync(temp, AgentFoldMergeTests.Text((2, "AGENT 2")), AgentFoldMergeTests.Text((9, "MAIN 9")));
+        var saved = AgentFoldMergeTests.Text((2, "AGENT 2"), (4, "SAVED MEANWHILE"));
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            BeforeCheckOut = _ => OrchestrationKit.Write(worktree, Both, saved),
+        };
+
+        var stopped = await kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git).RebaseAsync(kit.Main, "o1", "ag", Merging(Both), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Contains(
+            $"stopped part way: '{Both}' holds other content in the agent's worktree now than when it was measured, so it was not written over. ",
+            stopped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(saved, OrchestrationKit.Read(worktree, Both));
+        Assert.Equal(from, kit.Record("ag").Base);
+    }
+
+    /// <summary>
+    /// Whether the file can be run is merged with its content, from the two bases' entries and the agent's file: the main
+    /// tree made it runnable and the agent edited it, so the merge can be run, and its line says so.
+    /// </summary>
+    [Fact]
+    public async Task ARebaseMergesTheBit_FromTheTwoBasesEntriesAndTheAgentsFile()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no execute bit with a file.");
+
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var permissions = kit.Harness.FilePermissions;
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "a file that cannot be run", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text((9, "MAIN 9")));
+        permissions.SetExecutable(Path.Combine(kit.Main, Both), executable: true);
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree's change, which can be run", Token);
+
+        var applied = await RebaseAsync(kit, apply: true, Merging(Both));
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Contains($"  {Both}   (--merge: 1 hunk(s) from the agent, 1 from the main tree; it can be run, as the main tree made it)", applied.Details!);
+        Assert.Equal(AgentFoldMergeTests.Text((2, "AGENT 2"), (9, "MAIN 9")), OrchestrationKit.Read(worktree, Both));
+        Assert.True(permissions.IsExecutable(Path.Combine(worktree, Both)), "The merged file cannot be run.");
+    }
+
+    /// <summary>A link is no file to merge: where the new base holds one, the path is offered no merge, saying why.</summary>
+    [Fact]
+    public async Task APathTheNewBaseHoldsAsALink_IsOfferedNoMerge_SayingWhy()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "a file the main tree turns into a link", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        var from = kit.Record("ag").Base!;
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Text((2, "AGENT 2")));
+
+        // Set in the index, so the commit holds a link on a file system that makes none.
+        var target = (await kit.Harness.RunGitAsync(kit.Main, ["rev-parse", "HEAD:a.txt"], Token)).StandardOutput.Trim();
+        await kit.GitAsync(kit.Main, "update-index", "--cacheinfo", $"120000,{target},{Both}");
+        await kit.GitAsync(kit.Main, "commit", "--quiet", "-m", "the file becomes a link");
+
+        var refused = await RebaseAsync(kit, apply: true, Merging(Both));
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(
+            $"  '{Both}': the agent changed it, and the main tree committed a change to it since the agent's base {ReportText.Commit(from)}; no three-way merge "
+            + "is offered: one of its versions is a link, and only files are merged",
+            refused.Details!);
+        Assert.Equal(AgentFoldMergeTests.Text((2, "AGENT 2")), OrchestrationKit.Read(worktree, Both));
+    }
+
+    /// <summary>--merge reaches a move from the command line, once for each path, and a path no tree could hold is a usage error there.</summary>
+    [Fact]
+    public async Task TheCommandLine_TakesMergeOnceForEachPath()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree, _) = await BothChangedAsync(temp, AgentFoldMergeTests.Text((2, "AGENT 2")), AgentFoldMergeTests.Text((9, "MAIN 9")));
+
+        var usage = await CliRunner.RunAsync(["rebase-agent", "o1", "ag", "--merge", "../outside.txt"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.UsageError, usage.ExitCode);
+
+        var applied = await CliRunner.RunAsync(["rebase-agent", "o1", "ag", "--apply", "--merge", Both], Token, workingDirectory: kit.Main);
+
+        Assert.True(applied.Succeeded, applied.StandardOutput + applied.StandardError);
+        Assert.Equal(AgentFoldMergeTests.Text((2, "AGENT 2"), (9, "MAIN 9")), OrchestrationKit.Read(worktree, Both));
+    }
+
     /// <summary>Folding, deleting, seeding and refreshing agent 'ag', each asked to write.</summary>
     private static async Task<CommandOutcome[]> EveryCommandButTheMoveAsync(OrchestrationKit kit)
         => [
@@ -1162,7 +1498,10 @@ public sealed class AgentRebaseTests
         ];
 
     private static Task<CommandOutcome> RebaseAsync(OrchestrationKit kit, bool apply, params string[] settled)
-        => kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", settled, apply, Token);
+        => RebaseAsync(kit, apply, new RebaseRequest { Settled = settled });
+
+    private static Task<CommandOutcome> RebaseAsync(OrchestrationKit kit, bool apply, RebaseRequest request)
+        => kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", request, apply, Token);
 
     private static async Task<string> HeadAsync(string tree) => (await new HarnessFactory().GitClient.ResolveCommitAsync(tree, "HEAD", Token))!;
 

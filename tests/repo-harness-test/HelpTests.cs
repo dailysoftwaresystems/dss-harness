@@ -1654,8 +1654,18 @@ public sealed partial class HelpTests
             StringComparison.Ordinal);
         Assert.Contains("refuses the move, nothing changed, unless --settled <path> names it", text, StringComparison.Ordinal);
         Assert.Contains(
-            $"a move that stopped part way, exit {HarnessExit.Incomplete}, is finished where it was going by running it again, what it wrote held as "
-            + "the new base holds it, and every other command refuses the agent until then",
+            $"a move that stopped part way, exit {HarnessExit.Incomplete}, is finished where it was going by running it again - the command its "
+            + "last words name, with every option the move was given - what it wrote held as the new base holds it, and every other command "
+            + "refuses the agent until then",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains($"  {ToolPackage.Command} rebase-agent <o> <a> [--apply] [--merge <path>]... [--settled <path>]...", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "Where a three-way merge of the two is clean - git's, from what the old base held, of the new base's version and the agent's - "
+            + "--merge <path>, once for each, writes it into the agent's worktree as its own change on the new base, whether it can be run merged "
+            + "with its content: it is never taken unasked, and a clean textual merge proves nothing about the program. Nothing is recorded for it: "
+            + "its fold weighs it against the new base. The refusal says what a merge of each such path gives, and names the command that takes the "
+            + "clean ones.",
             text,
             StringComparison.Ordinal);
         Assert.Contains("a file turned into a directory, or a directory into a file or a submodule's entry - and its own changes", text, StringComparison.Ordinal);

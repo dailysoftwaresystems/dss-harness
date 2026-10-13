@@ -45,10 +45,11 @@ public interface IAgentService
     /// <summary>
     /// Moves a live agent's base to the main tree's HEAD: what the main tree committed since comes into its worktree as git
     /// holds it, and its own changes and what it was handed stay; refused, moving nothing, where it changed a path the main
-    /// tree committed a change to since, unless that path is one of <paramref name="settled"/>, reconciled by hand. A dry
-    /// run until <paramref name="apply"/>; run again after one that stopped part way, it finishes it.
+    /// tree committed a change to since, unless <paramref name="request"/> names that path - to be merged, where a
+    /// three-way merge of the two is clean, or as reconciled by hand. A dry run until <paramref name="apply"/>; run again
+    /// after one that stopped part way, it finishes it.
     /// </summary>
-    Task<CommandOutcome> RebaseAsync(string startDirectory, string orchestrator, string agent, IReadOnlyList<string> settled, bool apply, CancellationToken cancellationToken = default);
+    Task<CommandOutcome> RebaseAsync(string startDirectory, string orchestrator, string agent, RebaseRequest request, bool apply, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Folds a live agent's work into the main tree, then applies the anchor rows it declared anew: every path it changed
@@ -770,13 +771,13 @@ public sealed class AgentService(
         string startDirectory,
         string orchestrator,
         string agent,
-        IReadOnlyList<string> settled,
+        RebaseRequest request,
         bool apply,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(settled);
+        ArgumentNullException.ThrowIfNull(request);
 
-        if ((Shape(orchestrator, agent) ?? OrchestrationRules.PathsProblem(settled, FoldAllowances.SettledOption)) is { } shape)
+        if ((Shape(orchestrator, agent) ?? request.Problem()) is { } shape)
         {
             return CommandOutcome.Usage(shape);
         }
@@ -788,12 +789,12 @@ public sealed class AgentService(
             return refusal;
         }
 
-        var outcome = await RebaseLiveAsync(at, settled, apply, cancellationToken).ConfigureAwait(false);
+        var outcome = await RebaseLiveAsync(at, request, apply, cancellationToken).ConfigureAwait(false);
         return apply ? _log.Record(at.Layout!, agent, RebaseCommand, outcome) : outcome;
     }
 
     /// <summary>Moving a live agent's base, once it is found.</summary>
-    private async Task<CommandOutcome> RebaseLiveAsync(AgentAt at, IReadOnlyList<string> settled, bool apply, CancellationToken cancellationToken)
+    private async Task<CommandOutcome> RebaseLiveAsync(AgentAt at, RebaseRequest request, bool apply, CancellationToken cancellationToken)
     {
         var (context, layout, record, path) = (at.Context!, at.Layout!, at.Record!, at.Path!);
         var main = context.Layout.MainCheckoutRoot;
@@ -834,6 +835,11 @@ public sealed class AgentService(
 
         var finishing = record.Moving is not null;
         var moving = $"from {OrchestrationReports.Base(from)} to {(to == head ? "the main tree's HEAD " : "the main tree's commit ")}{OrchestrationReports.Base(to)}";
+        var policy = TwoChangePolicy.Of(context, request.Merge);
+
+        // The line that finishes this move, with every path it was told to merge or keep: said bare, it was refused over
+        // the very paths this one was let through.
+        var again = OrchestrationReports.Line(RebaseCommand, [record.Orchestrator, record.Name, "--apply", .. request.Arguments()]);
         var (plan, stop) = await MeasuredAsync(cancellationToken).ConfigureAwait(false);
 
         if (stop is not null)
@@ -877,6 +883,14 @@ public sealed class AgentService(
 
                 await _gitClient.CheckOutAtAsync(path, to, plan!.Written, CancellationToken.None).ConfigureAwait(false);
                 await _gitClient.CheckOutAtAsync(path, to, plan.WrittenLast, CancellationToken.None).ConfigureAwait(false);
+
+                // Each merge over the agent's file as it was weighed, before HEAD moves: stopped after, a run again finds the
+                // path both changed still, and merges it again to the same bytes.
+                foreach (var merge in plan.Merged)
+                {
+                    await _fold.WriteMergeAsync(merge).ConfigureAwait(false);
+                }
+
                 await _gitClient.ResetToAsync(path, to, CancellationToken.None).ConfigureAwait(false);
                 _store.UpdateAgent(layout, record.Name, current => current with { Base = to, Moving = null });
             }
@@ -885,8 +899,7 @@ public sealed class AgentService(
                 return CommandOutcome.Failed(
                     HarnessExit.Incomplete,
                     $"Moving the base of {Lower(Agent(record))} {moving} stopped part way: {ex.Message.TrimEnd('.')}. Its worktree may hold part of what the new "
-                    + $"base brings; run {OrchestrationReports.Line(RebaseCommand, record.Orchestrator, record.Name, "--apply")} again once that is dealt with, "
-                    + "and it finishes it.",
+                    + $"base brings; run {again} again once that is dealt with, and it finishes it.",
                     [recordLine]);
             }
 
@@ -916,7 +929,8 @@ public sealed class AgentService(
 
             try
             {
-                measured = await _fold.MeasureRebaseAsync(path, from, to, seed, settled, finishing, token).ConfigureAwait(false);
+                measured = await _fold.MeasureRebaseAsync(path, from, to, seed, request.Settled, policy, Changes(context, layout, record.Name, keeping: false), finishing, token)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -925,11 +939,16 @@ public sealed class AgentService(
                     $"The base of {Lower(Agent(record))} was not moved: what it holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was changed."));
             }
 
+            // The command that names every path whose merge is clean and that nobody asked for, beside what this one was given.
+            var merging = measured.Mergeable.Count == 0
+                ? null
+                : OrchestrationReports.Line(RebaseCommand, [record.Orchestrator, record.Name, .. (request with { Merge = [.. request.Merge, .. measured.Mergeable] }).Arguments()]);
+
             return measured.Refusals.Count == 0
                 ? (measured, null)
                 : (measured, CommandOutcome.Refused(
                     $"The base of {Lower(Agent(record))} cannot move {moving}: {ReportText.Counted(measured.Refusals.Count, "problem")}, and nothing was changed.",
-                    [.. RebaseRefusalLines(measured)]));
+                    [.. RebaseRefusalLines(measured, merging)]));
         }
     }
 
@@ -944,6 +963,18 @@ public sealed class AgentService(
             foreach (var path in plan.Settled)
             {
                 yield return $"  {path}";
+            }
+        }
+
+        if (plan.Merged.Count > 0)
+        {
+            // Never silent, and never taken for more than it is: git merged the text, and nobody has built it.
+            yield return $"{ReportText.Counted(plan.Merged.Count, "path")} it changed that the main tree committed a change to, merged three-way, "
+                + $"{(applied ? "written" : "to write")} into its worktree as its own change on the new base - a clean textual merge proves nothing about the program:";
+
+            foreach (var line in OrchestrationReports.MergedLines(plan.Merged))
+            {
+                yield return line;
             }
         }
 
@@ -976,17 +1007,35 @@ public sealed class AgentService(
         }
     }
 
-    /// <summary>Why an agent's base cannot be moved, each path with its reason, and how a path reconciled by hand is let through.</summary>
-    private static IEnumerable<string> RebaseRefusalLines(RebasePlan plan)
+    /// <summary>
+    /// Why an agent's base cannot be moved, each path with its reason and what a three-way merge of it gives, the conflicts
+    /// of each that conflicts, and how a path both changed is let through: merged where its merge is clean, or reconciled
+    /// by hand.
+    /// </summary>
+    /// <param name="plan">A move with refusals.</param>
+    /// <param name="merging">The command that names every path whose merge is clean and was not asked for, quoted; null where there is none.</param>
+    private static IEnumerable<string> RebaseRefusalLines(RebasePlan plan, string? merging)
     {
         foreach (var refusal in plan.Refusals)
         {
             yield return $"  {refusal}";
         }
 
-        yield return "A path the agent changed that the main tree committed a change to since is two changes of one file. Reconcile the agent's "
-            + "copy with what the main tree committed by hand, then run again naming each path you reconciled with --settled <path>, which keeps its "
-            + "copy as its own change on the new base. --settled says you reconciled the path yourself; it is not a --force.";
+        foreach (var line in plan.Shown)
+        {
+            yield return line;
+        }
+
+        yield return "A path the agent changed that the main tree committed a change to since is two changes of one file. Where a three-way merge "
+            + $"of the two is clean, {FoldAllowances.MergeOption} <path> writes it into the agent's worktree as its own change on the new base: it is "
+            + "never taken unasked, and a clean textual merge proves nothing about the program. Otherwise reconcile the agent's copy with what the "
+            + $"main tree committed by hand, then run again naming the path with {FoldAllowances.SettledOption} <path>, which keeps its copy as its "
+            + "own change on the new base. Neither is a --force.";
+
+        if (merging is not null)
+        {
+            yield return OrchestrationReports.MergingLine(plan.Mergeable.Count, merging);
+        }
     }
 
     /// <summary>

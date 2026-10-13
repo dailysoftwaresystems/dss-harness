@@ -54,14 +54,9 @@ public sealed record FoldAllowances
     /// </summary>
     public string? Problem()
     {
-        if ((OrchestrationRules.PathsProblem(Merge, MergeOption) ?? OrchestrationRules.PathsProblem(Settled, SettledOption)) is { } path)
+        if (PathsProblem(Merge, Settled) is { } paths)
         {
-            return path;
-        }
-
-        if (MergedAndSettled(Merge, Settled) is { } both)
-        {
-            return both;
+            return paths;
         }
 
         if (New.Select(AnchorRowCell.IdProblem).FirstOrDefault(problem => problem is not null) is { } id)
@@ -84,12 +79,28 @@ public sealed record FoldAllowances
         [.. AcceptLost.Select(cell => AnchorRowCell.Parse(cell) ?? throw new InvalidOperationException($"'{cell}' is not {AnchorRowCell.Form}; its problem was not asked first.")).Distinct()];
 
     /// <summary>
+    /// What is wrong with the paths named with <see cref="MergeOption"/> and with <see cref="SettledOption"/>, whichever
+    /// command takes the two, before anything is read: a path that could name nothing in the tree, or one named with both.
+    /// Null where nothing is.
+    /// </summary>
+    /// <param name="merge">The paths named to be merged.</param>
+    /// <param name="settled">The paths named as settled by hand.</param>
+    public static string? PathsProblem(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
+        => OrchestrationRules.PathsProblem(merge, MergeOption) ?? OrchestrationRules.PathsProblem(settled, SettledOption) ?? MergedAndSettled(merge, settled);
+
+    /// <summary>The arguments that name <paramref name="merge"/> and <paramref name="settled"/> again, each path once, as a command line takes them.</summary>
+    /// <param name="merge">The paths named to be merged.</param>
+    /// <param name="settled">The paths named as settled by hand.</param>
+    public static IEnumerable<string> PathArguments(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
+        => OrchestrationReports.PathArguments(MergeOption, merge).Concat(OrchestrationReports.PathArguments(SettledOption, settled));
+
+    /// <summary>
     /// What is wrong where one path is named both with <see cref="MergeOption"/> and with <see cref="SettledOption"/>,
     /// whichever command takes the two: they say opposite things of it. Null where none is.
     /// </summary>
     /// <param name="merge">The paths named to be merged.</param>
     /// <param name="settled">The paths named as settled by hand.</param>
-    public static string? MergedAndSettled(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
+    private static string? MergedAndSettled(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
     {
         ArgumentNullException.ThrowIfNull(merge);
         ArgumentNullException.ThrowIfNull(settled);
@@ -103,8 +114,7 @@ public sealed record FoldAllowances
 
     /// <summary>The arguments that give them again, each as a command line takes it, for one a report names.</summary>
     public IEnumerable<string> Arguments() =>
-        OrchestrationReports.PathArguments(MergeOption, Merge)
-            .Concat(OrchestrationReports.PathArguments(SettledOption, Settled))
+        PathArguments(Merge, Settled)
             .Concat(New.Distinct(StringComparer.Ordinal).SelectMany(id => new[] { AnchorBatchRequest.NewOption, id }))
             .Concat(LostCells.SelectMany(cell => new[] { AnchorBatchRequest.AcceptLostOption, cell.ToString() }));
 }

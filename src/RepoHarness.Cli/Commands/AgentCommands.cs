@@ -164,6 +164,11 @@ internal static class RebaseAgentCommand
 
     private static readonly Argument<string> AgentArgument = OrchestrationArguments.Agent("The agent whose base to move.");
 
+    private static readonly Option<string[]> MergeOption = OrchestrationArguments.Merge(
+        "A path the agent changed that the main tree committed a change to since its base, whose three-way merge is clean, as the dry run says of it: "
+        + "the merged file is written into its worktree as its own change on the new base. Never taken unasked, and a clean textual merge proves "
+        + "nothing about the program. Once for each path.");
+
     private static readonly Option<string[]> SettledOption = new(FoldAllowances.SettledOption)
     {
         HelpName = "path",
@@ -178,10 +183,11 @@ internal static class RebaseAgentCommand
             Name,
             "Move a live agent's base to the main tree's HEAD: what the main tree committed since comes into its worktree as git holds it, and its own "
             + "changes and what it was handed stay; refused, moving nothing, where it changed a path the main tree committed a change to since, "
-            + "unless --settled, or where what comes in would go over anything of its own. Run again after one that stopped part way "
-            + $"(exit {HarnessExit.Incomplete}), it finishes it.");
+            + "unless --merge takes a clean three-way merge of the two or --settled keeps its copy, or where what comes in would go over anything "
+            + $"of its own. Run again after one that stopped part way (exit {HarnessExit.Incomplete}), it finishes it.");
         command.Arguments.Add(OrchestratorArgument);
         command.Arguments.Add(AgentArgument);
+        command.Options.Add(MergeOption);
         command.Options.Add(SettledOption);
         command.Options.Add(ApplyOption);
         GlobalOptions.AddTo(command);
@@ -191,7 +197,11 @@ internal static class RebaseAgentCommand
                 context.Directory,
                 context.ParseResult.GetRequiredValue(OrchestratorArgument),
                 context.ParseResult.GetRequiredValue(AgentArgument),
-                context.ParseResult.GetValue(SettledOption) ?? [],
+                new RebaseRequest
+                {
+                    Merge = context.ParseResult.GetValue(MergeOption) ?? [],
+                    Settled = context.ParseResult.GetValue(SettledOption) ?? [],
+                },
                 context.ParseResult.GetValue(ApplyOption),
                 cancellationToken)));
 

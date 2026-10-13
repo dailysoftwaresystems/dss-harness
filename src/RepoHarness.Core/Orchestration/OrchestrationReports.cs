@@ -192,13 +192,10 @@ public static class OrchestrationReports
                 + (applied ? "written into both trees and recorded as shared" : "to write into both trees and record as shared")
                 + " - a clean textual merge proves nothing about the program, so build and test the tree before you commit it:";
 
-            foreach (var merge in plan.Merged)
+            foreach (var line in MergedLines(plan.Merged))
             {
-                yield return $"  {merge.Path}   {merge.Listed}";
+                yield return line;
             }
-
-            yield return "the agent's session must read these again before it writes them: a write made from what it held before would fold as its change, "
-                + "over what the main tree brought";
         }
 
         if (plan.Deleted.Count > 0)
@@ -253,9 +250,26 @@ public static class OrchestrationReports
 
         if (merging is not null)
         {
-            yield return $"to merge the {ReportText.Counted(plan.Mergeable.Count, "path")} that merge clean: {merging}";
+            yield return MergingLine(plan.Mergeable.Count, merging);
         }
     }
+
+    /// <summary>
+    /// Each merged path with what its merge brought, then what the agent's session must do about them: said under every
+    /// list of merged paths, whichever command wrote them into the agent's worktree.
+    /// </summary>
+    /// <param name="merged">The merged paths, at least one.</param>
+    internal static IEnumerable<string> MergedLines(IReadOnlyList<MergedPath> merged)
+        => [
+            .. merged.Select(merge => $"  {merge.Path}   {merge.Listed}"),
+            "the agent's session must read these again before it writes them: a write made from what it held before would fold as its change, "
+                + "over what the main tree brought",
+        ];
+
+    /// <summary>The last of a refusal's lines where paths merge clean that nobody named: the command that takes them, with every option given.</summary>
+    /// <param name="count">How many paths merge clean and were not named.</param>
+    /// <param name="merging">The command that names them, quoted.</param>
+    internal static string MergingLine(int count, string merging) => $"to merge the {ReportText.Counted(count, "path")} that merge clean: {merging}";
 
     /// <summary>
     /// What a fold writes, removes and leaves out - or, where <paramref name="plan"/> is null, nothing of it - then the

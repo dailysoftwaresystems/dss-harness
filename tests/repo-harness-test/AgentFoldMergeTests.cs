@@ -22,7 +22,7 @@ public sealed class AgentFoldMergeTests
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
     /// <summary>Twelve lines, each <c>line N</c> but those given: far enough apart that two edits of different lines merge.</summary>
-    private static string Text(params (int Line, string Text)[] changed)
+    internal static string Text(params (int Line, string Text)[] changed)
         => string.Concat(Enumerable.Range(1, 12).Select(line => (changed.FirstOrDefault(change => change.Line == line).Text ?? $"line {line}") + "\n"));
 
     private static FoldAllowances Merging(params string[] paths) => new() { Merge = paths };
@@ -203,7 +203,7 @@ public sealed class AgentFoldMergeTests
         var (kit, worktree) = await AtItsBaseAsync(temp);
         OrchestrationKit.Write(kit.Main, "src/other.txt", Text());
         await kit.Harness.CommitAllAsync(kit.Main, "another", Token);
-        await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, [], apply: true, Token);
+        await kit.Harness.AgentService.RebaseAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, new RebaseRequest(), apply: true, Token);
         File.Delete(Path.Combine(worktree, Both));
         OrchestrationKit.Write(kit.Main, Both, Text((9, "MAIN 9")));
         OrchestrationKit.Write(worktree, "src/other.txt", Text((2, "AGENT 2")));

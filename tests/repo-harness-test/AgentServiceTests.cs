@@ -521,7 +521,7 @@ public sealed class AgentServiceTests
 
         if (ontoItsOwnFoldFirst)
         {
-            var onto = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+            var onto = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
             Assert.True(onto.Succeeded, OrchestrationKit.Describe(onto));
         }
@@ -535,7 +535,7 @@ public sealed class AgentServiceTests
         await kit.Harness.CommitAllAsync(kit.Main, "another sibling's fold", Token);
         var previous = kit.Record("ag").Base!;
 
-        var moved = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var moved = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.True(moved.Succeeded, OrchestrationKit.Describe(moved));
         Assert.Equal(
@@ -627,14 +627,14 @@ public sealed class AgentServiceTests
         // The copy by hand that follows such a fold, the commit of what was folded, and the agent's base moved onto it.
         File.Copy(Path.Combine(kit.Main, "b.txt"), Path.Combine(worktree, "b.txt"), overwrite: true);
         await kit.Harness.CommitAllAsync(kit.Main, "the agent's second fold, reconciled", Token);
-        var onto = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var onto = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.True(onto.Succeeded, OrchestrationKit.Describe(onto));
         var previous = kit.Record("ag").Base!;
 
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nfirst pass\nsibling edit\nsecond pass\nanother sibling\n");
         await kit.Harness.CommitAllAsync(kit.Main, "another sibling's fold", Token);
-        var moved = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", [], apply: true, Token);
+        var moved = await kit.Harness.AgentService.RebaseAsync(kit.Main, "o1", "ag", new RebaseRequest(), apply: true, Token);
 
         Assert.True(moved.Succeeded, OrchestrationKit.Describe(moved));
         Assert.Contains("and 1 path(s) it shares with the main tree, handed to it or folded, stayed as its seed records them; refresh-agent hands it any the main tree moved since:", moved.Details!);

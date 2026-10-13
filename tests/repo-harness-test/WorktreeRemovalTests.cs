@@ -1181,6 +1181,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// <summary>A failure asking where two histories part throws instead of asking git, as a git that cannot look would.</summary>
     public HarnessException? MergeBaseFailure { get; init; }
 
+    /// <summary>Runs before each checkout of paths at a commit, with the paths it asks git to write.</summary>
+    public Action<IReadOnlyList<string>>? BeforeCheckOut { get; init; }
+
     /// <summary>Runs before each listing of names, with the arguments it asks git with.</summary>
     public Action<IReadOnlyList<string>>? BeforeListNames { get; init; }
 
@@ -1294,6 +1297,7 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task CheckOutAtAsync(string directory, string commit, IReadOnlyList<string> paths, CancellationToken cancellationToken = default)
     {
         BeforeEveryCall?.Invoke();
+        BeforeCheckOut?.Invoke(paths);
         return inner.CheckOutAtAsync(directory, commit, paths, Token(cancellationToken));
     }
 

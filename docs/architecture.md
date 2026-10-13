@@ -655,7 +655,15 @@ hold differently (`git diff --name-only`, commit to commit) is shared - kept as 
 not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
 base holds it, and comes in as git holds it (`git checkout --no-overlay <commit>`, the paths on standard input and read
 literally), or changed by the agent - asked of git against both commits, with anything where the old base holds
-nothing its own, untracked, ignored or staged - which refuses the move unless `--settled` names it. One thing the agent
+nothing its own, untracked, ignored or staged - which refuses the move unless `--settled` names it. A file the agent
+changed that the main tree committed a change to is two changes of one file, resolved where a fold resolves one
+(`TwoChanges`): what both held is the old base's blob, ours the new base's, theirs the agent's file, merged in the
+agent's worktree's forms, and the bit from the two bases' entries and the agent's file (`ListEntriesAtAsync`, which says
+too where a base holds a link, which is offered no merge). Its refusal says what the merge gives and names the command
+that takes the clean ones; `--merge` takes one, listed before what comes in, written over the agent's file as weighed
+(`AgentFold.WriteMergeAsync`, the one writer of a merge) once git has written the rest and before HEAD moves, and
+recorded nowhere: on the new base it is the agent's own change, which its fold weighs. A `--merge` naming a path the two
+commits hold alike is refused as a misspelling. One thing the agent
 made is not its change: a file that is the very file the new base holds there, which is held as the new base holds it
 already (`IGitClient.ListHeldAsAtAsync`: the new base's entry for each such file put in an index of the question's own,
 and `git diff` asked against it, so the content is compared through the clean filters and the line-ending rules and the
@@ -673,7 +681,8 @@ empty, where asked for both at once it finds that gone and stops, and a submodul
 place, hidden from git. The record names where the move goes (`Moving`) before anything is written, then the new
 base's paths are written, HEAD and the index move (`git reset --mixed`), then the record and the worktree's base ref
 name the new base: a move that stopped part way, exit 21, is finished where it was going by running rebase-agent
-again - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
+again - the command its last words name, with every `--merge` and `--settled` the move was given, a merge it wrote
+merged again to the same bytes - whatever the main tree committed since, and with what it wrote held as the new base holds it, a file the old
 base lacked included - and fold-agent, delete-agent, seed-agent and refresh-agent refuse the agent until then, saying
 so. Only a move its record names is ever finished, and only from its base or where it goes: a HEAD anywhere else was
 moved by hand - back, forward or beside its base, a move under way or not - or names no commit, and each command
