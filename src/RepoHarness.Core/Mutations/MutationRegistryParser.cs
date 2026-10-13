@@ -84,7 +84,7 @@ public static partial class MutationRegistryParser
 
         for (var index = 0; index < lines.Count; index++)
         {
-            reading.Read(index + 1, lines[index]);
+            reading.Read(index + 1, new RegistryLine(lines[index]));
         }
 
         reading.CheckShapes();
@@ -96,15 +96,11 @@ public static partial class MutationRegistryParser
     /// <summary>
     /// The lines of a registry's <paramref name="text"/>, as <see cref="Parse"/> takes them: however they end, so a line
     /// number names the line an editor shows. The empty one after a last line ending is a blank line, which reads as
-    /// nothing.
+    /// nothing. They are <see cref="RegistryText"/>'s lines, each without its ending.
     /// </summary>
     /// <param name="text">The registry's text.</param>
     public static IReadOnlyList<string> Lines(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-
-        return text.ReplaceLineEndings("\n").Split('\n');
-    }
+        => [.. RegistryText.Of(text).Lines.Select(line => line.Text)];
 
     /// <summary>
     /// What is wrong with <paramref name="path"/> as a path a row names, or <see langword="null"/> where nothing is: a
@@ -178,16 +174,14 @@ public static partial class MutationRegistryParser
 
         public List<string> Problems { get; } = [];
 
-        public void Read(int line, string raw)
+        public void Read(int line, RegistryLine read)
         {
-            var text = raw.Trim();
-
-            if (text.Length == 0 || text.StartsWith('#'))
+            if (read.Row is not { } row)
             {
                 return;
             }
 
-            var kind = text.Split('|', 2)[0].Trim();
+            var kind = row.Kind;
 
             if (Replaced.TryGetValue(kind, out var replaced))
             {
@@ -201,7 +195,7 @@ public static partial class MutationRegistryParser
                 return;
             }
 
-            var fields = text.Split('|', names.Length + 1).Select(field => field.Trim()).ToArray();
+            var fields = row.Fields(names.Length);
 
             if (fields.Length != names.Length + 1)
             {

@@ -2879,6 +2879,16 @@ directory must be cited by some row; what lies below it is not listed, and a fil
 withholds - one git ignores, as a desktop's or an editor's leftover is, or one the configuration
 keeps from a sync - is no text: no copy of the tree holds it, so nobody could drive it.
 
+The registry's text has one reader, `RegistryText`. It keeps every line with the ending that line
+has, a line ending exactly where `string.ReplaceLineEndings` reads one, so a problem's line number
+is the one an editor shows whichever way the checkout ends its lines; and it says of each line
+whether it is blank, a comment or a row, and cuts a row into its kind and its fields
+(`RegistryLine`), which is the one place a row is trimmed and split and what the parser reads
+through. A row of any kind belongs to the arm its second field names. Read from the bytes a tree
+holds, the text is UTF-8 and nothing else - a byte that forms no character is why it is not read,
+never a character put in its place - a byte order mark at its start is noted and is no part of
+its first line, and the text is written back as the bytes it was read from.
+
 The whole registry is read, with every text it cites, before any host is touched, and every
 problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once
 its hosts were measured and its slots taken. What a sync withholds is in no copy of the tree, and a
