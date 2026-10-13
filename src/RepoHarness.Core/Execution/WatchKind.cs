@@ -8,6 +8,13 @@ namespace RepoHarness.Core.Execution;
 internal interface IWatchKind
 {
     /// <summary>
+    /// How many directories a watch through this kind takes at most, or <see langword="null"/> where it has no bound of
+    /// its own. Past a bound, the watch takes some directories all the way down instead; with none, every directory that
+    /// holds an input is watched for itself, and none all the way down.
+    /// </summary>
+    int? MostDirectories { get; }
+
+    /// <summary>
     /// Watches every one of <paramref name="targets"/> until what it returns is disposed, telling
     /// <paramref name="sink"/> of what happens in them - from other threads, and possibly before this returns.
     /// </summary>

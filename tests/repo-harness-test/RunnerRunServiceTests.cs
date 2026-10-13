@@ -2775,7 +2775,7 @@ public sealed class RunnerRunServiceTests
 
             // This machine's own watcher, unless a test says what watches: one that will not start, say.
             watch is null
-                ? new InputFingerprint(factory.FileSystem, factory.Platform)
+                ? new InputFingerprint(factory.FileSystem, factory.Platform, factory.Output)
                 : new InputFingerprint(factory.FileSystem, factory.Platform, watch),
             new ProcessSampler(processTable ?? factory.ProcessTable, factory.Platform, factory.Output),
             factory.GitClient,

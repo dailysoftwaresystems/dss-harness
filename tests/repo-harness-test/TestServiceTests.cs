@@ -680,7 +680,7 @@ public sealed class TestServiceTests
 
             // This machine's own watcher, unless a test says what watches: one that will not start, say.
             watch is null
-                ? new InputFingerprint(factory.FileSystem, factory.Platform)
+                ? new InputFingerprint(factory.FileSystem, factory.Platform, factory.Output)
                 : new InputFingerprint(factory.FileSystem, factory.Platform, watch),
 
             // A table that answers, rather than the platform's own source: that one is a program on

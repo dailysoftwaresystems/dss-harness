@@ -2321,7 +2321,7 @@ public sealed class BuildServiceTests
 
             // This machine's own watcher, unless a test says what watches: one that will not start, say.
             watch is null
-                ? new InputFingerprint(fileSystem ?? factory.FileSystem, factory.Platform)
+                ? new InputFingerprint(fileSystem ?? factory.FileSystem, factory.Platform, factory.Output)
                 : new InputFingerprint(fileSystem ?? factory.FileSystem, factory.Platform, watch),
             new ProcessSampler(processTable ?? new QuietProcessTable(), factory.Platform, factory.Output),
             factory.GitClient,

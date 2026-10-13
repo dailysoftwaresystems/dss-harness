@@ -118,9 +118,10 @@ public sealed class InputFingerprint
 
     /// <summary>Fingerprints and watches as this machine does.</summary>
     /// <param name="fileSystem">Reads the files.</param>
-    /// <param name="platform">The machine: how its paths compare, and what its watches can be told of.</param>
-    public InputFingerprint(IFileSystem fileSystem, IHostPlatform platform)
-        : this(fileSystem, platform, new FileSystemWatcherKind())
+    /// <param name="platform">The machine: how its paths compare, what watches there, and what its watches can be told of.</param>
+    /// <param name="output">Where it is said, once, that a watch here takes more of the machine than it should.</param>
+    public InputFingerprint(IFileSystem fileSystem, IHostPlatform platform, IHarnessOutput output)
+        : this(fileSystem, platform, WatchKinds.For(platform, output))
     {
     }
 
@@ -350,14 +351,6 @@ public sealed class InputFingerprint
 /// </remarks>
 public sealed class InputWatch : IDisposable, IWatchSink
 {
-    /// <summary>
-    /// How many directories are watched at most. Past it, the top-level directories holding the most
-    /// directories of inputs are watched all the way down instead, one watch each, and a tree whose
-    /// inputs lie in more top-level directories than this - the root counted among them where it
-    /// holds one itself - is watched whole: a watch per directory would spend handles to no purpose.
-    /// </summary>
-    public const int MostDirectoriesWatched = 64;
-
     private readonly Lock _gate = new();
     private readonly Dictionary<string, string> _tracked;
     private readonly Dictionary<string, FileFingerprint> _found;
@@ -430,7 +423,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
             throw InputsUnwatchedException.NoTree(_root);
         }
 
-        _targets = [.. Targets()];
+        _targets = [.. Targets(kind.MostDirectories)];
 
         if (_targets.Count == 0)
         {
@@ -444,9 +437,10 @@ public sealed class InputWatch : IDisposable, IWatchSink
     /// <summary>
     /// The directories to watch, and whether each is watched all the way down: each directory that
     /// holds a tracked input, the root among them, for its own files only - and, past
-    /// <see cref="MostDirectoriesWatched"/>, the top-level directories holding the most of them all
-    /// the way down instead, until the rest fit.
+    /// <paramref name="most"/>, the top-level directories holding the most of them all the way down
+    /// instead, until the rest fit. With no bound, none is watched all the way down.
     /// </summary>
+    /// <param name="most">The kind's bound on directories, or <see langword="null"/> where it has none.</param>
     /// <remarks>
     /// Not one watch over the whole tree, nor over a whole top-level directory. A build writes its
     /// objects into <c>build/&lt;variant&gt;</c>, and other trees build below the worktrees root - a
@@ -463,7 +457,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
     /// a top-level directory takes in whatever is built below it again.
     /// </para>
     /// </remarks>
-    private IEnumerable<(string Directory, bool Recursive)> Targets()
+    private IEnumerable<(string Directory, bool Recursive)> Targets(int? most)
     {
         var directories = _tracked.Keys
             .Select(input => input.LastIndexOf('/') is var at and > 0 ? input[..at] : string.Empty)
@@ -482,7 +476,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
             .OrderByDescending(group => group.Count)
             .ThenBy(group => group.Top, StringComparer.Ordinal))
         {
-            if (count <= MostDirectoriesWatched)
+            if (count <= (most ?? count))
             {
                 break;
             }
@@ -491,7 +485,7 @@ public sealed class InputWatch : IDisposable, IWatchSink
             count -= group.Count - 1;
         }
 
-        if (count > MostDirectoriesWatched)
+        if (count > (most ?? count))
         {
             yield return (_root, true);
             yield break;

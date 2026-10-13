@@ -10,7 +10,8 @@ namespace RepoHarness.Tests;
 /// cannot watch does.
 /// </summary>
 /// <param name="refusal">What starting raises, or nothing for a kind that starts.</param>
-internal sealed class ScriptedWatchKind(InputsUnwatchedException? refusal = null) : IWatchKind
+/// <param name="mostDirectories">Its bound on directories: .NET's watcher's unless a test says otherwise.</param>
+internal sealed class ScriptedWatchKind(InputsUnwatchedException? refusal = null, int? mostDirectories = FileSystemWatcherKind.MostDirectoriesWatched) : IWatchKind
 {
     /// <summary>What a machine that will not watch says, in a system's own words.</summary>
     public const string SystemsWords = "The configured user limit (128) on the number of inotify instances has been reached.";
@@ -20,6 +21,9 @@ internal sealed class ScriptedWatchKind(InputsUnwatchedException? refusal = null
 
     /// <summary>What a span refused by <see cref="Refusing"/> says, whole.</summary>
     public static string Refused => InputsUnwatchedException.Opening + SystemsWords;
+
+    /// <inheritdoc/>
+    public int? MostDirectories => mostDirectories;
 
     /// <summary>The directories the last start was asked to watch, as it was asked.</summary>
     public IReadOnlyList<(string Directory, bool Recursive)>? Targets { get; private set; }

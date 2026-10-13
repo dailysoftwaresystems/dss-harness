@@ -456,8 +456,10 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The config topic says a leg's inputs are watched only as deep as they lie, so a build in another tree below the
-    /// worktrees root is never heard - but in a tree whose inputs lie in more top-level directories than a watch allows,
-    /// the number read from the code, which is watched whole.
+    /// worktrees root is never heard: on Linux however many directories they lie in, through one inotify instance for
+    /// the process; on Windows and macOS up to the number of directories .NET's watcher takes, read from the code, past
+    /// which some are watched all the way down - and where inotify cannot be called directly, that .NET's watcher
+    /// stands in, said once.
     /// </summary>
     [Fact]
     public async Task ConfigTopic_SaysInputsAreWatchedOnlyAsDeepAsTheyLie()
@@ -466,9 +468,13 @@ public sealed partial class HelpTests
 
         Assert.Contains(
             "Its inputs are watched only as deep as they lie - each directory holding one, for its own files - so a build in another "
-                + "tree below the worktrees root, which init keeps in git by a placeholder, is never heard: but in a tree whose inputs lie "
-                + $"in more than {InputWatch.MostDirectoriesWatched} top-level directories, the root counted where it holds one, which is "
-                + "watched whole.",
+                + "tree below the worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such "
+                + "directory is watched, however many there are, through one inotify instance for the whole process. On Windows and "
+                + $"macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories, so past them the top-level directories "
+                + "holding the most are watched all the way down, and a tree whose inputs lie in more top-level directories than that, "
+                + "the root counted where it holds one, is watched whole. Where inotify cannot be called directly on Linux, .NET's "
+                + "watcher stands in, as on Windows and macOS, each directory taking an inotify instance of its own, and the process "
+                + "says so once.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
@@ -484,7 +490,7 @@ public sealed partial class HelpTests
         var said = Words((await CliRunner.RunAsync(["help", "config"], TestContext.Current.CancellationToken)).StandardOutput);
 
         Assert.Contains(
-            "which is watched whole. A directory lying in a watched one that goes, arrives or changes its name counts every input in "
+            "and the process says so once. A directory lying in a watched one that goes, arrives or changes its name counts every input in "
                 + "or below it, under both names of a rename, though it be back when the work ends; one merely written to counts none. "
                 + "A leg whose inputs cannot be watched at all runs none of its work, and ends unmeasured at once, saying why ('help "
                 + "verdicts').",
@@ -506,6 +512,25 @@ public sealed partial class HelpTests
                 + $"phase of it run: '{InputsUnwatchedException.Opening.TrimEnd()}' and the machine's reason. Run first and called unmeasured "
                 + "after, the whole of the work was spent to learn what was known before it began. A watch that started and was lost "
                 + "while the work ran still leaves it unmeasured, as the work ends.",
+            said,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The verdicts topic names the two inotify limits a watch on Linux can meet, and says that the leg is said with the
+    /// processes holding them and waits for neither.
+    /// </summary>
+    [Fact]
+    public async Task VerdictsTopic_NamesTheTwoInotifyLimits_AndThatALegWaitsForNeither()
+    {
+        var said = Words((await CliRunner.RunAsync(["help", "verdicts"], TestContext.Current.CancellationToken)).StandardOutput);
+
+        Assert.Contains(
+            "On Linux the machine's reason can be this user's inotify instances all taken (fs.inotify.max_user_instances) - "
+                + "a process of this tool holds one, however many legs it runs - or its inotify watches run out "
+                + "(fs.inotify.max_user_watches), one for each directory the inputs lie in; each is said with the limit and the "
+                + "processes /proc shows holding it, the most first. The leg does not wait for either: what holds them is "
+                + "another program, whose end nothing here can read.",
             said,
             StringComparison.Ordinal);
     }

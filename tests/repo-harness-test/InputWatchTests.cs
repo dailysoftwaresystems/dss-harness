@@ -155,7 +155,7 @@ public sealed class InputWatchTests
     {
         using var temp = Tree();
         var factory = new HarnessFactory();
-        var found = await new InputFingerprint(factory.FileSystem, factory.Platform).TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
+        var found = await new InputFingerprint(factory.FileSystem, factory.Platform, factory.Output).TakeAsync(temp.Path, Inputs, TestContext.Current.CancellationToken);
         var kind = new ScriptedWatchKind();
         using var watch = new InputWatch(temp.Path, Inputs, StringComparer.Ordinal, kind, reportsEarlierWrites, found.Files);
 
@@ -247,6 +247,40 @@ public sealed class InputWatchTests
             $"the inputs could not be watched, so none of this work was run: no directory holding any of the 3 input(s) is present under '{temp.Path}'",
             refused.Message);
         Assert.Equal(0, kind.Starts);
+    }
+
+    /// <summary>
+    /// Through a kind with no bound - inotify's hub on Linux - every directory that holds an input is watched for its own
+    /// entries, the root among them, and none all the way down: past the 64 .NET's watcher takes, and however far past,
+    /// spread over one top-level directory or over many, the tree's other directories stay unheard.
+    /// </summary>
+    [Theory]
+    [InlineData(65, 1)]
+    [InlineData(65, 65)]
+    [InlineData(5000, 100)]
+    public void ThroughAKindWithNoBound_EveryDirectoryOfInputsIsWatchedForItself_NoneAllTheWayDown(int directories, int tops)
+    {
+        using var temp = new TempDirectory();
+        string[] inputs =
+        [
+            "README.md",
+            .. Enumerable.Range(0, directories).Select(index => $"t{index % tops:000}/d{index:0000}/f.cpp"),
+        ];
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, "f");
+        }
+
+        var kind = new ScriptedWatchKind(mostDirectories: null);
+
+        using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, kind);
+
+        Assert.Equal(
+            inputs.Skip(1).Select(input => temp.Combine(input[..input.LastIndexOf('/')].Split('/'))).Append(temp.Path).Order(StringComparer.Ordinal),
+            watch.Watched.Select(target => target.Directory));
+        Assert.All(watch.Watched, target => Assert.False(target.Recursive));
+        Assert.Equal(directories + 1, kind.Targets!.Count);
     }
 
     /// <summary>A tree holding every one of <see cref="Inputs"/>.</summary>

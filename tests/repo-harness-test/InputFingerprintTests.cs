@@ -565,7 +565,7 @@ public sealed class InputFingerprintTests
     private static InputFingerprint Create()
     {
         var factory = new HarnessFactory();
-        return new InputFingerprint(factory.FileSystem, factory.Platform);
+        return new InputFingerprint(factory.FileSystem, factory.Platform, factory.Output);
     }
 
     /// <summary>

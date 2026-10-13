@@ -1897,6 +1897,22 @@ the root counted among them where it holds one itself - is watched whole, other 
 builds below the worktrees root heard with the rest. The bound is the watcher's, not the
 watch's: each one .NET makes is a handle, a buffer and a thread.
 
+On Linux there is no such bound. Every directory that holds an input is watched for its
+own entries, and none all the way down, through one inotify instance the process makes at
+its first watch and keeps until it ends, read by one thread. .NET's watcher takes an
+instance for each directory it watches, and measured, three legs at once in one
+distribution held 120 of a user's 128; through the one instance they hold three. The
+kernel gives one watch for a directory however often it is named, so spans watching the
+same directory share it, and it is removed when the last of them ends. The instance is made
+close-on-exec, so no program a leg starts holds it. The instance's calls are bound from the
+C library by name - `libc.so.6`, then `libc.so`, then `libc` - and where none of them has
+them, .NET's watcher stands in, as on Windows and macOS, and the process warns once
+(`watch: WARN - inotify could not be called directly on this machine ...`). A limit met is
+never a reason to fall back. All of this goes when the floor this tool runs on is a .NET
+whose own watcher shares one instance (.NET 11); the seam it stands behind - which
+directories to watch, decided once, apart from what watches them - stays, and so do the
+rules below.
+
 A directory counts for the inputs in it. One lying in a watched directory that goes,
 arrives or changes its name counts every input in or below it, under both names of a
 rename: each went or arrived with it, and a directory moved aside and put back reads the
@@ -1913,8 +1929,19 @@ machine's reason, and whatever the watch had taken is released before the refusa
 Run first and called `unmeasured` after, as it was, the whole of the work was spent to
 learn what was known before it began. A build that had decided to start from clean has
 deleted its directory by then; the decision stands for the next build. A watch that
-started and is lost while the work runs - its buffer overflowed, its directory gone -
-still ends the leg `unmeasured`, as the work ends.
+started and is lost while the work runs - its buffer or its queue overflowed, its
+directory gone - still ends the leg `unmeasured`, as the work ends.
+
+On Linux the reason can be one of two limits, each said with what `/proc` shows of it:
+this user's inotify instances all taken - `fs.inotify.max_user_instances is 128, and
+/proc shows 128 held: 51 by pid 4242 (dssharness), ...` and `A leg needs one.` - or its
+watches run out - `fs.inotify.max_user_watches is 8192; this work's inputs lie in 3120
+directory(ies), one watch each, and /proc shows 6011 held: ...`. The holders are this
+user's processes, the most first, three named and the rest counted; where `/proc` cannot
+be read the sentence ends at the limit. The leg does not wait for an instance, and
+admission does not count them: at one instance a process this tool is not what holds
+them, and another program's hold ends on no schedule this tool can read. What the person
+can act on is who holds them, which is what the leg says.
 
 A leg on another machine tests that machine's copy, which holds still under it; what can
 move is the tree here, before the copy is made of it. So a run reads each tree its hosts'

@@ -763,7 +763,11 @@ internal static class HelpCommand
             "A leg whose inputs cannot be watched - the machine refusing the watch as its work was to begin - is unmeasured "
             + $"with no phase of it run: '{InputsUnwatchedException.Opening.TrimEnd()}' and the machine's reason. Run first and "
             + "called unmeasured after, the whole of the work was spent to learn what was known before it began. A watch that "
-            + "started and was lost while the work ran still leaves it unmeasured, as the work ends.");
+            + "started and was lost while the work ran still leaves it unmeasured, as the work ends. On Linux the machine's "
+            + "reason can be this user's inotify instances all taken (fs.inotify.max_user_instances) - a process of this tool "
+            + "holds one, however many legs it runs - or its inotify watches run out (fs.inotify.max_user_watches), one for each "
+            + "directory the inputs lie in; each is said with the limit and the processes /proc shows holding it, the most "
+            + "first. The leg does not wait for either: what holds them is another program, whose end nothing here can read.");
         builder.AppendLine();
         builder.AppendLine("A run's closing line names its verdict with the count of legs that reached it, and");
         builder.AppendLine("then the rest, worst first - 'poisoned: 2 of 8 leg(s); 3 failed, 3 passed' - never");
@@ -2462,16 +2466,22 @@ internal static class HelpCommand
         builder.AppendLine("declares a successPattern, since exiting 0 is not proof anything ran. A leg whose");
         builder.AppendLine("test inputs change while it runs, whose host's copy could not be made the tree the");
         builder.AppendLine("run began with because a file in it changed first, or whose build directory another");
-        builder.AppendLine("process uses, gets no pass or fail at all. Its inputs are watched only as deep as they");
-        builder.AppendLine("lie - each directory holding one, for its own files - so a build in another tree below");
-        builder.AppendLine("the worktrees root, which init keeps in git by a placeholder, is never heard: but in a");
-        builder.AppendLine($"tree whose inputs lie in more than {InputWatch.MostDirectoriesWatched} top-level directories, the root counted where it");
-        builder.AppendLine("holds one, which is watched whole. A directory lying in a watched one that goes,");
-        builder.AppendLine("arrives or changes its name counts every input in or below it, under both names of a");
-        builder.AppendLine("rename, though it be back when the work ends; one merely written to counts none. A leg");
-        builder.AppendLine("whose inputs cannot be watched at all runs none of its work, and ends unmeasured at");
-        builder.AppendLine("once, saying why ('help verdicts'). Durations that diverge between legs, or that span");
-        builder.AppendLine("a clock step or a host sleep, are marked suspect, and never change a verdict.");
+        builder.AppendLine("process uses, gets no pass or fail at all.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "Its inputs are watched only as deep as they lie - each directory holding one, for its own files - so a build in "
+            + "another tree below the worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every "
+            + "such directory is watched, however many there are, through one inotify instance for the whole process. On "
+            + $"Windows and macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories, so past them the top-level "
+            + "directories holding the most are watched all the way down, and a tree whose inputs lie in more top-level "
+            + "directories than that, the root counted where it holds one, is watched whole. Where inotify cannot be called "
+            + "directly on Linux, .NET's watcher stands in, as on Windows and macOS, each directory taking an inotify instance "
+            + "of its own, and the process says so once. A directory lying in a watched one that goes, arrives or changes its name "
+            + "counts every input in or below it, under both names of a rename, though it be back when the work ends; one merely "
+            + "written to counts none. A leg whose inputs cannot be watched at all runs none of its work, and ends unmeasured at "
+            + "once, saying why ('help verdicts'). Durations that diverge between legs, or that span a clock step or a host "
+            + "sleep, are marked suspect, and never change a verdict.");
         builder.AppendLine();
         builder.AppendLine("A test count countPattern reads that differs from the other legs of the same project");
         builder.AppendLine("and test set is marked on its own - 'test count differs', and testCountDiffers and");

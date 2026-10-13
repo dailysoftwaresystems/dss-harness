@@ -2,27 +2,50 @@ namespace RepoHarness.Core.Execution;
 
 /// <summary>
 /// Watches through .NET's own watcher, one for each directory: a handle, a buffer and a thread apiece, which is why a
-/// watch through it bounds how many directories it takes.
+/// watch through it bounds how many directories it takes (<see cref="MostDirectoriesWatched"/>). Windows and macOS
+/// watch through it, and Linux where inotify cannot be called directly.
 /// </summary>
-/// <param name="watch">Makes the one watcher of a directory, started; the runtime's own unless a test says otherwise.</param>
-internal sealed class FileSystemWatcherKind(Func<string, bool, IWatchSink, IDisposable> watch) : IWatchKind
+public sealed class FileSystemWatcherKind : IWatchKind
 {
+    /// <summary>
+    /// How many directories a watch through .NET's watcher takes at most: each watcher is a handle, a buffer and a
+    /// thread. Past it, the top-level directories holding the most directories of inputs are watched all the way down
+    /// instead, one watch each, and a tree whose inputs lie in more top-level directories than this - the root counted
+    /// among them where it holds one itself - is watched whole: a watcher per directory would spend handles to no
+    /// purpose. The bound is this kind's, and no watch's: a kind with none, as inotify's hub on Linux is, watches every
+    /// directory of inputs for itself.
+    /// </summary>
+    public const int MostDirectoriesWatched = 64;
+
     /// <summary>
     /// The largest buffer the operating system accepts. Events arrive faster than they can be read
     /// during a build, and a buffer that overflows loses them silently, which this exists to avoid.
     /// </summary>
     private const int BufferBytes = 64 * 1024;
 
-    private readonly Func<string, bool, IWatchSink, IDisposable> _watch = watch;
+    private readonly Func<string, bool, IWatchSink, IDisposable> _watch;
 
     /// <summary>Watches through the runtime's own watcher.</summary>
-    public FileSystemWatcherKind()
+    internal FileSystemWatcherKind()
         : this(Watch)
     {
     }
 
+    /// <summary>Watches through what <paramref name="watch"/> makes.</summary>
+    /// <param name="watch">Makes the one watcher of a directory, started; the runtime's own unless a test says otherwise.</param>
+    internal FileSystemWatcherKind(Func<string, bool, IWatchSink, IDisposable> watch)
+    {
+        _watch = watch;
+    }
+
     /// <inheritdoc/>
-    public IDisposable Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink)
+    public int? MostDirectories => MostDirectoriesWatched;
+
+    /// <inheritdoc/>
+    IDisposable IWatchKind.Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink) => Start(targets, sink);
+
+    /// <inheritdoc cref="IWatchKind.Start"/>
+    internal IDisposable Start(IReadOnlyList<(string Directory, bool Recursive)> targets, IWatchSink sink)
     {
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(sink);
