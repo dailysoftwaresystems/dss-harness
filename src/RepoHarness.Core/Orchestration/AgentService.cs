@@ -629,11 +629,12 @@ public sealed class AgentService(
 
         var under = prefixes is null ? string.Empty : $" under {string.Join(", ", prefixes)}";
         var except = request.Except.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal);
+        var stale = request.Stale.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal);
         RefreshPlan plan;
 
         try
         {
-            plan = await _fold.MeasureRefreshAsync(main, path, record.Base!, seed, floor, prefixes, except, cancellationToken).ConfigureAwait(false);
+            plan = await _fold.MeasureRefreshAsync(main, path, record.Base!, seed, floor, prefixes, except, stale, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -650,16 +651,50 @@ public sealed class AgentService(
                 + $"{Lower(Agent(record))} changed, so it leaves nothing out: check its spelling. Nothing was copied.");
         }
 
-        if (changed.Count > 0)
+        if (plan.StaleStray.Count > 0)
         {
             return CommandOutcome.Refused(
-                $"{Agent(record)} changed {changed.Count} of the path(s) to refresh - {ReportText.Listed(changed)} - and refreshing would undo those "
-                + "changes. Nothing was copied.",
+                $"{RefreshRequest.StaleOption} {ReportText.Listed([.. plan.StaleStray.Select(relative => $"'{relative}'")])} names no path{under} whose copy in "
+                + "the agent is not the main tree's, so it hands nothing: check its spelling. Nothing was copied.");
+        }
+
+        // Where the search stopped short of the main tree's whole history, a copy older than it reached is not found stale.
+        IReadOnlyList<string> bound = plan.Capped
+            ? [$"The last {ReportText.Counted(TwoChanges.MostCommits, "commit")} of the main tree that changed these paths were searched, and its history goes "
+                + "further back: a copy older than that is not found stale."]
+            : [];
+
+        if (plan.StaleRefused.Count > 0)
+        {
+            return plan.StaleRefused is [var one]
+                ? CommandOutcome.Refused($"{one} Nothing was copied.", bound)
+                : CommandOutcome.Refused(
+                    $"{ReportText.Counted(plan.StaleRefused.Count, "path")} named with {RefreshRequest.StaleOption} are not proved stale, each said below. Nothing was copied.",
+                    [.. plan.StaleRefused.Select(why => $"  {why}"), .. bound]);
+        }
+
+        if (changed.Count > 0)
+        {
+            var staleOnes = changed.Where(change => change.StaleAt is not null).Select(change => change.Path).ToList();
+
+            return CommandOutcome.Refused(
+                $"{Agent(record)} changed {changed.Count} of the path(s) to refresh - {ReportText.Listed([.. changed.Select(change => change.Path)])} - and "
+                + "refreshing would undo those changes. Nothing was copied.",
                 [
-                    .. changed.Select(relative => $"  {relative}"),
+                    .. changed.Select(change => change.StaleAt is { } commit ? $"  {change.Path}   {StaleSaid(commit)}" : $"  {change.Path}"),
                     $"To hand it every other path and leave these as it changed them, run again with {RefreshRequest.ExceptOption} <path> for each:",
-                    $"  {RefreshRequest.ExceptArguments(left.Concat(changed).Order(StringComparer.Ordinal))}",
-                    $"{RefreshRequest.ExceptOption} says the path stays the agent's change, for its fold to weigh against what the main tree holds; it is not a --force.",
+                    $"  {RefreshRequest.ExceptArguments(left.Concat(changed.Select(change => change.Path)).Order(StringComparer.Ordinal))}",
+                    .. staleOnes.Count == 0
+                        ? new[] { $"{RefreshRequest.ExceptOption} says the path stays the agent's change, for its fold to weigh against what the main tree holds; it is not a --force." }
+                        : [
+                            $"{staleOnes.Count} of them hold bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. "
+                                + "To hand it the main tree's copy of each instead, name them:",
+                            $"  {RefreshRequest.StaleArguments(staleOnes)}",
+                            $"{RefreshRequest.ExceptOption} says the path stays the agent's change, for its fold to weigh against what the main tree holds; "
+                                + $"{RefreshRequest.StaleOption} says its copy is not the agent's work, and is taken only where the main tree's history holds those "
+                                + "very bytes at that path. None is a --force.",
+                        ],
+                    .. bound,
                 ]);
         }
 
@@ -670,6 +705,17 @@ public sealed class AgentService(
 
         var all = moved.Files.Concat(moved.Deletions).Order(StringComparer.Ordinal).ToList();
         var behind = await BehindAsync(main, record).ConfigureAwait(false);
+
+        // Handed like any other path, and listed apart, each with the commit its copy is the main tree's own at.
+        var staleHanded = plan.Stale.Select(copy => copy.Path).ToHashSet(StringComparer.Ordinal);
+        IReadOnlyList<string> handedLines = [.. all.Where(relative => !staleHanded.Contains(relative)).Select(relative => $"  {relative}")];
+        IReadOnlyList<string> staleLines = plan.Stale.Count == 0
+            ? []
+            : [
+                $"{ReportText.Counted(plan.Stale.Count, "path")} named with {RefreshRequest.StaleOption}, whose copy is the main tree's own at an earlier commit, "
+                    + $"{(apply ? "handed" : "to hand")} the main tree's copy:",
+                .. plan.Stale.Select(copy => $"  {copy.Path}   {StaleSaid(copy.Commit)}"),
+            ];
 
         // Recorded as shared, so its record says what it holds: dropped unrecorded, the next move of the main tree reads
         // its copy as its change. Never silent, and written only with --apply.
@@ -701,7 +747,7 @@ public sealed class AgentService(
                     ? $"{holds}; {alike.Count} of them {(alike.Count == 1 ? "is" : "are")} not recorded as shared yet: pass --apply to record them"
                     : $"dry run: {ReportText.Counted(all.Count, "path")} would be refreshed into {Lower(Agent(record))}"
                         + $"{(alike.Count == 0 ? string.Empty : $", and {alike.Count} recorded as shared")}; pass --apply to hand them over",
-                [.. all.Select(relative => $"  {relative}"), .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]);
+                [.. handedLines, .. staleLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]);
         }
 
         // The agent's worktree is held too: a leg building in it would be building what is being replaced.
@@ -746,9 +792,12 @@ public sealed class AgentService(
                     all.Count == 0
                         ? $"{holds}, and recorded {alike.Count} of them as shared"
                         : $"refreshed {ReportText.Counted(all.Count, "path")} into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out{recorded}",
-                    [.. all.Select(relative => $"  {relative}"), .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind, .. notes, .. SeedRecords(layout, record.Name)]);
+                    [.. handedLines, .. staleLines, .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind, .. notes, .. SeedRecords(layout, record.Name)]);
         }
     }
+
+    /// <summary>What a stale copy's line says of it: the commit of the main tree's history that holds its very bytes.</summary>
+    private static string StaleSaid(string commit) => $"(its bytes are the main tree's at {ReportText.Commit(commit)})";
 
     public async Task<CommandOutcome> RebaseAsync(
         string startDirectory,

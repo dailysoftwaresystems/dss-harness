@@ -2209,7 +2209,8 @@ internal static class HelpCommand
         builder.AppendLine($"  {command} {OrchestratorService.CreateCommand} <o> --model <id> [--parallel <n>] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.CreateCommand} <o> <a> --model <id> [--empty] [--session <id>]");
         builder.AppendLine($"  {command} {AgentService.SeedCommand} <o> <a> [--empty] [--force]");
-        builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]... [--apply]");
+        builder.AppendLine($"  {command} {AgentService.RefreshCommand} <o> <a> [<path>... | {RefreshRequest.AllOption}] [{RefreshRequest.ExceptOption} <path>]...");
+        builder.AppendLine($"      [{RefreshRequest.StaleOption} <path>]... [--apply]");
         var paths = $"[{FoldAllowances.MergeOption} <path>]... [{FoldAllowances.SettledOption} <path>]...";
         builder.AppendLine($"  {command} {AgentService.RebaseCommand} <o> <a> [--apply] {paths}");
         var rows = $"[{AnchorBatchRequest.NewOption} <ID>]... [{AnchorBatchRequest.AcceptLostOption} {AnchorRowCell.Form}]...";
@@ -2251,7 +2252,15 @@ internal static class HelpCommand
             + $"{RefreshRequest.ExceptOption} <path>, once for each, hands it every other path and leaves that one as the agent "
             + "changed it, its own work for its fold to weigh against what the main tree holds - said in the report, never "
             + "silently; it is not a --force, nothing is left out that nobody named, and one naming a path the refresh would not "
-            + "have refused is refused, nothing copied. "
+            + $"have refused is refused, nothing copied. {RefreshRequest.StaleOption} <path>, once for each, says its copy is not the agent's "
+            + "work and hands it the main tree's - taken only where the agent's copy, as git would store it, is a blob the main "
+            + "tree's history held at that path, among the last 512 commits that changed it, and refused "
+            + "otherwise, nothing copied, as is one naming a path the agent holds no file at. The refusal over the agent's changes "
+            + "names each such copy with the commit whose bytes it holds, and the arguments that hand them; it says too where the "
+            + "search stopped short of the main tree's history. It reaches a path the main tree did not move as well - a copy put "
+            + "back by hand to an older version - and one naming a path the agent holds as the main tree does is let stand. A "
+            + $"path named with both {RefreshRequest.ExceptOption} and {RefreshRequest.StaleOption} is a usage error, exit "
+            + $"{HarnessExit.UsageError}. "
             + "What the agent holds of its own where what it is handed needs room - a file or a link where a directory goes, or "
             + "files of its own in a directory a file replaces - refuses the hand-over, forced or not, naming each: copied, it "
             + "would write over them, or through the link out of its worktree. A file of the agent's written after it was weighed "

@@ -1100,6 +1100,236 @@ public sealed class AgentServiceTests
         Assert.Equal("--all", new RefreshRequest { All = true }.Arguments());
         Assert.Equal("docs \"with space\"", RefreshRequest.Under("docs", "with space").Arguments());
         Assert.Equal("docs --except a.txt --except \"b c.txt\"", new RefreshRequest { Paths = ["docs"], Except = ["a.txt", "b c.txt"] }.Arguments());
+        Assert.Equal("--all --except a.txt --stale b.txt --stale \"c d.txt\"", new RefreshRequest { All = true, Except = ["a.txt"], Stale = ["b.txt", "c d.txt"] }.Arguments());
+    }
+
+    /// <summary>
+    /// A copy the agent holds that is the main tree's own file at an earlier commit is said to be one in the refusal over
+    /// its changes, with that commit and the arguments that hand it the main tree's copy instead; named with --stale, it is
+    /// handed like any other path, listed apart with its commit, and recorded as handed.
+    /// </summary>
+    [Fact]
+    public async Task ACopyThatIsTheMainTreesFileAtAnEarlierCommit_IsSaidToBeOne_AndNamedWithStale_IsHandedAndRecorded()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var first = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nthird\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the third version", Token);
+        var at = $"(its bytes are the main tree's at {Core.Output.ReportText.Commit(first)})";
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            "Agent 'ag' of 'o1' changed 1 of the path(s) to refresh - a.txt - and refreshing would undo those changes. Nothing was copied.",
+            refused.Message);
+        Assert.Equal(
+            [
+                $"  a.txt   {at}",
+                "To hand it every other path and leave these as it changed them, run again with --except <path> for each:",
+                "  --except a.txt",
+                "1 of them hold bytes the main tree itself held at that path: copies gone stale, where nobody changed them on purpose. To hand it the "
+                    + "main tree's copy of each instead, name them:",
+                "  --stale a.txt",
+                "--except says the path stays the agent's change, for its fold to weigh against what the main tree holds; --stale says its copy is "
+                    + "not the agent's work, and is taken only where the main tree's history holds those very bytes at that path. None is a --force.",
+                $"log {kit.Layout.LogFile("ag")}",
+            ],
+            refused.Details);
+
+        var request = new RefreshRequest { Paths = ["a.txt"], Stale = ["a.txt"] };
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", request, apply: false, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal("dry run: 1 path(s) would be refreshed into agent 'ag' of 'o1'; pass --apply to hand them over", dry.Message);
+        Assert.Equal(
+            ["1 path(s) named with --stale, whose copy is the main tree's own at an earlier commit, to hand the main tree's copy:", $"  a.txt   {at}"],
+            dry.Details!.Take(2));
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", request, apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(
+            ["1 path(s) named with --stale, whose copy is the main tree's own at an earlier commit, handed the main tree's copy:", $"  a.txt   {at}"],
+            applied.Details!.Take(2));
+        Assert.Equal("one\nthird\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal(await DigestAsync(kit.Main, "a.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["a.txt"]);
+    }
+
+    /// <summary>
+    /// The proof is git's: the agent's copy is weighed as git would store it, so one that differs from an earlier commit's
+    /// file only by a line-ending conversion is that commit's file, and is handed as a stale copy.
+    /// </summary>
+    [Fact]
+    public async Task ACopyDifferingFromAnEarlierCommitsFileOnlyInItsLineEndings_IsThatCommitsFile()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, ".gitattributes", "*.txt text eol=lf\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version, and how text is stored", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\r\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nthird\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the third version", Token);
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { Paths = ["a.txt"], Stale = ["a.txt"] }, apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("one\nthird\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
+    /// A --stale nothing proves is refused, nothing copied: a copy the main tree's history does not hold at that path, and
+    /// a path the agent holds no file at, whose deletion is its change; several said together. One naming no path under
+    /// those refreshed names nothing, and one naming a path also named with --except is a usage error.
+    /// </summary>
+    [Fact]
+    public async Task AStaleNothingProves_IsRefused_AndNothingIsCopied()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "never committed\n");
+        File.Delete(Path.Combine(worktree, "b.txt"));
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\ncommitted\n");
+        OrchestrationKit.Write(kit.Main, "docs/x.md", "x\ncommitted\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "between waves", Token);
+        const string Unproved = "--stale 'a.txt': its copy is no file the main tree held at that path in the last 512 commit(s) that changed it, so "
+            + "nothing proves it stale. --except leaves it as the agent's change, for its fold to weigh.";
+        const string Deleted = "--stale 'b.txt': the agent holds no file there, and a deletion is its change. --except leaves it.";
+
+        async Task<CommandOutcome> RefreshAsync(RefreshRequest request)
+        {
+            var outcome = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", request, apply: true, Token);
+
+            Assert.Equal("never committed\n", OrchestrationKit.Read(worktree, "a.txt"));
+            Assert.Equal("x\n", OrchestrationKit.Read(worktree, "docs/x.md"));
+            return outcome;
+        }
+
+        var unproved = await RefreshAsync(new RefreshRequest { All = true, Except = ["b.txt"], Stale = ["a.txt"] });
+        var deleted = await RefreshAsync(new RefreshRequest { All = true, Except = ["a.txt"], Stale = ["b.txt"] });
+        var both = await RefreshAsync(new RefreshRequest { All = true, Stale = ["a.txt", "b.txt"] });
+        var stray = await RefreshAsync(new RefreshRequest { Paths = ["docs"], Stale = ["a.txt"] });
+        var twice = await RefreshAsync(new RefreshRequest { All = true, Except = ["a.txt"], Stale = ["a.txt"] });
+
+        Assert.Equal((HarnessExit.Refused, $"{Unproved} Nothing was copied."), (unproved.ExitCode, unproved.Message));
+        Assert.Equal((HarnessExit.Refused, $"{Deleted} Nothing was copied."), (deleted.ExitCode, deleted.Message));
+        Assert.Equal((HarnessExit.Refused, "2 path(s) named with --stale are not proved stale, each said below. Nothing was copied."), (both.ExitCode, both.Message));
+        Assert.Equal([$"  {Unproved}", $"  {Deleted}"], both.Details!.Take(2));
+        Assert.Equal(
+            (HarnessExit.Refused, "--stale 'a.txt' names no path under docs whose copy in the agent is not the main tree's, so it hands nothing: check its spelling. Nothing was copied."),
+            (stray.ExitCode, stray.Message));
+        Assert.Equal(
+            (HarnessExit.UsageError, "'a.txt' is named with both --except and --stale: a path is left as the agent changed it, or handed the main tree's copy, never both."),
+            (twice.ExitCode, twice.Message));
+    }
+
+    /// <summary>
+    /// --stale reaches a path the main tree did not move: a copy put back by hand to an older version, which the agent's
+    /// fold would otherwise write into the main tree as its change, is handed the main tree's copy - and run again, the
+    /// same line, finding the copy now the main tree's, is let stand.
+    /// </summary>
+    [Fact]
+    public async Task AStaleNamingAPathTheMainTreeDidNotMove_HandsItTheMainTreesCopy_AndRunAgainIsLetStand()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\n");
+
+        var unnamed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
+
+        Assert.True(unnamed.Succeeded, OrchestrationKit.Describe(unnamed));
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+
+        var applied = await CliRunner.RunAsync(["refresh-agent", "o1", "ag", "a.txt", "--stale", "a.txt", "--apply"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(0, applied.ExitCode);
+        Assert.Equal("one\nsecond\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal(await DigestAsync(kit.Main, "a.txt"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["a.txt"]);
+
+        var again = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { Paths = ["a.txt"], Stale = ["a.txt"] }, apply: true, Token);
+
+        Assert.True(again.Succeeded, OrchestrationKit.Describe(again));
+        Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every changed path under a.txt", again.Message);
+    }
+
+    /// <summary>
+    /// The search of the main tree's history reads a bounded number of the commits that changed the paths, and says where
+    /// it stopped short of that history: a copy older than it reached is not found stale.
+    /// </summary>
+    [Fact]
+    public async Task TheSearchForStaleCopies_SaysWhereItStoppedShortOfTheMainTreesHistory()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nsecond\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "one\n");
+        await CommitManyAsync(kit.Main, "a.txt", TwoChanges.MostCommits + 1);
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal("  a.txt", refused.Details![0]);
+        Assert.Contains(
+            "The last 512 commit(s) of the main tree that changed these paths were searched, and its history goes further back: a copy older than that "
+            + "is not found stale.",
+            refused.Details);
+        Assert.Equal("one\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
+    /// Commits <paramref name="count"/> versions of <paramref name="path"/> onto the main tree's branch at once, through
+    /// git's own importer, and puts the tree's files as its HEAD then holds them.
+    /// </summary>
+    private static async Task CommitManyAsync(string main, string path, int count)
+    {
+        var harness = new HarnessFactory();
+        var head = (await harness.RunGitAsync(main, ["rev-parse", "HEAD"], Token)).StandardOutput.Trim();
+        var branch = (await harness.RunGitAsync(main, ["symbolic-ref", "HEAD"], Token)).StandardOutput.Trim();
+        var stream = new System.Text.StringBuilder();
+
+        for (var at = 1; at <= count; at++)
+        {
+            var content = $"version {at}\n";
+            stream.Append($"commit {branch}\ncommitter Test <test@example.com> {1_700_000_000 + at} +0000\ndata 1\nv\n");
+
+            if (at == 1)
+            {
+                stream.Append($"from {head}\n");
+            }
+
+            stream.Append($"M 100644 inline {path}\ndata {content.Length}\n{content}\n");
+        }
+
+        var import = new System.Diagnostics.ProcessStartInfo("git") { RedirectStandardInput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+
+        foreach (var argument in new[] { "-C", main, "fast-import", "--quiet" })
+        {
+            import.ArgumentList.Add(argument);
+        }
+
+        using var process = System.Diagnostics.Process.Start(import)!;
+        await process.StandardInput.WriteAsync(stream.ToString());
+        process.StandardInput.Close();
+        var error = await process.StandardError.ReadToEndAsync(Token);
+        await process.WaitForExitAsync(Token);
+
+        Assert.True(process.ExitCode == 0, $"git fast-import failed: {error}");
+        await harness.RunGitAsync(main, ["reset", "--hard", "--quiet"], Token);
     }
 
     /// <summary>

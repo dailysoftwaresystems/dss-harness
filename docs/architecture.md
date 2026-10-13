@@ -590,7 +590,18 @@ comparison asked of the agent's worktree). What it does is measured in one place
 (`AgentFold.MeasureRefreshAsync`, a `RefreshPlan`): a path the agent already holds as the main tree does - the same file,
 or absent from both - is recorded as shared at what both held when it was measured, its bytes kept from the agent's
 copy (`AgentFold.AlikeAsync`), listed, and written only with `--apply`, so its record says what it holds and the next
-move of the main tree hands it; dropped unrecorded, as before, the agent's copy read as its change from then on. The refusal names each such path and the arguments that leave them:
+move of the main tree hands it; dropped unrecorded, as before, the agent's copy read as its change from then on.
+`--stale <path>` hands the main tree's copy over a path the agent changed only where its copy is proved the main
+tree's own at an earlier commit (`AgentFold.StaleAtAsync`, asked once for every path a refusal or a `--stale` names):
+the agent's copy hashed as git would store it in its worktree (`ListStagedIdsAsync`), so a copy that differs from a
+commit's file only by a line-ending conversion is that commit's file, against the blobs the main tree's history held at
+the path (`ListHeldInHistoryAsync` from its HEAD, `rev-list --full-history` so a version a merge dropped is still its
+history's, at most `TwoChanges.MostCommits` commits). Bytes that history holds are the main tree's own there, so
+replacing them loses nothing it does not keep; the bound limits the cost only, and is said where it is reached. A
+proved copy is handed and recorded like the rest (`RefreshPlan.Stale`), listed apart with its commit; one not proved,
+or a deletion, is refused, nothing copied; one the main tree did not move is weighed too, where the agent's copy is not
+the main tree's. The refusal over the agent's changes names each changed path whose copy qualifies
+(`RefreshChange.StaleAt`) with the `--stale` arguments that hand them. The refusal names each such path and the arguments that leave them:
 `--except <path>`, once for each, takes that path out of what is handed, so the rest goes over and it stays the agent's
 change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed, would be,
 or needed no handing, and one naming a path the refresh would not have refused is refused as a stray `--settled` is. A

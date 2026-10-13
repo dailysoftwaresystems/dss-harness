@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using RepoHarness.Core.Platform;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Core.Orchestration;
@@ -319,6 +320,33 @@ public static partial class OrchestrationRules
         ArgumentNullException.ThrowIfNull(paths);
 
         return paths.Select(path => RelativePathProblem(path.TrimEnd('/', '\\'), what)).FirstOrDefault(problem => problem is not null);
+    }
+
+    /// <summary>
+    /// What is wrong where one path is named with two options that say different things of it, whichever command takes
+    /// them - each option given with the paths named with it, and what it does to a path, to follow "a path is" - or null
+    /// where none is.
+    /// </summary>
+    /// <param name="options">Each option, the paths named with it as they were typed, and what it does to a path.</param>
+    public static string? NamedTwiceProblem(params (string Option, IReadOnlyList<string> Paths, string Does)[] options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        for (var first = 0; first < options.Length; first++)
+        {
+            for (var second = first + 1; second < options.Length; second++)
+            {
+                var named = options[second].Paths.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal);
+
+                if (options[first].Paths.Select(PathPatterns.Normalize).FirstOrDefault(named.Contains) is { } path)
+                {
+                    return $"'{path}' is named with both {options[first].Option} and {options[second].Option}: a path is {options[first].Does}, or "
+                        + $"{options[second].Does}, never both.";
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>What is wrong with an agent's name beside its orchestrator's: never the same, since the two would share a log and a plans directory.</summary>

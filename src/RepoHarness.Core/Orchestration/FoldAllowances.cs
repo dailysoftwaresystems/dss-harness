@@ -17,6 +17,12 @@ public sealed record FoldAllowances
     /// <summary>The option that leaves out of the fold a path reconciled by hand.</summary>
     public const string SettledOption = "--settled";
 
+    /// <summary>What <see cref="MergeOption"/> does to a path, as a refusal of a path named twice says it.</summary>
+    public const string MergeDoes = "merged for you";
+
+    /// <summary>What <see cref="SettledOption"/> does to a path.</summary>
+    public const string SettledDoes = "reconciled by hand";
+
     /// <summary>
     /// Paths both trees changed whose three-way merge, where it is clean, the fold may write into both:
     /// <see cref="MergeOption"/>.
@@ -86,31 +92,15 @@ public sealed record FoldAllowances
     /// <param name="merge">The paths named to be merged.</param>
     /// <param name="settled">The paths named as settled by hand.</param>
     public static string? PathsProblem(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
-        => OrchestrationRules.PathsProblem(merge, MergeOption) ?? OrchestrationRules.PathsProblem(settled, SettledOption) ?? MergedAndSettled(merge, settled);
+        => OrchestrationRules.PathsProblem(merge, MergeOption)
+            ?? OrchestrationRules.PathsProblem(settled, SettledOption)
+            ?? OrchestrationRules.NamedTwiceProblem((MergeOption, merge, MergeDoes), (SettledOption, settled, SettledDoes));
 
     /// <summary>The arguments that name <paramref name="merge"/> and <paramref name="settled"/> again, each path once, as a command line takes them.</summary>
     /// <param name="merge">The paths named to be merged.</param>
     /// <param name="settled">The paths named as settled by hand.</param>
     public static IEnumerable<string> PathArguments(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
         => OrchestrationReports.PathArguments(MergeOption, merge).Concat(OrchestrationReports.PathArguments(SettledOption, settled));
-
-    /// <summary>
-    /// What is wrong where one path is named both with <see cref="MergeOption"/> and with <see cref="SettledOption"/>,
-    /// whichever command takes the two: they say opposite things of it. Null where none is.
-    /// </summary>
-    /// <param name="merge">The paths named to be merged.</param>
-    /// <param name="settled">The paths named as settled by hand.</param>
-    private static string? MergedAndSettled(IReadOnlyList<string> merge, IReadOnlyList<string> settled)
-    {
-        ArgumentNullException.ThrowIfNull(merge);
-        ArgumentNullException.ThrowIfNull(settled);
-
-        var settledPaths = settled.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal);
-
-        return merge.Select(PathPatterns.Normalize).FirstOrDefault(settledPaths.Contains) is { } path
-            ? $"'{path}' is named with both {MergeOption} and {SettledOption}: a path is merged for you, or it was reconciled by hand, never both."
-            : null;
-    }
 
     /// <summary>The arguments that give them again, each as a command line takes it, for one a report names.</summary>
     public IEnumerable<string> Arguments() =>

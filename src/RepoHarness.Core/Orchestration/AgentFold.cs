@@ -117,10 +117,21 @@ public sealed record RebasePlan
     public required IReadOnlyList<string> WrittenLast { get; init; }
 }
 
+/// <summary>A path whose copy in the agent is the main tree's own at an earlier commit, with that commit.</summary>
+/// <param name="Path">The path, as git names it.</param>
+/// <param name="Commit">The newest commit of the main tree's history that holds the agent's very bytes there.</param>
+public sealed record StaleCopy(string Path, string Commit);
+
+/// <summary>A path the agent changed, and where its copy is the main tree's own at an earlier commit, that commit.</summary>
+/// <param name="Path">The path, as git names it.</param>
+/// <param name="StaleAt">The newest commit of the main tree's history that holds its very bytes there; null where none does, or it holds no file.</param>
+public sealed record RefreshChange(string Path, string? StaleAt);
+
 /// <summary>
 /// What refreshing an agent does, measured; nothing written. Every path under the paths asked for that the main tree holds
-/// otherwise than the agent shares it is in exactly one list: handed, already held as the main tree does, left by name as
-/// the agent changed it, or changed by the agent - which refuses the refresh.
+/// otherwise than the agent shares it is in exactly one list: handed - a stale copy named with
+/// <see cref="RefreshRequest.StaleOption"/> among them - already held as the main tree does, left by name as the agent
+/// changed it, or changed by the agent - which refuses the refresh.
 /// </summary>
 public sealed record RefreshPlan
 {
@@ -139,8 +150,26 @@ public sealed record RefreshPlan
     /// <summary>The paths it changed that were named to be left as it changed them: handed nothing.</summary>
     public required IReadOnlyList<string> Left { get; init; }
 
-    /// <summary>The paths it changed that nothing named: handing the main tree's over them would undo its work, so the refresh is refused.</summary>
-    public required IReadOnlyList<string> Changed { get; init; }
+    /// <summary>
+    /// The paths it changed that nothing named: handing the main tree's over them would undo its work, so the refresh is
+    /// refused - each with the commit its copy is the main tree's own at, where it is one.
+    /// </summary>
+    public required IReadOnlyList<RefreshChange> Changed { get; init; }
+
+    /// <summary>
+    /// The paths named with <see cref="RefreshRequest.StaleOption"/> whose copy is proved the main tree's own at an earlier
+    /// commit: handed with the rest, in <see cref="Handed"/>, and listed apart.
+    /// </summary>
+    public required IReadOnlyList<StaleCopy> Stale { get; init; }
+
+    /// <summary>Why each path named with <see cref="RefreshRequest.StaleOption"/> that is not proved stale is refused, each a sentence.</summary>
+    public required IReadOnlyList<string> StaleRefused { get; init; }
+
+    /// <summary>The paths named with <see cref="RefreshRequest.StaleOption"/> that are not under the paths weighed, or never handed: a misspelling, most likely.</summary>
+    public required IReadOnlyList<string> StaleStray { get; init; }
+
+    /// <summary>Whether the search of the main tree's history stopped at its bound with more history left: a copy older than that is not found stale.</summary>
+    public required bool Capped { get; init; }
 
     /// <summary>What of the agent's own handing <see cref="Handed"/> would write over or through, which refuses the refresh.</summary>
     public required IReadOnlyList<string> InTheWay { get; init; }
@@ -1072,9 +1101,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// it where null; writes nothing. Each path the main tree holds otherwise than the agent shares it
     /// (<see cref="MovedAsync"/>) is, in this order: held by the agent as the main tree holds it already, and so recorded
     /// as shared; changed by the agent (<see cref="EditedAsync"/>) and named in <paramref name="except"/>, left as it is;
-    /// changed by the agent and not named, which refuses the refresh; or handed. What the agent's worktree holds at each
+    /// changed by the agent, named in <paramref name="stale"/> and proved the main tree's own copy at an earlier commit,
+    /// handed; changed by the agent otherwise, which refuses the refresh; or handed. A path named stale that the main tree
+    /// did not move is weighed too, where the agent's copy is not the main tree's. What the agent's worktree holds at each
     /// path handed is measured with it, so the hand-over writes over nothing it did not weigh.
     /// </summary>
+    /// <remarks>
+    /// The proof is git's, asked once for every path a refusal or a <see cref="RefreshRequest.StaleOption"/> names: the
+    /// agent's copy as git would store it in its worktree (<see cref="IGitClient.ListStagedIdsAsync"/>), so a copy that
+    /// differs from a commit's file only by a line-ending conversion is that commit's file, against the blobs the main
+    /// tree's history held at the path (<see cref="IGitClient.ListHeldInHistoryAsync"/>, among the last
+    /// <see cref="TwoChanges.MostCommits"/> commits that changed it, merges' other sides included). Bytes that history
+    /// holds are the main tree's own there, so handing its copy over them loses nothing the history does not keep.
+    /// </remarks>
     /// <param name="main">The main checkout's root.</param>
     /// <param name="worktree">The agent's worktree.</param>
     /// <param name="baseCommit">The commit its worktree was made from.</param>
@@ -1082,6 +1121,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <param name="floor">The paths never moved between trees.</param>
     /// <param name="within">Only the paths these cover; every path where null.</param>
     /// <param name="except">The paths named to be left as the agent changed them.</param>
+    /// <param name="stale">The paths named as stale copies, to be handed the main tree's where the proof holds.</param>
     /// <param name="cancellationToken">Stops the measuring.</param>
     /// <exception cref="HarnessException">A path is one a hand-over refuses (<see cref="MovedAsync"/>), or git could not answer.</exception>
     /// <exception cref="IOException">A path could not be looked at.</exception>
@@ -1093,30 +1133,76 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         IReadOnlyList<string> floor,
         IReadOnlyList<string>? within,
         IReadOnlySet<string> except,
+        IReadOnlySet<string> stale,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(except);
+        ArgumentNullException.ThrowIfNull(stale);
 
         // Every path the main tree holds otherwise than the agent shares it, committed or not: a copy it was handed goes
         // stale as soon as the main tree moves it, back to its HEAD's bytes included.
         var moved = await MovedAsync(main, baseCommit, seed, floor, within, everyUncommitted: false, cancellationToken).ConfigureAwait(false);
+        var movedPaths = moved.Files.Concat(moved.Deletions).ToHashSet(StringComparer.Ordinal);
         var alike = new List<string>();
         var other = new List<string>();
 
-        foreach (var path in moved.Files.Concat(moved.Deletions))
+        foreach (var path in movedPaths.Order(StringComparer.Ordinal))
         {
             (await SameAsync(Path.Combine(main, path), Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false) ? alike : other).Add(path);
+        }
+
+        // A stale copy the main tree did not move is weighed too - one put back by hand to an older version, which the
+        // agent's fold would otherwise write into the main tree as its change - where it is not the main tree's copy. One
+        // that is, is let stand, so a line that ran once runs again; one outside what is weighed names nothing.
+        var strays = new List<string>();
+        var unmoved = new List<string>();
+
+        foreach (var path in stale.Where(path => !movedPaths.Contains(path)).Order(StringComparer.Ordinal))
+        {
+            if (!Covered(path, floor, within))
+            {
+                strays.Add(path);
+            }
+            else if (!await SameAsync(Path.Combine(main, path), Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false))
+            {
+                unmoved.Add(path);
+            }
         }
 
         // Never over a change of the agent's own - an edit, or a deletion - handed to it or not. One left as it is by name is
         // handed nothing, and is in the way of what is handed like anything else of the agent's.
         var edited = await EditedAsync(worktree, baseCommit, seed, other, cancellationToken).ConfigureAwait(false);
-        // Handed: what is neither held as the main tree holds it already, nor the agent's change, nor named to be left.
-        var unhanded = alike.Concat(edited).Concat(except).ToHashSet(StringComparer.Ordinal);
+        var proved = await StaleAtAsync(main, worktree, [.. edited.Where(path => !except.Contains(path)), .. unmoved], cancellationToken).ConfigureAwait(false);
+        var staleCopies = new List<StaleCopy>();
+        var refused = new List<string>();
+
+        foreach (var path in edited.Where(stale.Contains).Concat(unmoved).Order(StringComparer.Ordinal))
+        {
+            if (proved.At.TryGetValue(path, out var commit))
+            {
+                staleCopies.Add(new StaleCopy(path, commit));
+            }
+            else
+            {
+                refused.Add(_fileSystem.KindOf(Path.Combine(worktree, path)) == PathKind.File
+                    ? $"{RefreshRequest.StaleOption} '{path}': its copy is no file the main tree held at that path in the last "
+                        + $"{ReportText.Counted(TwoChanges.MostCommits, "commit")} that changed it, so nothing proves it stale. "
+                        + $"{RefreshRequest.ExceptOption} leaves it as the agent's change, for its fold to weigh."
+                    : $"{RefreshRequest.StaleOption} '{path}': the agent holds no file there, and a deletion is its change. {RefreshRequest.ExceptOption} leaves it.");
+            }
+        }
+
+        // Handed: what is neither held as the main tree holds it already, nor the agent's change, nor named to be left -
+        // and each stale copy proved, the main tree's own at an earlier commit.
+        var handing = staleCopies.Select(copy => copy.Path).ToHashSet(StringComparer.Ordinal);
+        var unhanded = alike.Concat(edited).Concat(except).Where(path => !handing.Contains(path)).ToHashSet(StringComparer.Ordinal);
+        var unmovedHanded = await ClassifyAsync(main, [.. unmoved.Where(handing.Contains)], uncommitted: null, cancellationToken).ConfigureAwait(false);
         var handed = moved with
         {
-            Files = [.. moved.Files.Where(path => !unhanded.Contains(path))],
-            Deletions = [.. moved.Deletions.Where(path => !unhanded.Contains(path))],
+            Files = [.. moved.Files.Where(path => !unhanded.Contains(path)).Concat(unmovedHanded.Files).Order(StringComparer.Ordinal)],
+            Deletions = [.. moved.Deletions.Where(path => !unhanded.Contains(path)).Concat(unmovedHanded.Deletions).Order(StringComparer.Ordinal)],
+            Directories = [.. moved.Directories.Concat(unmovedHanded.Directories).Order(StringComparer.Ordinal)],
+            Links = [.. moved.Links.Concat(unmovedHanded.Links).Order(StringComparer.Ordinal)],
         };
 
         return new RefreshPlan
@@ -1124,10 +1210,47 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Handed = handed,
             Alike = [.. alike.Order(StringComparer.Ordinal)],
             Left = [.. edited.Where(except.Contains)],
-            Changed = [.. edited.Where(path => !except.Contains(path))],
+            Changed = [.. edited.Where(path => !except.Contains(path) && !handing.Contains(path)).Select(path => new RefreshChange(path, proved.At.GetValueOrDefault(path)))],
+            Stale = staleCopies,
+            StaleRefused = refused,
+            StaleStray = strays,
+            Capped = proved.Capped,
             InTheWay = InTheWayOfHanding(worktree, handed),
             Held = await HoldingAsync(worktree, [.. handed.Deletions, .. handed.Files, .. alike], cancellationToken).ConfigureAwait(false),
         };
+    }
+
+    /// <summary>
+    /// The newest commit of the main tree's history that holds, at each of <paramref name="paths"/> the agent holds a file
+    /// at, the very bytes the agent's copy is as git would store it; and whether the search stopped at its bound with more
+    /// history left. A path the agent holds no file at, or whose bytes that history does not hold, has none.
+    /// </summary>
+    private async Task<(IReadOnlyDictionary<string, string> At, bool Capped)> StaleAtAsync(
+        string main,
+        string worktree,
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken)
+    {
+        var files = paths.Distinct(StringComparer.Ordinal).Where(path => _fileSystem.KindOf(Path.Combine(worktree, path)) == PathKind.File).ToList();
+        var at = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (files.Count == 0)
+        {
+            return (at, false);
+        }
+
+        var staged = await _gitClient.ListStagedIdsAsync(worktree, files, cancellationToken).ConfigureAwait(false);
+        var history = await _gitClient.ListHeldInHistoryAsync(main, "HEAD", files, TwoChanges.MostCommits, cancellationToken).ConfigureAwait(false);
+
+        for (var index = 0; index < files.Count; index++)
+        {
+            if (history.Held.GetValueOrDefault(files[index], []).FirstOrDefault(version => version.Blob == staged[index]) is { } version)
+            {
+                at[files[index]] = version.Commit;
+            }
+        }
+
+        return (at, history.Cut);
     }
 
     /// <summary>

@@ -1342,7 +1342,7 @@ public sealed class AgentRebaseTests
         var usage = await RebaseAsync(kit, apply: false, new RebaseRequest { Merge = [Both], Settled = [$"{Both}/"] });
 
         Assert.Equal(HarnessExit.UsageError, usage.ExitCode);
-        Assert.Equal($"'{Both}' is named with both --merge and --settled: a path is merged for you, or it was reconciled by hand, never both.", usage.Message);
+        Assert.Equal($"'{Both}' is named with both --merge and --settled: a path is merged for you, or reconciled by hand, never both.", usage.Message);
 
         var unnameable = await RebaseAsync(kit, apply: false, Merging("../outside.txt"));
 

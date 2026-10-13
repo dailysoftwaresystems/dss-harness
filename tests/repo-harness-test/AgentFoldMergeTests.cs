@@ -623,7 +623,7 @@ public sealed class AgentFoldMergeTests
             var usage = deleting ? await kit.DeleteAsync(Agent, apply: false, allowances) : await kit.FoldAsync(Agent, apply: false, allowances);
 
             Assert.Equal(HarnessExit.UsageError, usage.ExitCode);
-            Assert.Equal($"'{Both}' is named with both --merge and --settled: a path is merged for you, or it was reconciled by hand, never both.", usage.Message);
+            Assert.Equal($"'{Both}' is named with both --merge and --settled: a path is merged for you, or reconciled by hand, never both.", usage.Message);
         }
 
         var unnameable = await kit.FoldAsync(Agent, apply: false, Merging("../outside.txt"));

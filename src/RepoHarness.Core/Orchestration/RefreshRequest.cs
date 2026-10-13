@@ -14,6 +14,18 @@ public sealed record RefreshRequest
     /// <summary>The option that leaves a path the agent changed as it changed it, and hands it the rest.</summary>
     public const string ExceptOption = "--except";
 
+    /// <summary>
+    /// The option that hands the main tree's copy of a path whose copy in the agent is not its work: the main tree's own at
+    /// an earlier commit.
+    /// </summary>
+    public const string StaleOption = "--stale";
+
+    /// <summary>What <see cref="ExceptOption"/> does to a path, as a refusal of a path named twice says it.</summary>
+    public const string ExceptDoes = "left as the agent changed it";
+
+    /// <summary>What <see cref="StaleOption"/> does to a path.</summary>
+    public const string StaleDoes = "handed the main tree's copy";
+
     /// <summary>The paths to refresh, relative to the tree; none where <see cref="All"/> is asked, or for the registries' directory.</summary>
     public IReadOnlyList<string> Paths { get; init; } = [];
 
@@ -23,13 +35,20 @@ public sealed record RefreshRequest
     /// <summary>Paths the agent changed, left as it changed them: <see cref="ExceptOption"/>.</summary>
     public IReadOnlyList<string> Except { get; init; } = [];
 
+    /// <summary>
+    /// Paths whose copy in the agent is not its work, handed the main tree's copy - only where the main tree's history holds
+    /// those very bytes at that path: <see cref="StaleOption"/>.
+    /// </summary>
+    public IReadOnlyList<string> Stale { get; init; } = [];
+
     /// <summary>A refresh of what is under <paramref name="paths"/>; of the registries' directory where there are none.</summary>
     /// <param name="paths">The paths, relative to the tree.</param>
     public static RefreshRequest Under(params string[] paths) => new() { Paths = paths };
 
     /// <summary>
     /// What is wrong with how it is spelt, before anything is read: a path that could name nothing in the tree, the whole
-    /// tree named as a path, or paths given beside <see cref="AllOption"/>; <see langword="null"/> where nothing is.
+    /// tree named as a path, paths given beside <see cref="AllOption"/>, or one named both to be left as the agent changed
+    /// it and to be handed the main tree's copy; <see langword="null"/> where nothing is.
     /// </summary>
     public string? Problem()
     {
@@ -43,21 +62,31 @@ public sealed record RefreshRequest
             return $"{AllOption} weighs every path the main tree moved, so it takes no path beside it: give the paths, or {AllOption}";
         }
 
-        return OrchestrationRules.PathsProblem(Paths, "a path to refresh") ?? OrchestrationRules.PathsProblem(Except, ExceptOption);
+        return OrchestrationRules.PathsProblem(Paths, "a path to refresh")
+            ?? OrchestrationRules.PathsProblem(Except, ExceptOption)
+            ?? OrchestrationRules.PathsProblem(Stale, StaleOption)
+            ?? OrchestrationRules.NamedTwiceProblem((ExceptOption, Except, ExceptDoes), (StaleOption, Stale, StaleDoes));
     }
 
     /// <summary>
     /// The arguments that ask for this refresh again, each as a command line takes it: its paths, or
-    /// <see cref="AllOption"/>, then <see cref="ExceptOption"/> for each path left as the agent changed it. Nothing where it
-    /// names none, which is a refresh of the registries' directory.
+    /// <see cref="AllOption"/>, then <see cref="ExceptOption"/> for each path left as the agent changed it and
+    /// <see cref="StaleOption"/> for each handed the main tree's copy. Nothing where it names none, which is a refresh of the
+    /// registries' directory.
     /// </summary>
     public string Arguments()
         => string.Join(
             ' ',
-            new[] { All ? AllOption : string.Join(' ', Paths.Select(OrchestrationReports.Argument)), ExceptArguments(Except) }.Where(part => part.Length > 0));
+            new[] { All ? AllOption : string.Join(' ', Paths.Select(OrchestrationReports.Argument)), ExceptArguments(Except), StaleArguments(Stale) }
+                .Where(part => part.Length > 0));
 
     /// <summary>The arguments that leave <paramref name="paths"/> as the agent changed them, each as a command line takes it.</summary>
     /// <param name="paths">The paths, as git names them.</param>
     public static string ExceptArguments(IEnumerable<string> paths)
         => string.Join(' ', OrchestrationReports.PathArguments(ExceptOption, paths));
+
+    /// <summary>The arguments that hand <paramref name="paths"/> the main tree's copy as stale ones, each as a command line takes it.</summary>
+    /// <param name="paths">The paths, as git names them.</param>
+    public static string StaleArguments(IEnumerable<string> paths)
+        => string.Join(' ', OrchestrationReports.PathArguments(StaleOption, paths));
 }
