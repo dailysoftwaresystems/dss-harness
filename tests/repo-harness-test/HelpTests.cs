@@ -1759,6 +1759,19 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains(
+            "The arm registry (mutations.registry) both trees changed is merged by arm, unasked - each arm from the side that alone added, removed or "
+            + "changed it, each version as its tree holds it, from nothing where neither held a registry before - and taken only where the merged text "
+            + "reads as a registry of the tree as the command leaves it, as check-mutations reads one ('help mutations'); an arm the two changed "
+            + "differently, a version that cannot be read as a registry, or a merged text that does not read as one refuses the path, each shown, and so "
+            + "do shared bytes that cannot be found, since an arm one side removed would come back.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The arm registry is merged by arm, unasked, as a fold merges it (below), from the old base's version, of the new base's as the worktree "
+            + "checks it out and the agent's, and judged by the worktree as the move leaves it.",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "Whether a file can be run is merged with its content: the merged file takes the bit of the side that changed it, and the bit alone never "
             + "conflicts; Windows keeps no such bit, and none is read or set there.",
             text,

@@ -96,6 +96,7 @@ public interface IAgentService
 /// <param name="runLock">Holds the main tree, and an agent's worktree, while they are written.</param>
 /// <param name="anchorLocator">Where the anchor registries are, which refresh-agent refreshes by default.</param>
 /// <param name="anchors">Applies an agent's rows.</param>
+/// <param name="sync">Says what a sync of a tree withholds, which the arm registry a command merges into it is judged by.</param>
 /// <param name="transcripts">Finds and keeps an agent's Claude transcripts.</param>
 /// <param name="store">The records.</param>
 /// <param name="log">The logs.</param>
@@ -112,6 +113,7 @@ public sealed class AgentService(
     RunLock runLock,
     IAnchorRegistryLocator anchorLocator,
     IAnchorRegistryService anchors,
+    ISyncService sync,
     ClaudeTranscripts transcripts,
     OrchestrationStore store,
     OrchestrationLog log,
@@ -146,6 +148,7 @@ public sealed class AgentService(
     private readonly RunLock _runLock = runLock;
     private readonly IAnchorRegistryLocator _anchorLocator = anchorLocator;
     private readonly IAnchorRegistryService _anchors = anchors;
+    private readonly ISyncService _sync = sync;
     private readonly ClaudeTranscripts _transcripts = transcripts;
     private readonly OrchestrationStore _store = store;
     private readonly OrchestrationLog _log = log;
@@ -2544,7 +2547,7 @@ public sealed class AgentService(
     /// <param name="agent">The agent, whose kept copies are what both trees held at a shared path.</param>
     /// <param name="keeping">Whether bytes found in that history are kept: true of a command that goes on to write.</param>
     private TwoChanges Changes(HarnessContext context, OrchestratorLayout layout, string agent, bool keeping)
-        => new(_gitClient, _fileSystem, Copies(layout, agent), context.Layout.MainCheckoutRoot, keeping);
+        => new(_gitClient, _fileSystem, _sync, Copies(layout, agent), context.Layout.MainCheckoutRoot, keeping);
 
     /// <summary>
     /// Writes what <paramref name="ledger"/> recorded as the agent's seed, then prunes the bytes kept beside it to what that

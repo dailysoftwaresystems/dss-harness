@@ -260,6 +260,12 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// <summary>The agent's worktree, as such a stop names it.</summary>
     private const string AgentTreeName = "the agent's worktree";
 
+    /// <summary>What writes a merged arm registry into the main tree, as a refusal of the merged text names it.</summary>
+    private const string FoldWriter = "the fold";
+
+    /// <summary>What writes one into the agent's worktree on a move of its base.</summary>
+    private const string RebaseWriter = "the rebase";
+
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
     private readonly IFilePermissions _permissions = permissions;
@@ -479,11 +485,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             }
         }
 
-        // Every path both trees changed is weighed in full before anything is written, asked for or not: a merge that is
-        // clean and was asked for is taken, and any other ends the path's refusal with what a merge of it gives.
-        var merged = new List<MergedPath>();
-        var shown = new List<string>();
-        var mergeableUnasked = new List<string>();
+        // Every path both trees changed is weighed in full before anything is written, asked for or not.
+        var weighed = new List<(TwoChangeOffer Offer, string Why, IReadOnlyList<MergeTarget> Into)>();
 
         foreach (var (look, why, ancestor) in twice.OrderBy(two => two.Look.Path, StringComparer.Ordinal))
         {
@@ -498,17 +501,28 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                     main),
                 cancellationToken).ConfigureAwait(false);
 
+            weighed.Add((offer, why, [new MergeTarget(Path.Combine(main, path), MainTreeName, look.Main.File!.Value), new MergeTarget(Path.Combine(worktree, path), AgentTreeName, look.Agent.File!.Value)]));
+        }
+
+        // The arm registry merged by arm is judged as a registry of the main tree as the fold leaves it: what it removes
+        // gone, and what it writes and merges there - each read only where the registry cites it.
+        await JudgeAsync(changes, policy, weighed, main, FoldWriter, merges => TreeAfter.Folded(_fileSystem, worktree, deleted, written, merges), cancellationToken).ConfigureAwait(false);
+
+        // A merge that is clean and was asked for - or the arm registry's, which reads as one - is taken, and any other ends
+        // the path's refusal with what a merge of it gives.
+        var merged = new List<MergedPath>();
+        var shown = new List<string>();
+        var mergeableUnasked = new List<string>();
+
+        foreach (var (offer, why, into) in weighed)
+        {
+            var path = offer.Path;
+
             if (TwoChanges.Taken(policy, offer))
             {
-                merged.Add(new MergedPath(
-                    path,
-                    offer.Working!,
-                    offer.Digest!,
-                    offer.Executable,
-                    offer.Listed,
-                    [new MergeTarget(Path.Combine(main, path), MainTreeName, look.Main.File!.Value), new MergeTarget(Path.Combine(worktree, path), AgentTreeName, look.Agent.File!.Value)]));
-                mainContent[path] = look.Main.File!.Value.Digest;
-                agentContent[path] = look.Agent.File!.Value.Digest;
+                merged.Add(new MergedPath(path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, into));
+                mainContent[path] = into[0].Weighed.Digest;
+                agentContent[path] = into[1].Weighed.Digest;
                 continue;
             }
 
@@ -564,6 +578,40 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             Seeded = seed.Weighed.ToHashSet(StringComparer.Ordinal),
             AgentContent = agentContent,
             MainContent = mainContent,
+        };
+    }
+
+    /// <summary>
+    /// Judges the arm registry merged by arm among <paramref name="weighed"/>, where it is, as a registry of
+    /// <paramref name="tree"/> as the command leaves it - changed as <paramref name="changed"/> says, with every merge that
+    /// would be taken written there, the registry's own among them - and puts the judged offer in its place.
+    /// </summary>
+    /// <param name="changes">Judges it.</param>
+    /// <param name="policy">What decides which merges are taken.</param>
+    /// <param name="weighed">Every path both trees changed, with what a merge of it gives.</param>
+    /// <param name="tree">The tree the merged registry is written into.</param>
+    /// <param name="writer">What writes it, as a refusal names it.</param>
+    /// <param name="changed">What the command changes in that tree, given the merges it writes there.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    private static async Task JudgeAsync(
+        TwoChanges changes,
+        TwoChangePolicy policy,
+        List<(TwoChangeOffer Offer, string Why, IReadOnlyList<MergeTarget> Into)> weighed,
+        string tree,
+        string writer,
+        Func<IEnumerable<(string Path, byte[] Bytes)>, IEnumerable<(string Path, Func<CancellationToken, Task<byte[]>>? Read)>> changed,
+        CancellationToken cancellationToken)
+    {
+        if (weighed.FindIndex(one => one.Offer.Registry is not null) is var at && at < 0)
+        {
+            return;
+        }
+
+        var merges = weighed.Where(one => TwoChanges.Taken(policy, one.Offer)).Select(one => (one.Offer.Path, one.Offer.Working!)).ToList();
+
+        weighed[at] = weighed[at] with
+        {
+            Offer = await changes.JudgedAsync(policy, weighed[at].Offer, tree, writer, changed(merges), cancellationToken).ConfigureAwait(false),
         };
     }
 
@@ -1187,6 +1235,12 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             {
                 settledHere.Add(path);
             }
+            else if (policy.RuleFor(path) == TwoChangeRule.Arms && atFrom[path].IsNothing && !InRepository(path) && KindOf(path) is PathKind.File or PathKind.Link
+                && atTo[path].Blob is not null)
+            {
+                // The arm registry both made is merged by arm from nothing, as no other path both made is.
+                twice.Add((path, $"'{path}': the agent made it, and the main tree committed a file there since the agent's base {at}"));
+            }
             else if (Own(path))
             {
                 refused.Add((path, $"'{path}': the agent made it, and the main tree committed a file there since the agent's base {at}"));
@@ -1199,8 +1253,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             {
                 var why = $"'{path}': the agent changed it, and the main tree committed a change to it since the agent's base {at}";
 
-                // Two changes of one file, each holding a file there: what a merge of them gives is measured below. Anything
-                // else the agent holds there - a directory - is refused as it is.
+                // Two changes of one file, each holding a file there: what a merge of them gives is measured below - the arm
+                // registry's by arm. Anything else the agent holds there - a directory - is refused as it is.
                 if (KindOf(path) is PathKind.File or PathKind.Link && atFrom[path].Blob is not null && atTo[path].Blob is not null)
                 {
                     twice.Add((path, why));
@@ -1212,11 +1266,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             }
         }
 
-        // Every path both changed is weighed in full, asked for or not: a clean merge that was asked for is taken, and any
-        // other ends the path's refusal with what a merge of it gives.
-        var merged = new List<MergedPath>();
-        var shown = new List<string>();
-        var mergeable = new List<string>();
+        // Every path both changed is weighed in full, asked for or not.
+        var weighed = new List<(TwoChangeOffer Offer, string Why, IReadOnlyList<MergeTarget> Into)>();
 
         if (twice.Count > 0)
         {
@@ -1243,25 +1294,47 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                     policy,
                     new TwoChangeAsk(
                         path,
-                        new TwoChangeAncestor.Committed(atFrom[path].Blob!, Bit(atFromEntries.GetValueOrDefault(path))),
+                        atFrom[path].Blob is { } held ? new TwoChangeAncestor.Committed(held, Bit(atFromEntries.GetValueOrDefault(path))) : null,
                         new TwoChangeSide(new GitContent.Blob(atTo[path].Blob!), Bit(atToEntries.GetValueOrDefault(path))),
                         new TwoChangeSide(new GitContent.File(file), agent.Executable),
                         worktree),
                     cancellationToken).ConfigureAwait(false);
 
-                if (TwoChanges.Taken(policy, offer))
-                {
-                    merged.Add(new MergedPath(path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, [new MergeTarget(file, AgentTreeName, agent)]));
-                    continue;
-                }
+                weighed.Add((offer, why, [new MergeTarget(file, AgentTreeName, agent)]));
+            }
+        }
 
-                refused.Add((path, offer.After(why)));
-                shown.AddRange(offer.Shown);
+        // The arm registry merged by arm is judged as a registry of the agent's worktree as the move leaves it: each path it
+        // takes as the new base holds it, and each merge - read only where the registry cites it.
+        await JudgeAsync(
+            changes,
+            policy,
+            weighed,
+            worktree,
+            RebaseWriter,
+            merges => TreeAfter.Moved(_gitClient, worktree, taken.Select(path => (path, atTo[path].Blob)), merges),
+            cancellationToken).ConfigureAwait(false);
 
-                if (offer.IsClean)
-                {
-                    mergeable.Add(path);
-                }
+        // A clean merge that was asked for - or the arm registry's, which reads as one - is taken, and any other ends the
+        // path's refusal with what a merge of it gives.
+        var merged = new List<MergedPath>();
+        var shown = new List<string>();
+        var mergeable = new List<string>();
+
+        foreach (var (offer, why, into) in weighed)
+        {
+            if (TwoChanges.Taken(policy, offer))
+            {
+                merged.Add(new MergedPath(offer.Path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, into));
+                continue;
+            }
+
+            refused.Add((offer.Path, offer.After(why)));
+            shown.AddRange(offer.Shown);
+
+            if (offer.IsClean)
+            {
+                mergeable.Add(offer.Path);
             }
         }
 

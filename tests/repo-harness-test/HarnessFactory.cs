@@ -118,6 +118,7 @@ public sealed class HarnessFactory
             new RunLock(fileSystem, Output, Identity),
             AnchorRegistryLocator,
             anchors,
+            SyncKit.Service(this, fileSystem: fileSystem, git: gitClient),
             TranscriptsOver(fileSystem),
             new OrchestrationStore(fileSystem),
             new OrchestrationLog(fileSystem, TimeProvider.System),

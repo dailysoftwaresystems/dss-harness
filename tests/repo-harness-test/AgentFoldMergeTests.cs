@@ -601,8 +601,9 @@ public sealed class AgentFoldMergeTests
     }
 
     /// <summary>
-    /// A registry changes only through the rows an agent files, and the arm registry is never merged by line: both trees
-    /// having changed one as a file, it is refused as it always was, with no word of a merge, whatever is named.
+    /// An anchor registry changes only through the rows an agent files: both trees having changed one as a file, it is
+    /// refused as it always was, with no word of a merge, whatever is named. The arm registry is merged by arm and never by
+    /// line: one whose versions cannot be read as a registry is refused, saying so, whatever is named.
     /// </summary>
     [Fact]
     public async Task ARegistryBothTreesChangedAsAFile_IsRefused_WhateverIsNamedToBeMerged()
@@ -626,12 +627,15 @@ public sealed class AgentFoldMergeTests
 
         Assert.Equal(HarnessExit.Refused, refused.ExitCode);
         Assert.Contains($"  --merge '{anchors}' names an anchor registry, which a fold changes only through the rows the agent files, never as a file", refused.Details!);
-        Assert.Contains($"  --merge '{arms}' names the arm registry, which is never merged by line: drop it", refused.Details!);
+        Assert.Contains($"  --merge '{arms}' names the arm registry, which is merged by arm without it and never by line: drop it", refused.Details!);
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{anchors}': the main tree changed it after the agent's base", StringComparison.Ordinal)
+            && line.EndsWith("so writing the agent's copy would lose that change", StringComparison.Ordinal));
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{arms}': the main tree changed it after the agent's base", StringComparison.Ordinal)
+            && line.Contains("so writing the agent's copy would lose that change; merged by arm and never by line, and it cannot be read as a registry - ", StringComparison.Ordinal)
+            && line.EndsWith($": reconcile it by hand, then --settled {arms}", StringComparison.Ordinal));
 
         foreach (var registry in new[] { anchors, arms })
         {
-            Assert.Contains(refused.Details!, line => line.StartsWith($"  '{registry}': the main tree changed it after the agent's base", StringComparison.Ordinal)
-                && line.EndsWith("so writing the agent's copy would lose that change", StringComparison.Ordinal));
             Assert.StartsWith("an edit of the main tree's\n", OrchestrationKit.Read(kit.Main, registry));
         }
 
@@ -920,7 +924,7 @@ public sealed class AgentFoldMergeTests
     }
 
     /// <summary>The real file system, except that nothing can be put in place at one path, as while another program holds the file open.</summary>
-    private sealed class UnwritableFile(IFileSystem inner, string file) : PassThroughFileSystem(inner)
+    internal sealed class UnwritableFile(IFileSystem inner, string file) : PassThroughFileSystem(inner)
     {
         public override void ReplaceFile(string source, string destination)
         {

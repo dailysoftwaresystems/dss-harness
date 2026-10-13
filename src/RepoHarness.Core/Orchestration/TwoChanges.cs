@@ -2,10 +2,12 @@ using System.Diagnostics;
 using RepoHarness.Core.Anchors;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Git;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
+using RepoHarness.Core.Sync;
 
 namespace RepoHarness.Core.Orchestration;
 
@@ -18,18 +20,22 @@ internal enum TwoChangeRule
     /// <summary>As text, named with <see cref="FoldAllowances.MergeOption"/>: a clean merge of it is taken.</summary>
     Text,
 
-    /// <summary>The arm registry, which is never merged by line.</summary>
+    /// <summary>The arm registry: merged by arm, unasked, and never by line.</summary>
     Arms,
 
     /// <summary>An anchor registry, which changes only through the rows an agent files: never merged.</summary>
     Never,
 }
 
-/// <summary>What decides how a path both trees changed is resolved: the arm registry's path, the anchor registries', and the paths named with <see cref="FoldAllowances.MergeOption"/>.</summary>
+/// <summary>
+/// What decides how a path both trees changed is resolved: the arm registry's path, the anchor registries', and the paths
+/// named with <see cref="FoldAllowances.MergeOption"/>; and the configuration a merged arm registry is judged by.
+/// </summary>
 /// <param name="ArmRegistry">The configured arm registry, as git names it; null where the repository declares none.</param>
 /// <param name="AnchorRegistries">The anchor registries, as git names them.</param>
 /// <param name="Merge">The paths named with <see cref="FoldAllowances.MergeOption"/>, as git names them.</param>
-internal sealed record TwoChangePolicy(string? ArmRegistry, IReadOnlySet<string> AnchorRegistries, IReadOnlySet<string> Merge)
+/// <param name="Context">The repository and the configuration the command loaded.</param>
+internal sealed record TwoChangePolicy(string? ArmRegistry, IReadOnlySet<string> AnchorRegistries, IReadOnlySet<string> Merge, HarnessContext Context)
 {
     /// <summary>The policy of a command run in <paramref name="context"/> that was given <paramref name="merge"/>.</summary>
     /// <param name="context">The repository and its configuration.</param>
@@ -42,7 +48,8 @@ internal sealed record TwoChangePolicy(string? ArmRegistry, IReadOnlySet<string>
         return new TwoChangePolicy(
             context.Config.Mutations.Registry is { Length: > 0 } registry ? PathPatterns.Normalize(registry) : null,
             new[] { context.Config.Anchors.PendingAnchorsPath, context.Config.Anchors.DoneAnchorsPath }.Select(AnchorRegistryLocator.Normalize).ToHashSet(StringComparer.Ordinal),
-            merge.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal));
+            merge.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal),
+            context);
     }
 
     /// <summary>How <paramref name="path"/> is resolved where both trees changed it.</summary>
@@ -61,7 +68,7 @@ internal sealed record TwoChangePolicy(string? ArmRegistry, IReadOnlySet<string>
         => Merge.Order(StringComparer.Ordinal).Select(path => (Path: path, Why: RuleFor(path) switch
         {
             TwoChangeRule.Never => $"{FoldAllowances.MergeOption} '{path}' names an anchor registry, which a fold changes only through the rows the agent files, never as a file",
-            TwoChangeRule.Arms => $"{FoldAllowances.MergeOption} '{path}' names the arm registry, which is never merged by line: drop it",
+            TwoChangeRule.Arms => $"{FoldAllowances.MergeOption} '{path}' names the arm registry, which is merged by arm without it and never by line: drop it",
             _ => null,
         })).Where(named => named.Why is not null).Select(named => (named.Path, named.Why!));
 
@@ -158,18 +165,35 @@ internal sealed record NoMerge
     /// <param name="why">git's words.</param>
     public static NoMerge NotCheckedOut(string why) => new($"git could not write the merge as it would check it out - {why.TrimEnd('.')}");
 
+    /// <summary>
+    /// git could not bring a version a commit holds to the form a checkout writes, which a merge by arm reads it in: a
+    /// filter that failed on it, for one.
+    /// </summary>
+    /// <param name="why">git's words.</param>
+    public static NoMerge VersionNotCheckedOut(string why) => new($"git could not read the new base's version as a checkout would write it - {why.TrimEnd('.')}");
+
     /// <summary>A digest as a sentence names it: its first eight characters.</summary>
     private static string Short(string digest) => digest.Length > 8 ? $"{digest[..8]}..." : digest;
 }
 
 /// <summary>
-/// What a merge of one path gives: one of four outcomes, each made by its own factory - clean, with the bytes as the tree
-/// would hold them and whether the merged file can be run; conflicting, with what to show; none, with why; or not measured,
-/// for a path never merged by line - so no offer holds two of them.
+/// What a merge of one path gives: one of six outcomes, each made by its own factory - clean, with the bytes as the tree
+/// would hold them and whether the merged file can be run; merged by arm, the same with the text a validation reads;
+/// conflicting, with what to show; none, with why; a merge by arm that is not taken, with what to show; or not measured,
+/// for a path never merged - so no offer holds two of them.
 /// </summary>
 internal sealed record TwoChangeOffer
 {
-    private TwoChangeOffer(string path, TwoChangeRule rule, byte[]? working, bool executable, string said, string listed, IReadOnlyList<string> shown, NoMerge? none)
+    private TwoChangeOffer(
+        string path,
+        TwoChangeRule rule,
+        byte[]? working,
+        bool executable,
+        string said,
+        string listed,
+        IReadOnlyList<string> shown,
+        NoMerge? none,
+        RegistryMerge.Merged? registry = null)
     {
         Path = path;
         Rule = rule;
@@ -180,6 +204,7 @@ internal sealed record TwoChangeOffer
         Listed = listed;
         Shown = shown;
         None = none;
+        Registry = registry;
     }
 
     /// <summary>The path.</summary>
@@ -209,12 +234,18 @@ internal sealed record TwoChangeOffer
     /// <summary>Why no merge is offered; null where one is, or where the rule never asks for one.</summary>
     public NoMerge? None { get; }
 
+    /// <summary>
+    /// The arm registry merged by arm, clean and not yet judged as a registry of the tree it is written into; null for
+    /// every other offer, and for one already judged.
+    /// </summary>
+    public RegistryMerge.Merged? Registry { get; }
+
     /// <summary>Whether the three merged with no conflict.</summary>
     public bool IsClean => Working is not null;
 
-    /// <summary>A path never merged by line: nothing is measured, and nothing said of a merge.</summary>
+    /// <summary>A path never merged: nothing is measured, and nothing said of a merge.</summary>
     /// <param name="path">The path.</param>
-    /// <param name="rule">How it is resolved: a registry's rule.</param>
+    /// <param name="rule">How it is resolved: an anchor registry's rule.</param>
     public static TwoChangeOffer Unmeasured(string path, TwoChangeRule rule) => new(path, rule, null, false, string.Empty, string.Empty, [], null);
 
     /// <summary>A path no merge is offered for, with why.</summary>
@@ -247,6 +278,51 @@ internal sealed record TwoChangeOffer
         ArgumentNullException.ThrowIfNull(working);
 
         return new(path, rule, working, executable, said, listed, [], null);
+    }
+
+    /// <summary>
+    /// The arm registry merged by arm, clean: taken unasked once its text reads as a registry of the tree it is written
+    /// into (<see cref="Judged"/>).
+    /// </summary>
+    /// <param name="path">The path.</param>
+    /// <param name="merged">The merge, with the bytes to write and the text a validation reads.</param>
+    /// <param name="executable">Whether the merged file can be run.</param>
+    /// <param name="said">What the merge gives, as a clause.</param>
+    /// <param name="listed">The clause after the path in the list of merged paths, once it reads as a registry.</param>
+    public static TwoChangeOffer ByArm(string path, RegistryMerge.Merged merged, bool executable, string said, string listed)
+    {
+        ArgumentNullException.ThrowIfNull(merged);
+
+        return new(path, TwoChangeRule.Arms, merged.Bytes, executable, said, listed, [], null, merged);
+    }
+
+    /// <summary>
+    /// A merge by arm that is not taken: the two changed an arm differently, a version cannot be read as a registry, or
+    /// the merged text does not read as one in the tree it would be written into.
+    /// </summary>
+    /// <param name="path">The path.</param>
+    /// <param name="said">Why, to end the line that refuses the path.</param>
+    /// <param name="shown">What to show of it under the refusals; empty where the line says it all.</param>
+    public static TwoChangeOffer NotTaken(string path, string said, IReadOnlyList<string> shown) => new(path, TwoChangeRule.Arms, null, false, said, string.Empty, shown, null);
+
+    /// <summary>
+    /// This offer, judged by <paramref name="validation"/>: as it is, no longer waiting to be judged, where the merged text
+    /// reads as a registry; otherwise not taken, its line saying how many problems it has, and every problem shown as
+    /// check-mutations words them.
+    /// </summary>
+    /// <param name="validation">The merged text, validated against the tree it would be written into.</param>
+    /// <param name="registry">The registry's path, as the configuration names it.</param>
+    /// <param name="subject">Whose text it is, in the command's words: <c>as the fold would write it</c>.</param>
+    public TwoChangeOffer Judged(RegistryValidation validation, string registry, string subject)
+    {
+        ArgumentNullException.ThrowIfNull(validation);
+
+        return validation.Valid
+            ? new(Path, Rule, Working, Executable, Said, Listed, Shown, None)
+            : NotTaken(
+                Path,
+                $"merged by arm, it does not read as a registry - {ReportText.Counted(validation.Problems.Count, "problem")}, listed below",
+                validation.Refusal(registry, subject));
     }
 
     /// <summary>The line that refuses the path, ended with what a merge of it gives.</summary>
@@ -283,18 +359,26 @@ public sealed record MergedPath(string Path, byte[] Working, string Digest, bool
 /// <see cref="FoldAllowances.MergeOption"/> - changes one thing: whether a clean merge is taken or refused.
 /// </summary>
 /// <remarks>
-/// git merges; nothing here compares lines. The three versions are brought to the form git stores, merged there, and the
-/// result brought to the form a checkout writes, so a file one tree holds with other line endings merges as git itself
-/// would merge it. Whether the file can be run is merged with its content (<see cref="MergedBit"/>). Never merged,
+/// <para>
+/// git merges text; nothing here compares lines. The three versions are brought to the form git stores, merged there, and
+/// the result brought to the form a checkout writes, so a file one tree holds with other line endings merges as git
+/// itself would merge it. Whether the file can be run is merged with its content (<see cref="MergedBit"/>). Never merged,
 /// whatever is named: a path neither tree held a file at before, one git reads as binary or will not merge, one whose
 /// <c>merge</c> attribute asks for another merge, and a file above <see cref="MostBytes"/>.
+/// </para>
+/// <para>
+/// The arm registry is merged by arm, unasked, and never by line (<see cref="MutationRegistryMerge"/>): each version as
+/// its tree holds it, from nothing where neither tree held a registry before, and taken only once its text reads as a
+/// registry of the tree the command leaves (<see cref="JudgedAsync"/>).
+/// </para>
 /// </remarks>
 /// <param name="git">Stores, merges and checks out.</param>
-/// <param name="files">Reads how large a side's file is.</param>
+/// <param name="files">Reads how large a side's file is, and the files a merge by arm reads.</param>
+/// <param name="sync">Says what a sync of the tree a merged arm registry is written into withholds from every copy of it.</param>
 /// <param name="kept">The bytes the agent shares, kept beside its seed: what both trees held at a shared path.</param>
 /// <param name="main">The main checkout's root, whose history is read where no copy was kept.</param>
 /// <param name="keeping">Whether bytes found in that history are kept, so they are looked for once: true of a command that writes.</param>
-internal sealed class TwoChanges(IGitClient git, IFileSystem files, SharedCopies kept, string main, bool keeping)
+internal sealed class TwoChanges(IGitClient git, IFileSystem files, ISyncService sync, SharedCopies kept, string main, bool keeping)
 {
     /// <summary>The most bytes of one file a merge is offered for, and so the most kept of one a seed records.</summary>
     public const long MostBytes = 16 * 1024 * 1024;
@@ -319,6 +403,9 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, SharedCopies
 
     private static readonly GitMergeNames Names = new(Ours, Ancestor, Theirs);
 
+    /// <summary>The same three names, as a merge by arm says them: one set of words for both rules.</summary>
+    private static readonly MergeSides Sides = new(Names.Ancestor, Names.Ours, Names.Theirs);
+
     /// <summary>
     /// Whether a file can be run once two changes of it are merged: the bit that differs from what both held, where either
     /// side's does. A bit has two values, so two sides that both changed it changed it alike, and it never conflicts.
@@ -328,7 +415,10 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, SharedCopies
     /// <param name="theirs">Whether theirs can.</param>
     public static bool MergedBit(bool ancestor, bool ours, bool theirs) => ours != ancestor ? ours : theirs;
 
-    /// <summary>Whether <paramref name="offer"/> is written: a clean merge of a path the policy lets be merged.</summary>
+    /// <summary>
+    /// Whether <paramref name="offer"/> is written: a clean merge of a path the policy lets be merged - one named to be, or
+    /// the arm registry, which a command judges (<see cref="JudgedAsync"/>) before it takes it.
+    /// </summary>
     /// <param name="policy">What decides it.</param>
     /// <param name="offer">What a merge of the path gives.</param>
     public static bool Taken(TwoChangePolicy policy, TwoChangeOffer offer)
@@ -336,7 +426,7 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, SharedCopies
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(offer);
 
-        return offer.IsClean && policy.RuleFor(offer.Path) == TwoChangeRule.Text;
+        return offer.IsClean && policy.RuleFor(offer.Path) is TwoChangeRule.Text or TwoChangeRule.Arms;
     }
 
     /// <summary>What a three-way merge of <paramref name="ask"/> gives; nothing is written to either tree or to the repository.</summary>
@@ -352,11 +442,16 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, SharedCopies
 
         var rule = policy.RuleFor(ask.Path);
 
-        // Neither registry is ever merged by line, so nothing is measured, and nothing said of a merge: the path is
-        // refused as it is without one.
-        if (rule is TwoChangeRule.Never or TwoChangeRule.Arms)
+        // An anchor registry is never merged, so nothing is measured, and nothing said of a merge: the path is refused as
+        // it is without one.
+        if (rule == TwoChangeRule.Never)
         {
             return TwoChangeOffer.Unmeasured(ask.Path, rule);
+        }
+
+        if (rule == TwoChangeRule.Arms)
+        {
+            return await ByArmAsync(ask, cancellationToken).ConfigureAwait(false);
         }
 
         var (merge, none) = await MergeAsync(ask, cancellationToken).ConfigureAwait(false);
@@ -394,19 +489,168 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, SharedCopies
         var executable = MergedBit(ask.Ancestor!.Executable, ask.Ours.Executable, ask.Theirs.Executable);
         var hunks = $"{ReportText.Counted(merge.TheirsHunks, "hunk")} from {Theirs}, {merge.OursHunks} from {Ours}";
 
-        // Said only where the two copies differ in it: the bit is then the side's that changed it.
-        var bit = ask.Ours.Executable == ask.Theirs.Executable
-            ? string.Empty
-            : $"; it can {(executable ? string.Empty : "no longer ")}be run, as {(executable == ask.Theirs.Executable ? Theirs : Ours)} made it";
-
         return TwoChangeOffer.Clean(
             ask.Path,
             rule,
             working,
             executable,
             $"a three-way merge of the two is clean - {hunks} - and {FoldAllowances.MergeOption} {path} writes it",
-            $"({FoldAllowances.MergeOption}: {hunks}{bit})");
+            $"({FoldAllowances.MergeOption}: {hunks}{BitSaid(ask, executable)})");
     }
+
+    /// <summary>
+    /// <paramref name="offer"/> judged, where it is the arm registry merged by arm and not yet judged: its text read as a
+    /// registry of <paramref name="tree"/> as the command leaves it - <paramref name="changed"/> applied, each path read only
+    /// where the validation asks for it - by the configuration the command loaded, as check-mutations reads one. Any other
+    /// offer is as it was. Nothing is written.
+    /// </summary>
+    /// <param name="policy">The configuration the command loaded, among the rest.</param>
+    /// <param name="offer">What a merge of the path gives.</param>
+    /// <param name="tree">The tree the merged registry is written into.</param>
+    /// <param name="writer">What writes it, as the refusal names it: <c>the fold</c>.</param>
+    /// <param name="changed">Each path the command writes into that tree, the registry among them, and each it removes (<see cref="TreeAfter"/>).</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    /// <exception cref="HarnessException">git could not be asked what it ignores in the tree.</exception>
+    public async Task<TwoChangeOffer> JudgedAsync(
+        TwoChangePolicy policy,
+        TwoChangeOffer offer,
+        string tree,
+        string writer,
+        IEnumerable<(string Path, Func<CancellationToken, Task<byte[]>>? Read)> changed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(offer);
+
+        if (offer.Registry is not { } merged)
+        {
+            return offer;
+        }
+
+        var config = policy.Context.Config;
+        var after = await TreeAfter.OfAsync(sync, files, policy.Context, tree, changed, cancellationToken).ConfigureAwait(false);
+        var validation = await MutationRegistryValidation.ValidateAsync(merged.Text, after, config.Mutations, config, cancellationToken).ConfigureAwait(false);
+
+        return offer.Judged(validation, config.Mutations.Registry!, $"as {writer} would write it");
+    }
+
+    /// <summary>
+    /// The arm registry's three versions merged by arm, each as its tree holds it - nothing staged, and git merges nothing -
+    /// or why that merge is not offered or not taken. With nothing both held - neither tree held a registry there - it is
+    /// merged from nothing; with something recorded whose bytes are not found it is not merged at all, since a merge with
+    /// nothing to start from takes an arm one side removed for the other side's addition, and brings it back unsaid.
+    /// </summary>
+    private async Task<TwoChangeOffer> ByArmAsync(TwoChangeAsk ask, CancellationToken cancellationToken)
+    {
+        // Asked of a file before it is read: one above the bound is never brought into memory.
+        if (LargestFile(ask) is var largest && largest > MostBytes)
+        {
+            return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, NoMerge.TooLarge(largest));
+        }
+
+        byte[]? held = null;
+
+        if (ask.Ancestor is { } ancestor)
+        {
+            var (content, lost) = await AncestorAsync(ask.Path, ancestor, cancellationToken).ConfigureAwait(false);
+
+            if (lost is not null)
+            {
+                return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, lost);
+            }
+
+            held = await BytesAsync(ask.Tree, content!, cancellationToken).ConfigureAwait(false);
+        }
+
+        byte[] ours;
+
+        try
+        {
+            // A commit's version as a checkout into the tree writes it: the merge ends its lines as this side does.
+            ours = ask.Ours.Content is GitContent.Blob blob
+                ? await git.ReadCheckedOutAsync(ask.Tree, ask.Path, await BlobAsync(ask.Tree, blob.Id, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false)
+                : await BytesAsync(ask.Tree, ask.Ours.Content, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
+        {
+            return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, NoMerge.VersionNotCheckedOut(ex.Message));
+        }
+
+        var theirs = await BytesAsync(ask.Tree, ask.Theirs.Content, cancellationToken).ConfigureAwait(false);
+
+        // A blob's size is known only once it is read: the same bound, asked of what was read.
+        if (new[] { held?.LongLength ?? 0, ours.LongLength, theirs.LongLength }.Max() is var size && size > MostBytes)
+        {
+            return TwoChangeOffer.Unoffered(ask.Path, TwoChangeRule.Arms, NoMerge.TooLarge(size));
+        }
+
+        var path = OrchestrationReports.Argument(ask.Path);
+        var settle = $"reconcile it by hand, then {FoldAllowances.SettledOption} {path}";
+
+        switch (MutationRegistryMerge.Merge(held, ours, theirs))
+        {
+            case RegistryMerge.Merged merged:
+            {
+                var executable = MergedBit(ask.Ancestor?.Executable ?? false, ask.Ours.Executable, ask.Theirs.Executable);
+                var said = merged.Said(Sides);
+
+                return TwoChangeOffer.ByArm(ask.Path, merged, executable, said, $"({said}{BitSaid(ask, executable)}; it reads as a registry)");
+            }
+
+            case RegistryMerge.Conflicted conflicted:
+            {
+                var places = ReportText.Counted(conflicted.Conflicts.Count, "place");
+
+                return TwoChangeOffer.NotTaken(
+                    ask.Path,
+                    $"merged by arm, it conflicts in {places}, shown below: {settle}",
+                    [
+                        $"conflicts of '{ask.Path}' merged by arm, {places}:",
+                        .. conflicted.Conflicts.SelectMany(conflict => conflict.Said(Sides)).Select(line => $"  {line}"),
+                    ]);
+            }
+
+            case RegistryMerge.Unreadable unreadable:
+                return TwoChangeOffer.NotTaken(
+                    ask.Path,
+                    $"merged by arm and never by line, and it cannot be read as a registry - {string.Join("; ", unreadable.Said(Sides))}: {settle}",
+                    []);
+
+            case var other:
+                throw new UnreachableException($"A merge by arm comes to one of three answers, and {other.GetType().Name} is none of them.");
+        }
+    }
+
+    /// <summary>
+    /// Whether the merged file can be run, as the clause after the path says it: only where the two copies differ in it,
+    /// the bit then being the side's that changed it.
+    /// </summary>
+    private static string BitSaid(TwoChangeAsk ask, bool executable)
+        => ask.Ours.Executable == ask.Theirs.Executable
+            ? string.Empty
+            : $"; it can {(executable ? string.Empty : "no longer ")}be run, as {(executable == ask.Theirs.Executable ? Theirs : Ours)} made it";
+
+    /// <summary>How many bytes the larger of the two sides' files holds, asked before either is read; 0 where neither is a file.</summary>
+    private long LargestFile(TwoChangeAsk ask)
+        => new[] { ask.Ours.Content, ask.Theirs.Content }.OfType<GitContent.File>().Select(file => SharedCopies.LengthOf(files, file.Path)).DefaultIfEmpty(0).Max();
+
+    /// <summary>The bytes <paramref name="content"/> holds: a file's, a blob's as git stores it, or those in hand.</summary>
+    /// <exception cref="HarnessException">git holds no such blob, or could not be asked.</exception>
+    /// <exception cref="IOException">The file could not be read.</exception>
+    private async Task<byte[]> BytesAsync(string tree, GitContent content, CancellationToken cancellationToken)
+        => content switch
+        {
+            GitContent.File file => await files.ReadAllBytesAsync(file.Path, cancellationToken).ConfigureAwait(false),
+            GitContent.Blob blob => await BlobAsync(tree, blob.Id, cancellationToken).ConfigureAwait(false),
+            GitContent.Bytes bytes => bytes.Content,
+            _ => throw new UnreachableException($"Content is one of three kinds, and {content.GetType().Name} is none of them."),
+        };
+
+    /// <summary>The bytes git stores for <paramref name="id"/>.</summary>
+    /// <exception cref="HarnessException">git holds no such blob, or could not be asked.</exception>
+    private async Task<byte[]> BlobAsync(string tree, string id, CancellationToken cancellationToken)
+        => (await git.ReadBlobsAsync(tree, [id], cancellationToken).ConfigureAwait(false))[0]
+            ?? throw new HarnessException(HarnessExit.CommandFailed, $"git holds no blob {id}, which a merge by arm reads.");
 
     /// <summary>The three versions merged as git merges them, or why no merge of them is offered.</summary>
     private async Task<(GitTextMerge? Merge, NoMerge? None)> MergeAsync(TwoChangeAsk ask, CancellationToken cancellationToken)
@@ -417,7 +661,7 @@ internal sealed class TwoChanges(IGitClient git, IFileSystem files, SharedCopies
         }
 
         // Asked of a file before it is read: one above the bound is never brought into memory.
-        var largest = new[] { ask.Ours.Content, ask.Theirs.Content }.OfType<GitContent.File>().Select(file => SharedCopies.LengthOf(files, file.Path)).DefaultIfEmpty(0).Max();
+        var largest = LargestFile(ask);
 
         if (largest > MostBytes)
         {

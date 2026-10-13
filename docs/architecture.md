@@ -663,7 +663,11 @@ too where a base holds a link, which is offered no merge). Its refusal says what
 that takes the clean ones; `--merge` takes one, listed before what comes in, written over the agent's file as weighed
 (`AgentFold.WriteMergeAsync`, the one writer of a merge) once git has written the rest and before HEAD moves, and
 recorded nowhere: on the new base it is the agent's own change, which its fold weighs. A `--merge` naming a path the two
-commits hold alike is refused as a misspelling. One thing the agent
+commits hold alike is refused as a misspelling. The arm registry is merged by arm as a fold merges it (below): what both
+held is the old base's blob as git stores it, or nothing where the agent made the registry the new base brings; ours is
+the new base's blob as a checkout into the agent's worktree writes it (`ReadCheckedOutAsync`), so the merge ends its
+lines as that checkout would; and the merged text is judged by the worktree as the move leaves it, each path the move
+takes read from its blob when the validation asks for it (`TreeAfter.Moved`). One thing the agent
 made is not its change: a file that is the very file the new base holds there, which is held as the new base holds it
 already (`IGitClient.ListHeldAsAtAsync`: the new base's entry for each such file put in an index of the question's own,
 and `git diff` asked against it, so the content is compared through the clean filters and the line-ending rules and the
@@ -730,7 +734,20 @@ once for each, changes one thing: a clean merge is taken. None is offered for a 
 both trees made with nothing either held there before, a file above 16 MiB (`TwoChanges.MostBytes`, the bound a
 kept copy has too), one whose `merge` attribute asks for another merge than git's own of text, or one git reads as
 binary or will not merge; and an anchor registry, which changes only through the rows an agent files, and the arm
-registry are never merged by line. What both held is, for a path the agent shares, the bytes kept under the digest
+registry are never merged by line. The arm registry - the configured `mutations.registry` - is merged by arm instead,
+with no option given (`TwoChangeRule.Arms`): its three versions go to `MutationRegistryMerge.Merge` as the bytes each
+tree holds, nothing staged and nothing git merges, so the merge ends its lines as the main tree's file does; what both
+held is found as for any path, and is nothing only where neither tree held a registry before - shared bytes that cannot
+be found offer no merge, since a merge from nothing takes an arm one side removed for the other's addition. A clean
+merge is taken only once its text (`Merged.Text`) reads as a registry of the tree the command leaves
+(`TwoChanges.JudgedAsync`, through `MutationRegistryValidation.ValidateAsync` with the configuration the command
+loaded): `TreeAfter` makes that tree an `OverlaidRegistryFiles` over `TreeRegistryFiles.OfAsync` of the tree the
+registry is written into, each path the command writes there read only when the validation asks for it - a fold's from
+the agent's files, its merges from the bytes in hand, and what it removes gone - so a fold of hundreds of paths reads the
+few the registry cites. Arms the two changed differently (`ArmConflict`, shown under the refusals), a version that cannot
+be read as a registry, and a merged text that does not read as one - every problem listed as `check-mutations` words it,
+`as the fold would write it` - refuse the path, and `--merge` naming the registry is refused: it is never merged by line.
+Run again after a fold that wrote it into one tree only, the merge of its own result gives that result again. What both held is, for a path the agent shares, the bytes kept under the digest
 its seed records, used only where they still hash to it; where the seed was written by a build that kept none, the
 versions of the path in the main tree's history are read (`ListHeldInHistoryAsync`, at most 64 among the last 512
 commits that changed it), each as its commit holds it and then as a checkout writes it, and the first that hashes
@@ -745,7 +762,7 @@ held is the seed's record of the bit for a shared path - whichever source gave t
 under a digest and holds no bit - and the base's entry for any other (`ListEntriesAtAsync`, for those paths alone);
 each side's is its file's. Where the platform keeps no such bit, as on Windows, none is read, merged or set. A merged
 path is written after the fold's own writes: both trees' copies are asked to be what was weighed - the content, and
-the bit where the platform keeps one (`MergedPath.MainWeighed`, `AgentWeighed`) - before either is written, the main tree's is written first, and the path is recorded as shared, at the merged bytes and bit, only once
+the bit where the platform keeps one (`MergedPath.Into`, each `MergeTarget` with what it was when weighed) - before either is written, the main tree's is written first, and the path is recorded as shared, at the merged bytes and bit, only once
 both hold it. Stopped between the two, the main tree holds the merge, the agent its own copy and the seed what both
 held before; the same command run again merges those again, and since every change of the agent's is already in the
 merge, comes to the same bytes. A tree that already holds what the merge gives is not written again.
