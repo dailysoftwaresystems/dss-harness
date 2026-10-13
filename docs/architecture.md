@@ -2889,6 +2889,19 @@ holds, the text is UTF-8 and nothing else - a byte that forms no character is wh
 never a character put in its place - a byte order mark at its start is noted and is no part of
 its first line, and the text is written back as the bytes it was read from.
 
+What makes a text a registry a sweep can read has one owner too,
+`MutationRegistryValidation.ValidateAsync`: the rows and each arm's shape, the cover of the text
+directory, each cited text, and each scope's legs. It reads a tree through a view of its files
+(`IRegistryFiles`), never the file system itself. `TreeRegistryFiles` is a tree as it stands, and
+is made one way (`OfAsync`), which asks what a sync of that tree withholds, once.
+`OverlaidRegistryFiles` is a tree with some paths written and some removed: each written path is
+given as what reads its bytes when they are asked for, so nothing is read that no row needs read,
+and a written path is there, listed in its directory and not withheld, whatever stood under it
+before. So a text nobody has written yet can be judged by the tree it would stand in, with the
+sentences `check-mutations` refuses a registry in (`RegistryValidation.Refusal`), and
+`MutationService.ReadAsync` keeps what is about the file itself - that it is configured, a file,
+readable and carried - before the validation, and weighs `--arms` and the report arguments after it.
+
 The whole registry is read, with every text it cites, before any host is touched, and every
 problem is listed with its line, exit 12: a sweep refused from inside a leg would end the run once
 its hosts were measured and its slots taken. What a sync withholds is in no copy of the tree, and a

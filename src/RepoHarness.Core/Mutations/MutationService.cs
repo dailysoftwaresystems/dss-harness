@@ -362,7 +362,7 @@ public sealed class MutationService(
         }
 
         var root = context.Layout.RepositoryRoot;
-        var file = InTree(root, registry);
+        var file = TreeRegistryFiles.In(root, registry);
 
         if (!_fileSystem.FileExists(file))
         {
@@ -383,37 +383,29 @@ public sealed class MutationService(
 
         // What a sync withholds is in no copy of the tree, and a worker is such a copy, as a host's is: by the rules the
         // configuration names, which the registry and the text directory are held to as it is read, and by git's - what
-        // git ignores a sync leaves behind as well, and only the tree says which that is. So it is asked here.
-        var carried = await _syncService.ExclusionsAsync(context, cancellationToken).ConfigureAwait(false);
+        // git ignores a sync leaves behind as well, and only the tree says which that is. So it is asked here, as the
+        // tree's view is made.
+        var files = await TreeRegistryFiles.OfAsync(_syncService, _fileSystem, context, cancellationToken).ConfigureAwait(false);
 
-        if (carried.IsWithheldFromTransfer(PathPatterns.Normalize(registry)))
+        if (files.IsWithheld(PathPatterns.Normalize(registry)))
         {
             throw new HarnessException(
                 HarnessExit.ConfigInvalid,
-                $"mutations.registry names '{registry}', which a sync withholds from every copy of the tree - {Withholders} - so no "
+                $"mutations.registry names '{registry}', which a sync withholds from every copy of the tree - {MutationRegistryValidation.Withholders} - so no "
                 + "host sweeping a leg would hold it: keep it where a sync carries it.");
-        }
-
-        var reading = MutationRegistryParser.Parse(
-            MutationRegistryParser.Lines(rows),
-            Listing(root, settings.TextDirectory, carried.IsWithheldFromTransfer),
-            PathCase.In(_fileSystem, root));
-        var problems = new List<string>(reading.Problems);
-
-        if (reading.Valid)
-        {
-            // A text so kept would be missing to every arm citing it, each read violated for a text nobody carried.
-            problems.AddRange(TextProblems(reading.Registry, root, carried.IsWithheldFromTransfer));
         }
 
         // Every problem of the registry in one refusal, and before --arms is weighed against it: a scope naming no leg is
         // the registry's whatever else is wrong with it, and whichever arms the command names - one it does not declare
         // among them, which is a mistake of the command and is said once the registry itself can be swept.
-        var scopes = ArmSelection.Scopes(context.Config, reading.Registry, problems);
+        var validation = await MutationRegistryValidation.ValidateAsync(rows, files, settings, context.Config, cancellationToken).ConfigureAwait(false);
 
-        Refuse(registry, problems);
+        if (!validation.Valid)
+        {
+            throw new HarnessException(HarnessExit.ConfigInvalid, string.Join(Environment.NewLine, validation.Refusal(registry)));
+        }
 
-        var selected = ArmSelection.Resolve(reading.Registry, armNames);
+        var selected = ArmSelection.Resolve(validation.Registry, armNames);
 
         if (selected.Any(arm => arm.Kind == RedKind.TestRed) && settings.ReportArgs is not { Count: > 0 })
         {
@@ -424,7 +416,7 @@ public sealed class MutationService(
                 + $"{{{MutationReport.Placeholder}}}, such as [\"--gtest_output=xml:{{{MutationReport.Placeholder}}}\"].");
         }
 
-        return new SweepArms(reading.Registry, selected, scopes);
+        return new SweepArms(validation.Registry, selected, validation.Scopes);
     }
 
     /// <summary>
@@ -481,191 +473,4 @@ public sealed class MutationService(
                 string.Join(Environment.NewLine, [$"{CommandName} cannot sweep every leg it was asked to, so nothing was run:", .. problems]));
         }
     }
-
-    /// <summary>
-    /// What is wrong with the texts <paramref name="registry"/>'s rows cite, read as the tree holds them: each that is not a
-    /// file; each before-text, control before-text or diagnostic holding nothing - which occurs everywhere, and which
-    /// every run would say; and each text of an arm that shares a byte of its file with another of that arm's, as the
-    /// tree holds the file, said at the later row's line.
-    /// </summary>
-    private IEnumerable<string> TextProblems(MutationRegistry registry, string root, Func<string, bool> withheld)
-    {
-        foreach (var arm in registry.Arms)
-        {
-            foreach (var site in arm.Sites)
-            {
-                var whole = true;
-
-                foreach (var text in site.Texts)
-                {
-                    if (TextProblem(root, text.Before, text.Line, empty: true, withheld) is { } before)
-                    {
-                        whole = false;
-                        yield return before;
-                    }
-
-                    if (TextProblem(root, text.After, text.Line, empty: false, withheld) is { } after)
-                    {
-                        whole = false;
-                        yield return after;
-                    }
-                }
-
-                if (whole)
-                {
-                    foreach (var overlap in Overlaps(root, site))
-                    {
-                        yield return overlap;
-                    }
-                }
-            }
-
-            if (arm.Control is { } control)
-            {
-                if (TextProblem(root, control.Before, control.Line, empty: true, withheld) is { } before)
-                {
-                    yield return before;
-                }
-
-                if (TextProblem(root, control.After, control.Line, empty: false, withheld) is { } after)
-                {
-                    yield return after;
-                }
-            }
-
-            if (arm.Kind == RedKind.TestRed && TextProblem(root, arm.Diagnostic, arm.Line, empty: true, withheld) is { } diagnostic)
-            {
-                yield return diagnostic;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Each two texts of <paramref name="site"/> that overlap in the file as the tree holds it, the later row's problem:
-    /// the texts of one file are replaced together, each as the tree holds it, so two that share a byte of it say two
-    /// things of that byte. Nothing of a site with one text; of a file the tree does not hold, which its arm's pre-flight
-    /// says of the worker's copy; or of a text not there exactly once, which that pre-flight counts.
-    /// </summary>
-    private IEnumerable<string> Overlaps(string root, MutationSite site)
-    {
-        var file = InTree(root, site.Site);
-
-        if (site.Further.Count == 0 || !_fileSystem.FileExists(file))
-        {
-            return [];
-        }
-
-        var texts = site.Texts;
-
-        try
-        {
-            var edits = SiteEdit.ApplyAll(
-                _fileSystem.ReadAllBytes(file),
-                [.. texts.Select(text => (SiteEdit.Text(_fileSystem.ReadAllBytes(InTree(root, text.Before))), SiteEdit.Text(_fileSystem.ReadAllBytes(InTree(root, text.After)))))]);
-
-            return
-            [
-                .. edits.Overlapping.Select(pair =>
-                    $"line {texts[pair.Later].Line}: the text in '{texts[pair.Later].Before}' overlaps the text in '{texts[pair.Earlier].Before}', "
-                    + $"line {texts[pair.Earlier].Line}, in '{site.Site}': the texts of one arm in one file are replaced together, each as the "
-                    + "tree holds the file, so no two share a byte of it"),
-            ];
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // The site, there and not read: nothing can be said of its texts here, and the arm's pre-flight reads them
-            // again in each worker's copy, where an overlap is the arm's own violation.
-            return [];
-        }
-    }
-
-    /// <summary>
-    /// What is wrong with the text <paramref name="cited"/> on line <paramref name="line"/>, or <see langword="null"/>:
-    /// no file of the tree, one <paramref name="withheld"/> says no copy of the tree would hold, or, where
-    /// <paramref name="empty"/> says a text holding nothing cannot be swept, one holding nothing - or one that could not
-    /// be read to tell.
-    /// </summary>
-    private string? TextProblem(string root, string cited, int line, bool empty, Func<string, bool> withheld)
-    {
-        var file = InTree(root, cited);
-
-        if (!_fileSystem.FileExists(file))
-        {
-            return $"line {line}: text '{cited}' is not a file in the tree";
-        }
-
-        if (withheld(cited))
-        {
-            return $"line {line}: text '{cited}' is withheld from every copy of the tree by a sync - {Withholders} - so no worker would hold it";
-        }
-
-        if (!empty)
-        {
-            return null;
-        }
-
-        try
-        {
-            return SiteEdit.Text(_fileSystem.ReadAllBytes(file)).Length == 0
-                ? $"line {line}: the text in '{cited}' holds nothing, which occurs everywhere and which every run says"
-                : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return $"line {line}: text '{cited}' could not be read: {ex.Message}";
-        }
-    }
-
-    /// <summary>
-    /// The files directly in the text directory, as the cover check reads them - or why it could not be listed - or
-    /// <see langword="null"/> where none is configured. One <paramref name="withheld"/> says no copy of the tree would
-    /// hold - what git ignores, as a desktop's or an editor's leftover is, or what the configuration keeps from a sync -
-    /// is counted and left out: no worker holds it, so it is no text anybody could drive.
-    /// </summary>
-    private TextDirectoryListing? Listing(string root, string? textDirectory, Func<string, bool> withheld)
-    {
-        if (textDirectory is null)
-        {
-            return null;
-        }
-
-        var directory = InTree(root, textDirectory);
-        var named = textDirectory.TrimEnd('/');
-
-        if (!_fileSystem.DirectoryExists(directory))
-        {
-            return new TextDirectoryListing(named, null);
-        }
-
-        try
-        {
-            var carried = _fileSystem.EnumerateFiles(directory, recursive: false)
-                .Select(Path.GetFileName)
-                .OfType<string>()
-                .ToLookup(name => !withheld(PathPatterns.Normalize(named + "/" + name)));
-
-            return new TextDirectoryListing(named, [.. carried[true]]) { Withheld = carried[false].Count() };
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return new TextDirectoryListing(named, null) { Unlisted = ex.Message };
-        }
-    }
-
-    /// <summary>Refuses the registry, naming every problem with it, where it has any.</summary>
-    private static void Refuse(string registry, List<string> problems)
-    {
-        if (problems.Count > 0)
-        {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                string.Join(Environment.NewLine, [$"The arms registry '{registry}' cannot be swept: {ReportText.Counted(problems.Count, "problem")}, each to fix:", .. problems.Select(problem => "  - " + problem)]));
-        }
-    }
-
-    /// <summary>What keeps a sync from carrying a file, as a refusal names them: git's rules, or the configuration's.</summary>
-    private const string Withholders = "git ignores it, or sync.neverTransfer, sync.exclude or worktrees.root covers it";
-
-    /// <summary>Where <paramref name="relative"/>, as configuration and rows spell it, is in <paramref name="root"/>.</summary>
-    private static string InTree(string root, string relative) => Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
 }
