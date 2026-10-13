@@ -586,7 +586,11 @@ tree's copy is not the one its seed records, and any other once the main tree's 
 what the agent's base holds, asked of git as a fold asks it. refresh-agent hands over every such path under the paths
 it is given - or anywhere in the tree, off the floor, with `--all` (`RefreshRequest`), which names no prefix and takes
 no path beside it - refused, copying nothing, where the agent changed or deleted one of them (`EditedAsync`, the same
-comparison asked of the agent's worktree). The refusal names each such path and the arguments that leave them:
+comparison asked of the agent's worktree). What it does is measured in one place, beside the fold's and the move's
+(`AgentFold.MeasureRefreshAsync`, a `RefreshPlan`): a path the agent already holds as the main tree does - the same file,
+or absent from both - is recorded as shared at what both held when it was measured, its bytes kept from the agent's
+copy (`AgentFold.AlikeAsync`), listed, and written only with `--apply`, so its record says what it holds and the next
+move of the main tree hands it; dropped unrecorded, as before, the agent's copy read as its change from then on. The refusal names each such path and the arguments that leave them:
 `--except <path>`, once for each, takes that path out of what is handed, so the rest goes over and it stays the agent's
 change, weighed by its fold against what the main tree holds; it is listed in each report of what was handed, would be,
 or needed no handing, and one naming a path the refresh would not have refused is refused as a stray `--settled` is. A
@@ -604,7 +608,11 @@ and the directory's files, and a directory it turned into a file as the files' d
 made first, with the directories it empties, then every file copied. What the agent holds of its own where a hand-over
 needs room refuses it, forced or not, before anything is written (`AgentFold.InTheWayOfHanding`): a file or a link at
 a part of a handed file's path, which a copy would stop at or write through, out of its worktree, and anything in a
-directory where a handed file goes that the hand-over does not delete. Neither hands anything while a move of the
+directory where a handed file goes that the hand-over does not delete. What the agent's worktree holds at each path
+handed is measured with the rest (`AgentFold.HoldingAsync`), and the hand-over writes over or removes only that
+(`AgentFold.HandAsync`, asked before each path): a file the agent's session wrote since stops it there, exit 21, naming
+it, with what it handed recorded, for a run again to weigh anew - seed-agent's forced hand-over included; create-agent's,
+into a worktree just made, asks nothing. Neither hands anything while a move of the
 agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base is not the main
 tree's HEAD, seed-agent --empty too. A path named otherwise than in UTF-8, committed or not, refuses any hand-over,
 named as git's quoting writes it: no file opens here by such a name.

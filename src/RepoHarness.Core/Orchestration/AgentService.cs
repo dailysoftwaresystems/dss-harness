@@ -340,7 +340,7 @@ public sealed class AgentService(
             _fileSystem.CreateDirectory(layout.RowsDirectory(agent));
 
             var ledger = Ledger(layout, agent, new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = empty, Paths = [] });
-            var (handed, stopped) = await _fold.HandAsync(context.Layout.MainCheckoutRoot, created.Path, handable, ledger, CancellationToken.None).ConfigureAwait(false);
+            var (handed, stopped) = await _fold.HandAsync(context.Layout.MainCheckoutRoot, created.Path, handable, ledger, held: null, CancellationToken.None).ConfigureAwait(false);
             var (seed, notes) = WriteSeed(layout, agent, ledger);
 
             if (stopped is not null)
@@ -444,6 +444,7 @@ public sealed class AgentService(
         var previous = _store.ReadSeed(layout, record.Name);
         var unseeded = new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = empty, Paths = [] };
         Handable handable;
+        IReadOnlyDictionary<string, string?> holding;
 
         // What it is handed is weighed against its base: never while a move of that base stands part way, or with its HEAD
         // elsewhere.
@@ -480,6 +481,9 @@ public sealed class AgentService(
             {
                 return InTheWay("Seeding", record, inTheWay);
             }
+
+            // Forced or not, what it is written over is what was weighed here: a file its session writes meanwhile stops it.
+            holding = await _fold.HoldingAsync(path, [.. handable.Deletions, .. handable.Files], cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -509,7 +513,7 @@ public sealed class AgentService(
             try
             {
                 var ledger = Ledger(layout, record.Name, start);
-                (handed, stopped) = await _fold.HandAsync(main, path, handable, ledger, CancellationToken.None).ConfigureAwait(false);
+                (handed, stopped) = await _fold.HandAsync(main, path, handable, ledger, holding, CancellationToken.None).ConfigureAwait(false);
                 (_, notes) = WriteSeed(layout, record.Name, ledger);
             }
             catch (Exception ex) when (Unfinished(ex))
@@ -625,40 +629,18 @@ public sealed class AgentService(
 
         var under = prefixes is null ? string.Empty : $" under {string.Join(", ", prefixes)}";
         var except = request.Except.Select(PathPatterns.Normalize).ToHashSet(StringComparer.Ordinal);
-        Handable handable;
-        Handable moved;
-        IReadOnlyList<string> changed;
-        IReadOnlyList<string> left;
-        IReadOnlyList<string> inTheWay;
+        RefreshPlan plan;
 
         try
         {
-            // Every path the main tree holds otherwise than the agent shares it, committed or not: a copy it was handed goes
-            // stale as soon as the main tree moves it, back to its HEAD's bytes included.
-            handable = await _fold.MovedAsync(main, record.Base!, seed, floor, prefixes, everyUncommitted: false, cancellationToken).ConfigureAwait(false);
-            moved = handable with
-            {
-                Files = await OtherAsync(handable.Files).ConfigureAwait(false),
-                Deletions = await OtherAsync(handable.Deletions).ConfigureAwait(false),
-            };
-
-            // Never over a change of the agent's own - an edit, or a deletion - handed to it or not, nor over or through
-            // anything of its own where what it is handed needs room. One left as it is by name is handed nothing, and is in
-            // the way of what is handed like anything else of the agent's.
-            var edited = await _fold.EditedAsync(path, record.Base!, seed, [.. moved.Files, .. moved.Deletions], cancellationToken).ConfigureAwait(false);
-            left = [.. edited.Where(except.Contains)];
-            changed = [.. edited.Where(relative => !except.Contains(relative))];
-            moved = moved with
-            {
-                Files = [.. moved.Files.Where(relative => !except.Contains(relative))],
-                Deletions = [.. moved.Deletions.Where(relative => !except.Contains(relative))],
-            };
-            inTheWay = _fold.InTheWayOfHanding(path, moved);
+            plan = await _fold.MeasureRefreshAsync(main, path, record.Base!, seed, floor, prefixes, except, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return CommandOutcome.Failed(HarnessExit.CommandFailed, $"{Agent(record)} was not refreshed: what it or the main tree holds cannot be read - {ex.Message.TrimEnd('.')}. Nothing was copied.");
         }
+
+        var (moved, left, changed, inTheWay, alike) = (plan.Handed, plan.Left, plan.Changed, plan.InTheWay, plan.Alike);
 
         // Never silent, and never a guess: a name that leaves nothing out is the typo it usually is.
         if (except.Where(relative => !left.Contains(relative, StringComparer.Ordinal)).Order(StringComparer.Ordinal).ToList() is { Count: > 0 } stray)
@@ -689,6 +671,12 @@ public sealed class AgentService(
         var all = moved.Files.Concat(moved.Deletions).Order(StringComparer.Ordinal).ToList();
         var behind = await BehindAsync(main, record).ConfigureAwait(false);
 
+        // Recorded as shared, so its record says what it holds: dropped unrecorded, the next move of the main tree reads
+        // its copy as its change. Never silent, and written only with --apply.
+        IReadOnlyList<string> alikeLines = alike.Count == 0
+            ? []
+            : [$"{ReportText.Counted(alike.Count, "path")} it already holds as the main tree does, {(apply ? "recorded" : "to record")} as shared:", .. alike.Select(relative => $"  {relative}")];
+
         // The line that asks for this refresh again, with everything it was asked: its paths or --all, and each path left
         // as the agent changed it. Said bare, it asked for another refresh - of the registries' directory alone, and
         // refused over the very changes this one was told to leave.
@@ -699,18 +687,21 @@ public sealed class AgentService(
             ? []
             : [$"{ReportText.Counted(left.Count, "path")} it changed, named with {RefreshRequest.ExceptOption}, {(apply ? "left" : "to leave")} as it changed them:", .. left.Select(relative => $"  {relative}")];
 
-        if (all.Count == 0)
+        var holds = $"{Lower(Agent(record))} holds the main tree's copy of every {(left.Count > 0 ? "other " : string.Empty)}changed path{under}";
+
+        if (all.Count == 0 && alike.Count == 0)
         {
-            return CommandOutcome.Ok(
-                $"{Lower(Agent(record))} holds the main tree's copy of every {(left.Count > 0 ? "other " : string.Empty)}changed path{under}",
-                [.. leftLines, .. NotHanded(handable), .. behind]);
+            return CommandOutcome.Ok(holds, [.. leftLines, .. NotHanded(moved), .. behind]);
         }
 
         if (!apply)
         {
             return CommandOutcome.Ok(
-                $"dry run: {ReportText.Counted(all.Count, "path")} would be refreshed into {Lower(Agent(record))}; pass --apply to hand them over",
-                [.. all.Select(relative => $"  {relative}"), .. leftLines, .. NotHanded(handable), .. behind]);
+                all.Count == 0
+                    ? $"{holds}; {alike.Count} of them {(alike.Count == 1 ? "is" : "are")} not recorded as shared yet: pass --apply to record them"
+                    : $"dry run: {ReportText.Counted(all.Count, "path")} would be refreshed into {Lower(Agent(record))}"
+                        + $"{(alike.Count == 0 ? string.Empty : $", and {alike.Count} recorded as shared")}; pass --apply to hand them over",
+                [.. all.Select(relative => $"  {relative}"), .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind]);
         }
 
         // The agent's worktree is held too: a leg building in it would be building what is being replaced.
@@ -730,7 +721,8 @@ public sealed class AgentService(
             try
             {
                 var ledger = Ledger(layout, record.Name, seed);
-                (handed, stopped) = await _fold.HandAsync(main, path, moved, ledger, CancellationToken.None).ConfigureAwait(false);
+                await _fold.AlikeAsync(path, plan, ledger).ConfigureAwait(false);
+                (handed, stopped) = await _fold.HandAsync(main, path, moved, ledger, plan.Held, CancellationToken.None).ConfigureAwait(false);
                 (_, notes) = WriteSeed(layout, record.Name, ledger);
             }
             catch (Exception ex) when (Unfinished(ex))
@@ -742,31 +734,19 @@ public sealed class AgentService(
                     SeedRecords(layout, record.Name));
             }
 
+            var recorded = alike.Count == 0 ? string.Empty : $", and recorded {alike.Count} it already held as the main tree does";
+
             return stopped is not null
                 ? CommandOutcome.Failed(
                     HarnessExit.Incomplete,
-                    $"Refreshing {Lower(Agent(record))} stopped after {handed} of {ReportText.Counted(all.Count, "path")}: {stopped}. Its seed records the {handed} handed; "
-                    + $"run {again} again once that is dealt with.",
+                    $"Refreshing {Lower(Agent(record))} stopped after {handed} of {ReportText.Counted(all.Count, "path")}: {stopped}. Its seed records the {handed} handed"
+                    + $"{(alike.Count == 0 ? string.Empty : $" and the {alike.Count} it already held as the main tree does")}; run {again} again once that is dealt with.",
                     [.. notes, .. SeedRecords(layout, record.Name)])
                 : CommandOutcome.Ok(
-                    $"refreshed {ReportText.Counted(all.Count, "path")} into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out",
-                    [.. all.Select(relative => $"  {relative}"), .. leftLines, .. NotHanded(handable), .. behind, .. notes, .. SeedRecords(layout, record.Name)]);
-        }
-
-        // The paths whose main-tree copy the agent does not hold already.
-        async Task<IReadOnlyList<string>> OtherAsync(IReadOnlyList<string> relatives)
-        {
-            var other = new List<string>();
-
-            foreach (var relative in relatives)
-            {
-                if (!await _fold.SameAsync(Path.Combine(main, relative), Path.Combine(path, relative), cancellationToken).ConfigureAwait(false))
-                {
-                    other.Add(relative);
-                }
-            }
-
-            return other;
+                    all.Count == 0
+                        ? $"{holds}, and recorded {alike.Count} of them as shared"
+                        : $"refreshed {ReportText.Counted(all.Count, "path")} into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out{recorded}",
+                    [.. all.Select(relative => $"  {relative}"), .. alikeLines, .. leftLines, .. NotHanded(moved), .. behind, .. notes, .. SeedRecords(layout, record.Name)]);
         }
     }
 

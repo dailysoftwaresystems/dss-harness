@@ -899,7 +899,7 @@ public sealed class AgentFoldMergeTests
     }
 
     /// <summary>The real file system, except that something is done just before one file is read for the given time: an agent still at work.</summary>
-    private sealed class MeanwhileFileSystem(IFileSystem inner, string watched, int read, Action meanwhile) : PassThroughFileSystem(inner)
+    internal sealed class MeanwhileFileSystem(IFileSystem inner, string watched, int read, Action meanwhile) : PassThroughFileSystem(inner)
     {
         private int _reads;
 

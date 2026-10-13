@@ -117,6 +117,42 @@ public sealed record RebasePlan
     public required IReadOnlyList<string> WrittenLast { get; init; }
 }
 
+/// <summary>
+/// What refreshing an agent does, measured; nothing written. Every path under the paths asked for that the main tree holds
+/// otherwise than the agent shares it is in exactly one list: handed, already held as the main tree does, left by name as
+/// the agent changed it, or changed by the agent - which refuses the refresh.
+/// </summary>
+public sealed record RefreshPlan
+{
+    /// <summary>
+    /// What is handed: each file the main tree holds there copied, each deletion made, and what is named and not handed -
+    /// directories git will not look into, and links the main tree committed.
+    /// </summary>
+    public required Handable Handed { get; init; }
+
+    /// <summary>
+    /// The paths the agent already holds as the main tree does - the same file, or absent from both: recorded as shared, so
+    /// its record says what it holds, and nothing copied.
+    /// </summary>
+    public required IReadOnlyList<string> Alike { get; init; }
+
+    /// <summary>The paths it changed that were named to be left as it changed them: handed nothing.</summary>
+    public required IReadOnlyList<string> Left { get; init; }
+
+    /// <summary>The paths it changed that nothing named: handing the main tree's over them would undo its work, so the refresh is refused.</summary>
+    public required IReadOnlyList<string> Changed { get; init; }
+
+    /// <summary>What of the agent's own handing <see cref="Handed"/> would write over or through, which refuses the refresh.</summary>
+    public required IReadOnlyList<string> InTheWay { get; init; }
+
+    /// <summary>
+    /// What the agent's worktree held at each path handed, and at each it already holds as the main tree does, when it was
+    /// measured: what a hand-over may write over or remove, and nothing else (<see cref="AgentFold.HandAsync"/>); and what is
+    /// recorded as shared for a path already alike (<see cref="AgentFold.AlikeAsync"/>).
+    /// </summary>
+    public required IReadOnlyDictionary<string, string?> Held { get; init; }
+}
+
 /// <summary>What the main tree hands an agent: each file copied, each deletion made, and what it cannot hand.</summary>
 /// <param name="Files">The changed files, each copied into the agent's worktree.</param>
 /// <param name="Deletions">
@@ -1039,16 +1075,146 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     }
 
     /// <summary>
+    /// Measures refreshing the agent whose worktree is <paramref name="worktree"/> under <paramref name="within"/> - all of
+    /// it where null; writes nothing. Each path the main tree holds otherwise than the agent shares it
+    /// (<see cref="MovedAsync"/>) is, in this order: held by the agent as the main tree holds it already, and so recorded
+    /// as shared; changed by the agent (<see cref="EditedAsync"/>) and named in <paramref name="except"/>, left as it is;
+    /// changed by the agent and not named, which refuses the refresh; or handed. What the agent's worktree holds at each
+    /// path handed is measured with it, so the hand-over writes over nothing it did not weigh.
+    /// </summary>
+    /// <param name="main">The main checkout's root.</param>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="baseCommit">The commit its worktree was made from.</param>
+    /// <param name="seed">What it shares with the main tree.</param>
+    /// <param name="floor">The paths never moved between trees.</param>
+    /// <param name="within">Only the paths these cover; every path where null.</param>
+    /// <param name="except">The paths named to be left as the agent changed them.</param>
+    /// <param name="cancellationToken">Stops the measuring.</param>
+    /// <exception cref="HarnessException">A path is one a hand-over refuses (<see cref="MovedAsync"/>), or git could not answer.</exception>
+    /// <exception cref="IOException">A path could not be looked at.</exception>
+    public async Task<RefreshPlan> MeasureRefreshAsync(
+        string main,
+        string worktree,
+        string baseCommit,
+        SeedRecord seed,
+        IReadOnlyList<string> floor,
+        IReadOnlyList<string>? within,
+        IReadOnlySet<string> except,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(except);
+
+        // Every path the main tree holds otherwise than the agent shares it, committed or not: a copy it was handed goes
+        // stale as soon as the main tree moves it, back to its HEAD's bytes included.
+        var moved = await MovedAsync(main, baseCommit, seed, floor, within, everyUncommitted: false, cancellationToken).ConfigureAwait(false);
+        var alike = new List<string>();
+        var other = new List<string>();
+
+        foreach (var path in moved.Files.Concat(moved.Deletions))
+        {
+            (await SameAsync(Path.Combine(main, path), Path.Combine(worktree, path), cancellationToken).ConfigureAwait(false) ? alike : other).Add(path);
+        }
+
+        // Never over a change of the agent's own - an edit, or a deletion - handed to it or not. One left as it is by name is
+        // handed nothing, and is in the way of what is handed like anything else of the agent's.
+        var edited = await EditedAsync(worktree, baseCommit, seed, other, cancellationToken).ConfigureAwait(false);
+        // Handed: what is neither held as the main tree holds it already, nor the agent's change, nor named to be left.
+        var unhanded = alike.Concat(edited).Concat(except).ToHashSet(StringComparer.Ordinal);
+        var handed = moved with
+        {
+            Files = [.. moved.Files.Where(path => !unhanded.Contains(path))],
+            Deletions = [.. moved.Deletions.Where(path => !unhanded.Contains(path))],
+        };
+
+        return new RefreshPlan
+        {
+            Handed = handed,
+            Alike = [.. alike.Order(StringComparer.Ordinal)],
+            Left = [.. edited.Where(except.Contains)],
+            Changed = [.. edited.Where(path => !except.Contains(path))],
+            InTheWay = InTheWayOfHanding(worktree, handed),
+            Held = await HoldingAsync(worktree, [.. handed.Deletions, .. handed.Files, .. alike], cancellationToken).ConfigureAwait(false),
+        };
+    }
+
+    /// <summary>
+    /// Records in <paramref name="ledger"/> each path of <paramref name="plan"/> the agent already holds as the main tree
+    /// does, as what it held when it was measured - the file both trees held, or absent from both - its bytes kept from the
+    /// agent's copy: nothing is copied, and its record then says what it holds.
+    /// </summary>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="plan">The refresh measured.</param>
+    /// <param name="ledger">What the agent shares with the main tree, to add them to.</param>
+    public async Task AlikeAsync(string worktree, RefreshPlan plan, SharedLedger ledger)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(ledger);
+
+        foreach (var path in plan.Alike)
+        {
+            var copy = Path.Combine(worktree, path);
+
+            if (plan.Held[path] is { } digest)
+            {
+                await ledger.FileAsync(path, digest, IsExecutable(copy), copy).ConfigureAwait(false);
+            }
+            else
+            {
+                ledger.Absent(path);
+            }
+        }
+    }
+
+    /// <summary>
+    /// What the agent's worktree holds at each of <paramref name="paths"/> - a file's digest, or null where it holds no
+    /// file - measured so a hand-over writes over or removes only what was weighed. A path where it holds anything else - a
+    /// directory, a link - is not in it: a hand-over meets that as it always has.
+    /// </summary>
+    /// <param name="worktree">The agent's worktree.</param>
+    /// <param name="paths">The paths it is to be handed.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    /// <exception cref="IOException">A path could not be looked at.</exception>
+    public async Task<IReadOnlyDictionary<string, string?>> HoldingAsync(string worktree, IEnumerable<string> paths, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var held = new Dictionary<string, string?>(StringComparer.Ordinal);
+
+        foreach (var path in paths)
+        {
+            var copy = Path.Combine(worktree, path);
+
+            switch (_fileSystem.KindOf(copy))
+            {
+                case PathKind.File:
+                    held[path] = (await FileContentHash.OfAsync(_fileSystem, copy, cancellationToken).ConfigureAwait(false)).Content;
+                    break;
+                case PathKind.None:
+                    held[path] = null;
+                    break;
+            }
+        }
+
+        return held;
+    }
+
+    /// <summary>
     /// Hands the agent what <paramref name="handable"/> names - each deletion made in its worktree, with the directories that
     /// leaves empty, then each file copied from the main tree there and proved, so a file the main tree turned into a
     /// directory, or a directory it turned into a file, makes room for what replaced it - and records in
     /// <paramref name="ledger"/> what it was handed as it goes: a hand-over that stops part way leaves a record of exactly
-    /// what was handed, never one that takes a copied file for the agent's own work.
+    /// what was handed, never one that takes a copied file for the agent's own work. Each path <paramref name="held"/>
+    /// names is first asked to hold what was measured there: a file the agent's session wrote since is never written over
+    /// or removed, and the hand-over stops there.
     /// </summary>
     /// <param name="main">The main checkout's root.</param>
     /// <param name="worktree">The agent's worktree.</param>
     /// <param name="handable">What to hand it, as <see cref="HandableAsync"/> gives it.</param>
     /// <param name="ledger">What the agent shares with the main tree, to add them to.</param>
+    /// <param name="held">
+    /// What the worktree held at each path when it was measured (<see cref="HoldingAsync"/>); null for a worktree just made,
+    /// which holds nothing anybody wrote.
+    /// </param>
     /// <param name="cancellationToken">Stops it between one path and the next.</param>
     /// <returns>How many paths were handed, and why it stopped where it did not hand everything.</returns>
     public async Task<(int Handed, string? Stopped)> HandAsync(
@@ -1056,6 +1222,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         string worktree,
         Handable handable,
         SharedLedger ledger,
+        IReadOnlyDictionary<string, string?>? held,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(handable);
@@ -1064,6 +1231,14 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var count = 0;
         string? stopped = null;
 
+        async Task RequireHeldAsync(string path, string copy, string what)
+        {
+            if (held is not null && held.TryGetValue(path, out var measured))
+            {
+                await RequireMeasuredAsync(copy, path, measured, AgentTreeName, what).ConfigureAwait(false);
+            }
+        }
+
         try
         {
             foreach (var path in handable.Deletions)
@@ -1071,6 +1246,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var copy = Path.Combine(worktree, path);
+                await RequireHeldAsync(path, copy, "removed").ConfigureAwait(false);
 
                 switch (_fileSystem.KindOf(copy))
                 {
@@ -1089,6 +1265,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             foreach (var path in handable.Files)
             {
                 var copy = Path.Combine(worktree, path);
+                await RequireHeldAsync(path, copy, "written over").ConfigureAwait(false);
                 var handed = await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(main, path), copy, cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 // Kept from the copy just written and proved: what the seed records the agent as holding.

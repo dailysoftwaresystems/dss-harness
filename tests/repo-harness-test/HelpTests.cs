@@ -1806,7 +1806,14 @@ public sealed partial class HelpTests
             text,
             StringComparison.Ordinal);
         Assert.Contains(
-            "refuses the hand-over, forced or not, naming each: copied, it would write over them, or through the link out of its worktree. Neither "
+            "and records them as handed to it, so its fold leaves them out; one the agent already holds as the main tree does is recorded as shared - "
+            + "listed, and written only with --apply - so its record says what it holds;",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "refuses the hand-over, forced or not, naming each: copied, it would write over them, or through the link out of its worktree. A file of "
+            + "the agent's written after it was weighed is never written over or removed by either, forced or not: the hand-over stops there, exit "
+            + $"{HarnessExit.Incomplete}, naming it, and run again weighs it anew. Neither "
             + "hands anything while a move of the agent's base stands stopped part way, or its HEAD is off its base. Both say when the agent's base "
             + "is not the main tree's HEAD. A path named otherwise than in UTF-8, committed or not, refuses any hand-over, naming it as git quotes it: "
             + "no file opens here by such a name.",

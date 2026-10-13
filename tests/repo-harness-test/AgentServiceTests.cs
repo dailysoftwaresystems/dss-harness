@@ -649,15 +649,14 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
-    /// What a refresh does today with a path the main tree moved that the agent already holds as the main tree does is hand
-    /// nothing and record nothing: here a path its seed records as its own fold wrote it, and one it shares nothing for, each
-    /// brought to the main tree's bytes by hand. Its seed goes on naming the older file, or nothing, so once the main tree
-    /// moves both again a refresh refuses them as the agent's changes. The other way the tool itself leaves a seed that no
-    /// longer says what an agent holds, stated as it stands: a refresh that records such a copy as shared replaces this test
-    /// with one whose next refresh hands both.
+    /// A path the main tree moved that the agent already holds as the main tree does - here one its seed records as its own
+    /// fold wrote it, and one it shares nothing for, each brought to the main tree's bytes by hand - is recorded as shared,
+    /// listed, and written only with --apply: a dry run says so and records nothing. Its record then says what it holds, so
+    /// once the main tree moves both again a refresh hands them. (At 0.6.13 such a path was dropped unrecorded, and that
+    /// next refresh refused both as the agent's changes.)
     /// </summary>
     [Fact]
-    public async Task APathTheAgentAlreadyHoldsAsTheMainTreeDoes_IsNotRecorded_AndOnceTheMainTreeMovesItIsRefusedAsTheAgentsChange()
+    public async Task APathTheAgentAlreadyHoldsAsTheMainTreeDoes_IsRecordedAsShared_WithApplyOnly_AndOnceTheMainTreeMovesItIsHanded()
     {
         using var temp = new TempDirectory();
         var kit = await OrchestrationKit.PrepareAsync(temp);
@@ -670,26 +669,119 @@ public sealed class AgentServiceTests
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nagent edit\nsibling edit\n");
         File.Copy(Path.Combine(kit.Main, "a.txt"), Path.Combine(worktree, "a.txt"), overwrite: true);
         File.Copy(Path.Combine(kit.Main, "b.txt"), Path.Combine(worktree, "b.txt"), overwrite: true);
+        string[] listed = ["  a.txt", "  b.txt"];
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: false, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every changed path; 2 of them are not recorded as shared yet: pass --apply to record them", dry.Message);
+        Assert.Equal(["2 path(s) it already holds as the main tree does, to record as shared:", .. listed], dry.Details);
+        Assert.Equal(recorded, kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"]);
+        Assert.DoesNotContain("a.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
 
         var alike = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
         var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
 
         Assert.True(alike.Succeeded, OrchestrationKit.Describe(alike));
-        Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every changed path", alike.Message);
-        Assert.Equal([$"log {kit.Layout.LogFile("ag")}"], alike.Details);
-        Assert.Equal(recorded, seed.Paths["b.txt"]);
-        Assert.NotEqual(await DigestAsync(kit.Main, "b.txt"), seed.Paths["b.txt"]);
-        Assert.DoesNotContain("a.txt", seed.Paths.Keys);
+        Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every changed path, and recorded 2 of them as shared", alike.Message);
+        Assert.Equal(["2 path(s) it already holds as the main tree does, recorded as shared:", .. listed], alike.Details!.Take(3));
+        Assert.Equal(await DigestAsync(kit.Main, "a.txt"), seed.Paths["a.txt"]);
+        Assert.Equal(await DigestAsync(kit.Main, "b.txt"), seed.Paths["b.txt"]);
+        Assert.Equal("agent 'ag' of 'o1' holds the main tree's copy of every changed path", (await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: false, Token)).Message);
 
         OrchestrationKit.Write(kit.Main, "a.txt", "one\nsibling edit\nanother\n");
         OrchestrationKit.Write(kit.Main, "b.txt", "two\nagent edit\nsibling edit\nanother\n");
 
-        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
+        var handed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { All = true }, apply: true, Token);
 
-        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
-        Assert.Equal("Agent 'ag' of 'o1' changed 2 of the path(s) to refresh - a.txt, b.txt - and refreshing would undo those changes. Nothing was copied.", refused.Message);
-        Assert.Equal("one\nsibling edit\n", OrchestrationKit.Read(worktree, "a.txt"));
-        Assert.Equal("two\nagent edit\nsibling edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.True(handed.Succeeded, OrchestrationKit.Describe(handed));
+        Assert.Equal("refreshed 2 path(s) into agent 'ag' of 'o1', recorded as handed to it, so its fold leaves them out", handed.Message);
+        Assert.Equal("one\nsibling edit\nanother\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal("two\nagent edit\nsibling edit\nanother\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
+    /// A refresh that hands some paths and finds the agent already holding others as the main tree does says both, in its
+    /// dry run and once applied, and records both.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshHandingSomePaths_AndFindingOthersAlike_SaysAndRecordsBoth()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        File.Copy(Path.Combine(kit.Main, "b.txt"), Path.Combine(worktree, "b.txt"), overwrite: true);
+
+        var dry = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt", "b.txt"), apply: false, Token);
+
+        Assert.True(dry.Succeeded, OrchestrationKit.Describe(dry));
+        Assert.Equal("dry run: 1 path(s) would be refreshed into agent 'ag' of 'o1', and 1 recorded as shared; pass --apply to hand them over", dry.Message);
+        Assert.Equal(["  a.txt", "1 path(s) it already holds as the main tree does, to record as shared:", "  b.txt"], dry.Details);
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt", "b.txt"), apply: true, Token);
+        var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(
+            "refreshed 1 path(s) into agent 'ag' of 'o1', recorded as handed to it, so its fold leaves them out, and recorded 1 it already held as the main tree does",
+            applied.Message);
+        Assert.Equal("one\nmain edit\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.Equal(await DigestAsync(kit.Main, "a.txt"), seed.Paths["a.txt"]);
+        Assert.Equal(await DigestAsync(kit.Main, "b.txt"), seed.Paths["b.txt"]);
+    }
+
+    /// <summary>
+    /// A file the agent's session writes between the weighing and the copy is never written over: the refresh stops there,
+    /// exit 21, naming it, and the agent's file holds what its session wrote. (At 0.6.13 it was written over.)
+    /// </summary>
+    [Fact]
+    public async Task AFileTheAgentChangedAfterItWasWeighed_StopsTheRefresh_AndIsNotWrittenOver()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var copy = Path.Combine(worktree, "a.txt");
+
+        // Its fourth reading is the one that asks, before the copy, whether it is what was weighed: the session writes first.
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 4, () => File.WriteAllText(copy, "one\nthe session's edit\n")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Equal(
+            "Refreshing agent 'ag' of 'o1' stopped after 0 of 1 path(s): 'a.txt' holds other content in the agent's worktree now than when it was measured, so it "
+            + "was not written over. Its seed records the 0 handed; run 'dssharness refresh-agent o1 ag a.txt --apply' again once that is dealt with.",
+            stopped.Message);
+        Assert.Equal("one\nthe session's edit\n", OrchestrationKit.Read(worktree, "a.txt"));
+        Assert.DoesNotContain("a.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Keys);
+    }
+
+    /// <summary>seed-agent's hand-over is guarded alike: a file written after it was weighed stops it there, exit 21, never written over.</summary>
+    [Fact]
+    public async Task AFileTheAgentChangedAfterItWasWeighed_StopsSeeding_AndIsNotWrittenOver()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var copy = Path.Combine(worktree, "a.txt");
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 2, () => File.WriteAllText(copy, "one\nthe session's edit\n")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith(
+            "Seeding agent 'ag' of 'o1' stopped after 0 of 1 path(s): 'a.txt' holds other content in the agent's worktree now than when it was measured, so it was not written over.",
+            stopped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("one\nthe session's edit\n", OrchestrationKit.Read(worktree, "a.txt"));
     }
 
     /// <summary>A path an agent was handed as a deletion that the main tree has since restored is handed again: its file goes back.</summary>
