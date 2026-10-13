@@ -9,6 +9,7 @@ using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runs;
+using RepoHarness.Core.Worktrees;
 
 namespace RepoHarness.Tests;
 
@@ -215,6 +216,74 @@ public sealed class CheckMutationsEndToEndTests
             Assert.DoesNotContain("keys differ", said, StringComparison.Ordinal);
             Assert.DoesNotContain("could not read what arm", said, StringComparison.Ordinal);
             Assert.DoesNotContain("one worker here", said, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (clock.Explains(ex))
+        {
+            Assert.Skip($"Its builds did not run on an honest clock - {clock.Seen}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// What a sweep recorded, a listing reads back on the same machine as it is: each arm the sweep passed is unmoved here,
+    /// shown with the key the sweep's ledger gave it - what the listing reads it compares by the sweep's own rules - and an
+    /// arm whose site is edited afterwards is pending, saying so.
+    /// </summary>
+    [Fact]
+    public async Task AListingAfterASweep_FindsEachArmItPassedUnmovedHere_AndOneWhoseSiteMovedPending()
+    {
+        var harness = new HarnessFactory();
+
+        SkipUnlessThisMachineBuilds(harness);
+
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+
+        using var clock = new ClockWatch();
+
+        var repository = await FixtureRepositoryAsync(harness, temp.Combine("r"), token);
+
+        try
+        {
+            var swept = await CliRunner.RunAsync(["check-mutations", "--legs", "native", "--arms", "charge-bound,depth-type", "--json", "-C", repository], token);
+
+            Assert.True(swept.ExitCode == HarnessExit.Success, swept.StandardError + swept.StandardOutput);
+
+            using var ledger = JsonDocument.Parse(swept.StandardOutput);
+            var keys = ledger.RootElement.GetProperty("legs")[0].GetProperty("arms").EnumerateArray()
+                .Where(arm => arm.GetProperty("verdict").GetString() == Verdicts.Display(LegVerdict.Passed))
+                .ToDictionary(arm => arm.GetProperty("arm").GetString()!, arm => arm.GetProperty("key").GetString());
+
+            Assert.Equal(["charge-bound", "depth-type"], keys.Keys.Order(StringComparer.Ordinal));
+
+            var listed = await CliRunner.RunAsync(["check-mutations", "--list", "--legs", "native", "--arms", "charge-bound,depth-type", "--json", "-C", repository], token);
+
+            Assert.True(listed.ExitCode == HarnessExit.Success, listed.StandardError + listed.StandardOutput);
+
+            using (var document = JsonDocument.Parse(listed.StandardOutput))
+            {
+                var arms = document.RootElement.GetProperty("legs")[0].GetProperty("arms").EnumerateArray().ToList();
+
+                Assert.Equal(2, arms.Count);
+                Assert.All(arms, arm =>
+                {
+                    Assert.True(arm.GetProperty("state").GetString() == "unmoved", arm.ToString());
+                    Assert.Equal(keys[arm.GetProperty("arm").GetString()!], arm.GetProperty("last").GetProperty("key").GetString());
+                    Assert.Equal(RepositoryTree.MainCheckout, arm.GetProperty("last").GetProperty("sweptIn").GetString());
+                });
+            }
+
+            File.AppendAllText(Path.Combine(repository, "src", "budget.hpp"), "// edited after the sweep\n");
+
+            var moved = await CliRunner.RunAsync(["check-mutations", "--list", "--legs", "native", "--arms", "depth-type", "--json", "-C", repository], token);
+
+            Assert.True(moved.ExitCode == HarnessExit.Success, moved.StandardError + moved.StandardOutput);
+
+            using (var document = JsonDocument.Parse(moved.StandardOutput))
+            {
+                var arm = document.RootElement.GetProperty("legs")[0].GetProperty("arms")[0];
+
+                Assert.Equal(("pending", "site-moved"), (arm.GetProperty("state").GetString(), arm.GetProperty("why")[0].GetProperty("code").GetString()));
+            }
         }
         catch (Exception ex) when (clock.Explains(ex))
         {

@@ -83,15 +83,28 @@ public sealed record RecordUnread
     /// <param name="format">Its format.</param>
     public static RecordUnread Newer(int format) => new(null, format);
 
-    /// <summary>What a sweep that meets it says, once, as a warning: every arm of the leg is pending, and it records none.</summary>
+    /// <summary>Why it cannot be read, in one clause: what reading it said, or which newer format it is in.</summary>
+    public string Said
+        => Format is { } format
+            ? $"it was written by a newer {ToolPackage.Id} (format {format}; this one reads {ArmVerdictRecord.Format})"
+            : Why!;
+
+    /// <summary>
+    /// What a command that meets it says, once, as a warning: every arm of the leg is pending - and, of a sweep, that it
+    /// records none.
+    /// </summary>
     /// <param name="file">The leg's record.</param>
     /// <param name="leg">The leg.</param>
-    public string Warning(string file, string leg)
-        => Format is { } format
-            ? $"'{file}' was written by a newer {ToolPackage.Id} (format {format}; this one reads {ArmVerdictRecord.Format}), so every arm of "
-                + $"'{leg}' is pending and this sweep records none. Update the tool ({ToolUpdateService.CommandName})."
-            : $"'{file}' cannot be read, so every arm of '{leg}' is pending and this sweep records none: {Why}. Delete it to start "
-                + "that leg's record again.";
+    /// <param name="sweep">Whether a sweep met it, which then records none of the leg's verdicts.</param>
+    public string Warning(string file, string leg, bool sweep = true)
+    {
+        var consequence = sweep ? $"every arm of '{leg}' is pending and this sweep records none" : $"every arm of '{leg}' is pending";
+
+        return Format is { } format
+            ? $"'{file}' was written by a newer {ToolPackage.Id} (format {format}; this one reads {ArmVerdictRecord.Format}), so "
+                + $"{consequence}. Update the tool ({ToolUpdateService.CommandName})."
+            : $"'{file}' cannot be read, so {consequence}: {Why}. Delete it to start that leg's record again.";
+    }
 
     /// <summary>What the leg's line says of it, once.</summary>
     /// <param name="file">The leg's record.</param>
@@ -173,6 +186,29 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
     /// <param name="leg">The leg.</param>
     /// <exception cref="Results.HarnessException">Another process held the leg's record past the window.</exception>
     public LegVerdictRecord Read(string leg) => Held(leg, () => ReadHeld(leg));
+
+    /// <summary>
+    /// The table of <paramref name="leg"/> whose digest is <paramref name="digest"/>, as an entry naming it was recorded
+    /// with, or why it cannot be read: a table an entry names that is gone, or holds anything but a table of that digest.
+    /// </summary>
+    /// <param name="leg">The leg.</param>
+    /// <param name="digest">The table's digest, as an entry names it.</param>
+    public (BuiltFromTable? Table, string? Unread) Table(string leg, string digest)
+    {
+        var file = TableFile(leg, digest);
+
+        if (!MachineWideFile.TryRead<BuiltFromTable>(_fileSystem, file, out var table, out var unreadable))
+        {
+            return (null, $"'{file}' cannot be read: {unreadable.Message.TrimEnd('.')}");
+        }
+
+        if (table is null)
+        {
+            return (null, $"'{file}', which an entry names, is gone");
+        }
+
+        return table.Digest() == digest ? (table, null) : (null, $"'{file}' holds a table of another digest, {table.Digest()}");
+    }
 
     /// <summary>
     /// Records <paramref name="verdict"/> of <paramref name="arm"/> on <paramref name="leg"/>: the tables it names written

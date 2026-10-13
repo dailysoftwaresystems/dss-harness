@@ -938,6 +938,68 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A listing finds each file of the tree a recorded table names as the tree's own file system compares names: a file
+    /// the table spells in another case is the file the tree holds where the file system folds case, and the arm is
+    /// unmoved here; where it does not fold, the file is gone, and the arm pending for it.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AListing_FindsEachFileATableNames_AsTheTreesFileSystemComparesNames(bool folds)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+        var token = TestContext.Current.CancellationToken;
+        var (service, context) = Prepare(temp, config, harness: harness, files: new CaseOf(harness.FileSystem, temp.Path, folds));
+
+        temp.WriteFile(Path.Combine("src", "fixture.cpp"), "bool within(int c, int b) { return c <= b; }\n");
+
+        harness.WriteConfig(temp.Path, config);
+
+        var arm = (await service.ReadAsync(context, ["charge"], token)).Selected[0];
+        string Held(string path) => FileContentHash.Of(File.ReadAllBytes(temp.Combine(path)));
+        var table = new BuiltFromTable
+        {
+            Target = "fixture",
+            Lines = "lines",
+            Files = new Dictionary<string, string>(StringComparer.Ordinal) { ["SRC/Fixture.cpp"] = Held("src/fixture.cpp") },
+            Fetched = new Dictionary<string, string>(StringComparer.Ordinal),
+            Made = new Dictionary<string, FilesIn>(StringComparer.Ordinal),
+            Outside = new Dictionary<string, FilesIn>(StringComparer.Ordinal),
+        };
+        var on = new JudgedOn
+        {
+            Judge = ArmJudge.Revision,
+            Rows = JudgedOn.RowsOf(arm),
+            Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, path => (string?)Held(path), StringComparer.Ordinal),
+            Sites = arm.Sites.ToDictionary(site => site.Site, site => (string?)Held(site.Site), StringComparer.Ordinal),
+            Built = new Dictionary<string, string>(StringComparer.Ordinal) { ["fixture"] = table.Digest() },
+            Compilers = [],
+            Settings = SweepSettings.Of(config, config.Legs["native"], config.Hosts.SettingsFor(HostId.Local)),
+            Host = HostId.Local.ToString(),
+        };
+
+        Assert.Null(new ArmVerdictRecord(harness.FileSystem, context.Layout).Merge(
+            "native",
+            "charge",
+            new RecordedVerdict { Verdict = "passed", Run = "20261012-145059-ba433418", At = DateTimeOffset.UnixEpoch, SweptIn = RepositoryTree.MainCheckout, Key = on.Key(), JudgedOn = on },
+            [table]));
+
+        var listed = await service.ListAsync(new MutationRequest(temp.Path, null, ["charge"], Json: true, List: true), token);
+
+        using var document = System.Text.Json.JsonDocument.Parse(Assert.Single(listed.Data));
+        var listedArm = document.RootElement.GetProperty("legs")[0].GetProperty("arms")[0];
+
+        Assert.Equal(folds ? "unmoved" : "pending", listedArm.GetProperty("state").GetString());
+
+        if (!folds)
+        {
+            Assert.Equal("what 'fixture' is built from moved: SRC/Fixture.cpp (gone)", listedArm.GetProperty("why")[0].GetProperty("said").GetString());
+        }
+    }
+
+    /// <summary>
     /// Nothing of a self-test is recorded: its subject has no sink. Nor is anything recorded by a leg swept for another
     /// machine, whose copy keeps no record: what it judged is that machine's to keep.
     /// </summary>

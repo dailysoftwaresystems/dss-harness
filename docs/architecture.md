@@ -3484,6 +3484,37 @@ part of a key names a tree, a worker or a build directory, so a worker made agai
 comes to the same key and the recorded `passed` holds. Deleting the record is the one way to forget
 it, and `git clean -x` in the main checkout does, as it deletes every ignored file.
 
+`check-mutations --list` (`MutationService.ListAsync`, `MutationListing`) says, without sweeping,
+each selected arm's last verdict on each selected leg its S row names, and whether anything it was
+judged on that this machine reads has moved since. It reads and verifies the registry exactly as a
+sweep does - any problem is the sweep's refusal, every problem listed, so a listing is the door that
+validates a registry and stops - resolves `--legs` and `--arms` as a sweep does, reads each leg's
+tree once (`ReadSourceAsync`) and each leg's record, and prints a row to every arm on every leg. It
+asks no host, takes no lock, begins no run and writes nothing: `CommandRunner` decides per command
+line whether a run begins, and a listing begins none. Nor does it need what only a sweep needs -
+`reportArgs`, a leg built with Ninja, a selection that drives an arm: a leg that cannot be swept is
+said once, above the rows, and every arm on it is pending, so a listing can be asked of any
+configuration a sweep would read.
+
+The verdict a row shows is the newest entry nothing read here moved for, else the newest; the
+listing compares by the sweep's own rules (`KeyDifference.Listed` beside `KeyDifference.Between`,
+sharing every comparison), reading each table by its digest and each file it names in the tree's one
+reading, as the tree compares names. An arm is pending for a closed list of reasons
+(`PendingReason`), the first that applies said on its row and every one under `--json`: its record
+cannot be read, or a newer build wrote it; its leg cannot be swept; it was never swept on the leg;
+the verdict shown is no `passed`; it was swept with no key; or the judge's revision, its rows, a
+text it cites, a site it mutates, a file of the tree its targets are built from (one gone said as
+gone), what of the configuration its build, run or judge is given, or the host its leg names
+changed. Every other arm is *unmoved here*, never said to hold: a listing reads the rows, the texts,
+the tree's files and the settings, and never how a target is built, a file the build makes, the
+dependency sources it fetched, a file outside the tree it reads, the compilers or the developer
+environment - only a sweep on the leg's machine reads those, and eight reasons are a sweep's alone
+for that. An arm unmoved here whose build is generated from a file that moved since, or whose
+configure would be given something else, says so: the causes kept beside the key name it. A
+listing exits `0` whatever is pending - a listing is no gate - and otherwise as a sweep gives it:
+`12` for the registry or the configuration, `10` for the command line, `20` where git could not say
+what a tree ignores, and `3` where a tree changed while it was read.
+
 ### Self-test
 
 `check-mutations --self-test` sweeps the fixture this tool carries, in place of the repository's
@@ -3626,7 +3657,8 @@ with "the harness could not run", because the remedies differ.
 or when no selected leg can, and `70` when whether a leg can run was never established, through
 a defect in this tool. `build`, `test`, `run` and `clean` exit `1` too when no selected leg can
 run and no failure turned one away, each leg's line saying why it cannot; `check-mutations`
-exits `21` there (see below). `install-missing-tools` exits `1` when a tool is missing, out of
+exits `21` there (see below), and `check-mutations --list` exits `0` whatever is pending - a
+listing is no gate. `install-missing-tools` exits `1` when a tool is missing, out of
 date or could not be installed, and `15` when a host could not be reached: a tool that is not
 there and a host that did not answer call for different things. `check-anchor-balance` and
 `check-anchor-citations` exit `1` on a finding, which is what they were asked to look for rather

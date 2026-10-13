@@ -377,6 +377,43 @@ public sealed partial class HelpTests
     }
 
     /// <summary>
+    /// The mutations topic says what a listing does and refuses, what it reads and what it cannot - so that unmoved here is
+    /// never to say an arm holds - and what it exits with, each code read from the code; the command's own help names it.
+    /// </summary>
+    [Fact]
+    public async Task TheMutationsTopic_SaysWhatAListingReads_WhatItCannot_AndWhatItExitsWith()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var said = Words((await CliRunner.RunAsync(["help", "mutations"], cancellationToken)).StandardOutput);
+        var command = Words((await CliRunner.RunAsync(["check-mutations", "--help"], cancellationToken)).StandardOutput);
+
+        foreach (var text in new[]
+        {
+            "--list sweeps nothing (see 'What holds, and what is pending'), so it is refused with --self-test, --force-lock, "
+            + $"--use-staged and --here ({HarnessExit.UsageError}), each in one sentence naming both.",
+            "check-mutations --list says, without sweeping, each selected arm's last verdict on each selected leg its S row names, "
+            + "and whether anything it was judged on that this machine reads has moved since.",
+            "it asks no host, takes no lock, begins no run and writes nothing, and needs nothing only a sweep needs - report "
+            + "arguments, a leg built with Ninja, a selection that drives an arm.",
+            "the newest entry nothing read here moved for, else the newest",
+            "the row says the first that applies, in that order, and --json every one.",
+            "Every other arm is unmoved here, which is never to say it holds: a listing reads the rows, the texts, the tree's "
+            + "files and the settings, never how a target is built, a file its build makes, the dependency sources it fetched, "
+            + "a file outside the tree it reads, the compilers or the developer environment - only a sweep on the leg's machine "
+            + "reads those.",
+            "A leg that cannot be swept is said once, above the rows, and never refused",
+            $"A listing exits {HarnessExit.Success} whatever is pending - it is no gate - and otherwise as a sweep would: "
+            + $"{HarnessExit.CommandFailed} where git could not say what a tree ignores, and {LegExit.InputsMoved} where a tree "
+            + "changed while it was read.",
+        })
+        {
+            Assert.Contains(text, said, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("--list Sweep nothing: say each selected arm's last verdict on each leg", command, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Help says what a command exits with where no selected leg can run, wherever it speaks of it: 1 of a build, a test
     /// and a run, and of a sweep incomplete, whose 1 is an arm violated - each code read from the code.
     /// </summary>

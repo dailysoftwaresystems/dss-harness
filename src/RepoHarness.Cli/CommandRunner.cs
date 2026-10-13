@@ -67,7 +67,7 @@ internal static class CommandRunner
         string commandName,
         Func<CommandContext, CancellationToken, Task<CommandOutcome>> body,
         Option<bool>? ledger = null)
-        => Wrap(commandName, (context, _, cancellationToken) => body(context, cancellationToken), ledger, beginsRun: false);
+        => Wrap(commandName, (context, _, cancellationToken) => body(context, cancellationToken), ledger, beginsRun: _ => false);
 
     /// <summary>
     /// Wraps the body of a command that keeps runs - build, test, run and check-mutations - into an action the parser
@@ -85,14 +85,30 @@ internal static class CommandRunner
         string commandName,
         Func<CommandContext, RunId, CancellationToken, Task<CommandOutcome>> body,
         Option<bool>? ledger = null)
-        => Wrap(commandName, (context, run, cancellationToken) => body(context, run!, cancellationToken), ledger, beginsRun: true);
+        => Wrap(commandName, (context, run, cancellationToken) => body(context, run!, cancellationToken), ledger, beginsRun: _ => true);
 
-    /// <summary>Wraps a command body, given its run where it <paramref name="beginsRun"/>, into an action the parser can invoke.</summary>
+    /// <summary>
+    /// Wraps the body of a command whose parsed command line decides whether it begins a run - check-mutations, whose
+    /// --list sweeps nothing and begins none - handing the body the run where it began one, and nothing where not.
+    /// </summary>
+    /// <param name="commandName">The command, which prefixes every line it writes.</param>
+    /// <param name="body">What the command does, given the run it began, or nothing where it began none.</param>
+    /// <param name="beginsRun">Whether the parsed command line begins a run.</param>
+    /// <param name="ledger">The command's <c>--json</c>, as <see cref="Wrap(string, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, Option{bool}?)"/> takes it.</param>
+    /// <remarks>A command line that begins no run prints no <c>run &lt;id&gt;</c> line, and keeps no records.</remarks>
+    internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
+        string commandName,
+        Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
+        Func<ParseResult, bool> beginsRun,
+        Option<bool>? ledger = null)
+        => Wrap(commandName, body, ledger, beginsRun);
+
+    /// <summary>Wraps a command body, given its run where its parsed command line <paramref name="beginsRun"/>, into an action the parser can invoke.</summary>
     private static Func<ParseResult, CancellationToken, Task<int>> Wrap(
         string commandName,
         Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
         Option<bool>? ledger,
-        bool beginsRun)
+        Func<ParseResult, bool> beginsRun)
     {
         return async (parseResult, cancellationToken) =>
         {
@@ -106,7 +122,7 @@ internal static class CommandRunner
             // the legs are surveyed: a line written before then would sit in front of it.
             using var document = answersWithLedger ? output.DataOnly() : null;
 
-            var run = beginsRun ? RunId.New() : null;
+            var run = beginsRun(parseResult) ? RunId.New() : null;
 
             if (run is not null)
             {

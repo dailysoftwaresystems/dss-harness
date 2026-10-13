@@ -29,6 +29,10 @@ namespace RepoHarness.Core.Mutations;
 /// Whether to sweep the fixture this tool carries, through each leg's toolchain, holding each arm to the verdict it is
 /// designed to reach - rather than the arms the repository's registry declares.
 /// </param>
+/// <param name="List">
+/// Whether to sweep nothing, and say instead each selected arm's last verdict on each leg and whether anything it was
+/// judged on that this machine reads has moved since.
+/// </param>
 public sealed record MutationRequest(
     string Directory,
     IReadOnlyList<string>? LegNames,
@@ -37,7 +41,8 @@ public sealed record MutationRequest(
     bool Json = false,
     bool UseStaged = false,
     HostId? Here = null,
-    bool SelfTest = false);
+    bool SelfTest = false,
+    bool List = false);
 
 /// <summary>The arms a sweep drives, as the registry declares them and <c>--arms</c> and the S rows select them.</summary>
 /// <param name="Registry">The registry, every arm in it.</param>
@@ -195,6 +200,96 @@ public sealed class MutationService(
                     : SweepAsync(runner, work, arms, request.ForceLock, records: request.Here is null, token),
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Lists, without sweeping, each selected arm's last verdict on each selected leg its S row names, and whether anything
+    /// it was judged on that this machine reads has moved since: the registry is read and verified as a sweep reads it,
+    /// each leg's tree is read once, and each leg's record. It asks no host, takes no lock, begins no run and writes nothing,
+    /// and it needs nothing only a sweep needs: report arguments, a leg built with Ninja, a selection that drives an arm. A
+    /// leg that cannot be swept is said, never refused; so is a record that cannot be read.
+    /// </summary>
+    /// <param name="request">What the command was asked to do.</param>
+    /// <param name="cancellationToken">Stops the reading.</param>
+    /// <exception cref="HarnessException">
+    /// The registry, its texts or its scopes cannot be swept (<see cref="HarnessExit.ConfigInvalid"/>); <c>--legs</c> or
+    /// <c>--arms</c> names something not declared (<see cref="HarnessExit.UsageError"/>); git could not say what it ignores
+    /// in a tree (<see cref="HarnessExit.CommandFailed"/>); or a tree changed while it was read (<see cref="LegExit.InputsMoved"/>).
+    /// </exception>
+    public async Task<CommandOutcome> ListAsync(MutationRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var context = await _contextLoader.LoadAsync(request.Directory, cancellationToken).ConfigureAwait(false);
+        var config = context.Config;
+        var arms = await ReadAsync(context, request.ArmNames, cancellationToken, sweeps: false).ConfigureAwait(false);
+        var legs = LegSelection.Resolve(config, request.LegNames).Legs;
+        var unsweepable = Unsweepable(config, legs);
+        var record = new ArmVerdictRecord(_fileSystem, context.Layout);
+        var trees = new Dictionary<string, TreeFiles>(StringComparer.FromComparison(_platform.PathComparison));
+        var listed = new List<ListedLeg>();
+
+        foreach (var leg in legs)
+        {
+            var tree = LegTrees.Here(context, leg.Leg, null);
+
+            if (!trees.TryGetValue(tree, out var files))
+            {
+                using var reading = await _syncService.ReadSourceAsync(tree, cancellationToken).ConfigureAwait(false);
+
+                trees[tree] = files = new TreeFiles(reading.Files, PathCase.In(_fileSystem, tree));
+            }
+
+            var named = LegPlacement.Named(config, leg.Leg);
+            var project = VariantKey.ProjectFor(config, leg.Leg);
+
+            listed.Add(MutationListing.Of(new ListingInput(
+                leg.Name,
+                ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes).Driven,
+                unsweepable.GetValueOrDefault(leg.Name),
+                record.Read(leg.Name),
+                digest => record.Table(leg.Name, digest),
+                files,
+                named?.ToString(),
+                SweepSettings.Of(config, leg.Leg, config.Hosts.SettingsFor(named ?? HostId.Local)),
+                project is null ? null : JudgedCauses.GenerationOf(config, VariantKey.For(config, leg.Leg, leg.Leg.Os), project))));
+        }
+
+        var registry = config.Mutations.Registry!;
+
+        if (request.Json)
+        {
+            return CommandOutcome.Ok(MutationListing.Summary(listed)) with
+            {
+                Data = [MutationListing.Json(listed, registry, record.Directory, _output.Shown)],
+                Quiet = true,
+            };
+        }
+
+        _output.Info(
+            CommandName,
+            $"listing {ReportText.Counted(arms.Selected.Count, "arm")} of '{registry}' on {ReportText.Counted(legs.Count, "leg")}; nothing is swept "
+            + "and no host is asked");
+        _output.Info(CommandName, $"the record is '{record.Directory}'");
+
+        foreach (var leg in listed)
+        {
+            if (leg.Unsweepable is { } why)
+            {
+                _output.Info(CommandName, $"'{leg.Leg}' cannot be swept, so every arm on it is pending: {why}");
+            }
+
+            if (leg.RecordUnread is { } unread)
+            {
+                _output.Warn(CommandName, unread.Warning(record.FileOf(leg.Leg), leg.Leg, sweep: false));
+            }
+        }
+
+        return CommandOutcome.Ok(MutationListing.Summary(listed), [MutationListing.Note]) with
+        {
+            Data = MutationListing.Table(listed, _output.Shown),
+            Quiet = true,
+        };
     }
 
     /// <summary>
@@ -394,11 +489,12 @@ public sealed class MutationService(
     /// <exception cref="HarnessException">
     /// No registry is configured, it or a text it cites cannot be read whole, it or a text it cites is one a sync
     /// withholds from every copy of the tree - by the configuration's rules or by git's - a scope names no leg, or a
-    /// selected arm runs a binary with no report arguments configured (<see cref="HarnessExit.ConfigInvalid"/>); or
+    /// selected arm runs a binary with no report arguments configured where <paramref name="sweeps"/> - a listing runs
+    /// none, and needs none (<see cref="HarnessExit.ConfigInvalid"/>); or
     /// <c>--arms</c> names an arm it does not declare (<see cref="HarnessExit.UsageError"/>); or git could not be asked
     /// what it ignores in the tree (<see cref="HarnessExit.CommandFailed"/>), which no sync of it could be made without.
     /// </exception>
-    internal async Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken)
+    internal async Task<SweepArms> ReadAsync(HarnessContext context, IReadOnlyList<string>? armNames, CancellationToken cancellationToken, bool sweeps = true)
     {
         ArgumentNullException.ThrowIfNull(context);
 
@@ -457,7 +553,7 @@ public sealed class MutationService(
 
         var selected = ArmSelection.Resolve(validation.Registry, armNames);
 
-        if (selected.Any(arm => arm.Kind == RedKind.TestRed) && settings.ReportArgs is not { Count: > 0 })
+        if (sweeps && selected.Any(arm => arm.Kind == RedKind.TestRed) && settings.ReportArgs is not { Count: > 0 })
         {
             throw new HarnessException(
                 HarnessExit.ConfigInvalid,
@@ -482,10 +578,29 @@ public sealed class MutationService(
     /// <exception cref="HarnessException">Any of them is such a leg: one refusal names each, with its fix.</exception>
     internal static void RequireSweepable(HarnessConfig config, IEnumerable<SelectedLeg> legs, bool selfTest = false)
     {
+        var problems = Unsweepable(config, legs, selfTest);
+
+        if (problems.Count > 0)
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                string.Join(Environment.NewLine, [$"{CommandName} cannot sweep every leg it was asked to, so nothing was run:", .. problems.Values.Select(why => $"  - {why}")]));
+        }
+    }
+
+    /// <summary>
+    /// Why each of <paramref name="legs"/> a sweep cannot read the build of cannot be swept, by its name, in the order
+    /// given - as <see cref="RequireSweepable"/> refuses them; none where every one can be.
+    /// </summary>
+    /// <param name="config">The configuration declaring the legs.</param>
+    /// <param name="legs">The selected legs.</param>
+    /// <param name="selfTest">Whether the run is a self-test.</param>
+    internal static IReadOnlyDictionary<string, string> Unsweepable(HarnessConfig config, IEnumerable<SelectedLeg> legs, bool selfTest = false)
+    {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(legs);
 
-        var problems = new List<string>();
+        var problems = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var leg in legs)
         {
@@ -494,13 +609,13 @@ public sealed class MutationService(
 
             if (!variant.CanBuild(leg.Name, project, leg.Leg.Os, out var why))
             {
-                problems.Add($"  - {why}");
+                problems[leg.Name] = why;
                 continue;
             }
 
             if (!selfTest && !string.Equals(project.Type, "cmake", StringComparison.OrdinalIgnoreCase))
             {
-                problems.Add($"  - Leg '{leg.Name}' builds project '{project.Name}', a {project.Type} project: only a CMake build's ninja records say which objects a mutation rebuilt.");
+                problems[leg.Name] = $"Leg '{leg.Name}' builds project '{project.Name}', a {project.Type} project: only a CMake build's ninja records say which objects a mutation rebuilt.";
                 continue;
             }
 
@@ -508,19 +623,14 @@ public sealed class MutationService(
 
             if (!string.Equals(generator, "Ninja", StringComparison.Ordinal))
             {
-                problems.Add(
-                    $"  - Leg '{leg.Name}' builds with toolchain '{variant.Toolchain}', whose generator is "
+                problems[leg.Name] =
+                    $"Leg '{leg.Name}' builds with toolchain '{variant.Toolchain}', whose generator is "
                     + (generator is null ? "not declared, so CMake picks one" : $"'{generator}'")
                     + $": set toolchains.{variant.Toolchain}.generator to \"Ninja\". A sweep reads which objects each mutation rebuilt "
-                    + "from ninja's own records of the build, which only the Ninja generator keeps for one configuration alone.");
+                    + "from ninja's own records of the build, which only the Ninja generator keeps for one configuration alone.";
             }
         }
 
-        if (problems.Count > 0)
-        {
-            throw new HarnessException(
-                HarnessExit.ConfigInvalid,
-                string.Join(Environment.NewLine, [$"{CommandName} cannot sweep every leg it was asked to, so nothing was run:", .. problems]));
-        }
+        return problems;
     }
 }

@@ -175,6 +175,37 @@ public sealed class ArmVerdictRecordTests : IDisposable
     }
 
     /// <summary>
+    /// A table is read back by the digest an entry names it by, as it was recorded; one that is gone, cannot be read, or
+    /// holds a table of another digest is no table, and says which.
+    /// </summary>
+    [Fact]
+    public void ATable_IsReadBackByItsDigest_AndOneGoneUnreadableOrOfAnotherDigestSaysSo()
+    {
+        var table = Table("fixture", "src/fixture.cpp");
+        var other = Table("fixture_tests", "src/tests.cpp");
+        var file = Record.TableFile(Leg, table.Digest());
+
+        Assert.Null(Record.Merge(Leg, "charge", Verdict("passed", "k1", Noon, table), [table]));
+
+        var (read, unread) = Record.Table(Leg, table.Digest());
+
+        Assert.Null(unread);
+        Assert.Equal(table.Digest(), read!.Digest());
+
+        File.WriteAllText(file, JsonSerializer.Serialize(other, JsonStateFile.Options));
+
+        Assert.Equal((null, $"'{file}' holds a table of another digest, {other.Digest()}"), Record.Table(Leg, table.Digest()));
+
+        File.WriteAllText(file, "{ \"target\":");
+
+        Assert.StartsWith($"'{file}' cannot be read: ", Record.Table(Leg, table.Digest()).Unread, StringComparison.Ordinal);
+
+        File.Delete(file);
+
+        Assert.Equal((null, $"'{file}', which an entry names, is gone"), Record.Table(Leg, table.Digest()));
+    }
+
+    /// <summary>
     /// A record that cannot be read - one that is not JSON, one holding a member this build does not know - or one a newer
     /// build wrote is never written: a sweep handing it verdicts says so once, as a warning naming the file and what to do,
     /// and once more on the leg's line, and records none.

@@ -925,7 +925,9 @@ internal static class HelpCommand
             + "selected whose S row names no selected leg is named in a warning before the sweep starts, and a sweep whose "
             + $"every selected arm is such a one is refused ({HarnessExit.UsageError}), naming each and where it runs: it would drive "
             + "no arm, and pass having proved nothing. Only a leg built by CMake with the Ninja generator can be swept: "
-            + "ninja's own records say which objects a mutation rebuilt.");
+            + "ninja's own records say which objects a mutation rebuilt. "
+            + "--list sweeps nothing (see 'What holds, and what is pending'), so it is refused with --self-test, --force-lock, "
+            + $"--use-staged and --here ({HarnessExit.UsageError}), each in one sentence naming both.");
         builder.AppendLine();
         builder.AppendLine("Workers");
         builder.AppendLine();
@@ -1061,6 +1063,28 @@ internal static class HelpCommand
             + "removed host copy leave it as it was; deleting it is the one way to forget it, and every arm is then pending. "
             + $"A record that cannot be read, or that a newer {ToolPackage.Id} wrote, is never written: a sweep of that leg "
             + "says so once, as a warning naming the file and on the leg's line, and records none.");
+        builder.AppendLine();
+        AppendWrapped(
+            builder,
+            "check-mutations --list says, without sweeping, each selected arm's last verdict on each selected leg its S row "
+            + "names, and whether anything it was judged on that this machine reads has moved since. It reads and verifies "
+            + $"the registry as a sweep does, every problem listed ({HarnessExit.ConfigInvalid}), resolves --legs and --arms as a "
+            + $"sweep does ({HarnessExit.UsageError}), and reads each leg's tree once and each leg's record; it asks no host, takes "
+            + "no lock, begins no run and writes nothing, and needs nothing only a sweep needs - report arguments, a leg "
+            + "built with Ninja, a selection that drives an arm. A row gives the verdict shown - the newest entry nothing read "
+            + "here moved for, else the newest - its run, when, and what the arm is now. It is pending where its record "
+            + $"cannot be read or a newer {ToolPackage.Id} wrote it, its leg cannot be swept, it was never swept on the leg, the "
+            + "verdict shown is no passed, it was swept with no key, or the judge's revision, its rows, a text it cites, a site "
+            + "it mutates, a file of the tree its targets are built from, what of the configuration its build, its run or its "
+            + "judge is given, or the host its leg names changed: the row says the first that applies, in that order, and "
+            + "--json every one. Every other arm is unmoved here, which is never to say it holds: a listing reads the rows, "
+            + "the texts, the tree's files and the settings, never how a target is built, a file its build makes, the "
+            + "dependency sources it fetched, a file outside the tree it reads, the compilers or the developer environment - "
+            + "only a sweep on the leg's machine reads those. An arm unmoved here whose build is generated from a file that "
+            + "moved since says so. A leg that cannot be swept is said once, above the rows, and never refused; a record that "
+            + $"cannot be read is said as a warning. A listing exits {HarnessExit.Success} whatever is pending - it is no gate - "
+            + $"and otherwise as a sweep would: {HarnessExit.CommandFailed} where git could not say what a tree ignores, and "
+            + $"{LegExit.InputsMoved} where a tree changed while it was read.");
         builder.AppendLine();
         builder.AppendLine("Records");
         builder.AppendLine();

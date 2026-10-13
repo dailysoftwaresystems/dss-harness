@@ -53,14 +53,9 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
             return [HostId.Local];
         }
 
-        if (leg.Wsl is { } wsl)
+        if (Named(config, leg) is { } named)
         {
-            return [HostId.Wsl(DeclaredName.In(config.Hosts.Wsl.Keys, wsl) ?? wsl)];
-        }
-
-        if (leg.Ssh is { } ssh)
-        {
-            return [HostId.Ssh(DeclaredName.In(config.Hosts.Ssh.Keys, ssh) ?? ssh)];
+            return [named];
         }
 
         // A WSL distribution runs Linux and nothing else. Measuring one for a leg on another operating system
@@ -70,6 +65,22 @@ public sealed record LegPlacement(SelectedLeg Leg, HostReport? Host, string? Rea
             : Enumerable.Empty<HostId>();
 
         return [HostId.Local, .. distributions, .. config.Hosts.Ssh.Keys.Select(HostId.Ssh)];
+    }
+
+    /// <summary>
+    /// The one host <paramref name="leg"/> names, as the configuration declares it, or <see langword="null"/> where it
+    /// names none and may run on any candidate.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="leg">The leg.</param>
+    public static HostId? Named(HarnessConfig config, LegConfig leg)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(leg);
+
+        return leg.Wsl is { } wsl ? HostId.Wsl(DeclaredName.In(config.Hosts.Wsl.Keys, wsl) ?? wsl)
+            : leg.Ssh is { } ssh ? HostId.Ssh(DeclaredName.In(config.Hosts.Ssh.Keys, ssh) ?? ssh)
+            : null;
     }
 
     /// <summary>

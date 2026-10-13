@@ -1,5 +1,6 @@
 using System.CommandLine;
 using RepoHarness.Core.Mutations;
+using RepoHarness.Core.Results;
 
 namespace RepoHarness.Cli.Commands;
 
@@ -37,6 +38,11 @@ internal static class CheckMutationsCommand
         Description = "Sweep the fixture this tool carries instead of the registry's arms, built the way each selected leg builds, and hold each of its arms to the verdict it is designed to reach: proves this tool judges arms rightly with that leg's toolchain.",
     };
 
+    private static readonly Option<bool> ListOption = new("--list")
+    {
+        Description = "Sweep nothing: say each selected arm's last verdict on each leg and whether anything it was judged on that this machine reads has moved since. Asks no host, takes no lock, begins no run and writes nothing; exits 0 whatever is pending.",
+    };
+
     internal static Command Create()
     {
         var command = new Command(
@@ -49,12 +55,19 @@ internal static class CheckMutationsCommand
         command.Options.Add(ForceLockOption);
         command.Options.Add(UseStagedOption);
         command.Options.Add(SelfTestOption);
+        command.Options.Add(ListOption);
         command.Options.Add(DispatchOptions.Here);
         GlobalOptions.AddTo(command);
 
         command.SetAction(CommandRunner.Wrap(Name, async (context, run, cancellationToken) =>
         {
             var arguments = context.ParseResult;
+            var list = arguments.GetValue(ListOption);
+
+            if (list && Refused(arguments) is { } refusal)
+            {
+                throw new HarnessException(HarnessExit.UsageError, refusal);
+            }
 
             var legs = arguments.GetResult(LegsOption) is { Implicit: false }
                 ? arguments.GetValue(LegsOption) ?? []
@@ -65,23 +78,42 @@ internal static class CheckMutationsCommand
                 : null;
 
             var selfTest = arguments.GetValue(SelfTestOption);
+            var request = new MutationRequest(
+                context.Directory,
+                legs,
+                arms,
+                arguments.GetValue(ForceLockOption),
+                arguments.GetValue(JsonOption),
+                arguments.GetValue(UseStagedOption),
+                arguments.GetValue(DispatchOptions.Here),
+                selfTest,
+                list);
+            var service = context.Get<MutationService>();
 
-            return await context.Get<MutationService>()
-                .RunAsync(
-                    new MutationRequest(
-                        context.Directory,
-                        legs,
-                        arms,
-                        arguments.GetValue(ForceLockOption),
-                        arguments.GetValue(JsonOption),
-                        arguments.GetValue(UseStagedOption),
-                        arguments.GetValue(DispatchOptions.Here),
-                        selfTest),
-                    run,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }, JsonOption));
+            return list
+                ? await service.ListAsync(request, cancellationToken).ConfigureAwait(false)
+                : await service.RunAsync(request, run!, cancellationToken).ConfigureAwait(false);
+        }, beginsRun: arguments => !arguments.GetValue(ListOption), JsonOption));
 
         return command;
+    }
+
+    /// <summary>
+    /// Why <c>--list</c> cannot be given with what else <paramref name="arguments"/> holds, or <see langword="null"/> where
+    /// it can: each option given with it that only a sweep has a use for, said in one sentence.
+    /// </summary>
+    private static string? Refused(ParseResult arguments)
+    {
+        (Option Option, bool Given, string Wants)[] sweepsOnly =
+        [
+            (SelfTestOption, arguments.GetValue(SelfTestOption), "has no fixture to sweep"),
+            (ForceLockOption, arguments.GetValue(ForceLockOption), "has no lock to take"),
+            (UseStagedOption, arguments.GetValue(UseStagedOption), "has nothing staged to sweep"),
+            (DispatchOptions.Here, arguments.GetValue(DispatchOptions.Here) is not null, "has no leg to sweep for another machine"),
+        ];
+
+        return sweepsOnly.FirstOrDefault(option => option.Given) is { Option: { } given } named
+            ? $"{ListOption.Name} sweeps nothing, so {given.Name} {named.Wants}: leave one of them out."
+            : null;
     }
 }

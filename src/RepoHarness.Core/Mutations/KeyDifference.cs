@@ -1,80 +1,176 @@
 using System.Globalization;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Mutations;
 
 /// <summary>
-/// Why what an arm is judged on is not what it was: one of a closed list, each with its code and the words a line says it
-/// in. The list is ordered as a reader asks - what the judge and the registry say first, then the tree, the settings and
+/// Why an arm is pending on a leg, or why what it is judged on is not what it was: one of a closed list, each with its code,
+/// the words a line says it in, and the words a leg's count of its pending arms groups it by. The list is ordered as a
+/// reader asks - the record and the leg first, then what the judge and the registry say, then the tree, the settings and
 /// the host, then what only a build in a worker reads - and the first that applies is the one a line names.
 /// </summary>
 /// <param name="Code">The reason, as data names it: <c>files-moved</c>.</param>
 /// <param name="Said">The reason, as a line says it: <c>what 'lex_tests' is built from moved: tests/lex/a_test.cpp</c>.</param>
 public sealed record PendingReason(string Code, string Said)
 {
+    /// <summary>The words a leg's count of its pending arms groups an arm pending for this reason by: <c>20 never swept</c>.</summary>
+    public string Counted { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The reason as an arm's row in a table says it: as a line says it, but for a reason said once above the table, which
+    /// each row then points at.
+    /// </summary>
+    public string Row
+    {
+        get => field ?? Said;
+        init;
+    }
+
+    /// <summary>The target the reason names, where it names one.</summary>
+    public string? Target { get; init; }
+
+    /// <summary>The paths of the tree the reason names, where it names any, as the record spells them.</summary>
+    public IReadOnlyList<string> Paths { get; init; } = [];
+
+    /// <summary>The leg's record of verdicts cannot be read.</summary>
+    public static PendingReason RecordUnreadable(string why)
+        => new("record-unreadable", $"the record of this leg cannot be read: {why}") { Counted = "whose record cannot be read" };
+
+    /// <summary>The leg's record of verdicts was written by a newer build.</summary>
+    public static PendingReason RecordNewer { get; } = new("record-newer", $"the record of this leg was written by a newer {ToolPackage.Id}")
+    {
+        Counted = $"whose record a newer {ToolPackage.Id} wrote",
+    };
+
+    /// <summary>The leg cannot be swept, as a sweep's refusal says it.</summary>
+    public static PendingReason LegUnsweepable(string why)
+        => new("leg-unsweepable", $"this leg cannot be swept: {why}") { Counted = "on a leg that cannot be swept", Row = "this leg cannot be swept, as said above" };
+
+    /// <summary>The record holds no verdict of the arm on the leg.</summary>
+    public static PendingReason NeverSwept { get; } = new("never-swept", "never swept on this leg") { Counted = "never swept" };
+
+    /// <summary>The verdict the reason is read against is not a passed.</summary>
+    public static PendingReason LastNotPassed(string verdict)
+        => new("last-not-passed", $"its last verdict is {verdict}, not passed") { Counted = "last read otherwise" };
+
+    /// <summary>The verdict recorded has no key: what it was judged on could not be read when it was swept.</summary>
+    public static PendingReason NotKeyed(string why)
+        => new("not-keyed", $"what it was judged on could not be read when it was swept: {why}") { Counted = "whose key was not read" };
+
     /// <summary>The judge's rules changed between the two.</summary>
     public static PendingReason JudgeRevised(int then, int now)
-        => new("judge-revised", string.Create(CultureInfo.InvariantCulture, $"the judge's rules changed since (revision {then}, now {now})"));
+        => new("judge-revised", string.Create(CultureInfo.InvariantCulture, $"the judge's rules changed since (revision {then}, now {now})"))
+        {
+            Counted = "judged by other rules",
+        };
 
     /// <summary>Rows of the given kinds changed.</summary>
-    public static PendingReason RowsChanged(IReadOnlyList<string> kinds) => new("rows-changed", $"its {string.Join(", ", kinds)} rows changed");
+    public static PendingReason RowsChanged(IReadOnlyList<string> kinds)
+        => new("rows-changed", $"its {string.Join(", ", kinds)} rows changed") { Counted = "whose rows changed" };
 
     /// <summary>A text the arm cites holds something else, or is gone.</summary>
-    public static PendingReason TextMoved(IReadOnlyList<string> paths) => new("text-moved", $"a text it cites moved: {ReportText.Listed(paths)}");
+    public static PendingReason TextMoved(IReadOnlyList<string> paths)
+        => new("text-moved", $"a text it cites moved: {ReportText.Listed(paths)}") { Counted = "whose texts moved", Paths = paths };
 
     /// <summary>A site of the arm holds something else, or is gone.</summary>
-    public static PendingReason SiteMoved(IReadOnlyList<string> paths) => new("site-moved", $"its site moved: {ReportText.Listed(paths)}");
+    public static PendingReason SiteMoved(IReadOnlyList<string> paths)
+        => new("site-moved", $"its site moved: {ReportText.Listed(paths)}") { Counted = "whose sites moved", Paths = paths };
 
-    /// <summary>A file of the tree a target is built from holds something else, or is gone.</summary>
-    public static PendingReason FilesMoved(string target, IReadOnlyList<string> paths)
-        => new("files-moved", $"what '{target}' is built from moved: {ReportText.Listed(paths)}");
+    /// <summary>Files of the tree a target is built from hold something else, or - where <paramref name="gone"/> names them - are gone from the tree.</summary>
+    public static PendingReason FilesMoved(string target, IReadOnlyList<string> paths, IReadOnlyCollection<string>? gone = null)
+        => new(
+            "files-moved",
+            $"what '{target}' is built from moved: {ReportText.Listed([.. paths.Select(path => gone?.Contains(path) == true ? $"{path} (gone)" : path)])}")
+        {
+            Counted = "whose files moved",
+            Target = target,
+            Paths = paths,
+        };
 
     /// <summary>The environment the build is given changed.</summary>
-    public static PendingReason BuildEnvironmentChanged { get; } = new("build-environment-changed", "the environment its build is given changed");
+    public static PendingReason BuildEnvironmentChanged { get; } = new("build-environment-changed", "the environment its build is given changed")
+    {
+        Counted = "whose settings changed",
+    };
 
     /// <summary>How the run starts changed.</summary>
-    public static PendingReason RunSettingsChanged { get; } = new("run-settings-changed", "how its run starts changed");
+    public static PendingReason RunSettingsChanged { get; } = new("run-settings-changed", "how its run starts changed") { Counted = "whose settings changed" };
 
     /// <summary>What the run is judged by changed.</summary>
-    public static PendingReason JudgeSettingsChanged { get; } = new("judge-settings-changed", "what its run is judged by changed");
+    public static PendingReason JudgeSettingsChanged { get; } = new("judge-settings-changed", "what its run is judged by changed") { Counted = "whose settings changed" };
 
     /// <summary>The arm was judged on another host than the leg runs on.</summary>
-    public static PendingReason HostChanged(string then, string now) => new("host-changed", $"it was judged on {then}, and this leg runs on {now}");
+    public static PendingReason HostChanged(string then, string now)
+        => new("host-changed", $"it was judged on {then}, and this leg runs on {now}") { Counted = "judged on another host" };
 
     /// <summary>A target's build lines changed.</summary>
-    public static PendingReason LinesChanged(string target) => new("lines-changed", $"how '{target}' is built changed");
+    public static PendingReason LinesChanged(string target)
+        => new("lines-changed", $"how '{target}' is built changed") { Counted = "built otherwise", Target = target };
 
     /// <summary>A file joined or left what a target is built from.</summary>
-    public static PendingReason SetChanged(string target) => new("set-changed", $"a file joined or left what '{target}' is built from");
+    public static PendingReason SetChanged(string target)
+        => new("set-changed", $"a file joined or left what '{target}' is built from") { Counted = "whose files joined or left", Target = target };
 
     /// <summary>A file a worker's configure made, and a target's build reads, holds something else.</summary>
-    public static PendingReason MadeMoved(string directory) => new("made-moved", $"a file its build makes moved, in {directory}");
+    public static PendingReason MadeMoved(string directory)
+        => new("made-moved", $"a file its build makes moved, in {directory}") { Counted = "whose made files moved" };
 
     /// <summary>The sources of a dependency the worker was given hold something else.</summary>
-    public static PendingReason FetchedMoved(string dependency) => new("fetched-moved", $"the sources of '{dependency}' its build fetched moved");
+    public static PendingReason FetchedMoved(string dependency)
+        => new("fetched-moved", $"the sources of '{dependency}' its build fetched moved") { Counted = "whose fetched sources moved" };
 
     /// <summary>A file outside the tree a target's build reads holds something else.</summary>
-    public static PendingReason OutsideMoved(string directory) => new("outside-moved", $"a file outside the tree its build reads moved, in {directory}");
+    public static PendingReason OutsideMoved(string directory)
+        => new("outside-moved", $"a file outside the tree its build reads moved, in {directory}") { Counted = "whose files outside the tree moved" };
 
     /// <summary>A compiler changed.</summary>
-    public static PendingReason CompilerChanged(string language, string then, string now) => new("compiler-changed", $"its compiler changed: {language} {then}, now {now}");
+    public static PendingReason CompilerChanged(string language, string then, string now)
+        => new("compiler-changed", $"its compiler changed: {language} {then}, now {now}") { Counted = "whose compiler changed" };
 
     /// <summary>The developer environment changed.</summary>
-    public static PendingReason EnvironmentChanged { get; } = new("environment-changed", "its developer environment changed");
+    public static PendingReason EnvironmentChanged { get; } = new("environment-changed", "its developer environment changed")
+    {
+        Counted = "whose developer environment changed",
+    };
 
     /// <summary>What the arm would be judged on could not all be read.</summary>
-    public static PendingReason KeyUnreadable(string why) => new("key-unreadable", $"what it would be judged on cannot be read now: {why}");
+    public static PendingReason KeyUnreadable(string why)
+        => new("key-unreadable", $"what it would be judged on cannot be read now: {why}") { Counted = "whose key cannot be read now" };
 }
 
 /// <summary>
-/// The one function that names every difference between what an arm was judged on and what it would be judged on now,
-/// for every reader of a key: the self-test comparing its workers, as each reader after it.
+/// What a listing reads, on the machine it is typed on, of what an arm would be judged on now: the judge's revision, its
+/// rows, what the tree's one reading holds of each text it cites and each site it mutates and of every file of the tree its
+/// recorded tables name, the settings, and the host where the leg names one. Never a compiler, a build line, a file a
+/// build makes or one outside the tree: those are read only where the leg is swept.
+/// </summary>
+/// <param name="Judge">The judge's revision (<see cref="ArmJudge.Revision"/>).</param>
+/// <param name="Rows">What the sweep and the judge would read of the arm's rows.</param>
+/// <param name="Texts">Each text the arm cites, as its rows spell it, with what the reading holds of it; nothing where it holds none.</param>
+/// <param name="Sites">Each site the arm mutates, as its rows spell it, with what the reading holds of it; nothing where it holds none.</param>
+/// <param name="Tree">The tree's one reading.</param>
+/// <param name="Settings">What of the configuration the build, the run and the judge would be given.</param>
+/// <param name="Host">The host the leg names, as a dispatcher names it; <see langword="null"/> where it names none.</param>
+internal sealed record ReadHere(
+    int Judge,
+    RowDigests Rows,
+    IReadOnlyDictionary<string, string?> Texts,
+    IReadOnlyDictionary<string, string?> Sites,
+    TreeFiles Tree,
+    SweepSettings Settings,
+    string? Host);
+
+/// <summary>
+/// The one place that names every difference between what an arm was judged on and what it would be judged on now, for
+/// every reader of a key: the self-test comparing its workers, a listing comparing the record with what it reads here, and
+/// each reader after them. Each part is compared by one rule, whoever asks.
 /// </summary>
 internal static class KeyDifference
 {
     /// <summary>Every reason <paramref name="now"/> is not <paramref name="then"/>, in the order a line names them; none where they are one.</summary>
     /// <param name="then">What the arm was judged on.</param>
-    /// <param name="now">What it would be judged on now.</param>
+    /// <param name="now">What it would be judged on now, every part read.</param>
     public static IReadOnlyList<PendingReason> Between(ArmKey then, ArmKey now)
     {
         ArgumentNullException.ThrowIfNull(then);
@@ -88,35 +184,9 @@ internal static class KeyDifference
         var was = then.JudgedOn;
         var @is = now.JudgedOn;
         var reasons = new List<PendingReason>();
-
-        if (was.Judge != @is.Judge)
-        {
-            reasons.Add(PendingReason.JudgeRevised(was.Judge, @is.Judge));
-        }
-
-        string[] kinds =
-        [
-            .. new[] { ("A", was.Rows.A, @is.Rows.A), ("C", was.Rows.C, @is.Rows.C), ("G", was.Rows.G, @is.Rows.G), ("B", was.Rows.B, @is.Rows.B), ("M", was.Rows.M, @is.Rows.M) }
-                .Where(row => !string.Equals(row.Item2, row.Item3, StringComparison.Ordinal))
-                .Select(row => row.Item1),
-        ];
-
-        if (kinds.Length > 0)
-        {
-            reasons.Add(PendingReason.RowsChanged(kinds));
-        }
-
-        if (Moved(was.Texts, @is.Texts) is { Count: > 0 } texts)
-        {
-            reasons.Add(PendingReason.TextMoved(texts));
-        }
-
-        if (Moved(was.Sites, @is.Sites) is { Count: > 0 } sites)
-        {
-            reasons.Add(PendingReason.SiteMoved(sites));
-        }
-
         var tables = Tables(then, now);
+
+        Read(was, @is.Judge, @is.Rows, @is.Texts, @is.Sites, reasons);
 
         foreach (var (target, before, after) in tables)
         {
@@ -127,25 +197,7 @@ internal static class KeyDifference
             }
         }
 
-        if (was.Settings.Build != @is.Settings.Build)
-        {
-            reasons.Add(PendingReason.BuildEnvironmentChanged);
-        }
-
-        if (was.Settings.Run != @is.Settings.Run)
-        {
-            reasons.Add(PendingReason.RunSettingsChanged);
-        }
-
-        if (was.Settings.Judge != @is.Settings.Judge)
-        {
-            reasons.Add(PendingReason.JudgeSettingsChanged);
-        }
-
-        if (!string.Equals(was.Host, @is.Host, StringComparison.Ordinal))
-        {
-            reasons.Add(PendingReason.HostChanged(was.Host, @is.Host));
-        }
+        Configured(was, @is.Settings, @is.Host, reasons);
 
         foreach (var (target, before, after) in tables)
         {
@@ -182,6 +234,107 @@ internal static class KeyDifference
         }
 
         return reasons;
+    }
+
+    /// <summary>
+    /// Every reason what a listing reads here (<paramref name="now"/>) is not what <paramref name="then"/> was judged on, in
+    /// the order a line names them: the parts a listing reads, each by the rule a sweep compares it by, and of each table
+    /// the files of the tree it names, as the reading holds them now - a file the reading no longer holds is gone, and
+    /// moved. None where nothing read here moved, which is never to say the arm holds.
+    /// </summary>
+    /// <param name="then">What the arm was judged on, with the tables its key names.</param>
+    /// <param name="now">What the listing read here.</param>
+    public static IReadOnlyList<PendingReason> Listed(ArmKey then, ReadHere now)
+    {
+        ArgumentNullException.ThrowIfNull(then);
+        ArgumentNullException.ThrowIfNull(now);
+
+        var was = then.JudgedOn;
+        var reasons = new List<PendingReason>();
+
+        Read(was, now.Judge, now.Rows, now.Texts, now.Sites, reasons);
+
+        foreach (var (target, table) in then.Tables.OrderBy(pair => pair.Key, StringComparer.Ordinal))
+        {
+            var moved = table.Files
+                .Where(file => !string.Equals(now.Tree.HashOf(file.Key), file.Value, StringComparison.Ordinal))
+                .Select(file => file.Key)
+                .Order(StringComparer.Ordinal)
+                .ToList();
+
+            if (moved.Count > 0)
+            {
+                reasons.Add(PendingReason.FilesMoved(target, moved, [.. moved.Where(path => now.Tree.Find(path) is null)]));
+            }
+        }
+
+        Configured(was, now.Settings, now.Host ?? was.Host, reasons);
+
+        return reasons;
+    }
+
+    /// <summary>
+    /// The reasons of the parts the registry and the tree's reading say: the judge's revision, each kind of row, each text
+    /// and each site.
+    /// </summary>
+    private static void Read(
+        JudgedOn was,
+        int judge,
+        RowDigests rows,
+        IReadOnlyDictionary<string, string?> texts,
+        IReadOnlyDictionary<string, string?> sites,
+        List<PendingReason> reasons)
+    {
+        if (was.Judge != judge)
+        {
+            reasons.Add(PendingReason.JudgeRevised(was.Judge, judge));
+        }
+
+        string[] kinds =
+        [
+            .. new[] { ("A", was.Rows.A, rows.A), ("C", was.Rows.C, rows.C), ("G", was.Rows.G, rows.G), ("B", was.Rows.B, rows.B), ("M", was.Rows.M, rows.M) }
+                .Where(row => !string.Equals(row.Item2, row.Item3, StringComparison.Ordinal))
+                .Select(row => row.Item1),
+        ];
+
+        if (kinds.Length > 0)
+        {
+            reasons.Add(PendingReason.RowsChanged(kinds));
+        }
+
+        if (Moved(was.Texts, texts) is { Count: > 0 } movedTexts)
+        {
+            reasons.Add(PendingReason.TextMoved(movedTexts));
+        }
+
+        if (Moved(was.Sites, sites) is { Count: > 0 } movedSites)
+        {
+            reasons.Add(PendingReason.SiteMoved(movedSites));
+        }
+    }
+
+    /// <summary>The reasons of the parts the configuration says: the build's, the run's and the judge's settings, and the host.</summary>
+    private static void Configured(JudgedOn was, SweepSettings settings, string host, List<PendingReason> reasons)
+    {
+        if (was.Settings.Build != settings.Build)
+        {
+            reasons.Add(PendingReason.BuildEnvironmentChanged);
+        }
+
+        if (was.Settings.Run != settings.Run)
+        {
+            reasons.Add(PendingReason.RunSettingsChanged);
+        }
+
+        if (was.Settings.Judge != settings.Judge)
+        {
+            reasons.Add(PendingReason.JudgeSettingsChanged);
+        }
+
+        if (!string.Equals(was.Host, host, StringComparison.Ordinal))
+        {
+            reasons.Add(PendingReason.HostChanged(was.Host, host));
+        }
     }
 
     /// <summary>Each target both keys hold a table of, with its two tables, in the order of its name.</summary>

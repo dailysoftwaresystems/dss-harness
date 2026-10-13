@@ -135,9 +135,9 @@ public sealed class JudgedOnTests
 
         Assert.Equal(3, new[] { text.Key, gone.Key, site.Key }.Distinct().Count());
         Assert.DoesNotContain(then.Key, new[] { text.Key, gone.Key, site.Key });
-        Assert.Equal([new PendingReason("text-moved", "a text it cites moved: texts/a2.after")], KeyDifference.Between(then, text));
-        Assert.Equal([new PendingReason("text-moved", "a text it cites moved: texts/a.diag")], KeyDifference.Between(then, gone));
-        Assert.Equal([new PendingReason("site-moved", "its site moved: src/b.cpp")], KeyDifference.Between(then, site));
+        Assert.Equal([("text-moved", "a text it cites moved: texts/a2.after")], Said(KeyDifference.Between(then, text)));
+        Assert.Equal([("text-moved", "a text it cites moved: texts/a.diag")], Said(KeyDifference.Between(then, gone)));
+        Assert.Equal([("site-moved", "its site moved: src/b.cpp")], Said(KeyDifference.Between(then, site)));
         Assert.Empty(KeyDifference.Between(then, KeyOf(arm, tree)));
     }
 
@@ -193,7 +193,7 @@ public sealed class JudgedOnTests
         Assert.NotNull(then.Key);
         Assert.NotEqual(then.Key, now.Key);
         Assert.Equal(part == "unread", now.Key is null);
-        Assert.Equal([new PendingReason(code, said)], KeyDifference.Between(then, now));
+        Assert.Equal([(code, said)], Said(KeyDifference.Between(then, now)));
         Assert.Empty(KeyDifference.Between(then, Again(then)));
     }
 
@@ -382,4 +382,7 @@ public sealed class JudgedOnTests
 
         return new ArmKey(on, tables, unread);
     }
+
+    /// <summary>Each reason by its code and the words a line says it in.</summary>
+    private static List<(string Code, string Said)> Said(IReadOnlyList<PendingReason> reasons) => [.. reasons.Select(reason => (reason.Code, reason.Said))];
 }

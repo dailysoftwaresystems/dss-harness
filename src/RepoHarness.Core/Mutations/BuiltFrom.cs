@@ -132,7 +132,7 @@ internal sealed class BuiltFromReader
     private readonly string _worker;
     private readonly string _build;
     private readonly StringComparer _names;
-    private readonly Dictionary<string, SyncEntry> _tree;
+    private readonly TreeFiles _tree;
     private readonly IReadOnlyList<(string Directory, string Name, string Digest)> _fetched;
 
     /// <summary>What each file read so far holds, or why it could not be read, by its path.</summary>
@@ -163,12 +163,7 @@ internal sealed class BuiltFromReader
         _build = Whole(buildDirectory);
         _names = names;
         _hashed = new(names);
-        _tree = new(names);
-
-        foreach (var entry in reading.Entries.Values.OrderBy(entry => entry.Path, StringComparer.Ordinal))
-        {
-            _tree.TryAdd(entry.Path, entry);
-        }
+        _tree = new TreeFiles(reading, names);
 
         _fetched = [.. fetched.Select(read => (Whole(FetchedSources.KeptIn(_worker, read.Source.Name)), read.Source.Name, ManifestDigest(read.Files)))];
     }
@@ -276,7 +271,7 @@ internal sealed class BuiltFromReader
     /// </summary>
     /// <param name="path">A file, whole.</param>
     private SyncEntry? OfTheTree(string path)
-        => Under(path, _worker) && _tree.TryGetValue(Path.GetRelativePath(_worker, path).Replace('\\', '/'), out var entry) ? entry : null;
+        => Under(path, _worker) ? _tree.Find(Path.GetRelativePath(_worker, path).Replace('\\', '/')) : null;
 
     /// <summary>The digest of every file of a dependency's sources as read: each path with its size and what it holds, sorted by path.</summary>
     private static string ManifestDigest(SyncManifest files)
