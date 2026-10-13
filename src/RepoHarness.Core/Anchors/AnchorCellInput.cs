@@ -1,4 +1,3 @@
-using System.Text;
 using RepoHarness.Core.FileSystem;
 using RepoHarness.Core.Results;
 
@@ -66,11 +65,8 @@ public static class AnchorCellInputs
         return Decode(fileSystem, input.File, input);
     }
 
-    /// <summary>A decoder that raises on bytes that do not form a UTF-8 character, rather than writing U+FFFD in their place.</summary>
-    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-
     /// <summary>
-    /// The file's text, read as UTF-8 and nothing else: a file that is not, or that opens with a byte-order
+    /// The file's text, read as UTF-8 and nothing else (<see cref="Utf8Text"/>): a file that is not, or that opens with a byte-order
     /// mark, is refused by name rather than cleaned. The line ending a file ends with is the value's own
     /// last line break, and goes as every line break does.
     /// </summary>
@@ -98,7 +94,7 @@ public static class AnchorCellInputs
                 ex);
         }
 
-        if (bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble))
+        if (Utf8Text.OpensWithByteOrderMark(bytes))
         {
             throw new HarnessException(
                 HarnessExit.UsageError,
@@ -106,18 +102,10 @@ public static class AnchorCellInputs
                 + "open with an invisible character. Save the file as UTF-8 without one.");
         }
 
-        try
-        {
-            return StrictUtf8.GetString(bytes);
-        }
-        catch (DecoderFallbackException ex)
-        {
-            throw new HarnessException(
+        return Utf8Text.TryDecode(bytes, out var text, out var problem)
+            ? text
+            : throw new HarnessException(
                 HarnessExit.UsageError,
-                $"{input.FileOption} names '{path}', which is not UTF-8: the byte at offset {ex.Index} "
-                + $"(0x{ex.BytesUnknown?.FirstOrDefault() ?? 0:X2}) does not form a UTF-8 character, so the {input.Cell} cell "
-                + "cannot be read as written. Save the file as UTF-8.",
-                ex);
-        }
+                $"{input.FileOption} names '{path}', which {problem}, so the {input.Cell} cell cannot be read as written. Save the file as UTF-8.");
     }
 }

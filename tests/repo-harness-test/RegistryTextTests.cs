@@ -19,11 +19,13 @@ public sealed class RegistryTextTests
     [InlineData("")]
     [InlineData("A | a")]
     [InlineData("A | a\n")]
+    [InlineData("A | a\r")]
+    [InlineData("\r")]
     [InlineData("# arms\r\nA | a\rC | a | x\n")]
     [InlineData("one\n\rtwo\r\n\nthree")]
     [InlineData("form\ffeed\x0085next\x2028line\x2029paragraph")]
     [InlineData("\n\n\r\n")]
-    [InlineData("tab\tand\vvertical tab end no line\x00A0")]
+    [InlineData("tab\tand\vvertical tab\u001Cfile\u001Dgroup\u001Erecord end no line\x00A0")]
     [InlineData("\xFEFF# arms\nA | a\n")]
     public void ARegistrysLines_AreNumberedAsTheParserNumbersThem_HoweverEachEnds(string text)
     {
@@ -61,7 +63,7 @@ public sealed class RegistryTextTests
     [InlineData("# arms\r\nA | a\rC | a | x\n\x2028last\f", false)]
     [InlineData("", true)]
     [InlineData("# arms\r\nA | a\n", true)]
-    [InlineData("\xFEFFa second mark is the first line's own\n", true)]
+    [InlineData("A | a | a mark \uFEFF within a line is a character of it\n", true)]
     public void ATextRead_IsWrittenBackByteForByte(string text, bool byteOrderMark)
     {
         byte[] bytes = [.. byteOrderMark ? Encoding.UTF8.Preamble : [], .. Encoding.UTF8.GetBytes(text)];
@@ -109,6 +111,23 @@ public sealed class RegistryTextTests
 
         Assert.Null(read);
         Assert.Equal(why, unread);
+    }
+
+    /// <summary>
+    /// A line that opens with a byte order mark - a second one behind the text's own, or one on a later line - is not
+    /// read, and why names the line: standing first, as it would once the lines above it were gone, the mark would be
+    /// read as the text's own, and the text written back would read as another.
+    /// </summary>
+    [Theory]
+    [InlineData(new byte[] { 0xEF, 0xBB, 0xBF, 0xEF, 0xBB, 0xBF, 0x41, 0x0A }, 1)]
+    [InlineData(new byte[] { 0x41, 0x0A, 0x23, 0x0D, 0x0A, 0xEF, 0xBB, 0xBF, 0x42, 0x0A }, 3)]
+    [InlineData(new byte[] { 0xEF, 0xBB, 0xBF, 0x41, 0x0D, 0xEF, 0xBB, 0xBF }, 2)]
+    public void ALineOpeningWithAByteOrderMark_IsNotRead_AndWhyNamesTheLine(byte[] bytes, int line)
+    {
+        Assert.False(RegistryText.TryRead(bytes, out var read, out var unread));
+
+        Assert.Null(read);
+        Assert.Equal($"has a byte order mark at the start of line {line}, which no line may open with: standing first, it would be read as the text's own", unread);
     }
 
     /// <summary>

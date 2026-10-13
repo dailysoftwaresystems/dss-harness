@@ -3020,14 +3020,17 @@ withholds - one git ignores, as a desktop's or an editor's leftover is, or one t
 keeps from a sync - is no text: no copy of the tree holds it, so nobody could drive it.
 
 The registry's text has one reader, `RegistryText`. It keeps every line with the ending that line
-has, a line ending exactly where `string.ReplaceLineEndings` reads one, so a problem's line number
-is the one an editor shows whichever way the checkout ends its lines; and it says of each line
-whether it is blank, a comment or a row, and cuts a row into its kind and its fields
-(`RegistryLine`), which is the one place a row is trimmed and split and what the parser reads
-through. A row of any kind belongs to the arm its second field names. Read from the bytes a tree
-holds, the text is UTF-8 and nothing else - a byte that forms no character is why it is not read,
-never a character put in its place - a byte order mark at its start is noted and is no part of
-its first line, and the text is written back as the bytes it was read from.
+has, a line ending exactly where `string.ReplaceLineEndings` reads one - the one set of endings
+this tool divides lines at (`TextLines`), which a phase's last lines are divided by too - so a
+problem's line number is the one an editor shows whichever way the checkout ends its lines; and it
+says of each line whether it is blank, a comment or a row, and cuts a row into its kind and its
+fields (`RegistryLine`), which is the one place a row is trimmed and split and what the parser
+reads through. A row of any kind belongs to the arm its second field names. Read from the bytes a
+tree holds, the text is UTF-8 and nothing else (`Utf8Text`, the one strict reader, which an anchor's
+cell file is read by too) - a byte that forms no character is why it is not read, never a character
+put in its place - a byte order mark at its start is noted and is no part of its first line, a
+line that opens with another is why it is not read, since standing first it would be read as the
+text's own, and the text is written back as the bytes it was read from.
 
 What makes a text a registry a sweep can read has one owner too,
 `MutationRegistryValidation.ValidateAsync`: the rows and each arm's shape, the cover of the text
@@ -3036,8 +3039,8 @@ directory, each cited text, and each scope's legs. It reads a tree through a vie
 is made one way (`OfAsync`), which asks what a sync of that tree withholds, once.
 `OverlaidRegistryFiles` is a tree with some paths written and some removed: each written path is
 given as what reads its bytes when they are asked for, so nothing is read that no row needs read,
-and a written path is there, listed in its directory and not withheld, whatever stood under it
-before. So a text nobody has written yet can be judged by the tree it would stand in, with the
+and nothing twice, and a written path is there, listed in its directory and not withheld, whatever
+stood under it before. So a text nobody has written yet can be judged by the tree it would stand in, with the
 sentences `check-mutations` refuses a registry in (`RegistryValidation.Refusal`), and
 `MutationService.ReadAsync` keeps what is about the file itself - that it is configured, a file,
 readable and carried - before the validation, and weighs `--arms` and the report arguments after it.
@@ -3048,34 +3051,44 @@ they held one, the main tree's and an agent's - that reads no file, no clock and
 Each text is read, through the one reader, as the lines above its first row down to their last blank
 line, its segments - each one row with the comment and blank lines directly above it - and the
 lines below its last row. An arm is the segments naming it, wherever they stand, ids compared
-ignoring case, and two versions of an arm are the same where each line's text is: how a line ends is
-no part of it, so a checkout with other line endings changes nothing. Each arm is taken from the
+ignoring case, and two versions of an arm are the same where each line's text is, the blank lines
+that open each segment left out: they only part it from what stands above it, so an arm removed or
+added beside another changes nothing of that one. How a line ends is no part of it either, so a
+checkout with other line endings changes nothing. Each arm is taken from the
 side that alone added, removed or changed it, and one both changed alike is one. An arm each changed
 its own way, one a side removed and the other changed, or one both added differently - under ids
 that differ only in case, among them - is a conflict (`ArmConflict`), said with each side's lines
 that the versions do not all hold and each line's number, the three texts called what the caller
 calls them (`MergeSides`). With no text both held, an arm one side has is kept: its removal by the
 other could not be told from its addition. The lines above the first row, and those below the last,
-are each weighed the same way, as one. A text that is not UTF-8, holds a row naming no arm or opens
-with a second byte order mark is not merged at all, and the result says which of the three and why.
+are each weighed the same way, as one. A text that is not UTF-8, holds a row naming no arm, or holds
+a line that opens with a byte order mark - which the one reader refuses, since standing first it
+would be read as the text's own - is not merged at all, and the result says which of the three and
+why.
 
 The merged text is the main tree's, line for line, changed only where the agent contributed. The
 main tree's segments stay where they stand. An arm taken from the agent in place of the main tree's
-lies over the main tree's segments of it, one for one: where the agent has more, the rest follow the
-last, and where it has fewer, the main tree's remaining places go. A segment of an arm only the
-agent has stands after the nearest segment above it in the agent's text that the merged text holds,
-and past what the main tree alone holds there, so two sides adding at one place come out the main
-tree's addition first, then the agent's; the agent's first segment stands first, past what the main
-tree alone holds there; one above which the merged text holds nothing goes after the last segment;
-and none stands above an earlier segment of its own arm. Each of the main tree's lines is written as
+lies over the main tree's segments of it, one for one, each below the blank lines the main tree parts
+it from what stands above it with: where the agent has more, the rest follow the last, and where it
+has fewer, the main tree's remaining places go. A segment of an arm only the agent has stands after
+the nearest segment above it in the agent's text that the merged text holds - a segment of an arm
+kept from the main tree is held only where the main tree's version holds one like it, and stands as
+that one, or as the arm's last where no later segment of the arm is held - and past what the main
+tree alone holds there, so two sides adding at one place come out the main tree's addition first,
+then the agent's; the agent's first segment stands first, past what the main tree alone holds there;
+one above which the merged text holds nothing goes after the last segment; and none stands above an
+earlier segment of its own arm. The segment that comes to stand first is written without the blank
+lines that open it. Each of the main tree's lines is written as
 the main tree holds it, each of the agent's with the ending of the main tree's first line, behind a
 byte order mark where the main tree's text has one and with an ending on the last line where the
 main tree's has one.
 
-So a text merged with itself is itself, one merged with a side that changed nothing is the other,
-and a merge run again with its own result on either side gives that result, each byte for byte -
-what a command needs that wrote the result to one tree and was stopped before the other. The last
-holds because a merge is offered only where its text reads back as it was merged. Where the lines
+So a text merged with itself is itself, and a merge in which the agent changed nothing is the main
+tree's text, each byte for byte; one in which the main tree changed nothing holds the agent's arms in
+the main tree's order, with its line endings and its byte order mark. A merge run again with its own
+result on either side gives that result, byte for byte - what a command needs that wrote the result
+to one tree and was stopped before the other. That holds because a merge is offered only where its
+text reads back as it was merged. Where the lines
 above the first row end is a matter of where a blank line stands, so a segment that keeps a blank
 line above its row and would come to stand first is a conflict of its own
 (`ArmConflictKind.WouldOpenTheText`), as lines with a blank one among them are where no row would be

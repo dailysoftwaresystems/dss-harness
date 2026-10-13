@@ -55,18 +55,24 @@ public sealed record MergeCounts(int Added, int Removed, int Changed)
 /// <summary>Why one of the three texts could not be read as a registry.</summary>
 /// <param name="Side">Which of the three.</param>
 /// <param name="Line">The line, or <see langword="null"/> where it is the text as a whole.</param>
-/// <param name="Why">What is wrong, as what follows the text's name: <c>is not UTF-8: ...</c>, <c>a row names no arm</c>.</param>
+/// <param name="Why">
+/// What is wrong: of the text as a whole, as what follows its name - <c>is not UTF-8: ...</c>; of a line, as what follows
+/// the line - <c>a row names no arm</c>.
+/// </param>
 public sealed record UnreadVersion(MergeSide Side, int? Line, string Why)
 {
-    /// <summary>The problem as a line says it, the text called what the caller calls it.</summary>
+    /// <summary>
+    /// The problem as a line says it, the text called what the caller calls it: <c>the text of the agent is not UTF-8:
+    /// ...</c>, <c>line 14 of the text of the main tree: a row names no arm</c>.
+    /// </summary>
     /// <param name="sides">What the three are called.</param>
     public string Said(MergeSides sides)
     {
         ArgumentNullException.ThrowIfNull(sides);
 
         return Line is { } line
-            ? string.Create(CultureInfo.InvariantCulture, $"{sides.Of(Side)}'s, line {line}: {Why}")
-            : $"{sides.Of(Side)}'s version {Why}";
+            ? string.Create(CultureInfo.InvariantCulture, $"line {line} of the text of {sides.Of(Side)}: {Why}")
+            : $"the text of {sides.Of(Side)} {Why}";
     }
 }
 
@@ -113,13 +119,12 @@ public enum RegistryPart
     BelowTheLastRow,
 }
 
-/// <summary>An arm the two sides did not leave mergeable: what they disagree over, how, and each side's version.</summary>
-/// <param name="Arm">The arm's id, as the main tree spells it where it holds the arm; what the lines are, where the conflict is over no arm.</param>
-/// <param name="Kind">How the two disagree.</param>
-/// <param name="Base">What both held of it, or <see langword="null"/> where they held none.</param>
-/// <param name="Main">The main tree's version, or <see langword="null"/> where it has none.</param>
-/// <param name="Agent">The agent's version, or <see langword="null"/> where it has none.</param>
-public sealed record ArmConflict(string Arm, ArmConflictKind Kind, ArmVersion? Base, ArmVersion? Main, ArmVersion? Agent)
+/// <summary>An arm, or lines that are no arm's, the two sides did not leave mergeable: what they disagree over, how, and each side's version.</summary>
+/// <remarks>
+/// Made by its three factories and nothing else, one to each part of a registry a conflict can be over, so what it is
+/// over, what it is called and how the two disagree always agree.
+/// </remarks>
+public sealed record ArmConflict
 {
     /// <summary>What the lines above the first row are called, in a conflict over them.</summary>
     public const string AboveTheFirstRow = "the lines above the first row";
@@ -127,8 +132,74 @@ public sealed record ArmConflict(string Arm, ArmConflictKind Kind, ArmVersion? B
     /// <summary>What the lines below the last row are called, in a conflict over them.</summary>
     public const string BelowTheLastRow = "the lines below the last row";
 
-    /// <summary>What the conflict is over: an arm, unless it says otherwise.</summary>
-    public RegistryPart Part { get; init; } = RegistryPart.Arm;
+    private ArmConflict(RegistryPart part, string arm, ArmConflictKind kind, ArmVersion? @base, ArmVersion? main, ArmVersion? agent)
+    {
+        Part = part;
+        Arm = arm;
+        Kind = kind;
+        Base = @base;
+        Main = main;
+        Agent = agent;
+    }
+
+    /// <summary>What the conflict is over.</summary>
+    public RegistryPart Part { get; }
+
+    /// <summary>
+    /// The arm's id, as the main tree spells it where it holds the arm, else as the agent does, else as both did; what
+    /// the lines are, <see cref="AboveTheFirstRow"/> or <see cref="BelowTheLastRow"/>, where the conflict is over no arm.
+    /// </summary>
+    public string Arm { get; }
+
+    /// <summary>How the two disagree.</summary>
+    public ArmConflictKind Kind { get; }
+
+    /// <summary>What both held of it, or <see langword="null"/> where they held none.</summary>
+    public ArmVersion? Base { get; }
+
+    /// <summary>The main tree's version, or <see langword="null"/> where it has none.</summary>
+    public ArmVersion? Main { get; }
+
+    /// <summary>The agent's version, or <see langword="null"/> where it has none.</summary>
+    public ArmVersion? Agent { get; }
+
+    /// <summary>A conflict over the arm <paramref name="arm"/>.</summary>
+    /// <param name="arm">The arm's id, as the main tree spells it where it holds the arm, else as the agent does, else as both did.</param>
+    /// <param name="kind">How the two disagree.</param>
+    /// <param name="base">What both held of it, or <see langword="null"/> where they held none.</param>
+    /// <param name="main">The main tree's version, or <see langword="null"/> where it has none.</param>
+    /// <param name="agent">The agent's version, or <see langword="null"/> where it has none.</param>
+    public static ArmConflict OverArm(string arm, ArmConflictKind kind, ArmVersion? @base, ArmVersion? main, ArmVersion? agent)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(arm);
+
+        return new(RegistryPart.Arm, arm, kind, @base, main, agent);
+    }
+
+    /// <summary>
+    /// A conflict over the lines above the first row: never under ids that differ in case, which they have none of, and
+    /// never as lines that would stand first, which they always do.
+    /// </summary>
+    /// <param name="kind">How the two disagree.</param>
+    /// <param name="base">What both held of them, or <see langword="null"/> where they held none.</param>
+    /// <param name="main">The main tree's, or <see langword="null"/> where it has none.</param>
+    /// <param name="agent">The agent's, or <see langword="null"/> where it has none.</param>
+    /// <exception cref="ArgumentException">The two cannot disagree over these lines as <paramref name="kind"/> says.</exception>
+    public static ArmConflict OverTheLinesAbove(ArmConflictKind kind, ArmVersion? @base, ArmVersion? main, ArmVersion? agent)
+        => kind is ArmConflictKind.SpelledApart or ArmConflictKind.WouldOpenTheText
+            ? throw new ArgumentException($"{AboveTheFirstRow} cannot conflict as {kind}.", nameof(kind))
+            : new(RegistryPart.AboveTheFirstRow, AboveTheFirstRow, kind, @base, main, agent);
+
+    /// <summary>A conflict over the lines below the last row: never under ids that differ in case, which they have none of.</summary>
+    /// <param name="kind">How the two disagree.</param>
+    /// <param name="base">What both held of them, or <see langword="null"/> where they held none.</param>
+    /// <param name="main">The main tree's, or <see langword="null"/> where it has none.</param>
+    /// <param name="agent">The agent's, or <see langword="null"/> where it has none.</param>
+    /// <exception cref="ArgumentException">The two cannot disagree over these lines as <paramref name="kind"/> says.</exception>
+    public static ArmConflict OverTheLinesBelow(ArmConflictKind kind, ArmVersion? @base, ArmVersion? main, ArmVersion? agent)
+        => kind is ArmConflictKind.SpelledApart
+            ? throw new ArgumentException($"{BelowTheLastRow} cannot conflict as {kind}.", nameof(kind))
+            : new(RegistryPart.BelowTheLastRow, BelowTheLastRow, kind, @base, main, agent);
 
     /// <summary>
     /// The conflict as lines say it: what it is over and how the two disagree, then, beneath it, each side's lines that
@@ -245,8 +316,9 @@ public abstract record RegistryMerge
 /// A text is read as the lines above its first row down to their last blank line; its segments, each one row with the
 /// comment and blank lines directly above it; and the comment and blank lines below its last row. An arm is the
 /// segments naming it, in the order they stand, ids compared ignoring case. Two versions of an arm are the same where
-/// their segments are the same in number and order and each line's text is equal: how a line ends is no part of it, so
-/// a checkout with other line endings changes nothing.
+/// their segments are the same in number and order and each line's text is equal, the blank lines that open a segment
+/// left out: they only part it from what stands above it, so an arm removed or added beside another changes nothing of
+/// that one. How a line ends is no part of it either, so a checkout with other line endings changes nothing.
 /// </para>
 /// <para>
 /// Each arm is taken from the side that alone added, removed or changed it, and is a conflict where both did so
@@ -254,28 +326,27 @@ public abstract record RegistryMerge
 /// </para>
 /// <para>
 /// The main tree's text is kept line for line and changed only where the agent contributed. An arm taken from the
-/// agent in place of the main tree's lies over the main tree's segments of it, one for one; an arm only the agent has
-/// stands after the segment it follows in the agent's text, and after what the main tree alone holds there - so two
-/// sides adding at one place come out as the main tree's addition, then the agent's. Each of the main tree's lines is
-/// written as the main tree holds it, each of the agent's with the ending of the main tree's first line, behind a byte
-/// order mark where the main tree's text has one and ending with a line ending where it does.
+/// agent in place of the main tree's lies over the main tree's segments of it, one for one, each below the blank lines
+/// the main tree parts it from what stands above it with; an arm only the agent has stands after the nearest segment
+/// above it in the agent's text that the result holds, and after what the main tree alone holds there - so two sides
+/// adding at one place come out as the main tree's addition, then the agent's. The segment that comes to stand first
+/// is written without the blank lines that open it. Each of the main tree's lines is written as the main tree holds
+/// it, each of the agent's with the ending of the main tree's first line, behind a byte order mark where the main
+/// tree's text has one and ending with a line ending where it does.
 /// </para>
 /// <para>
-/// So a text merged with itself is itself, a text merged with a side that changed nothing is the other, and a merge
-/// run again with its own result on either side gives that result, each byte for byte. The last holds because a merge
-/// is only offered where its text reads back as it was merged (<see cref="ArmConflictKind.WouldOpenTheText"/>).
+/// So a text merged with itself is itself, and a merge in which the agent changed nothing is the main tree's text,
+/// each byte for byte; one in which the main tree changed nothing holds the agent's arms, in the main tree's order,
+/// with its line endings and its byte order mark. And a merge run again with its own result on either side gives that
+/// result, byte for byte, because a merge is only offered where its text reads back as it was merged
+/// (<see cref="ArmConflictKind.WouldOpenTheText"/>) and no text is read in which a line opens with a byte order mark
+/// (<see cref="RegistryText.TryRead"/>), which would read as the text's own once it stood first.
 /// </para>
 /// </remarks>
 public static class MutationRegistryMerge
 {
     /// <summary>Why a text holding a row with no second field is unreadable.</summary>
     private const string NamesNoArm = "a row names no arm";
-
-    /// <summary>Why a text whose first line still opens with a byte order mark is unreadable.</summary>
-    private const string SecondMark = "it opens with a second byte order mark";
-
-    /// <summary>The byte order mark, as a character of a text.</summary>
-    private const char MarkCharacter = (char)0xFEFF;
 
     /// <summary>Which side an arm, or the lines above the first row or below the last, is taken from.</summary>
     private enum Taken
@@ -316,7 +387,11 @@ public static class MutationRegistryMerge
 
         if (header is null)
         {
-            conflicts.Add(Conflict(ArmConflict.AboveTheFirstRow, disagreed, Held(held?.Header), Held(mains.Header), Held(agents.Header)) with { Part = RegistryPart.AboveTheFirstRow });
+            conflicts.Add(ArmConflict.OverTheLinesAbove(
+                disagreed,
+                Version(ArmConflict.AboveTheFirstRow, Held(held?.Header)),
+                Version(ArmConflict.AboveTheFirstRow, Held(mains.Header)),
+                Version(ArmConflict.AboveTheFirstRow, Held(agents.Header))));
         }
 
         foreach (var arm in mains.Ids.Concat(agents.Ids).Concat(held?.Ids ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
@@ -331,19 +406,23 @@ public static class MutationRegistryMerge
                 continue;
             }
 
-            conflicts.Add(Conflict(
+            conflicts.Add(ArmConflict.OverArm(
                 (theirs ?? ours ?? before)![0].Arm,
                 disagreed == ArmConflictKind.AddedDifferently && SpelledApart(theirs!, ours!) ? ArmConflictKind.SpelledApart : disagreed,
-                Lines(before),
-                Lines(theirs),
-                Lines(ours)));
+                Version(before),
+                Version(theirs),
+                Version(ours)));
         }
 
         var trailer = Weigh(Held(held?.Trailer), Held(mains.Trailer), Held(agents.Trailer), Same, new Tally(), out disagreed);
 
         if (trailer is null)
         {
-            conflicts.Add(Conflict(ArmConflict.BelowTheLastRow, disagreed, Held(held?.Trailer), Held(mains.Trailer), Held(agents.Trailer)) with { Part = RegistryPart.BelowTheLastRow });
+            conflicts.Add(ArmConflict.OverTheLinesBelow(
+                disagreed,
+                Version(ArmConflict.BelowTheLastRow, Held(held?.Trailer)),
+                Version(ArmConflict.BelowTheLastRow, Held(mains.Trailer)),
+                Version(ArmConflict.BelowTheLastRow, Held(agents.Trailer))));
         }
 
         var mainCounts = new MergeCounts(tally.MainAdded, tally.MainRemoved, tally.MainChanged);
@@ -491,11 +570,15 @@ public static class MutationRegistryMerge
 
     /// <summary>
     /// The merged text's segments, in order: the main tree's, each where it stands; the agent's version of an arm over
-    /// the main tree's segments of it; and each arm only the agent has, where the agent's text places it.
+    /// the main tree's segments of it; and each arm only the agent has, where the agent's text places it - the first of
+    /// them all without the blank lines that open it.
     /// </summary>
     private static List<Segment> Placed(Reading mains, Reading agents, Dictionary<string, Taken> arms)
     {
         var placed = new List<Segment>();
+
+        // Each of the agent's segments of an arm taken from it that lies over one of the main tree's, as it stands there.
+        var over = new Dictionary<Segment, Segment>();
 
         foreach (var segment in mains.Segments)
         {
@@ -506,14 +589,18 @@ public static class MutationRegistryMerge
                     break;
 
                 case Taken.Agent:
-                    // One for one in order; where the agent has more, the rest follow the last of the main tree's, and
-                    // where it has fewer, the main tree's remaining places go.
+                    // One for one in order, each below the blank lines that part the main tree's from what stands above
+                    // it; where the agent has more, the rest follow the last of the main tree's, and where it has fewer,
+                    // the main tree's remaining places go.
                     var theirs = mains.Arm(segment.Arm)!;
                     var ours = agents.Arm(segment.Arm)!;
 
                     if (segment.Within < ours.Count)
                     {
-                        placed.Add(ours[segment.Within]);
+                        var own = ours[segment.Within];
+
+                        over[own] = new Segment(MergeSide.Agent, [.. segment.Lines.Take(segment.Leading), .. own.Content], own.At) { Within = own.Within };
+                        placed.Add(over[own]);
                     }
 
                     if (segment.Within == theirs.Count - 1)
@@ -523,6 +610,22 @@ public static class MutationRegistryMerge
 
                     break;
             }
+        }
+
+        // Whether the main tree's version of the arm of the agent's segment holds one like it.
+        bool Kept(Segment ours) => mains.Arm(ours.Arm)!.Any(theirs => Same(theirs.Content, ours.Content));
+
+        // Where the agent's segment of an arm kept from the main tree stands in the result: nowhere, where the main tree's
+        // version holds none like it; its last, where no later segment of the arm in the agent's text is kept, so that a
+        // row only the main tree's version holds stays with its arm; and otherwise the one like it.
+        Segment? KeptAs(Segment ours)
+        {
+            var theirs = mains.Arm(ours.Arm)!;
+
+            return !Kept(ours) ? null
+                : agents.Arm(ours.Arm)!.Skip(ours.Within + 1).Any(Kept)
+                    ? theirs.Where(kept => Same(kept.Content, ours.Content)).MinBy(kept => Math.Abs(kept.Within - ours.Within))
+                : theirs[^1];
         }
 
         // What the main tree alone holds: a segment of an arm the agent's text has none of. Placed, it is one the main
@@ -543,17 +646,15 @@ public static class MutationRegistryMerge
         {
             var at = segment.At == 0 ? Past(0) : placed.Count;
 
-            // After the nearest segment above it in the agent's text that the result holds: the agent's own, or the main
-            // tree's segment of that arm - its last, where the agent's is the last of its arm, so that a row only the
-            // main tree's version holds stays with its arm.
+            // After the nearest segment above it in the agent's text that the result holds: the agent's own, as it stands
+            // there, or the main tree's like it.
             for (var above = segment.At - 1; above >= 0; above--)
             {
                 var follows = agents.Segments[above];
                 var anchor = arms[follows.Arm] switch
                 {
-                    Taken.Agent => follows,
-                    Taken.Main when mains.Arm(follows.Arm) is { } theirs
-                        => theirs[follows.Within == agents.Arm(follows.Arm)!.Count - 1 ? theirs.Count - 1 : Math.Min(follows.Within, theirs.Count - 1)],
+                    Taken.Agent => over.GetValueOrDefault(follows, follows),
+                    Taken.Main => KeptAs(follows),
                     _ => null,
                 };
 
@@ -571,6 +672,13 @@ public static class MutationRegistryMerge
             }
 
             placed.Insert(at, segment);
+        }
+
+        // The blank lines that open a segment part it from what stands above it, and nothing stands above the first but
+        // the lines above the first row, which end at their own last blank line.
+        if (placed is [{ Leading: > 0 } first, ..])
+        {
+            placed[0] = new Segment(first.Side, first.Content, first.At) { Within = first.Within };
         }
 
         return placed;
@@ -592,29 +700,20 @@ public static class MutationRegistryMerge
             return null;
         }
 
-        var version = new ArmVersion(
-            placed.Count > 0 ? placed[0].Arm : ArmConflict.BelowTheLastRow,
-            [.. lines.Take(blank + 1).Select(line => (line.Number, line.Text))]);
+        var version = Version(placed.Count > 0 ? placed[0].Arm : ArmConflict.BelowTheLastRow, [.. lines.Take(blank + 1)]);
+        var main = lines[0].Side == MergeSide.Main ? version : null;
+        var agent = lines[0].Side == MergeSide.Agent ? version : null;
 
-        return new ArmConflict(
-            version.Id,
-            ArmConflictKind.WouldOpenTheText,
-            null,
-            lines[0].Side == MergeSide.Main ? version : null,
-            lines[0].Side == MergeSide.Agent ? version : null)
-        {
-            Part = placed.Count > 0 ? RegistryPart.Arm : RegistryPart.BelowTheLastRow,
-        };
+        return placed.Count > 0
+            ? ArmConflict.OverArm(version!.Id, ArmConflictKind.WouldOpenTheText, null, main, agent)
+            : ArmConflict.OverTheLinesBelow(ArmConflictKind.WouldOpenTheText, null, main, agent);
     }
 
-    private static ArmConflict Conflict(string named, ArmConflictKind kind, IReadOnlyList<Line>? held, IReadOnlyList<Line>? main, IReadOnlyList<Line>? agent)
-    {
-        ArmVersion? Version(IReadOnlyList<Line>? lines) => lines is null ? null : new ArmVersion(named, [.. lines.Select(line => (line.Number, line.Text))]);
+    /// <summary>One side's version of an arm: its segments' lines, the arm named as that side spells it; nothing where it has none.</summary>
+    private static ArmVersion? Version(IReadOnlyList<Segment>? arm) => arm is null ? null : Version(arm[0].Arm, [.. arm.SelectMany(segment => segment.Lines)]);
 
-        return new ArmConflict(named, kind, Version(held), Version(main), Version(agent));
-    }
-
-    private static IReadOnlyList<Line>? Lines(IReadOnlyList<Segment>? arm) => arm is null ? null : [.. arm.SelectMany(segment => segment.Lines)];
+    /// <summary>One side's version of lines named <paramref name="named"/>, each with its number there; nothing where it has none.</summary>
+    private static ArmVersion? Version(string named, IReadOnlyList<Line>? lines) => lines is null ? null : new ArmVersion(named, [.. lines.Select(line => (line.Number, line.Text))]);
 
     /// <summary>
     /// The lines above the first row, or below the last, as one thing a text holds or does not: <see langword="null"/>
@@ -628,21 +727,25 @@ public static class MutationRegistryMerge
             ? one is null && other is null
             : one.Select(line => line.Text).SequenceEqual(other.Select(line => line.Text), StringComparer.Ordinal);
 
-    /// <summary>Whether two versions of an arm are the same: their segments the same in number and order, each line's text equal.</summary>
+    /// <summary>
+    /// Whether two versions of an arm are the same: their segments the same in number and order, each line's text equal
+    /// below the blank lines that open each segment.
+    /// </summary>
     private static bool Same(IReadOnlyList<Segment>? one, IReadOnlyList<Segment>? other)
         => one is null || other is null
             ? one is null && other is null
-            : one.Count == other.Count && one.Zip(other).All(pair => Same(pair.First.Lines, pair.Second.Lines));
+            : one.Count == other.Count && one.Zip(other).All(pair => Same(pair.First.Content, pair.Second.Content));
 
     /// <summary>
     /// Whether two versions of an arm differ only in how each spells the arm's id: line for line they are one text
-    /// once both spell it one way, and so are cut into the same segments, each ending at its row.
+    /// once both spell it one way, the blank lines that open each segment left out, and so are cut into the same
+    /// segments, each ending at its row.
     /// </summary>
     private static bool SpelledApart(IReadOnlyList<Segment> one, IReadOnlyList<Segment> other)
     {
         var spelled = one[0].Arm;
 
-        IEnumerable<string> Respelled(IReadOnlyList<Segment> arm) => arm.SelectMany(segment => segment.Lines).Select(line => line.Read.NamedAs(spelled));
+        IEnumerable<string> Respelled(IReadOnlyList<Segment> arm) => arm.SelectMany(segment => segment.Content).Select(line => line.Read.NamedAs(spelled));
 
         return Respelled(one).SequenceEqual(Respelled(other), StringComparer.Ordinal);
     }
@@ -693,6 +796,15 @@ public static class MutationRegistryMerge
         /// <summary>The arm its row names, as the row spells it; nothing where the row names none, which makes its text unreadable.</summary>
         public string Arm { get; } = lines[^1].Read.Arm ?? string.Empty;
 
+        /// <summary>
+        /// Its lines below the blank lines that open it: what its arm holds of it. The blank lines only part it from what
+        /// stands above it.
+        /// </summary>
+        public IReadOnlyList<Line> Content { get; } = [.. lines.SkipWhile(line => line.Blank)];
+
+        /// <summary>How many blank lines open it.</summary>
+        public int Leading => Lines.Count - Content.Count;
+
         /// <summary>Its place among its arm's segments, from 0.</summary>
         public int Within { get; set; }
 
@@ -710,13 +822,6 @@ public static class MutationRegistryMerge
             Line[] lines = [.. Ended(text).Select((line, index) => new Line(side, index + 1, line))];
             var rows = new List<List<Line>>();
             var above = new List<Line>();
-
-            // A mark the reader left in the first line stands behind the one it took for the text's own: written under
-            // another text's mark, or under none, the line would read back as another.
-            if (lines.Length > 0 && lines[0].Text.StartsWith(MarkCharacter))
-            {
-                unread.Add(new UnreadVersion(side, 1, SecondMark));
-            }
 
             foreach (var line in lines)
             {

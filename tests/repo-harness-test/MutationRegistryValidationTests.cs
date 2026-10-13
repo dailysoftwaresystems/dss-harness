@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using NSubstitute;
 using RepoHarness.Core.Configuration;
@@ -184,7 +185,115 @@ public sealed class MutationRegistryValidationTests
         Assert.Equal(3, (await MutationRegistryValidation.ValidateAsync(Text(Candidate), tree, config.Mutations, config, token)).Problems.Count);
 
         await sync.Received(1).ExclusionsAsync(context, Arg.Any<CancellationToken>());
-        Assert.Empty(typeof(TreeRegistryFiles).GetConstructors());
+        Assert.All(
+            typeof(TreeRegistryFiles).GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            constructor => Assert.True(constructor.IsPrivate, $"{constructor} is not private"));
+    }
+
+    /// <summary>
+    /// A file of the tree is read as every file a command reads is, with the token the command was given: asked with one
+    /// that is cancelled, the reading stops.
+    /// </summary>
+    [Fact]
+    public async Task ATreesFile_IsReadWithTheTokenItIsAskedWith()
+    {
+        using var temp = new TempDirectory();
+        var tree = await TreeAsync(temp, Config());
+
+        Assert.Equal("c <= b"u8.ToArray(), await tree.ReadAsync("mutations/texts/charge.before", TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tree.ReadAsync("mutations/texts/charge.before", new CancellationToken(canceled: true)));
+    }
+
+    /// <summary>
+    /// A written path is read once however often the validation asks for it - a before-text is asked for to tell whether
+    /// it holds nothing, and again where its file holds a further text of its arm - since reading one may cost a process.
+    /// </summary>
+    [Fact]
+    public async Task AWrittenPath_IsReadOnce_HoweverOftenTheValidationAsksForIt()
+    {
+        using var temp = new TempDirectory();
+        var config = Config();
+        var tree = await TreeAsync(temp, config);
+        var read = new List<string>();
+
+        Func<CancellationToken, Task<byte[]>> Counted(string path, string holds) => _ =>
+        {
+            read.Add(path);
+            return Task.FromResult(Encoding.UTF8.GetBytes(holds));
+        };
+
+        temp.WriteFile("src/fixture.cpp", "if (c <= b) { charge(c); } else { spare(c); }");
+
+        var written = new OverlaidRegistryFiles(tree, new Dictionary<string, Func<CancellationToken, Task<byte[]>>?>
+        {
+            ["mutations/texts/spare.before"] = Counted("mutations/texts/spare.before", "spare(c)"),
+            ["mutations/texts/spare.after"] = Counted("mutations/texts/spare.after", "spare(b)"),
+        });
+        var validation = await MutationRegistryValidation.ValidateAsync(
+            Text([.. Held, "M | charge | src/fixture.cpp | mutations/texts/spare.before | mutations/texts/spare.after | a second place"]),
+            written,
+            config.Mutations,
+            config,
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(validation.Problems);
+        Assert.Equal(["mutations/texts/spare.before", "mutations/texts/spare.after"], read);
+    }
+
+    /// <summary>
+    /// The texts are read only of a registry whose rows read, and every text of a row is read whatever another of its
+    /// texts is: a row with both texts missing has both said. A scope naming no leg is said after the texts.
+    /// </summary>
+    [Fact]
+    public async Task TheTexts_AreReadOfRowsThatRead_EachOfThem_AndAScopeIsSaidAfterThem()
+    {
+        using var temp = new TempDirectory();
+        var config = Config();
+        var tree = await TreeAsync(temp, config);
+        var token = TestContext.Current.CancellationToken;
+        var diagGone = new OverlaidRegistryFiles(tree, new Dictionary<string, Func<CancellationToken, Task<byte[]>>?> { ["mutations/texts/charge.diag"] = null });
+        var bothGone = new OverlaidRegistryFiles(tree, new Dictionary<string, Func<CancellationToken, Task<byte[]>>?>
+        {
+            ["mutations/texts/charge.before"] = null,
+            ["mutations/texts/charge.after"] = null,
+        });
+
+        Assert.Equal(
+            ["line 3: 'Z' is no row this registry reads, which are A, C, G, B, M and S"],
+            (await MutationRegistryValidation.ValidateAsync(Text([.. Held, "Z | charge | x"]), diagGone, config.Mutations, config, token)).Problems);
+        Assert.Equal(
+            [
+                "line 1: text 'mutations/texts/charge.diag' is not a file in the tree",
+                "line 3: the S row of arm 'charge' names 'nowhere', which is neither a leg nor a leg set; declared legs: native",
+            ],
+            (await MutationRegistryValidation.ValidateAsync(Text([.. Held, "S | charge | nowhere | where it is built"]), diagGone, config.Mutations, config, token)).Problems);
+        Assert.Equal(
+            [
+                "line 1: text 'mutations/texts/charge.before' is not a file in the tree",
+                "line 1: text 'mutations/texts/charge.after' is not a file in the tree",
+            ],
+            (await MutationRegistryValidation.ValidateAsync(Text(Held), bothGone, config.Mutations, config, token)).Problems);
+    }
+
+    /// <summary>
+    /// A file the command writes into the text directory where a sync would withhold it is listed - it is what the command
+    /// puts there - and leaves the count of withheld files as the tree has it: it was not there to be withheld.
+    /// </summary>
+    [Fact]
+    public async Task AFileWrittenWhereASyncWouldWithholdIt_IsListed_AndLeavesTheWithheldAsTheTreeHasThem()
+    {
+        using var temp = new TempDirectory();
+        var config = Config();
+
+        config.Sync.Exclude.AddRange(["mutations/texts/old.tmp", "mutations/texts/new.tmp"]);
+        temp.WriteFile("mutations/texts/old.tmp", "an editor's leftover");
+
+        var tree = await TreeAsync(temp, config);
+        var written = new OverlaidRegistryFiles(tree, new Dictionary<string, Func<CancellationToken, Task<byte[]>>?> { ["mutations/texts/new.tmp"] = Holding("another") });
+
+        Assert.Equal(1, tree.List("mutations/texts")!.Withheld);
+        Assert.Equal(["charge.after", "charge.before", "charge.diag", "new.tmp"], written.List("mutations/texts")!.Files!.Order(StringComparer.Ordinal));
+        Assert.Equal(1, written.List("mutations/texts")!.Withheld);
     }
 
     /// <summary>

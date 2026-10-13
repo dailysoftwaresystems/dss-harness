@@ -1231,6 +1231,9 @@ public sealed class MutationServiceTests
 
         public override byte[] ReadAllBytes(string read) => read == path ? throw raised : base.ReadAllBytes(read);
 
+        public override Task<byte[]> ReadAllBytesAsync(string read, CancellationToken cancellationToken = default)
+            => read == path ? Task.FromException<byte[]>(raised) : base.ReadAllBytesAsync(read, cancellationToken);
+
         public override IEnumerable<string> EnumerateFiles(string listed, bool recursive)
             => listed == path ? throw raised : base.EnumerateFiles(listed, recursive);
     }

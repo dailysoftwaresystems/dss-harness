@@ -1,4 +1,4 @@
-using System.Buffers;
+using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Execution;
 
@@ -15,12 +15,6 @@ namespace RepoHarness.Core.Execution;
 /// <param name="capacity">How many lines are kept.</param>
 internal sealed class LastLinesRing(int capacity)
 {
-    /// <summary>
-    /// Everything <see cref="string.ReplaceLineEndings(string)"/> reads as ending a line: a carriage return, a line feed, a form
-    /// feed, the next-line character, and Unicode's line and paragraph separators.
-    /// </summary>
-    private static readonly SearchValues<char> Endings = SearchValues.Create(['\r', '\n', '\f', (char)0x0085, (char)0x2028, (char)0x2029]);
-
     private readonly string[] _ring = capacity > 0
         ? new string[capacity]
         : throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "A ring keeps at least one line.");
@@ -40,7 +34,7 @@ internal sealed class LastLinesRing(int capacity)
     {
         ArgumentNullException.ThrowIfNull(line);
 
-        if (!line.AsSpan().ContainsAny(Endings))
+        if (!line.AsSpan().ContainsAny(TextLines.Endings))
         {
             Part(line);
             return;
@@ -48,11 +42,11 @@ internal sealed class LastLinesRing(int capacity)
 
         // Ended as the log ends it, so that a carriage return at its end and the line feed after it are one ending, as they
         // are in what was written, and not a line and an empty one.
-        var parts = (line + "\n").ReplaceLineEndings("\n").Split('\n');
+        var parts = TextLines.Split(line + "\n");
 
-        for (var index = 0; index < parts.Length - 1; index++)
+        for (var index = 0; index < parts.Count - 1; index++)
         {
-            Part(parts[index]);
+            Part(parts[index].Text);
         }
     }
 

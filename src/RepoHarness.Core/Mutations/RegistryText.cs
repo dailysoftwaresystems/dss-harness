@@ -1,7 +1,8 @@
-using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
+using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Mutations;
 
@@ -127,18 +128,15 @@ public sealed class RegistryLine
 /// one an editor shows and the text can be written back as the bytes it was read from.
 /// </summary>
 /// <remarks>
-/// A line ends exactly where <see cref="string.ReplaceLineEndings(string)"/> reads an ending - a carriage return, a
-/// line feed, the two together, a form feed, the next-line character, and Unicode's line and paragraph separators -
-/// and the text after the last ending is a line too, empty where the text ends with one. So a text of no characters
-/// is one empty line, and joining every line with its ending gives the text back.
+/// A line ends where every line this tool reads does (<see cref="TextLines"/>) - a carriage return, a line feed, the
+/// two together, a form feed, the next-line character, and Unicode's line and paragraph separators - and the text after
+/// the last ending is a line too, empty where the text ends with one. So a text of no characters is one empty line, and
+/// joining every line with its ending gives the text back.
 /// </remarks>
 public sealed class RegistryText
 {
-    /// <summary>A decoder that raises on bytes that form no UTF-8 character, rather than reading U+FFFD in their place.</summary>
-    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-
-    /// <summary>Every character that ends a line, alone or as the first of two.</summary>
-    private static readonly SearchValues<char> Endings = SearchValues.Create(['\r', '\n', '\f', (char)0x0085, (char)0x2028, (char)0x2029]);
+    /// <summary>The byte order mark, as a character a line may hold.</summary>
+    private const char Mark = (char)0xFEFF;
 
     private RegistryText(string text, bool byteOrderMark)
     {
@@ -176,41 +174,48 @@ public sealed class RegistryText
     }
 
     /// <summary>
-    /// Reads a registry from the bytes a tree holds: UTF-8 and nothing else, a byte order mark at their start noted
-    /// and left out of the text.
+    /// Reads a registry from the bytes a tree holds: UTF-8 and nothing else (<see cref="Utf8Text"/>), a byte order mark
+    /// at their start noted and left out of the text, and no line opening with another.
     /// </summary>
     /// <remarks>
     /// Strictly, because what is read here is written back: a byte that forms no character, read leniently, would be
-    /// written as another, and the file changed where nobody changed it.
+    /// written as another, and the file changed where nobody changed it. And a line that opens with a byte order mark,
+    /// written where it stands first - as it does once the lines above it are gone - would be read back as the text's own
+    /// mark and a line without it: another text.
     /// </remarks>
     /// <param name="bytes">The bytes, as the tree holds them.</param>
-    /// <param name="text">The text read, or <see langword="null"/> where the bytes are not UTF-8.</param>
+    /// <param name="text">The text read, or <see langword="null"/> where the bytes are not UTF-8, or a line opens with a byte order mark.</param>
     /// <param name="unread">
-    /// Why the bytes could not be read, as what follows the name of the file: <c>is not UTF-8: ...</c>; <see langword="null"/>
-    /// where they were.
+    /// Why the bytes could not be read, as what follows the name of the file: <c>is not UTF-8: ...</c>, <c>has a byte
+    /// order mark at the start of line 3, ...</c>; <see langword="null"/> where they were.
     /// </param>
-    /// <returns>Whether the bytes are UTF-8.</returns>
+    /// <returns>Whether the bytes were read.</returns>
     public static bool TryRead(ReadOnlySpan<byte> bytes, [NotNullWhen(true)] out RegistryText? text, [NotNullWhen(false)] out string? unread)
     {
-        var marked = bytes.StartsWith(Encoding.UTF8.Preamble);
+        var marked = Utf8Text.OpensWithByteOrderMark(bytes);
         var start = marked ? Encoding.UTF8.Preamble.Length : 0;
 
-        try
+        if (!Utf8Text.TryDecode(bytes[start..], out var decoded, out unread, start))
         {
-            text = new RegistryText(StrictUtf8.GetString(bytes[start..]), marked);
-            unread = null;
-
-            return true;
+            text = null;
+            return false;
         }
-        catch (DecoderFallbackException ex)
+
+        var read = new RegistryText(decoded, marked);
+
+        if (read.Lines.Select((line, index) => (line.Text, Number: index + 1)).FirstOrDefault(line => line.Text.StartsWith(Mark)) is { Text: not null } opened)
         {
             text = null;
             unread = string.Create(
                 CultureInfo.InvariantCulture,
-                $"is not UTF-8: the byte at offset {start + ex.Index} (0x{ex.BytesUnknown?.FirstOrDefault() ?? 0:X2}) does not form a UTF-8 character");
+                $"has a byte order mark at the start of line {opened.Number}, which no line may open with: standing first, it would be read as the text's own");
 
             return false;
         }
+
+        text = read;
+
+        return true;
     }
 
     /// <summary>
@@ -218,24 +223,8 @@ public sealed class RegistryText
     /// A text read from bytes gives those bytes.
     /// </summary>
     public byte[] ToBytes()
-        => ByteOrderMark ? [.. Encoding.UTF8.Preamble, .. StrictUtf8.GetBytes(Text)] : StrictUtf8.GetBytes(Text);
+        => ByteOrderMark ? [.. Encoding.UTF8.Preamble, .. Utf8Text.Encode(Text)] : Utf8Text.Encode(Text);
 
     private static IReadOnlyList<RegistryLine> Split(string text)
-    {
-        var lines = new List<RegistryLine>();
-        var rest = text.AsSpan();
-
-        while (rest.IndexOfAny(Endings) is >= 0 and var at)
-        {
-            // A carriage return and the line feed after it are one ending; the other way round they are two.
-            var length = rest[at] == '\r' && at + 1 < rest.Length && rest[at + 1] == '\n' ? 2 : 1;
-
-            lines.Add(new RegistryLine(rest[..at].ToString(), rest.Slice(at, length).ToString()));
-            rest = rest[(at + length)..];
-        }
-
-        lines.Add(new RegistryLine(rest.ToString()));
-
-        return lines;
-    }
+        => [.. TextLines.Split(text).Select(line => new RegistryLine(line.Text, line.Ending))];
 }

@@ -85,8 +85,8 @@ public sealed class TreeRegistryFiles : IRegistryFiles
     public bool Exists(string path) => _fileSystem.FileExists(In(_root, path));
 
     /// <inheritdoc/>
-    /// <remarks>Read in one call, as a sweep reads the texts its registry cites: each is a few lines.</remarks>
-    public Task<byte[]> ReadAsync(string path, CancellationToken cancellationToken) => Task.FromResult(_fileSystem.ReadAllBytes(In(_root, path)));
+    /// <remarks>Read whole, as a sweep reads the texts its registry cites - each is a few lines - and stopped by the token.</remarks>
+    public Task<byte[]> ReadAsync(string path, CancellationToken cancellationToken) => _fileSystem.ReadAllBytesAsync(In(_root, path), cancellationToken);
 
     /// <inheritdoc/>
     public bool IsWithheld(string path) => _carried.IsWithheldFromTransfer(path);
@@ -135,7 +135,8 @@ public sealed class TreeRegistryFiles : IRegistryFiles
 /// <para>
 /// Each written path is given as what reads its new bytes when they are asked for, never as the bytes: a command that
 /// writes hundreds of paths has a registry cite a few of them, and some - a blob only git reads - cost a process to
-/// read. Nothing of a written path is read until the validation asks for that path.
+/// read. Nothing of a written path is read until the validation asks for that path, and nothing of it twice: the read
+/// begun the first time it is asked for is the answer every time after.
 /// </para>
 /// <para>
 /// A written path is there, read as written, listed in its directory, and not withheld: it is what the command puts in
@@ -147,6 +148,9 @@ public sealed class OverlaidRegistryFiles : IRegistryFiles
 {
     private readonly IRegistryFiles _under;
     private readonly Dictionary<string, Func<CancellationToken, Task<byte[]>>?> _written;
+
+    /// <summary>The read of each written path asked for so far, by its path: begun once, and answering each ask after.</summary>
+    private readonly Dictionary<string, Task<byte[]>> _read;
 
     /// <summary>The tree <paramref name="under"/> as it would be with <paramref name="written"/> applied.</summary>
     /// <param name="under">The tree as it stands.</param>
@@ -164,6 +168,7 @@ public sealed class OverlaidRegistryFiles : IRegistryFiles
 
         _under = under;
         _written = new Dictionary<string, Func<CancellationToken, Task<byte[]>>?>(written, under.Names);
+        _read = new Dictionary<string, Task<byte[]>>(under.Names);
     }
 
     /// <inheritdoc/>
@@ -174,9 +179,27 @@ public sealed class OverlaidRegistryFiles : IRegistryFiles
 
     /// <inheritdoc/>
     public Task<byte[]> ReadAsync(string path, CancellationToken cancellationToken)
-        => !_written.TryGetValue(path, out var read) ? _under.ReadAsync(path, cancellationToken)
-            : read is not null ? read(cancellationToken)
-            : Task.FromException<byte[]>(new FileNotFoundException($"'{path}' is removed from the tree.", path));
+    {
+        if (!_written.TryGetValue(path, out var read))
+        {
+            return _under.ReadAsync(path, cancellationToken);
+        }
+
+        if (read is null)
+        {
+            return Task.FromException<byte[]>(new FileNotFoundException($"'{path}' is removed from the tree.", path));
+        }
+
+        lock (_read)
+        {
+            if (!_read.TryGetValue(path, out var begun))
+            {
+                _read[path] = begun = read(cancellationToken);
+            }
+
+            return begun.WaitAsync(cancellationToken);
+        }
+    }
 
     /// <inheritdoc/>
     public bool IsWithheld(string path) => !(_written.TryGetValue(path, out var read) && read is not null) && _under.IsWithheld(path);
