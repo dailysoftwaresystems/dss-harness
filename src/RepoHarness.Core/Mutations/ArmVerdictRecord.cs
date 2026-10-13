@@ -121,17 +121,85 @@ public sealed record RecordUnread
 }
 
 /// <summary>What the record of verdicts holds of one leg, or why it holds nothing that can be read.</summary>
-/// <param name="File">The leg's record.</param>
-/// <param name="Arms">
-/// Each arm's entries, by its id, compared ignoring case: one to a key, in the order recorded, the newest last.
-/// </param>
-/// <param name="Tables">Each table an entry names, by its digest.</param>
-/// <param name="Unread">Why the record cannot be read, or <see langword="null"/> where it was read or is not there.</param>
-public sealed record LegVerdictRecord(
-    string File,
-    IReadOnlyDictionary<string, IReadOnlyList<RecordedVerdict>> Arms,
-    IReadOnlyDictionary<string, TableIndex> Tables,
-    RecordUnread? Unread);
+/// <remarks>
+/// Made one way, by <see cref="Read"/> and <see cref="Unreadable"/>: a record either holds what it holds or is unreadable,
+/// never both, and never neither.
+/// </remarks>
+public sealed record LegVerdictRecord
+{
+    private LegVerdictRecord(string file, IReadOnlyDictionary<string, IReadOnlyList<RecordedVerdict>> arms, IReadOnlyDictionary<string, TableIndex> tables, RecordUnread? unread)
+    {
+        File = file;
+        Arms = arms;
+        Tables = tables;
+        Unread = unread;
+    }
+
+    /// <summary>The leg's record.</summary>
+    public string File { get; }
+
+    /// <summary>
+    /// Each arm's entries, by its id, compared ignoring case: one to a key, in the order recorded, the newest last.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<RecordedVerdict>> Arms { get; }
+
+    /// <summary>Each table an entry names, by its digest.</summary>
+    public IReadOnlyDictionary<string, TableIndex> Tables { get; }
+
+    /// <summary>Why the record cannot be read, or <see langword="null"/> where it was read or is not there.</summary>
+    public RecordUnread? Unread { get; }
+
+    /// <summary>A record read: what it holds.</summary>
+    /// <param name="file">The leg's record.</param>
+    /// <param name="arms">Each arm's entries, by its id.</param>
+    /// <param name="tables">Each table an entry names, by its digest.</param>
+    internal static LegVerdictRecord Read(string file, IReadOnlyDictionary<string, IReadOnlyList<RecordedVerdict>> arms, IReadOnlyDictionary<string, TableIndex> tables)
+        => new(file, arms, tables, null);
+
+    /// <summary>A record that cannot be read, for <paramref name="unread"/>.</summary>
+    /// <param name="file">The leg's record.</param>
+    /// <param name="unread">Why it cannot be read.</param>
+    internal static LegVerdictRecord Unreadable(string file, RecordUnread unread)
+    {
+        ArgumentNullException.ThrowIfNull(unread);
+
+        return new(file, new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase), new Dictionary<string, TableIndex>(StringComparer.Ordinal), unread);
+    }
+}
+
+/// <summary>A table of the record, as an entry named it, or why it could not be read: one or the other.</summary>
+public sealed record RecordedTable
+{
+    private RecordedTable(BuiltFromTable? table, string? unread)
+    {
+        Table = table;
+        Unread = unread;
+    }
+
+    /// <summary>The table, or <see langword="null"/> where it could not be read.</summary>
+    public BuiltFromTable? Table { get; }
+
+    /// <summary>Why it could not be read - a table an entry names that is gone, or holds anything but a table of that digest; <see langword="null"/> where there is one.</summary>
+    public string? Unread { get; }
+
+    /// <summary>The table of <paramref name="table"/>, as read.</summary>
+    /// <param name="table">The table.</param>
+    public static RecordedTable Read(BuiltFromTable table)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+
+        return new(table, null);
+    }
+
+    /// <summary>A table that could not be read, for <paramref name="unread"/>.</summary>
+    /// <param name="unread">Why.</param>
+    public static RecordedTable Unreadable(string unread)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(unread);
+
+        return new(null, unread.TrimEnd('.'));
+    }
+}
 
 /// <summary>
 /// Each leg's recorded verdicts of its mutation arms, with what each was judged on, in the main checkout's harness
@@ -196,25 +264,28 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
     /// <summary>
     /// The table of <paramref name="leg"/> whose digest is <paramref name="digest"/>, as an entry naming it was recorded
     /// with, or why it cannot be read: a table an entry names that is gone, or holds anything but a table of that digest.
+    /// Read holding the leg's record's mutex, so a change of the record pruning it meanwhile cannot take it away between
+    /// the ask and the read.
     /// </summary>
     /// <param name="leg">The leg.</param>
     /// <param name="digest">The table's digest, as an entry names it.</param>
-    public (BuiltFromTable? Table, string? Unread) Table(string leg, string digest)
-    {
-        var file = TableFile(leg, digest);
-
-        if (!MachineWideFile.TryRead<BuiltFromTable>(_fileSystem, file, out var table, out var unreadable))
+    public RecordedTable Table(string leg, string digest)
+        => Held(leg, () =>
         {
-            return (null, $"'{file}' cannot be read: {unreadable.Message.TrimEnd('.')}");
-        }
+            var file = TableFile(leg, digest);
 
-        if (table is null)
-        {
-            return (null, $"'{file}', which an entry names, is gone");
-        }
+            if (!MachineWideFile.TryRead<BuiltFromTable>(_fileSystem, file, out var table, out var unreadable))
+            {
+                return RecordedTable.Unreadable($"'{file}' cannot be read: {unreadable.Message}");
+            }
 
-        return table.Digest() == digest ? (table, null) : (null, $"'{file}' holds a table of another digest, {table.Digest()}");
-    }
+            if (table is null)
+            {
+                return RecordedTable.Unreadable($"'{file}', which an entry names, is gone");
+            }
+
+            return table.Digest() == digest ? RecordedTable.Read(table) : RecordedTable.Unreadable($"'{file}' holds a table of another digest, {table.Digest()}");
+        });
 
     /// <summary>
     /// What the record holds of <paramref name="arms"/> on <paramref name="leg"/>, as a sweep under <c>--pending</c> weighs
@@ -257,15 +328,15 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
                     continue;
                 }
 
-                var (table, why) = Table(leg, digest);
+                var held = Table(leg, digest);
 
-                if (table is not null)
+                if (held.Table is { } table)
                 {
                     tables[digest] = table;
                 }
                 else
                 {
-                    unreadTables[digest] = why!;
+                    unreadTables[digest] = held.Unread!;
                 }
             }
         }
@@ -442,15 +513,16 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
     private LegVerdictRecord ReadHeld(string leg)
     {
         var file = FileOf(leg);
-        var none = new LegVerdictRecord(
+        var none = LegVerdictRecord.Read(
             file,
             new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase),
-            new Dictionary<string, TableIndex>(StringComparer.Ordinal),
-            null);
+            new Dictionary<string, TableIndex>(StringComparer.Ordinal));
 
         if (!MachineWideFile.TryRead<JsonNode>(_fileSystem, file, out var node, out var unreadable))
         {
-            return none with { Unread = RecordUnread.Because(unreadable.Message) };
+            return LegVerdictRecord.Unreadable(
+                file,
+                unreadable is JsonException ? RecordUnread.Because(WrittenOtherwise) : RecordUnread.Because(unreadable.Message));
         }
 
         if (node is null)
@@ -464,7 +536,7 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
             && declared.TryGetValue<int>(out var format)
             && format > Format)
         {
-            return none with { Unread = RecordUnread.Newer(format) };
+            return LegVerdictRecord.Unreadable(file, RecordUnread.Newer(format));
         }
 
         Document document;
@@ -473,19 +545,41 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
         {
             document = node.Deserialize<Document>(JsonStateFile.Options) ?? throw new JsonException("it holds null");
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            return none with { Unread = RecordUnread.Because(ex.Message) };
+            return LegVerdictRecord.Unreadable(file, RecordUnread.Because(WrittenOtherwise));
         }
 
         if (document.Format != Format)
         {
-            return none with { Unread = RecordUnread.Because($"it says it is of format {document.Format}, which no build of {ToolPackage.Id} writes") };
+            return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it says it is of format {document.Format}, which no build of {ToolPackage.Id} writes"));
         }
 
         if (!string.Equals(document.Leg, leg, StringComparison.OrdinalIgnoreCase))
         {
-            return none with { Unread = RecordUnread.Because($"it is the record of leg '{document.Leg}'") };
+            return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it is the record of leg '{document.Leg}'"));
+        }
+
+        // What only this build's own hand keeps out: a null where entries or tables go, or an entry with a key and nothing
+        // it was judged on, would otherwise reach every comparison of it as a crash. Refused here, once, as unreadable.
+        foreach (var (arm, entries) in document.Arms)
+        {
+            if (entries is null || entries.Any(entry => entry is null))
+            {
+                return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it holds no list of entries for arm '{arm}'"));
+            }
+
+            foreach (var entry in entries.Where(entry => entry.Key is not null && entry.JudgedOn is null))
+            {
+                return LegVerdictRecord.Unreadable(
+                    file,
+                    RecordUnread.Because($"it holds an entry of arm '{arm}' with the key '{entry.Key}' and nothing it was judged on"));
+            }
+        }
+
+        foreach (var (digest, _) in document.Tables.Where(pair => pair.Value is null))
+        {
+            return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it holds no table index for '{digest}'"));
         }
 
         var arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase);
@@ -494,12 +588,15 @@ public sealed class ArmVerdictRecord(IFileSystem fileSystem, HarnessLayout layou
         {
             if (!arms.TryAdd(arm, entries))
             {
-                return none with { Unread = RecordUnread.Because($"it records arm '{arm}' twice, under two spellings that differ only in case") };
+                return LegVerdictRecord.Unreadable(file, RecordUnread.Because($"it records arm '{arm}' twice, under two spellings that differ only in case"));
             }
         }
 
-        return new LegVerdictRecord(file, arms, new Dictionary<string, TableIndex>(document.Tables, StringComparer.Ordinal), null);
+        return LegVerdictRecord.Read(file, arms, new Dictionary<string, TableIndex>(document.Tables, StringComparer.Ordinal));
     }
+
+    /// <summary>Why a record this build cannot read says it cannot be, in this tool's words, wherever a shape is to blame.</summary>
+    private static string WrittenOtherwise => $"it holds what no build of {ToolPackage.Id} writes - another build wrote it, or a hand changed it";
 
     /// <summary>
     /// Removes each table of <paramref name="leg"/> whose digest is not among <paramref name="named"/>. One that cannot be

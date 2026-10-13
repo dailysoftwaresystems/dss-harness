@@ -37,6 +37,36 @@ public sealed class ArmVerdictRecordTests : IDisposable
     public void Dispose() => _temp.Dispose();
 
     /// <summary>
+    /// A record that cannot be written stops the sweep's recording: one warning naming the file and why, once on the
+    /// leg's line, and nothing retried - the arm's verdict stands as it was reached, and nothing of the record is the
+    /// arm's.
+    /// </summary>
+    [Fact]
+    public void ARecordThatCannotBeWritten_StopsRecording_SaidOnce()
+    {
+        var sink = new RecordSink(Record, Leg, _harness.Output, MutationService.CommandName);
+        var table = Table("fixture_tests", "src/fixture.cpp");
+        var file = Record.FileOf(Leg);
+
+        // A file where the record's directory would be: nothing of it can be made.
+        Directory.CreateDirectory(Path.GetDirectoryName(Layout.MutationRecordDirectory)!);
+        File.WriteAllText(Layout.MutationRecordDirectory, "in the way");
+
+        sink.Judged("charge", Verdict("passed", "k1", Noon, table), [table]);
+        sink.Judged("floor", Verdict("passed", "k2", Noon, table), [table]);
+
+        Assert.Single(_harness.StandardError.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries));
+        Assert.StartsWith(
+            $"check-mutations: WARN - '{file}' could not be written, so this sweep records no verdict of '{Leg}' from arm 'charge' on:",
+            _harness.StandardError.ToString().TrimEnd('\r', '\n'),
+            StringComparison.Ordinal);
+        Assert.StartsWith(
+            $"its verdicts from arm 'charge' on were not recorded: '{file}' could not be written:",
+            sink.Unrecorded,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A later verdict on a key replaces the arm's entry on that key, whatever either verdict was - a passed followed by
     /// anything else on the same key is no longer a passed - and stands as the newest.
     /// </summary>
@@ -187,14 +217,16 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
         Assert.Null(Record.Merge(Leg, "charge", Verdict("passed", "k1", Noon, table), [table]));
 
-        var (read, unread) = Record.Table(Leg, table.Digest());
+        var read = Record.Table(Leg, table.Digest());
 
-        Assert.Null(unread);
-        Assert.Equal(table.Digest(), read!.Digest());
+        Assert.Null(read.Unread);
+        Assert.Equal(table.Digest(), read.Table!.Digest());
 
         File.WriteAllText(file, JsonSerializer.Serialize(other, JsonStateFile.Options));
 
-        Assert.Equal((null, $"'{file}' holds a table of another digest, {other.Digest()}"), Record.Table(Leg, table.Digest()));
+        Assert.Equal(
+            (null, $"'{file}' holds a table of another digest, {other.Digest()}"),
+            (Record.Table(Leg, table.Digest()).Table, Record.Table(Leg, table.Digest()).Unread));
 
         File.WriteAllText(file, "{ \"target\":");
 
@@ -202,7 +234,9 @@ public sealed class ArmVerdictRecordTests : IDisposable
 
         File.Delete(file);
 
-        Assert.Equal((null, $"'{file}', which an entry names, is gone"), Record.Table(Leg, table.Digest()));
+        Assert.Equal(
+            (null, $"'{file}', which an entry names, is gone"),
+            (Record.Table(Leg, table.Digest()).Table, Record.Table(Leg, table.Digest()).Unread));
     }
 
     /// <summary>
@@ -246,13 +280,45 @@ public sealed class ArmVerdictRecordTests : IDisposable
         {
             var why = Record.Read(Leg).Unread?.Why;
 
-            Assert.False(string.IsNullOrWhiteSpace(why));
+            Assert.Equal($"it holds what no build of {ToolPackage.Id} writes - another build wrote it, or a hand changed it", why);
             Assert.Equal(
                 $"check-mutations: WARN - '{file}' cannot be read, so every arm of 'native' is pending and this sweep records none: {why}. "
                 + "Delete it to start that leg's record again.",
                 warning.TrimEnd('\r'));
             Assert.Equal($"none of its verdicts was recorded: '{file}' cannot be read", sink.Unrecorded);
         }
+    }
+
+    /// <summary>
+    /// A record a hand damaged - an arm's entries or a table's index turned to null, a null inside an arm's entries, an
+    /// entry given a key and nothing it was judged on - is refused as unreadable, naming the file and what to do, never
+    /// reaching a comparison of it as a crash.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "format": 1, "leg": "native", "arms": { "charge": null }, "tables": {} }""", "it holds no list of entries for arm 'charge'")]
+    [InlineData("""{ "format": 1, "leg": "native", "arms": { "charge": [null] }, "tables": {} }""", "it holds what no build of DssHarness writes - another build wrote it, or a hand changed it")]
+    [InlineData("""{ "format": 1, "leg": "native", "arms": {}, "tables": { "77a0": null } }""", "it holds no table index for '77a0'")]
+    [InlineData("""{ "format": 1, "leg": "native", "arms": { "charge": [ { "verdict": "passed", "run": "r1", "at": "2026-10-12T14:58:11Z", "sweptIn": "the main checkout", "key": "k1" } ] }, "tables": {} }""", "it holds an entry of arm 'charge' with the key 'k1' and nothing it was judged on")]
+    public void ARecordAHandDamaged_IsRefusedAsUnreadable_NamingWhatIsWrong(string held, string why)
+    {
+        var file = Record.FileOf(Leg);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, held);
+
+        var unread = Record.Read(Leg).Unread;
+
+        Assert.NotNull(unread);
+        Assert.Null(unread.Format);
+        Assert.Equal(why, unread.Why);
+        Assert.StartsWith($"'{file}' cannot be read, so every arm of 'native' is pending", unread.Warning(file, Leg, sweep: false), StringComparison.Ordinal);
+        Assert.EndsWith("Delete it to start that leg's record again.", unread.Warning(file, Leg, sweep: false), StringComparison.Ordinal);
+
+        // And it never reaches a comparison: a sweep under --pending weighing the arm is told the record cannot be read.
+        var weighed = Record.ArmsOf(Leg, ["charge"]);
+
+        Assert.Equal(why, weighed.Unread?.Why);
+        Assert.Empty(weighed.Arms);
     }
 
     /// <summary>

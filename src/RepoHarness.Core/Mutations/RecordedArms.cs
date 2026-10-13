@@ -82,7 +82,8 @@ internal static class ArmHolding
     /// <param name="recorded">What the record holds of the leg's arms.</param>
     /// <param name="arm">The arm, as the registry names it.</param>
     /// <param name="now">What it would be judged on now, as the first worker's build read it.</param>
-    public static ArmStanding Of(RecordedArms recorded, string arm, ArmKey now)
+    /// <param name="names">How the leg's tree compares names, as its file system does.</param>
+    public static ArmStanding Of(RecordedArms recorded, string arm, ArmKey now, StringComparer? names = null)
     {
         ArgumentNullException.ThrowIfNull(recorded);
         ArgumentNullException.ThrowIfNull(now);
@@ -141,7 +142,7 @@ internal static class ArmHolding
 
         if (shown.JudgedOn is { } on)
         {
-            why.AddRange(KeyDifference.Between(on, tables, now));
+            why.AddRange(KeyDifference.Between(on, tables, now, names));
         }
         else if (now.Unread is { } unreadNow)
         {

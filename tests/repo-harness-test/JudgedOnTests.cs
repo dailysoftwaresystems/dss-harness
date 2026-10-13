@@ -424,6 +424,25 @@ public sealed class JudgedOnTests
             Why(Holding(Entry(compiled)), Again(now, unread: "'a.h' is gone")));
     }
 
+    /// <summary>
+    /// The paths of what a runner reads at run time are compared as the leg's tree compares names, as every other path of
+    /// a key is: a recorded spelling that differs only in case is no move where the tree folds case, and a move where it
+    /// tells the spellings apart.
+    /// </summary>
+    [Fact]
+    public void RunReadPaths_AreComparedAsTheLegsTreeComparesNames()
+    {
+        var arm = Arms(Registry).Find("one")!;
+        var now = KeyOf(arm, new Dictionary<string, string?>(StringComparer.Ordinal));
+        var recorded = Again(now, on => on with { RunReads = new Dictionary<string, string>(StringComparer.Ordinal) { ["Data/Golden.txt"] = "golden" } });
+        var tables = now.Tables.ToDictionary(table => table.Key, table => table.Value, StringComparer.Ordinal);
+
+        Assert.Empty(KeyDifference.Between(recorded.JudgedOn, tables, now, StringComparer.OrdinalIgnoreCase));
+        Assert.Equal(
+            [("run-reads-moved", "what its runner reads at run time moved: Data/Golden.txt, data/golden.txt")],
+            Said(KeyDifference.Between(recorded.JudgedOn, tables, now, StringComparer.Ordinal)));
+    }
+
     /// <summary>The key of <paramref name="arm"/> where everything but its rows is held as one value.</summary>
     private static string Key(MutationArm arm) => KeyOf(arm, new Dictionary<string, string?>(StringComparer.Ordinal)).Key!;
 

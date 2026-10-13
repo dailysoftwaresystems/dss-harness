@@ -49,6 +49,14 @@ public interface IBuildAdapter
     /// <param name="buildConfig">The build configuration's name.</param>
     string? BuildTypeOf(HarnessConfig config, string buildConfig);
 
+    /// <summary>
+    /// The generator this configuration names for the build system of <paramref name="toolchain"/>, or null when it names
+    /// none. Asked of the adapter, so the value it configures with is the value every reader of the configuration holds.
+    /// </summary>
+    /// <param name="config">The whole configuration.</param>
+    /// <param name="toolchain">The toolchain the build builds with.</param>
+    string? GeneratorOf(HarnessConfig config, string toolchain);
+
     /// <summary>The phases that configure and build this project, in order.</summary>
     /// <param name="config">The whole configuration.</param>
     /// <param name="request">The leg's build.</param>
@@ -258,6 +266,16 @@ public sealed class CMakeAdapter : IBuildAdapter
     }
 
     /// <inheritdoc/>
+    public string? GeneratorOf(HarnessConfig config, string toolchain)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return config.Toolchains.TryGetValue(toolchain, out var declared) && declared.Generator is { Length: > 0 } generator
+            ? generator
+            : null;
+    }
+
+    /// <inheritdoc/>
     public IEnumerable<PhaseRequest> Phases(
         HarnessConfig config,
         BuildRequest request,
@@ -272,8 +290,7 @@ public sealed class CMakeAdapter : IBuildAdapter
         var source = Path.Combine(request.TreeRoot, request.Project.Path);
         var configure = new List<string> { "-S", source, "-B", buildDirectory };
 
-        if (config.Toolchains.TryGetValue(request.Variant.Toolchain, out var toolchain)
-            && toolchain.Generator is { Length: > 0 } generator)
+        if (GeneratorOf(config, request.Variant.Toolchain) is { } generator)
         {
             configure.Add("-G");
             configure.Add(generator);
@@ -366,6 +383,14 @@ public sealed class DotnetAdapter : IBuildAdapter
     }
 
     /// <inheritdoc/>
+    public string? GeneratorOf(HarnessConfig config, string toolchain)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return null;
+    }
+
+    /// <inheritdoc/>
     public IEnumerable<PhaseRequest> Phases(
         HarnessConfig config,
         BuildRequest request,
@@ -435,6 +460,14 @@ public sealed class DartAdapter : IBuildAdapter
         ArgumentNullException.ThrowIfNull(config);
 
         return config.BuildConfigs.TryGetValue(buildConfig, out var declared) ? declared.DartMode : null;
+    }
+
+    /// <inheritdoc/>
+    public string? GeneratorOf(HarnessConfig config, string toolchain)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return null;
     }
 
     /// <inheritdoc/>

@@ -24,6 +24,21 @@ public sealed class PendingReason
     /// <summary>The reason, as a line says it: <c>what 'lex_tests' is built from moved: tests/lex/a_test.cpp</c>.</summary>
     public string Said { get; }
 
+    /// <summary>
+    /// Where in the list's order this reason stands: the first that applies is the one a line names, and a reader given
+    /// every one - a listing under <c>--json</c>, a sweep - names them in this order however they were gathered.
+    /// </summary>
+    public int Rank => Array.IndexOf(InOrder, Code);
+
+    /// <summary>The codes, in the order the list is stated in: a reason unknown to it stands last, keeping the others' order.</summary>
+    private static readonly string[] InOrder =
+    [
+        "record-unreadable", "record-newer", "leg-unsweepable", "never-swept", "last-not-passed", "not-keyed", "judge-revised",
+        "rows-changed", "text-moved", "site-moved", "files-moved", "run-reads-moved", "build-environment-changed", "run-settings-changed",
+        "judge-settings-changed", "host-changed", "lines-changed", "set-changed", "made-moved", "fetched-moved", "outside-moved",
+        "compiler-changed", "environment-changed", "key-unreadable",
+    ];
+
     /// <summary>The words a leg's count of its pending arms groups an arm pending for this reason by: <c>20 never swept</c>.</summary>
     public string Counted { get; private init; } = string.Empty;
 
@@ -221,7 +236,8 @@ internal static class KeyDifference
     /// <param name="was">What the arm was judged on, as recorded.</param>
     /// <param name="tables">The tables of it the record could give, by target.</param>
     /// <param name="now">What it would be judged on now, as a worker's build read it.</param>
-    public static IReadOnlyList<PendingReason> Between(JudgedOn was, IReadOnlyDictionary<string, BuiltFromTable> tables, ArmKey now)
+    /// <param name="names">How the leg's tree compares names, as its file system does.</param>
+    public static IReadOnlyList<PendingReason> Between(JudgedOn was, IReadOnlyDictionary<string, BuiltFromTable> tables, ArmKey now, StringComparer? names = null)
     {
         ArgumentNullException.ThrowIfNull(was);
         ArgumentNullException.ThrowIfNull(tables);
@@ -247,7 +263,7 @@ internal static class KeyDifference
             }
         }
 
-        RunRead(was.RunReads, @is.RunReads, StringComparer.Ordinal, reasons);
+        RunRead(was.RunReads, @is.RunReads, names ?? StringComparer.Ordinal, reasons);
         Configured(was, @is.Settings, @is.Host, reasons);
 
         foreach (var (target, before, after) in compared)

@@ -49,7 +49,8 @@ public static class PathPatterns
     /// </summary>
     /// <param name="patterns">The entries, as written.</param>
     /// <param name="relativePath">A path relative to the tree root, spelled either way.</param>
-    public static bool Matches(IReadOnlyList<string> patterns, string relativePath)
+    /// <param name="comparison">How a path and an entry are compared, where the tree's own file system tells names apart in another way.</param>
+    public static bool Matches(IReadOnlyList<string> patterns, string relativePath, StringComparison comparison = StringComparison.Ordinal)
     {
         ArgumentNullException.ThrowIfNull(patterns);
 
@@ -71,7 +72,7 @@ public static class PathPatterns
 
             if (pattern.StartsWith(AnyDepth, StringComparison.Ordinal))
             {
-                if (CoversAnyDepth(pattern[AnyDepth.Length..], candidate))
+                if (CoversAnyDepth(pattern[AnyDepth.Length..], candidate, comparison))
                 {
                     return true;
                 }
@@ -79,8 +80,8 @@ public static class PathPatterns
                 continue;
             }
 
-            if (string.Equals(candidate, pattern, StringComparison.Ordinal)
-                || candidate.StartsWith(pattern + "/", StringComparison.Ordinal))
+            if (string.Equals(candidate, pattern, comparison)
+                || candidate.StartsWith(pattern + "/", comparison))
             {
                 return true;
             }
@@ -159,10 +160,11 @@ public static class PathPatterns
     /// </summary>
     /// <param name="name">The name the pattern gave, which may itself hold separators.</param>
     /// <param name="candidate">The normalised path being tested.</param>
-    private static bool CoversAnyDepth(string name, string candidate)
+    /// <param name="comparison">How a path and the name are compared.</param>
+    private static bool CoversAnyDepth(string name, string candidate, StringComparison comparison)
     {
-        if (string.Equals(candidate, name, StringComparison.Ordinal)
-            || candidate.StartsWith(name + "/", StringComparison.Ordinal))
+        if (string.Equals(candidate, name, comparison)
+            || candidate.StartsWith(name + "/", comparison))
         {
             return true;
         }
@@ -170,7 +172,7 @@ public static class PathPatterns
         // Matched on whole segments. Without that, '**/cache' would cover 'src/mycache', which is a
         // different directory with a similar name, and the reader would never see it go.
         var needle = "/" + name;
-        var at = candidate.IndexOf(needle, StringComparison.Ordinal);
+        var at = candidate.IndexOf(needle, comparison);
 
         while (at >= 0)
         {
@@ -181,7 +183,7 @@ public static class PathPatterns
                 return true;
             }
 
-            at = candidate.IndexOf(needle, at + 1, StringComparison.Ordinal);
+            at = candidate.IndexOf(needle, at + 1, comparison);
         }
 
         return false;

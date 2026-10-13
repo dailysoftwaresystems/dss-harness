@@ -263,7 +263,7 @@ public sealed class LedgerReport
     /// fail" are separate questions, and folding them into one boolean made a run where all eight
     /// legs ran and two failed report as incomplete — which reads as a run that did not finish,
     /// when it finished and found bugs. Interruption is not visible from the rows at all, so the
-    /// caller that can see it supplies it to <see cref="ExitCodeGiven"/> and <see cref="ToJson(bool, IReadOnlyList{string}, string, Func{string, string}, RunId)"/>.
+    /// caller that can see it supplies it to <see cref="ExitCodeGiven"/> and <see cref="ToJson(bool, IReadOnlyList{string}, string, Func{string, string}, RunId, string)"/>.
     /// </remarks>
     public bool Complete => WithoutVerdict.Count == 0;
 
@@ -511,8 +511,12 @@ public sealed class LedgerReport
     /// The run this is, for a command that keeps runs, which a caller can cite it by whatever ended it;
     /// <see langword="null"/> for a command that keeps none.
     /// </param>
-    public string ToJson(bool cancelled, IReadOnlyList<string> unfinished, string? runDirectory = null, Func<string, string>? shown = null, RunId? run = null)
-        => Json(ExitCodeGiven(cancelled, unfinished), Summarize(cancelled, unfinished), cancelled, unfinished, stopped: false, run, runDirectory, shown ?? AsWritten);
+    /// <param name="mutationRecord">
+    /// The directory this run's verdicts of its mutation arms are recorded in, where it records them; <see langword="null"/>
+    /// for a command that records none.
+    /// </param>
+    public string ToJson(bool cancelled, IReadOnlyList<string> unfinished, string? runDirectory = null, Func<string, string>? shown = null, RunId? run = null, string? mutationRecord = null)
+        => Json(ExitCodeGiven(cancelled, unfinished), Summarize(cancelled, unfinished), cancelled, unfinished, stopped: false, run, runDirectory, shown ?? AsWritten, mutationRecord);
 
     /// <summary>
     /// The ledger as data for a run something other than its legs ended - a refusal of the whole run,
@@ -533,6 +537,10 @@ public sealed class LedgerReport
     /// The run this is, for a command that keeps runs, which a caller can cite it by whatever ended it;
     /// <see langword="null"/> for a command that keeps none.
     /// </param>
+    /// <param name="mutationRecord">
+    /// The directory this run's verdicts of its mutation arms are recorded in, where it records them; <see langword="null"/>
+    /// for a command that records none.
+    /// </param>
     /// <remarks>
     /// Whatever ended the run, a reader who asked for data is answered with data: the machine that
     /// dispatched a leg reads a host's standard output as this document, and text there - a table, a
@@ -541,11 +549,11 @@ public sealed class LedgerReport
     /// the run itself: it neither passed nor completed, and reached no verdict of its own. An
     /// interruption is said as one, from the code it ends with, so a script never reads it as red.
     /// </remarks>
-    public string ToJson(int exitCode, string stoppedBecause, string? runDirectory = null, Func<string, string>? shown = null, RunId? run = null)
+    public string ToJson(int exitCode, string stoppedBecause, string? runDirectory = null, Func<string, string>? shown = null, RunId? run = null, string? mutationRecord = null)
     {
         ArgumentNullException.ThrowIfNull(stoppedBecause);
 
-        return Json(exitCode, stoppedBecause, cancelled: exitCode == HarnessExit.Cancelled, [], stopped: true, run, runDirectory, shown ?? AsWritten);
+        return Json(exitCode, stoppedBecause, cancelled: exitCode == HarnessExit.Cancelled, [], stopped: true, run, runDirectory, shown ?? AsWritten, mutationRecord);
     }
 
     /// <summary>
@@ -574,7 +582,7 @@ public sealed class LedgerReport
     /// last lines a phase printed are that program's own lines, beneath the table as here, and stay as it
     /// printed them.
     /// </remarks>
-    private string Json(int exitCode, string summary, bool cancelled, IReadOnlyList<string> unfinished, bool stopped, RunId? run, string? runDirectory, Func<string, string> show) => JsonSerializer.Serialize(
+    private string Json(int exitCode, string summary, bool cancelled, IReadOnlyList<string> unfinished, bool stopped, RunId? run, string? runDirectory, Func<string, string> show, string? mutationRecord = null) => JsonSerializer.Serialize(
         new
         {
             Verdict = stopped ? null : Verdicts.Display(Verdict),
@@ -591,6 +599,10 @@ public sealed class LedgerReport
             // Where the records are, as the text form's 'logs:' line says: a caller is told rather
             // than left to work out which tree a run wrote into.
             RunDirectory = runDirectory is null ? null : show(runDirectory),
+
+            // Where the verdicts of a sweep's arms are kept, for the one command that records them: a
+            // caller reading them back needs no rule to work out which tree they were kept in.
+            MutationRecord = mutationRecord is null ? null : show(mutationRecord),
             Passed = !stopped && !cancelled && Passed,
             Cancelled = cancelled,
             Unfinished = unfinished,

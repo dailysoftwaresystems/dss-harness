@@ -221,6 +221,97 @@ public sealed class MutationListingTests
     }
 
     /// <summary>
+    /// A file of the tree a table names that still stands but holds something else moves the arm, named as such - "(gone)"
+    /// says only a file the reading no longer holds.
+    /// </summary>
+    [Fact]
+    public void AFileATableNames_ThatStillStandsButHoldsSomethingElse_MovesTheArm()
+    {
+        var listing = new Listing();
+
+        listing.Tree["src/lib.cpp"] = "moved";
+
+        var arm = Assert.Single(MutationListing.Of(listing.Input()).Arms);
+
+        Assert.True(arm.Pending);
+        Assert.Equal(("files-moved", "what 'lib_tests' is built from moved: src/lib.cpp"), (arm.Why[0].Code, arm.Why[0].Said));
+    }
+
+    /// <summary>
+    /// The reasons an arm is pending for are in the order they are stated in however they were gathered: a record that
+    /// cannot be read and a leg that cannot be swept are both said, the record first, and a table the record cannot give
+    /// comes before the leg's own trouble.
+    /// </summary>
+    [Fact]
+    public void TheReasonsAreInTheirOrder_HoweverTheyWereGathered()
+    {
+        var listing = new Listing { Unsweepable = "Leg 'native' builds with toolchain 'vs'" };
+
+        listing.Unread = RecordUnread.Because("it is not JSON");
+
+        var both = Assert.Single(MutationListing.Of(listing.Input()).Arms);
+
+        Assert.Equal(["record-unreadable", "leg-unsweepable"], both.Why.Select(reason => reason.Code));
+
+        listing.Unread = null;
+        listing.Lost = listing.Entry.JudgedOn!.Built["lib"];
+
+        var tabled = Assert.Single(MutationListing.Of(listing.Input()).Arms);
+
+        Assert.Equal(["record-unreadable", "leg-unsweepable"], tabled.Why.Select(reason => reason.Code));
+    }
+
+    /// <summary>
+    /// The document's <c>recordUnread</c> names the file that cannot be read, as a listing's warning does, and the warning
+    /// itself is written under <c>--json</c> too.
+    /// </summary>
+    [Fact]
+    public void TheDocumentsRecordUnread_NamesTheFile()
+    {
+        var listing = new Listing();
+        listing.Unread = RecordUnread.Because("it is not JSON");
+
+        var leg = MutationListing.Of(listing.Input());
+
+        using var document = JsonDocument.Parse(MutationListing.Json([leg], "arms.txt", "the record", text => text));
+
+        Assert.Equal("native.json: it is not JSON", document.RootElement.GetProperty("legs")[0].GetProperty("recordUnread").GetString());
+    }
+
+    /// <summary>
+    /// A listing asks after a table of the record for no entry older than the newest nothing moved for: what the newest
+    /// unmoved entry names is asked after, and what an older one names never.
+    /// </summary>
+    [Fact]
+    public void AListing_AsksAfterNoTableOfAnEntryOlderThanTheNewestUnmoved()
+    {
+        var listing = new Listing();
+        var older = new BuiltFromTable
+        {
+            Target = "lib_tests",
+            Lines = "lines",
+            Files = new Dictionary<string, string>(StringComparer.Ordinal) { ["src/other.cpp"] = "other" },
+            Fetched = new Dictionary<string, string>(StringComparer.Ordinal),
+            Made = new Dictionary<string, FilesIn>(StringComparer.Ordinal),
+            Outside = new Dictionary<string, FilesIn>(StringComparer.Ordinal),
+        };
+        var entry = listing.Entry with
+        {
+            Key = "older",
+            Run = "20261011-090000-00000000",
+            JudgedOn = listing.Entry.JudgedOn! with { Built = new Dictionary<string, string>(listing.Entry.JudgedOn.Built) { ["lib_tests"] = older.Digest() } },
+        };
+
+        listing.Entries.Insert(0, entry);
+
+        var arm = Assert.Single(MutationListing.Of(listing.Input()).Arms);
+
+        Assert.False(arm.Pending);
+        Assert.DoesNotContain(older.Digest(), listing.Asked, StringComparer.Ordinal);
+        Assert.Equal([.. listing.Entry.JudgedOn!.Built.Values.Order(StringComparer.Ordinal)], listing.Asked.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// The listing's document carries every reason an arm is pending for, with the target and paths each names, what was
     /// read and what was not, and the verdict shown - its key and where it was swept; and each leg's counts.
     /// </summary>
@@ -358,6 +449,9 @@ public sealed class MutationListingTests
         /// <summary>The digest of a table the record cannot give, or <see langword="null"/>.</summary>
         public string? Lost { get; set; }
 
+        /// <summary>Each digest a table of the record was asked after, in the order asked.</summary>
+        public List<string> Asked { get; } = [];
+
         /// <summary>Makes the reason <paramref name="code"/> names apply to arm <c>one</c>.</summary>
         public void Make(string code)
         {
@@ -390,19 +484,24 @@ public sealed class MutationListingTests
             var reading = new SyncManifest(
                 "tree",
                 Tree.ToDictionary(pair => pair.Key, pair => new SyncEntry(pair.Key, pair.Value.Length, pair.Value), StringComparer.Ordinal));
+            var arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["one"] = [.. Entries],
+            };
+
+            if (Entries.Count == 0)
+            {
+                arms.Clear();
+            }
 
             return new ListingInput(
                 "native",
                 Arms,
                 Unsweepable,
-                new LegVerdictRecord(
-                    "native.json",
-                    Entries.Count == 0
-                        ? new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase)
-                        : new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase) { ["one"] = [.. Entries] },
-                    new Dictionary<string, TableIndex>(StringComparer.Ordinal),
-                    Unread),
-                digest => digest != Lost && tables.TryGetValue(digest, out var table) ? (table, null) : (null, $"'{digest}.json' is gone"),
+                Unread is null
+                    ? LegVerdictRecord.Read("native.json", arms, new Dictionary<string, TableIndex>(StringComparer.Ordinal))
+                    : LegVerdictRecord.Unreadable("native.json", Unread),
+                digest => digest != Lost && tables.TryGetValue(digest, out var table) ? AskedTable(digest, table) : AskedLost(digest),
                 new TreeFiles(reading, StringComparer.Ordinal),
                 Host,
                 Now,
@@ -411,6 +510,22 @@ public sealed class MutationListingTests
         }
 
         private void Judged(Func<JudgedOn, JudgedOn> change) => Entries[^1] = Entries[^1] with { JudgedOn = change(Entries[^1].JudgedOn!) };
+
+        /// <summary>Says the digest was asked after, and gives the table.</summary>
+        private RecordedTable AskedTable(string digest, BuiltFromTable table)
+        {
+            Asked.Add(digest);
+
+            return RecordedTable.Read(table);
+        }
+
+        /// <summary>Says the digest was asked after, and gives none.</summary>
+        private RecordedTable AskedLost(string digest)
+        {
+            Asked.Add(digest);
+
+            return RecordedTable.Unreadable($"'{digest}.json' is gone");
+        }
 
         /// <summary>A table of <paramref name="target"/>, reading <paramref name="file"/> of the tree as it holds it now.</summary>
         private static BuiltFromTable Table(string target, string file) => new()

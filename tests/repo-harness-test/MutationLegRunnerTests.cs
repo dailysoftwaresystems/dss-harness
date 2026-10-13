@@ -2290,19 +2290,20 @@ public sealed class MutationLegRunnerTests
     /// <summary>
     /// What a test binary reads at run time, as <c>mutations.runReads</c> names it for the arm's runner, is part of the
     /// arm's key: each file of the tree's reading a pattern covers, with what it holds - so editing one moves the key of
-    /// an arm that runner runs, and not a BUILD-RED arm's, which runs nothing. A file no pattern covers moves no key.
+    /// an arm that runner runs, and not a BUILD-RED arm's, which runs nothing. A file no pattern covers moves no key, and
+    /// a file that leaves what the patterns cover moves it: what the runner reads at run time changed.
     /// </summary>
     [Fact]
     public async Task WhatARunnerReadsAtRunTime_AsRunReadsNamesIt_IsInTheKeyOfEachArmItRuns()
     {
-        static async Task<Dictionary<string, RecordedVerdict>> SweptAsync(string golden, string unnamed)
+        static async Task<Dictionary<string, RecordedVerdict>> SweptAsync(string golden, string unnamed, string under = "data/golden")
         {
             var kept = new Kept();
 
             // A BUILD-RED arm runs nothing, so holds nothing of this - even where an entry names the token its row has for a runner.
             using var sweep = new Sweep { Workers = 1, Sink = kept, RunReads = new() { ["fixture_tests"] = ["data/golden"], [MutationRegistryParser.NoRunner] = ["data"] } };
 
-            sweep.More["data/golden/expected.txt"] = golden;
+            sweep.More[$"{under}/expected.txt"] = golden;
             sweep.More["data/other.txt"] = unnamed;
             await sweep.RunAsync([ChargeBound, DepthType]);
 
@@ -2324,15 +2325,62 @@ public sealed class MutationLegRunnerTests
 
         Assert.NotEqual(then["charge-bound"].Key, edited["charge-bound"].Key);
         Assert.Equal(then["depth-type"].Key, edited["depth-type"].Key);
+
+        var leftTheSet = await SweptAsync("3 passed", "anything", under: "data/moved");
+
+        Assert.NotEqual(then["charge-bound"].Key, leftTheSet["charge-bound"].Key);
+        Assert.Equal(then["depth-type"].Key, leftTheSet["depth-type"].Key);
+    }
+
+    /// <summary>
+    /// What a runner reads at run time is found as the tree's own file system compares names: an entry of runReads spelled
+    /// in another case than the reading spells the files it covers covers them still, where that file system folds case,
+    /// and what they hold is in the key. An entry that covers no file of the reading leaves the arm with no key, naming
+    /// the entry - as a text the arm cites that the reading lacks does.
+    /// </summary>
+    [Fact]
+    public async Task WhatARunnerReadsAtRunTime_IsFoundAsTheTreesFileSystemComparesNames_AndAnEntryCoveringNothingLeavesNoKey()
+    {
+        var kept = new Kept();
+
+        using (var sweep = new Sweep { Workers = 1, Sink = kept, RunReads = new() { ["fixture_tests"] = ["Data/Golden"] } })
+        {
+            sweep.More["data/golden/expected.txt"] = "3 passed";
+            sweep.Files = new CaseOf(sweep.Harness.FileSystem, sweep.Tree, folds: true);
+
+            Assert.Equal(LegVerdict.Passed, (await sweep.RunAsync([ChargeBound])).Verdict);
+
+            var (_, verdict, _) = Assert.Single(kept.Judgements);
+
+            Assert.NotNull(verdict.Key);
+            Assert.Equal(
+                [("data/golden/expected.txt", FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes("3 passed")))],
+                verdict.JudgedOn!.RunReads.Select(pair => (pair.Key, pair.Value)));
+        }
+
+        var lacking = new Kept();
+
+        using (var sweep = new Sweep { Workers = 1, Sink = lacking, RunReads = new() { ["fixture_tests"] = ["data/nowhere"] } })
+        {
+            sweep.More["data/golden/expected.txt"] = "3 passed";
+
+            await sweep.RunAsync([ChargeBound]);
+
+            var (_, verdict, _) = Assert.Single(lacking.Judgements);
+
+            Assert.Null(verdict.Key);
+            Assert.Equal("runReads names data/nowhere, which covers no file of the tree", verdict.KeyUnread);
+        }
     }
 
     /// <summary>
     /// An arm's key, as a sweep builds it, moves with each part read where the sweep runs - a text it cites edited in the
-    /// tree, the environment its host declares, a value of the environment its test settings give its runs, and the host
-    /// its leg is named on - each to a key of its own; and stays where nothing moved, in another tree of the same content.
+    /// tree, the environment its host declares, the developer environment its leg's toolchain names, a value of the
+    /// environment its test settings give its runs, and the host its leg is named on - each to a key of its own; and stays
+    /// where nothing moved, in another tree of the same content.
     /// </summary>
     [Fact]
-    public async Task AnArmsKey_MovesWithAText_TheHostsEnvironment_ATestEnvironmentValue_AndTheHost()
+    public async Task AnArmsKey_MovesWithAText_TheHostsEnvironment_ItsDeveloperEnvironment_ATestEnvironmentValue_AndTheHost()
     {
         static TestConfig Tested(string mode) => new() { All = new TestInvocation { Runner = "ctest", Env = new() { ["FIXTURE_MODE"] = mode } } };
 
@@ -2356,6 +2404,7 @@ public sealed class MutationLegRunnerTests
         [
             await KeyAsync(sweep => File.WriteAllText(Path.Combine(sweep.Tree, "texts", "charge.diag"), "the charge was exceeded")),
             await KeyAsync(sweep => sweep.HostEnv["HOST_SETTING"] = "1"),
+            await KeyAsync(sweep => sweep.DeveloperEnvironment = new DeveloperEnvironmentFact("vs", "C:/vs", "17.14", "14.44", "x64")),
             await KeyAsync(mode: "loose"),
             await KeyAsync(named: HostId.Ssh("example-pi")),
         ];

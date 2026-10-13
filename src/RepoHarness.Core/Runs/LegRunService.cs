@@ -70,6 +70,12 @@ public sealed record LegRunRequest(
     /// copy for them all. Never sent to a host: a host's legs work in its copies whatever it says.
     /// </summary>
     public LocalTrees LocalTrees { get; init; } = LocalTrees.AsConfigured;
+
+    /// <summary>
+    /// The directory this run's verdicts of its mutation arms are recorded in, where it records them; <see langword="null"/>
+    /// where it records none. Said once in its ledger, so a reader of the document knows where what it holds was kept.
+    /// </summary>
+    public string? MutationRecord { get; init; }
 }
 
 /// <summary>One unit of a leg's work asking its machine to take it: an arm of a sweep.</summary>
@@ -321,7 +327,7 @@ public sealed class LegRunService(
                     runDirectory);
             }
 
-            return Report(commandName, context, ledger, execution, runId, runDirectory, placed, request.Json);
+            return Report(commandName, context, ledger, execution, runId, runDirectory, placed, request.Json, request.MutationRecord);
         }
         finally
         {
@@ -511,7 +517,10 @@ public sealed class LegRunService(
         IReadOnlyList<string> details,
         string? runDirectory)
         => request.Json
-            ? new CommandOutcome(exitCode, message) { Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory, _output.Shown, runId)] }
+            ? new CommandOutcome(exitCode, message)
+            {
+                Data = [LedgerReport.From(entries, factor).ToJson(exitCode, message, runDirectory, _output.Shown, runId, request.MutationRecord)],
+            }
             : CommandOutcome.Failed(exitCode, message, details);
 
     /// <summary>
@@ -1004,7 +1013,8 @@ public sealed class LegRunService(
         RunId runId,
         string runDirectory,
         IReadOnlyList<PlacedLeg> placed,
-        bool json)
+        bool json,
+        string? mutationRecord = null)
     {
         var report = ledger.Build(context.Config.Defaults.DurationWarningFactor);
 
@@ -1018,7 +1028,7 @@ public sealed class LegRunService(
         {
             return new CommandOutcome(exitCode, message)
             {
-                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory, _output.Shown, runId)],
+                Data = [report.ToJson(execution.Cancelled, execution.Unfinished, runDirectory, _output.Shown, runId, mutationRecord)],
                 Quiet = true,
             };
         }

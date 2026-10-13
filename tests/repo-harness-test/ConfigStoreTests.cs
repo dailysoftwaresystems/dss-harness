@@ -1116,6 +1116,8 @@ public sealed class ConfigStoreTests
     [InlineData("""{ "mutations": { "runReads": { "fixture_tests": ["../data"] } } }""", "mutations.runReads.fixture_tests entry '../data' must be a relative path inside the tree")]
     [InlineData("""{ "mutations": { "runReads": { "fixture_tests": ["/data"] } } }""", "mutations.runReads.fixture_tests entry '/data' must be a relative path inside the tree")]
     [InlineData("""{ "mutations": { "runReads": { "fixture_tests": ["data/*.txt"] } } }""", "mutations.runReads.fixture_tests names 'data/*.txt', which holds '*'")]
+    [InlineData("""{ "mutations": { "runReads": { "fixture_tests": ["."] } } }""", "mutations.runReads.fixture_tests names '.', the whole tree: name the files and directories its runs read")]
+    [InlineData("""{ "mutations": { "runReads": { "fixture_tests": ["./."] } } }""", "mutations.runReads.fixture_tests names './.', the whole tree: name the files and directories its runs read")]
     public void Load_RejectsMutationSettingsThatCannotWork(string json, string expected)
     {
         var exception = LoadInvalid(json);

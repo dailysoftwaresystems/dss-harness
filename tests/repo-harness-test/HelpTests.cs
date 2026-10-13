@@ -346,8 +346,10 @@ public sealed partial class HelpTests
             "runReads names, for each runner as the A rows name it, the files of the tree its runs read at run time - a data file, a "
             + "golden output, a plugin it opens - each a path, everything below a directory, or **/name at any depth: what the "
             + "sweep's reading of the tree holds of each is part of the key of every arm that runner runs.",
+            "A runner given no file, an entry outside the tree, one holding a '*' anywhere but a leading '**/', and one naming the "
+            + "whole tree ('.'), are refused; so is a runner no A row of the registry names, when the registry is read.",
             "A file a test binary reads at run time that runReads does not name is read by no part of a key: editing it moves "
-            + "none, and a passed it changes the verdict of still holds.",
+            + "none, and a recorded passed it would change still holds.",
             "a key two workers read otherwise, or one a worker could not read, fails the leg as violated, naming the arm, the workers and "
             + "the part that differs; a self-test with one worker says it compared its keys with no other's. A self-test's keys are on no "
             + "arm's line.",
@@ -383,7 +385,8 @@ public sealed partial class HelpTests
             "clean, a deleted worktree and a removed host copy leave it as it was; deleting it is the one way to forget it, and "
             + "every arm is then pending.",
             $"A record that cannot be read, or that a newer {ToolPackage.Id} wrote, is never written: a sweep of that leg says so "
-            + "once, as a warning naming the file and on the leg's line, and records none.",
+            + "once, as a warning naming the file and on the leg's line, and records none. A sweep this machine "
+            + "records names the record once, in its lines and in --json, as a listing does.",
         })
         {
             Assert.Contains(text, said, StringComparison.Ordinal);
@@ -417,6 +420,9 @@ public sealed partial class HelpTests
             "it asks no host, takes no lock, begins no run and writes nothing, and needs nothing only a sweep needs - report "
             + "arguments, a leg built with Ninja, a selection that drives an arm.",
             "the newest entry nothing read here moved for, else the newest",
+            "the verdict shown is no passed, it was swept with no key, or the judge's revision, its rows, a text it cites, a site "
+            + "it mutates, a file of the tree its targets are built from, a file its runner reads at run time, what of the "
+            + "configuration its build, its run or its judge is given, or the host its leg names changed",
             "the row says the first that applies, in that order, and --json every one.",
             "Every other arm is unmoved here, which is never to say it holds: a listing reads the rows, the texts, the tree's "
             + "files and the settings, never how a target is built, a file its build makes, the dependency sources it fetched, "
@@ -751,6 +757,8 @@ public sealed partial class HelpTests
             "and test set is marked on its own - 'test count differs', and testCountDiffers and",
             "testCountNote in --json - never as a timing, and never changes a verdict either. A",
             "\"windows\": { \"testSet\": \"windows\" }",
+            "A leg's os names its section however it is spelled - Windows as windows - as every",
+            "per-system setting is read.",
         })
         {
             Assert.Contains(text, result.StandardOutput, StringComparison.Ordinal);

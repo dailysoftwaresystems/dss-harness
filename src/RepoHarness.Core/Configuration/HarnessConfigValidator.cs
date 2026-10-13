@@ -6,6 +6,7 @@ using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Processes;
+using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 using RepoHarness.Core.Runners;
 using RepoHarness.Core.Testing;
@@ -356,8 +357,9 @@ public static partial class HarnessConfigValidator
                 + "unmutated run's own duration stops a mutated run that is merely as slow");
         }
 
-        // A runner no arm names is no error - the registry is the repository's own, read only by a sweep - but each entry
-        // must name files of the tree, as every other list of paths does, and a runner given none says nothing.
+        // Each entry must name files of the tree, as every other list of paths does, and a runner given none says nothing.
+        // A runner no A row of the registry names is refused when the registry is read, not here: the registry is the
+        // repository's own, and whether a runner is named is its question, asked where both are in hand.
         foreach (var (runner, patterns) in mutations.RunReads ?? [])
         {
             var setting = $"mutations.runReads.{runner}";
@@ -366,6 +368,11 @@ public static partial class HarnessConfigValidator
             {
                 problems.Add($"{setting} names no file: name what its runs read at run time, or leave the runner out");
                 continue;
+            }
+
+            foreach (var entry in patterns.Where(entry => PathPatterns.Normalize(entry) is "." or ""))
+            {
+                problems.Add($"{setting} names '{entry}', the whole tree: name the files and directories its runs read");
             }
 
             RequireRelativePaths(patterns, setting, problems);

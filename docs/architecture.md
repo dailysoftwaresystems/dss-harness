@@ -1958,7 +1958,8 @@ tool replaces, where a green result had quietly stopped meaning anything.
 
 - The exit code is read from the process itself, never through a pipe or a wrapper.
 - Every test invocation declares a `successPattern`, checked on the platform section
-  merged over `all`. It is matched against the runner's own output and never against
+  merged over `all` - a section found by the leg's `os` however it is spelled, as every
+  per-system setting is read. It is matched against the runner's own output and never against
   anything the harness wrote: a log header that echoes the command line contains the
   pattern whenever the command does. An empty pattern matches anything and is refused
   when the file is read.
@@ -3596,12 +3597,16 @@ read by no part, so editing it moves no key, and a recorded `passed` it would ch
   through the compilers, `mutations.runReads` through the files it names.
 - `runReads`: each file of the tree the arm's runner reads at run time, as `mutations.runReads`
   names them for that runner - a path, everything below a directory, or `**/name` at any depth, as
-  every list of paths reads them (`PathPatterns`) - with what the sweep's reading holds of each;
-  nothing for a BUILD-RED arm, which runs nothing. Declared, never found: what a binary opens at run
+  every list of paths reads them (`PathPatterns`), and found as the tree's file system compares
+  names - with what the sweep's reading holds of each; nothing for a BUILD-RED arm, which runs
+  nothing. Declared, never found: what a binary opens at run
   time is said by no record a build keeps, and every file of the tree in every key would make every
   arm pending after every edit. A file that joins or leaves what the entries cover moves the key, as
-  one that holds something else does. A runner no arm names is no error; one given no file, or an
-  entry outside the tree, is refused when the configuration is read.
+  one that holds something else does; an entry that covers no file of the reading leaves the arm no
+  key, naming the entry, as a text it cites that the reading lacks does. A runner no TEST-RED row of
+  the registry names, one given no file, an entry outside the tree, one holding a `*` anywhere but a
+  leading `**/`, and one naming the whole tree, are refused - the runner when the registry is read,
+  the rest when the configuration is.
 - `host`: the host the leg ran on, as the machine that dispatched it names it.
 
 A target's table (`BuiltFromTable`) is what the build of it read, never what that was generated
@@ -3679,11 +3684,14 @@ the record keeps what it held; recording wherever `arm.json` is written would le
 stops admitting arms turn every recorded `passed` into `not-admitted`. Never: a self-test, whose
 subject has no sink. A leg swept on a host is recorded by nothing: the host's copy keeps no record.
 
-A record that cannot be read - not JSON, a member this build does not know - or one a newer build
+A record that cannot be read - not JSON, a member this build does not know, or a hand's damage: a
+null where entries or tables go, an entry with a key and nothing it was judged on - or one a newer build
 wrote (its `format` above this build's) is never written: every arm of its leg is pending, a sweep
 of that leg says so once as a warning naming the file - delete it to start again, or update the tool
 - and once on the leg's line, and records none; so is a record that cannot be written. Either is the
-record's, never the arm's: its verdict stands as reached. `clean`, a deleted worktree and a removed
+record's, never the arm's: its verdict stands as reached. A sweep typed on this machine names the
+record once, in its lines and in its ledger's document (`mutationRecord`), as a listing does.
+`clean`, a deleted worktree and a removed
 host copy leave the record as it was: it is outside every build directory, worker and copy, and no
 part of a key names a tree, a worker or a build directory, so a worker made again after a `clean`
 comes to the same key and the recorded `passed` holds. Deleting the record is the one way to forget

@@ -209,6 +209,49 @@ public sealed class LegPlacementTests
         Assert.Equal(HostId.Ssh("pi"), Place(HostDoubles.Leg("linux", "arm64"), Windows, Pi).Host?.Host);
     }
 
+    /// <summary>
+    /// A leg's os names its test invocation's section however it is spelled, as every per-system setting is read: a leg
+    /// declaring "Windows" is asked for the runner its windows section declares, and not the one the shared section or
+    /// another system's does.
+    /// </summary>
+    [Theory]
+    [InlineData("Windows")]
+    [InlineData("windows")]
+    public void Place_RequiresTheTestRunnersOfTheSection_TheLegsOsNamesHoweverSpelled(string os)
+    {
+        var test = new TestConfig
+        {
+            All = new TestInvocation { Runner = "ctest" },
+            Windows = new TestInvocation { Runner = "gtest" },
+        };
+        var leg = new SelectedLeg("win", new LegConfig { Os = os, Processor = "x86_64", Config = "debug", Test = test });
+        var withGtest = Windows with
+        {
+            Programs = new Dictionary<string, ProgramLocation>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["gtest"] = new ProgramLocation("gtest", ProgramFound.OnPath, "C:/bin/gtest.exe"),
+            },
+        };
+
+        var placed = LegPlacement.Place(new HarnessConfig(), leg, LegWorkload.BuildAndTest, new Dictionary<HostId, HostReport> { [withGtest.Host] = withGtest });
+
+        Assert.True(placed.Runnable);
+
+        var without = Windows with
+        {
+            Programs = new Dictionary<string, ProgramLocation>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ctest"] = new ProgramLocation("ctest", ProgramFound.OnPath, "C:/bin/ctest.exe"),
+            },
+        };
+
+        var refused = LegPlacement.Place(new HarnessConfig(), leg, LegWorkload.BuildAndTest, new Dictionary<HostId, HostReport> { [without.Host] = without });
+
+        Assert.False(refused.Runnable);
+        Assert.Contains("gtest", refused.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("ctest", refused.Reason, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void TheCheck_FailsForANamedLegThatCannotRun_ButNotForADeclaredOne()
     {

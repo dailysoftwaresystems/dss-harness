@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using NSubstitute;
 using RepoHarness.Core.Build;
 using RepoHarness.Core.Configuration;
@@ -822,6 +823,84 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A runner <c>mutations.runReads</c> names that no TEST-RED row of the registry names is refused where the registry
+    /// is read: an entry for a runner that was renamed or misspelled would silently cover nothing, and every key it was
+    /// meant to move would hold for ever.
+    /// </summary>
+    [Fact]
+    public async Task ARunReadsRunnerNoTestRedRowNames_IsRefusedWhereTheRegistryIsRead()
+    {
+        using var temp = new TempDirectory();
+        var (service, context) = Prepare(temp, Sweepable(new MutationSettings
+        {
+            Registry = Registry,
+            TextDirectory = "mutations/texts",
+            ReportArgs = ["--gtest_output=xml:{report}"],
+            RunReads = new() { ["fixture_tests"] = ["data"], ["fixture_testz"] = ["data"] },
+        }));
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => service.ReadAsync(context, null, TestContext.Current.CancellationToken));
+
+        Assert.Equal(HarnessExit.ConfigInvalid, refusal.ExitCode);
+        Assert.Equal(
+            "mutations.runReads names runner 'fixture_testz', which no TEST-RED row of 'mutations/arms.txt' names: an entry no arm runs covers nothing. "
+            + "Name the runner as its A row does, or leave it out.",
+            refusal.Message);
+    }
+
+    /// <summary>
+    /// A sweep typed on this machine names the record it writes, in its lines and in its ledger's document, as a listing
+    /// does; a self-test, and a sweep this machine runs for another machine, record nothing and name nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ASweepThatRecordsNamesTheRecord_InItsLinesAndItsLedger(bool selfTest, bool onAHost)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+
+        config.Hosts.Wsl["Example-Linux"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" };
+
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "x86_64" });
+        var (service, _) = Prepare(temp, config, harness: harness, inspector: inspector);
+        var record = Path.Combine(temp.Path, HarnessLayout.DirectoryName, HarnessLayout.MutationRecordDirectoryName);
+
+        var outcome = await service.RunAsync(
+            new MutationRequest(temp.Path, ["native"], null, Json: true, Here: onAHost ? HostId.Wsl("Example-Linux") : null, SelfTest: selfTest),
+            RunId.New(),
+            TestContext.Current.CancellationToken);
+
+        using (var document = JsonDocument.Parse(Assert.Single(outcome.Data)))
+        {
+            if (selfTest || onAHost)
+            {
+                Assert.False(document.RootElement.TryGetProperty("mutationRecord", out _));
+            }
+            else
+            {
+                Assert.Equal(record, document.RootElement.GetProperty("mutationRecord").GetString());
+            }
+        }
+
+        await service.RunAsync(
+            new MutationRequest(temp.Path, ["native"], null, Here: onAHost ? HostId.Wsl("Example-Linux") : null, SelfTest: selfTest),
+            RunId.New(),
+            TestContext.Current.CancellationToken);
+
+        if (selfTest || onAHost)
+        {
+            Assert.DoesNotContain($"the record is '{record}'", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains($"check-mutations: the record is '{record}'", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
     /// A sweep, or a self-test, in a tree whose git does not ignore what it would make in the slot its workers are kept
     /// in - a branch whose rules predate init's - is refused before anything is made, naming init, and the run ends
     /// there: a worker committed by <c>git add -A</c> would travel to every clone. It is asked of the tree on the machine
@@ -965,7 +1044,26 @@ public sealed class MutationServiceTests
 
         inWorktree.Sink!.Judged(
             "charge",
-            new RecordedVerdict { Verdict = "passed", Run = "20261012-145059-ba433418", At = DateTimeOffset.UnixEpoch, SweptIn = inWorktree.SweptIn, Key = "k" },
+            new RecordedVerdict
+            {
+                Verdict = "passed",
+                Run = "20261012-145059-ba433418",
+                At = DateTimeOffset.UnixEpoch,
+                SweptIn = inWorktree.SweptIn,
+                Key = "k",
+                JudgedOn = new JudgedOn
+                {
+                    Judge = ArmJudge.Revision,
+                    Rows = new RowDigests("rows"),
+                    Texts = new Dictionary<string, string?>(StringComparer.Ordinal),
+                    Sites = new Dictionary<string, string?>(StringComparer.Ordinal),
+                    Built = new Dictionary<string, string>(StringComparer.Ordinal),
+                    Compilers = [],
+                    Settings = new SweepSettings("build", "run", "judge"),
+                    RunReads = new Dictionary<string, string>(StringComparer.Ordinal),
+                    Host = "local",
+                },
+            },
             []);
 
         Assert.Null(inWorktree.Sink.Unrecorded);

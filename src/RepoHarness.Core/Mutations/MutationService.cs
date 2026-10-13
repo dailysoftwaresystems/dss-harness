@@ -180,6 +180,15 @@ public sealed class MutationService(
             _clock,
             CommandName);
 
+        // A sweep typed on this machine records each verdict as its arm ends; one a host runs for it keeps no record
+        // there, and nothing of a self-test is kept. Where this one records, it says where, as a listing does.
+        var records = request.Here is null && !request.SelfTest;
+
+        if (records && !request.Json)
+        {
+            _output.Info(CommandName, $"the record is '{new ArmVerdictRecord(_fileSystem, context.Layout).Directory}'");
+        }
+
         return await _legRuns
             .RunAsync(
                 CommandName,
@@ -203,10 +212,11 @@ public sealed class MutationService(
                     // A sweep makes no copy of its own: its workers are already copies of one reading. The legs it runs
                     // here work in their trees, wherever the configuration would have a command's legs work.
                     LocalTrees = LocalTrees.InPlace,
+                    MutationRecord = records ? context.Layout.MutationRecordDirectory : null,
                 },
                 (work, token) => request.SelfTest
                     ? SelfTestAsync(runner, work, arms, request.ForceLock, token)
-                    : SweepAsync(runner, work, arms, request.ForceLock, records: request.Here is null, pending: request.Pending && request.Here is null, token),
+                    : SweepAsync(runner, work, arms, request.ForceLock, records, pending: request.Pending && request.Here is null, token),
                 cancellationToken)
             .ConfigureAwait(false);
     }
@@ -252,12 +262,18 @@ public sealed class MutationService(
             var named = LegPlacement.Named(config, leg.Leg);
             var project = VariantKey.ProjectFor(config, leg.Leg);
 
+            // One read of a table to a digest, for the whole listing, however many arms and entries name it.
+            var tables = new Dictionary<string, RecordedTable>(StringComparer.Ordinal);
+
+            RecordedTable TableOf(string digest)
+                => tables.TryGetValue(digest, out var read) ? read : tables[digest] = record.Table(leg.Name, digest);
+
             listed.Add(MutationListing.Of(new ListingInput(
                 leg.Name,
                 ArmSelection.For(leg.Name, arms.Registry, arms.Selected, arms.Scopes).Driven,
                 unsweepable.GetValueOrDefault(leg.Name),
                 record.Read(leg.Name),
-                digest => record.Table(leg.Name, digest),
+                TableOf,
                 files,
                 named?.ToString(),
                 SweepSettings.Of(config, leg.Leg, config.Hosts.SettingsFor(named ?? HostId.Local)),
@@ -266,6 +282,15 @@ public sealed class MutationService(
         }
 
         var registry = config.Mutations.Registry!;
+
+        // Said under --json too: a warning is for whoever reads the document, and no row of it names the file.
+        foreach (var leg in listed)
+        {
+            if (leg.RecordUnread is { } unread)
+            {
+                _output.Warn(CommandName, unread.Warning(record.FileOf(leg.Leg), leg.Leg, sweep: false));
+            }
+        }
 
         if (request.Json)
         {
@@ -287,11 +312,6 @@ public sealed class MutationService(
             if (leg.Unsweepable is { } why)
             {
                 _output.Info(CommandName, $"'{leg.Leg}' cannot be swept, so every arm on it is pending: {why}");
-            }
-
-            if (leg.RecordUnread is { } unread)
-            {
-                _output.Warn(CommandName, unread.Warning(record.FileOf(leg.Leg), leg.Leg, sweep: false));
             }
         }
 
@@ -591,6 +611,21 @@ public sealed class MutationService(
                 + $"{{{MutationReport.Placeholder}}}, such as [\"--gtest_output=xml:{{{MutationReport.Placeholder}}}\"].");
         }
 
+        // A runner runReads names that no TEST-RED row names covers nothing: an entry for a runner that was renamed, or
+        // spelled otherwise, would silently keep every key of the runner it meant to name.
+        var named = validation.Registry.Arms
+            .Where(arm => arm.Kind == RedKind.TestRed)
+            .Select(arm => arm.Runner)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (settings.RunReads?.Keys.FirstOrDefault(runner => !named.Contains(runner)) is { } unnamed)
+        {
+            throw new HarnessException(
+                HarnessExit.ConfigInvalid,
+                $"{MutationSettings.RunReadsSetting} names runner '{unnamed}', which no {MutationRegistryParser.TestRed} row of '{registry}' names: "
+                + "an entry no arm runs covers nothing. Name the runner as its A row does, or leave it out.");
+        }
+
         return new SweepArms(validation.Registry, selected, validation.Scopes);
     }
 
@@ -648,7 +683,8 @@ public sealed class MutationService(
                 continue;
             }
 
-            var generator = config.Toolchains.TryGetValue(variant.Toolchain, out var toolchain) ? toolchain.Generator : null;
+            // A self-test builds the fixture, so it is the fixture's build system that must keep ninja's records.
+            var generator = Build.BuildAdapters.For(selfTest ? MutationFixture.Project.Type : project.Type).GeneratorOf(config, variant.Toolchain);
 
             if (!string.Equals(generator, "Ninja", StringComparison.Ordinal))
             {

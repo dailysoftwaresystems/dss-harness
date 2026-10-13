@@ -874,7 +874,8 @@ internal static class HelpCommand
             + "runReads names, for each runner as the A rows name it, the files of the tree its runs read at run time - a data "
             + "file, a golden output, a plugin it opens - each a path, everything below a directory, or **/name at any depth: what "
             + "the sweep's reading of the tree holds of each is part of the key of every arm that runner runs. A runner given no "
-            + "file, or an entry outside the tree, is refused; a runner no arm names is no error.");
+            + "file, an entry outside the tree, one holding a '*' anywhere but a leading '**/', and one naming the whole tree "
+            + "('.'), are refused; so is a runner no A row of the registry names, when the registry is read.");
         builder.AppendLine();
         builder.AppendLine("The registry");
         builder.AppendLine();
@@ -1079,7 +1080,7 @@ internal static class HelpCommand
             + "what its runner reads at run time, as runReads names it; and the host. No part is a commit, a date, a run, a "
             + "worker or a tree: the same content judged again, in another worker or another tree, comes to the same key. An "
             + "arm a part of whose key could not be read has none. A file a test binary reads at run time that runReads does "
-            + "not name is read by no part of a key: editing it moves none, and a passed it changes the verdict of still holds.");
+            + "not name is read by no part of a key: editing it moves none, and a recorded passed it would change still holds.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -1096,7 +1097,8 @@ internal static class HelpCommand
             + "never by its date. Two sweeps recording at once lose neither's verdicts. clean, a deleted worktree and a "
             + "removed host copy leave it as it was; deleting it is the one way to forget it, and every arm is then pending. "
             + $"A record that cannot be read, or that a newer {ToolPackage.Id} wrote, is never written: a sweep of that leg "
-            + "says so once, as a warning naming the file and on the leg's line, and records none.");
+            + "says so once, as a warning naming the file and on the leg's line, and records none. A sweep this machine "
+            + "records names the record once, in its lines and in --json, as a listing does.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -2770,6 +2772,8 @@ internal static class HelpCommand
         builder.AppendLine("  }");
         builder.AppendLine();
         builder.AppendLine("Windows legs are then compared with each other, and every other leg with the rest.");
+        builder.AppendLine("A leg's os names its section however it is spelled - Windows as windows - as every");
+        builder.AppendLine("per-system setting is read.");
         builder.AppendLine();
         builder.AppendLine("'test --filter', '--exclude' and '--label' reach the runner through the invocation's");
         builder.AppendLine("filterArg, excludeArg and labelArg, so one set of options serves every runner. For");

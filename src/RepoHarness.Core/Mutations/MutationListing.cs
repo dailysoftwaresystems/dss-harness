@@ -12,8 +12,8 @@ public sealed record ListedArm
     /// <summary>The arm, as the registry names it.</summary>
     public required string Arm { get; init; }
 
-    /// <summary>Whether it is pending; otherwise nothing read here moved, which is never to say it holds.</summary>
-    public required bool Pending { get; init; }
+    /// <summary>Whether it is pending - it has a reason to be; otherwise nothing read here moved, which is never to say it holds.</summary>
+    public bool Pending => Why.Count > 0;
 
     /// <summary>
     /// The verdict shown: the newest the record holds that nothing read here moved for, else the newest; <see langword="null"/>
@@ -39,16 +39,20 @@ public sealed record ListedArm
     /// <summary>Whether what the configuration gives the configure changed since the verdict shown.</summary>
     public bool GenerationMoved { get; init; }
 
-    /// <summary>Every reason it is pending, the first that applies first; none where it is not.</summary>
-    public IReadOnlyList<PendingReason> Why { get; init; } = [];
+    /// <summary>
+    /// Every reason it is pending, the first that applies first; none where it is not. What the row and the leg's count
+    /// say of it is read from here alone, so an arm is never pending with nothing to say for it.
+    /// </summary>
+    public required IReadOnlyList<PendingReason> Why { get; init; }
 }
 
 /// <summary>One leg of a listing: whether it can be swept, whether its record could be read, and its arms.</summary>
 /// <param name="Leg">The leg.</param>
 /// <param name="Unsweepable">Why it cannot be swept, as a sweep's refusal says it; <see langword="null"/> where it can be.</param>
+/// <param name="RecordFile">The leg's record.</param>
 /// <param name="RecordUnread">Why its record cannot be read; <see langword="null"/> where it was read, or is not there.</param>
 /// <param name="Arms">Each arm its S row names, in the registry's order.</param>
-public sealed record ListedLeg(string Leg, string? Unsweepable, RecordUnread? RecordUnread, IReadOnlyList<ListedArm> Arms)
+public sealed record ListedLeg(string Leg, string? Unsweepable, string RecordFile, RecordUnread? RecordUnread, IReadOnlyList<ListedArm> Arms)
 {
     /// <summary>How many of its arms are pending.</summary>
     public int Pending => Arms.Count(arm => arm.Pending);
@@ -65,7 +69,7 @@ public sealed record ListedLeg(string Leg, string? Unsweepable, RecordUnread? Re
 /// <param name="Arms">The arms selected that its S row names.</param>
 /// <param name="Unsweepable">Why it cannot be swept, or <see langword="null"/>.</param>
 /// <param name="Record">What the record holds of it.</param>
-/// <param name="Table">Reads a table of its record by its digest.</param>
+/// <param name="Table">Reads a table of its record by its digest - called for at most one table to a digest, and for no entry older than the newest nothing moved for.</param>
 /// <param name="Tree">The one reading of the tree it acts on here.</param>
 /// <param name="Host">The host it names, as a dispatcher names it; <see langword="null"/> where it names none.</param>
 /// <param name="Settings">The settings it would be swept with, on the host it names or on this machine.</param>
@@ -76,7 +80,7 @@ internal sealed record ListingInput(
     IReadOnlyList<MutationArm> Arms,
     string? Unsweepable,
     LegVerdictRecord Record,
-    Func<string, (BuiltFromTable? Table, string? Unread)> Table,
+    Func<string, RecordedTable> Table,
     TreeFiles Tree,
     string? Host,
     SweepSettings Settings,
@@ -110,38 +114,40 @@ internal static class MutationListing
         ArgumentNullException.ThrowIfNull(input);
 
         var notRead = input.Host is null ? [.. NeverRead, "host"] : NeverRead;
+        var runReads = new RunReadsOf(input.Mutations, input.Tree);
 
         return new ListedLeg(
             input.Leg,
             input.Unsweepable,
+            input.Record.File,
             input.Record.Unread,
-            [.. input.Arms.Select(arm => Arm(input, arm, notRead))]);
+            [.. input.Arms.Select(arm => Arm(input, arm, notRead, runReads))]);
     }
 
-    private static ListedArm Arm(ListingInput input, MutationArm arm, IReadOnlyList<string> notRead)
+    private static ListedArm Arm(ListingInput input, MutationArm arm, IReadOnlyList<string> notRead, RunReadsOf runReads)
     {
         var texts = JudgedOn.TextsOf(arm);
         var listed = new ListedArm
         {
             Arm = arm.Id,
-            Pending = true,
             Texts = texts.Count,
             Sites = arm.Sites.Count,
             Files = 0,
             NotRead = notRead,
+            Why = [],
         };
-
-        if (input.Record.Unread is { } unread)
-        {
-            return listed with { Why = [unread.Format is null ? PendingReason.RecordUnreadable(unread.Why!) : PendingReason.RecordNewer] };
-        }
 
         List<PendingReason> before = input.Unsweepable is { } why ? [PendingReason.LegUnsweepable(why)] : [];
         var entries = input.Record.Arms.GetValueOrDefault(arm.Id) ?? [];
 
+        if (input.Record.Unread is { } unread)
+        {
+            return listed with { Why = Ordered([unread.Format is null ? PendingReason.RecordUnreadable(unread.Why!) : PendingReason.RecordNewer, .. before]) };
+        }
+
         if (entries.Count == 0)
         {
-            return listed with { Why = [.. before, PendingReason.NeverSwept] };
+            return listed with { Why = Ordered([.. before, PendingReason.NeverSwept]) };
         }
 
         var here = new ReadHere(
@@ -150,32 +156,54 @@ internal static class MutationListing
             texts.ToDictionary(path => path, input.Tree.HashOf, StringComparer.Ordinal),
             arm.Sites.ToDictionary(site => site.Site, site => input.Tree.HashOf(site.Site), StringComparer.Ordinal),
             input.Tree,
-            JudgedOn.RunReadsOf(arm, input.Mutations, input.Tree),
+            runReads.Of(arm).Files,
             input.Settings,
             input.Host);
-        var read = entries.Reverse().Select(entry => Read(input, entry, here)).ToList();
-        var shown = read.Find(entry => entry.Unmoved) ?? read[0];
-        var causes = shown.Entry.Causes;
+        EntryRead? shown = null;
+
+        // The newest nothing moved for - and no entry older than it asked after, its tables read for nothing - else the newest.
+        foreach (var entry in entries.Reverse())
+        {
+            var read = Read(input, entry, here);
+
+            if (shown is null || read.Unmoved)
+            {
+                shown = read;
+            }
+
+            if (read.Unmoved)
+            {
+                break;
+            }
+        }
+
+        var verdictShown = shown!;
+        var causes = verdictShown.Entry.Causes;
 
         listed = listed with
         {
-            Last = shown.Entry,
-            Files = shown.Files,
+            Last = verdictShown.Entry,
+            Files = verdictShown.Files,
             CausesMoved = causes is null
                 ? []
                 : [.. causes.GeneratedFrom.Where(file => input.Tree.HashOf(file.Key) != file.Value).Select(file => file.Key).Order(StringComparer.Ordinal)],
             GenerationMoved = causes is not null && input.Generation is not null && causes.Generation != input.Generation,
         };
 
-        if (shown.Unmoved)
+        if (verdictShown.Unmoved)
         {
-            List<PendingReason> held = [.. before, .. shown.Entry.Verdict == Passed ? [] : new[] { PendingReason.LastNotPassed(shown.Entry.Verdict) }];
-
-            return listed with { Pending = held.Count > 0, Why = held };
+            return listed with
+            {
+                Why = Ordered([.. before, .. verdictShown.Entry.Verdict == Passed ? [] : new[] { PendingReason.LastNotPassed(verdictShown.Entry.Verdict) }]),
+            };
         }
 
-        return listed with { Why = [.. before, .. shown.Why] };
+        return listed with { Why = Ordered([.. before, .. verdictShown.Why]) };
     }
+
+    /// <summary>The reasons in the order a line names them, whoever gathered them.</summary>
+    private static IReadOnlyList<PendingReason> Ordered(IEnumerable<PendingReason> reasons)
+        => [.. reasons.OrderBy(reason => reason.Rank)];
 
     /// <summary>
     /// What a listing makes of one recorded verdict: every reason it is not one that holds as far as this machine reads -
@@ -190,15 +218,15 @@ internal static class MutationListing
 
         foreach (var (target, digest) in built.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
-            var (table, unread) = input.Table(digest);
+            var read = input.Table(digest);
 
-            if (table is null)
+            if (read.Table is { } table)
             {
-                why.Add(PendingReason.RecordUnreadable(unread!));
+                tables[target] = table;
             }
             else
             {
-                tables[target] = table;
+                why.Add(PendingReason.RecordUnreadable(read.Unread!));
             }
         }
 
@@ -287,7 +315,7 @@ internal static class MutationListing
                     leg.Leg,
                     Sweepable = leg.Unsweepable is null,
                     Unsweepable = leg.Unsweepable is { } why ? show(why) : null,
-                    RecordUnread = leg.RecordUnread is { } unread ? show(unread.Said) : null,
+                    RecordUnread = leg.RecordUnread is { } unread ? show($"{leg.RecordFile}: {unread.Said}") : null,
                     leg.Pending,
                     leg.Unmoved,
                     Arms = leg.Arms.Select(arm => new

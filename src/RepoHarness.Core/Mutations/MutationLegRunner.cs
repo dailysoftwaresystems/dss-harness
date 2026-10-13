@@ -487,7 +487,7 @@ internal sealed class MutationLegRunner(
             foreach (var arm in driven)
             {
                 var key = keys[arm.Id];
-                var standing = ArmHolding.Of(recorded, arm.Id, key);
+                var standing = ArmHolding.Of(recorded, arm.Id, key, PathCase.In(_runner._fileSystem, _subject.TreeRoot));
 
                 if (standing.Held is { } held)
                 {
@@ -696,6 +696,7 @@ internal sealed class MutationLegRunner(
             var compilersUnread = unidentified.Count == 0 ? null : $"the compilers its build identified: {string.Join("; ", unidentified)}";
 
             var causes = new JudgedCauses(reader.OfTheTree(graph.GeneratedFrom), JudgedCauses.GenerationOf(_config, _leg.Variant, _subject.Project));
+            var runReads = new RunReadsOf(_subject.Settings, tree);
 
             return driven.ToDictionary(
                 arm => arm.Id,
@@ -706,6 +707,10 @@ internal sealed class MutationLegRunner(
                     // A text it cites that the reading does not hold - which the registry's check found - was not read
                     // whole: what the arm was judged on is not what the key would say.
                     var lacking = texts.Where(text => text.Value is null).Select(text => $"'{text.Key}'").ToList();
+
+                    // So is an entry of runReads that covers no file of the reading: a key that silently read none of
+                    // what the runner reads at run time would hold for ever.
+                    var reads = runReads.Of(arm);
 
                     return ArmKey.Of(
                         new JudgedOn
@@ -718,11 +723,15 @@ internal sealed class MutationLegRunner(
                             Compilers = compilers,
                             DeveloperEnvironment = _work.DeveloperEnvironment,
                             Settings = _subject.SweepSettings,
-                            RunReads = JudgedOn.RunReadsOf(arm, _subject.Settings, tree),
+                            RunReads = reads.Files,
                             Host = _leg.Named.ToString(),
                         },
                         [.. ArmJudge.Builds(arm).Select(target => tables[target])],
-                        lacking.Count > 0 ? $"the tree's reading holds no {ReportText.Listed(lacking)}, which it cites" : compilersUnread,
+                        lacking.Count > 0
+                            ? $"the tree's reading holds no {ReportText.Listed(lacking)}, which it cites"
+                            : reads.Uncovered.Count > 0
+                                ? $"runReads names {ReportText.Listed(reads.Uncovered)}, which covers no file of the tree"
+                                : compilersUnread,
                         causes);
                 },
                 StringComparer.OrdinalIgnoreCase);

@@ -82,7 +82,9 @@ public sealed class MutationSettings
     /// by the runner's name as the registry's A rows name it, each entry a path relative to the repository root as
     /// <see cref="Repository.PathPatterns"/> reads one: the path, everything below a directory, or <c>**/name</c> at any
     /// depth. What the sweep's reading of the tree holds of each file an entry covers is part of the key of every arm that
-    /// runner runs, so editing one moves those keys and no other. A runner no arm names is no error.
+    /// runner runs, so editing one moves those keys and no other. A runner no <c>A</c> row of the registry names is
+    /// refused when the registry is read; so is an entry that names the whole tree or holds a <c>*</c> anywhere but a
+    /// leading any-depth prefix.
     /// </summary>
     /// <remarks>
     /// Declared, never found: what a binary opens at run time is said by nothing a build records, and a test that read
@@ -91,4 +93,7 @@ public sealed class MutationSettings
     /// </remarks>
     [Description("each runner's files of the tree its runs read at run time, by the runner as the A rows name it; part of the key of every arm it runs")]
     public Dictionary<string, List<string>>? RunReads { get; init; }
+
+    /// <summary>The setting <see cref="RunReads"/> is named by, as a refusal names it.</summary>
+    public const string RunReadsSetting = "mutations.runReads";
 }

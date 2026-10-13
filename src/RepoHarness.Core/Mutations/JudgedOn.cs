@@ -212,7 +212,8 @@ public sealed record JudgedCauses(IReadOnlyDictionary<string, string> GeneratedF
     /// <summary>
     /// The digest of what <paramref name="config"/> gives the configure of <paramref name="project"/> as
     /// <paramref name="variant"/> builds it: the generator its toolchain declares, the build type its configuration
-    /// declares, the cache variables its overlay sets, and the project's path.
+    /// declares, the cache variables its overlay sets, and the project's path - the generator and the build type asked of
+    /// the adapter that configures and builds the project, which owns them both.
     /// </summary>
     /// <param name="config">The whole configuration.</param>
     /// <param name="variant">The leg's variant.</param>
@@ -223,13 +224,55 @@ public sealed record JudgedCauses(IReadOnlyDictionary<string, string> GeneratedF
         ArgumentNullException.ThrowIfNull(variant);
         ArgumentNullException.ThrowIfNull(project);
 
+        var adapter = Build.BuildAdapters.For(project.Type);
+
         return CanonicalJson.Digest(new
         {
-            Generator = config.Toolchains.GetValueOrDefault(variant.Toolchain)?.Generator,
-            BuildType = config.BuildConfigs.GetValueOrDefault(variant.Config)?.CmakeBuildType,
+            Generator = adapter.GeneratorOf(config, variant.Toolchain),
+            BuildType = adapter.BuildTypeOf(config, variant.Config),
             CacheVars = CanonicalJson.Sorted(variant.Overlay(config, project).CacheVars),
             project.Path,
         });
+    }
+}
+
+/// <summary>
+/// The files each runner's runs read at run time, of one reading of a tree, each runner read once however many arms run
+/// it: what <see cref="JudgedOn.RunReadsOf"/> says, beside each entry of <c>runReads</c> that covers no file of the
+/// reading - which, like a text the arm cites that the reading lacks, leaves every arm that runner runs with no key,
+/// rather than a key that silently reads none of what its runs do.
+/// </summary>
+internal sealed class RunReadsOf(MutationSettings settings, TreeFiles tree)
+{
+    private readonly Dictionary<string, (IReadOnlyDictionary<string, string> Files, IReadOnlyList<string> Uncovered)> _of = new(StringComparer.Ordinal);
+
+    /// <summary>What <paramref name="arm"/>'s runner reads at run time, and which entries of <c>runReads</c> cover no file of the tree.</summary>
+    /// <param name="arm">The arm.</param>
+    public (IReadOnlyDictionary<string, string> Files, IReadOnlyList<string> Uncovered) Of(MutationArm arm)
+    {
+        ArgumentNullException.ThrowIfNull(arm);
+
+        var runner = arm.Kind == RedKind.TestRed ? arm.Runner : string.Empty;
+
+        if (_of.TryGetValue(runner, out var read))
+        {
+            return read;
+        }
+
+        var files = JudgedOn.RunReadsOf(arm, settings, tree);
+        var uncovered = new List<string>();
+
+        // The union is what the arm is judged on; each entry on its own says whether it covers anything, so one that
+        // names nothing is named rather than silently holding none of what the runner reads.
+        foreach (var pattern in settings.RunReads?.GetValueOrDefault(arm.Runner) ?? [])
+        {
+            if (tree.Matching([pattern]).Count == 0)
+            {
+                uncovered.Add(pattern);
+            }
+        }
+
+        return _of[runner] = (files, (IReadOnlyList<string>)[.. uncovered]);
     }
 }
 

@@ -59,7 +59,8 @@ internal sealed class TreeFiles
 
     /// <summary>
     /// Each file of the reading <paramref name="patterns"/> covers (<see cref="Repository.PathPatterns.Matches"/>), by its
-    /// path as the reading spells it, with what the reading says it holds, sorted by path.
+    /// path as the reading spells it, with what the reading says it holds, sorted by path: the patterns compared as this
+    /// tree's file system compares names, like every path the reading is asked for.
     /// </summary>
     /// <param name="patterns">Paths and patterns relative to the tree, as a configuration writes them.</param>
     public IReadOnlyDictionary<string, string> Matching(IReadOnlyList<string> patterns)
@@ -67,7 +68,7 @@ internal sealed class TreeFiles
         ArgumentNullException.ThrowIfNull(patterns);
 
         return CanonicalJson.Sorted(_entries.Values
-            .Where(entry => Repository.PathPatterns.Matches(patterns, entry.Path))
+            .Where(entry => Repository.PathPatterns.Matches(patterns, entry.Path, Comparison))
             .ToDictionary(entry => entry.Path, entry => entry.ContentHash, StringComparer.Ordinal));
     }
 }
