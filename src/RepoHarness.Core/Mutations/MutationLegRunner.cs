@@ -729,9 +729,13 @@ internal sealed class MutationLegRunner(
                 : _subject.PathReserve is { } reserve ? $"as the {reserve} its project's build makes below its build directory and worktrees.pathBudgetMargin reckon them"
                 : "as worktrees.pathBudgetReserve and pathBudgetMargin reckon them";
 
-            // Where the tree fitted a worker kept beside it and no longer fits one kept in it, the two characters are why.
-            return $"worker {number} would be kept at '{Worker(number)}', in the tree's {HarnessLayout.MutationsDirectoryName}, two characters "
-                + "deeper than a worker an earlier version of this tool kept beside the tree, "
+            // Where the tree fitted a worker an earlier version of this tool kept beside it, and fits none kept in it, the
+            // characters a worker kept in it adds are why, and said; anywhere else they are not, and nothing is said of them.
+            var deeper = budget.Limit is { } limit && budget.RequiredLength - WorkerFamily.DeeperThanBeside < limit
+                ? $", {ReportText.Counted(WorkerFamily.DeeperThanBeside, "character")} deeper than a worker an earlier version of this tool kept beside the tree"
+                : string.Empty;
+
+            return $"worker {number} would be kept at '{Worker(number)}', in the tree's {HarnessLayout.MutationsDirectoryName}{deeper}, "
                 + $"where its build needs paths of {budget.RequiredLength} "
                 + $"characters, {reckoned}, and every path must stay under {budget.Limit}: keep the tree at a shorter path, or set "
                 + "worktrees.pathLimit where every tool its build runs takes longer ones";

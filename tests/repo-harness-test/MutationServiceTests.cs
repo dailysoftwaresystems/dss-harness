@@ -870,6 +870,42 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A sweep whose tree git cannot answer in - whether it ignores what the sweep would make there - leaves its leg
+    /// skipped-unavailable, in git's own words, with nothing made, as a runner's leg is left: no answer either way, and no
+    /// verdict on the code, so never the leg failing.
+    /// </summary>
+    [Fact]
+    public async Task ASweepWhoseTreeGitCannotSayItIgnoresItsWorkersIn_LeavesTheLegUnavailable()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var git = new InterceptingGitClient(harness.GitClient)
+        {
+            IsIgnoredFailure = new HarnessException(HarnessExit.CommandFailed, "fatal: not a git repository: .git"),
+        };
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "x86_64" });
+        var (service, _) = Prepare(temp, Sweepable(), harness: harness, inspector: inspector, git: git);
+
+        var outcome = await service.RunAsync(new MutationRequest(temp.Path, ["native"], null, Json: true), RunId.New(), TestContext.Current.CancellationToken);
+
+        using var document = System.Text.Json.JsonDocument.Parse(Assert.Single(outcome.Data));
+        var leg = Assert.Single(document.RootElement.GetProperty("legs").EnumerateArray());
+
+        Assert.Equal("skipped-unavailable", leg.GetProperty("verdict").GetString());
+        Assert.StartsWith(
+            $"git could not say whether it ignores '{HarnessLayout.MutationsDirectoryName}/", leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.EndsWith(
+            $"', so whether the mutation workers a sweep makes in '{temp.Path}' would be committed is unknown. Nothing has run. "
+            + "fatal: not a git repository: .git",
+            leg.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
+
+        var slot = temp.Combine(HarnessLayout.MutationsDirectoryName);
+
+        Assert.Empty(Directory.Exists(slot) ? Directory.EnumerateDirectories(slot) : []);
+    }
+
+    /// <summary>
     /// A sweep reads the tree its leg's work happens in, and keeps its workers in that tree - its own and its
     /// self-test's alike - never the tree the command reads here, where the two are not one.
     /// </summary>

@@ -279,8 +279,13 @@ public sealed partial class HelpTests
             + "cannot be removed keeps it as a failure until that is put right - or --force deletes the worktree with that worker in it. "
             + "A directory there under a worker's name that no sync made goes with the worktree, or the host's copy, as everything "
             + "else in it does, and is said. No copy of a tree carries its workers, and a sync into a host's copy never deletes that "
-            + "copy's own. Workers an earlier version of this tool kept beside a tree, as <tree>.mutation-<key><mark>-<n>, are known "
-            + "to nothing here: nothing lists, counts or removes them, and they are yours to delete.",
+            + "copy's own. Workers an earlier version of this tool kept beside a tree, as <tree>.mutation-<key><mark>-<n>, are no "
+            + "workers to anything here: nothing counts or removes one as a worker, and they are yours to delete. Each holds a .git "
+            + "of its own that git records no worktree at, so one below the worktrees root is said as any such directory: "
+            + "list-worktree warns of it, and delete-orchestrator, and delete-worktree of an orchestrator's directory with or "
+            + $"without --force, refuse ({HarnessExit.Refused}) while one is below it.",
+            "built whole before it drives an arm. Of the tree itself a sweep reads every file and writes none: what it writes "
+            + "there - its workers, and the claims on them - is in .mutations alone.",
             "Its workers are kept in the leg's own tree, as a sweep's are, in a family of their own - <tree>/.mutations/<key>s-<n>,",
             "What the sweep timed across a clock step or a host sleep is said on the leg's line, among why its timings are suspect, and "
             + "changes no verdict: an arm's run and the unmutated run that bounds it, however each ended, and what each of its builds says "
@@ -600,9 +605,9 @@ public sealed partial class HelpTests
                 + "above one, the root among them, for the names of the directories in it alone - so a build in another tree below the "
                 + "worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such directory is watched, "
                 + "however many there are, through one inotify instance for the whole process. On Windows and "
-                + $"macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories holding inputs, those above them "
-                + "besides, so past them the top-level directories holding the most are watched all the way down, and a tree whose "
-                + "inputs lie in more top-level directories than that, the root counted among them where it holds one, is watched "
+                + $"macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories besides the root's own, those "
+                + "holding inputs and those above them alike, so past them the top-level directories watching the most are watched all "
+                + "the way down, until the rest fit, and a tree whose inputs lie in more top-level directories than that is watched "
                 + "whole. Where inotify cannot be called directly on Linux, .NET's "
                 + "watcher stands in, as on Windows and macOS, each directory taking an inotify instance of its own, and the process "
                 + "says so once.",
@@ -1533,7 +1538,9 @@ public sealed partial class HelpTests
         Assert.Contains(
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, made by "
             + "create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, and delete-worktree "
-            + $"takes that address. The directory named for an orchestrator is never deleted as one while worktrees are below it, --force "
+            + "takes that address. The directory named for an orchestrator is never deleted as one while worktrees are below it, or a "
+            + "directory holding a .git of its own that git records no worktree at - what a removal left, or a worker an earlier "
+            + "version of this tool kept beside an agent's worktree, a person's to look in and delete - --force "
             + $"or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git cannot list its worktrees "
             + $"({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. A plain worktree cannot take an "
             + "orchestrator's name. An agent's copies on hosts are kept under orchestrator--agent, so two orchestrators' agents of one name "
@@ -1931,6 +1938,23 @@ public sealed partial class HelpTests
             "deleted, removed first, with the directories that leaves empty, so a file it turned into a directory, or a directory into a file, "
             + "makes room for what replaced it",
             text,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The orchestrators topic says that delete-orchestrator refuses while a directory below the orchestrator's holds a
+    /// .git of its own that git records no worktree at, as it does while a worktree is left there.
+    /// </summary>
+    [Fact]
+    public async Task OrchestratorsTopic_SaysDeleteOrchestratorRefuses_WhileADirectoryGitRecordsNoWorktreeAtIsBelowIt()
+    {
+        var result = await CliRunner.RunAsync(["help", "agents"], TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
+                + "directory, nor any directory holding a .git of its own that git records no worktree at - until then it refuses "
+                + $"({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with --delete-evidence;",
+            Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
 

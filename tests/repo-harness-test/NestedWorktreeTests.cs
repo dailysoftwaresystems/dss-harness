@@ -92,6 +92,50 @@ public sealed class NestedWorktreeTests
         Assert.Equal(["o1/api", "o1/web"], (await harness.WorktreeService.ListAsync(temp.Path, cancellationToken)).Select(worktree => worktree.Name));
     }
 
+    /// <summary>
+    /// The directory named for an orchestrator is never deleted while a directory in it holds a .git of its own that git
+    /// records no worktree at - a worker an earlier version of this tool kept beside an agent's worktree - --force or not:
+    /// what it holds is a person's to look at, and goes with nothing here. Said beside the worktrees there where there are
+    /// any, and alone where there are none.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnOrchestratorsDirectoryHoldingAnOldWorker_IsRefused_EvenForced(bool withAgent)
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var directory = Path.Combine(Root(temp), "o1");
+        var old = Path.Combine(directory, "api.mutation-357e24cw-1");
+
+        Directory.CreateDirectory(temp.Combine(HarnessLayout.OrchestratorsDirectoryName, "o1"));
+
+        if (withAgent)
+        {
+            await harness.WorktreeService.CreateAtAsync(temp.Path, WorktreeAddress.Nested("o1", "api"), cancellationToken);
+        }
+
+        Directory.CreateDirectory(old);
+        await harness.RunGitAsync(old, ["init", "--quiet"], cancellationToken);
+
+        foreach (var force in new[] { false, true })
+        {
+            var refused = await harness.WorktreeService.DeleteAsync(temp.Path, "o1", force, deleteEvidence: false, cancellationToken: cancellationToken);
+
+            Assert.Equal(HarnessExit.Refused, refused.Outcome.ExitCode);
+            Assert.Equal(
+                withAgent
+                    ? $"'{directory}' is not deleted, --force or not: it holds worktrees below it - o1/api - and deleting it would delete each "
+                        + $"of them. Delete each on its own, with '{ToolPackage.Command} delete-worktree <address>' or, for an orchestrator's "
+                        + $"agent, delete-agent. And {WorktreeInspector.SaidUnrecorded([old])}."
+                    : $"'{directory}' is not deleted, --force or not: {WorktreeInspector.SaidUnrecorded([old])}, and deleting the directory "
+                        + "would delete each with it.",
+                refused.Outcome.Message);
+            Assert.True(Directory.Exists(Path.Combine(old, ".git")));
+        }
+    }
+
     /// <summary>create-worktree makes a plain worktree only: an agent's is made with its records, by create-agent.</summary>
     [Fact]
     public async Task CreateWorktree_RefusesAnAgentsAddress_NamingCreateAgent()

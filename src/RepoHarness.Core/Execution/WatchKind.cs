@@ -59,10 +59,10 @@ internal sealed record WatchTarget
 internal interface IWatchKind
 {
     /// <summary>
-    /// How many directories holding inputs a watch through this kind takes at most - those above them watched besides,
-    /// never counted - or <see langword="null"/> where it has no bound of its own. Past a bound, the watch takes some
-    /// directories all the way down instead; with none, every directory that holds an input, or lies above one, is
-    /// watched for itself, and none all the way down.
+    /// How many directories a watch through this kind takes at most besides the root's own - each holding inputs and each
+    /// above them watched for the names in it alone, counted alike - or <see langword="null"/> where it has no bound of its
+    /// own. Past a bound, the watch takes some directories all the way down instead; with none, every directory that holds
+    /// an input, or lies above one, is watched for itself, and none all the way down.
     /// </summary>
     int? MostDirectories { get; }
 

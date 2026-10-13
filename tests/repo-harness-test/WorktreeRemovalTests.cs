@@ -1330,8 +1330,11 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         CancellationToken cancellationToken = default)
         => Call(() => inner.CountCommitsAsync(directory, revisions, Token(cancellationToken)));
 
+    /// <summary>A failure asking whether git ignores a path throws instead of asking git, as a git that cannot read the tree would.</summary>
+    public HarnessException? IsIgnoredFailure { get; init; }
+
     public Task<bool> IsIgnoredAsync(string directory, string path, CancellationToken cancellationToken = default)
-        => Call(() => inner.IsIgnoredAsync(directory, path, Token(cancellationToken)));
+        => IsIgnoredFailure is { } failure ? throw failure : Call(() => inner.IsIgnoredAsync(directory, path, Token(cancellationToken)));
 
     public Task<IReadOnlyList<IgnoreDecision>> ExplainIgnoredAsync(
         string directory,

@@ -1,19 +1,20 @@
 namespace RepoHarness.Core.Execution;
 
 /// <summary>
-/// Watches through .NET's own watcher, one for each directory: a handle, a buffer and a thread apiece, which is why a
-/// watch through it bounds how many directories it takes (<see cref="MostDirectoriesWatched"/>). Windows and macOS
-/// watch through it, and Linux where inotify cannot be called directly.
+/// Watches through .NET's own watcher, one for each directory watched: a handle, a buffer and a thread apiece - on Linux
+/// an inotify instance apiece besides - which is why a watch through it bounds how many watchers it makes besides the
+/// root's (<see cref="MostDirectoriesWatched"/>). Windows and macOS watch through it, and Linux where inotify cannot be
+/// called directly.
 /// </summary>
 public sealed class FileSystemWatcherKind : IWatchKind
 {
     /// <summary>
-    /// How many directories holding inputs a watch through .NET's watcher takes at most - those above them, watched for
-    /// the names in them alone, besides: each watcher is a handle, a buffer and a thread. Past it, the top-level
-    /// directories holding the most directories of inputs are watched all the way down instead, one watch each, and a
-    /// tree whose inputs lie in more top-level directories than this - the root counted among them where it holds one
-    /// itself - is watched whole: a watcher per directory would spend handles to no purpose. The bound is this kind's, and no watch's: a kind with none, as inotify's hub on Linux is, watches every
-    /// directory of inputs for itself.
+    /// How many directories a watch through .NET's watcher takes at most besides the root's own - each holding inputs,
+    /// and each above them watched for the names in it alone, alike: each is a watcher, a handle, a buffer and a thread.
+    /// Past it, the top-level directories watching the most are watched all the way down instead, one watch each, until
+    /// the rest fit, and a tree whose inputs lie in more top-level directories than this is watched whole: a watcher per
+    /// directory would spend handles to no purpose. The bound is this kind's, and no watch's: a kind with none, as
+    /// inotify's hub on Linux is, watches every such directory for itself.
     /// </summary>
     public const int MostDirectoriesWatched = 64;
 

@@ -222,9 +222,10 @@ agent's branch needs that commit before it can sweep. Workers an earlier version
 tree, `<tree>.mutation-*`, on this machine and on every host, are no longer known to the tool:
 find them with `ls -d <tree>.mutation-*` and delete them. Each worker's build is made once again.
 
-Ignored state lives only in the main checkout. A worktree receives the tracked part
-of `.harness-config` through git but never the ignored part, so secrets and the run
-lock resolve back to the originating checkout.
+Secrets and the run lock live only in the main checkout. A worktree receives the tracked
+part of `.harness-config` through git but never the ignored part, so both resolve back to
+the originating checkout. What a tree makes for itself - its runs' records, its mutation
+workers in `.mutations`, its legs' copies in `.legs` - is ignored too, and kept in that tree.
 
 ## Legs and hosts
 

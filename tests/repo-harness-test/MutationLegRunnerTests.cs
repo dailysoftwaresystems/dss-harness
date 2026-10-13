@@ -1882,7 +1882,7 @@ public sealed class MutationLegRunnerTests
         var turned = await deep.RunAsync([DepthType]);
 
         Assert.Equal(LegVerdict.SkippedUnavailable, turned.Verdict);
-        Assert.StartsWith($"worker 1 would be kept at '{deep.Worker(1)}', in the tree's .mutations, two characters deeper than a worker an earlier version of this tool kept beside the tree, where its build needs paths of ", turned.Detail, StringComparison.Ordinal);
+        Assert.StartsWith($"worker 1 would be kept at '{deep.Worker(1)}', in the tree's .mutations, where its build needs paths of ", turned.Detail, StringComparison.Ordinal);
         Assert.Contains(
             " characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under 40: keep the tree at a "
             + "shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones; 1 arm(s): 1 skipped-unavailable",
@@ -1898,11 +1898,37 @@ public sealed class MutationLegRunnerTests
 
         Assert.Equal(
             $"2 arm(s): 2 passed; 1 of 2 workers: worker 2 would be kept at '{second.Worker(2)}', "
-            + "in the tree's .mutations, two characters deeper than a worker an earlier version of this tool kept beside the tree, where its build needs paths of 300 characters, "
+            + "in the tree's .mutations, where its build needs paths of 300 characters, "
             + "as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under 260: keep the tree at a shorter "
             + "path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);
         Assert.Equal([second.Worker(1)], second.Copies.Synced.Select(sync => sync.Worker));
+    }
+
+    /// <summary>
+    /// A worker past the path limit by no more than a worker kept in the tree adds over one an earlier version of this tool
+    /// kept beside it says so - the tree fitted that one - and one past it by more says nothing of it: the characters are
+    /// why only where without them it would fit.
+    /// </summary>
+    [Theory]
+    [InlineData(261, true)]
+    [InlineData(262, false)]
+    public async Task AWorkerPastThePathLimit_SaysTheCharactersItIsDeeper_OnlyWhereWithoutThemItWouldFit(int required, bool said)
+    {
+        using var sweep = new Sweep();
+        sweep.Budget.Check(Arg.Is<string>(path => path.EndsWith("-2", StringComparison.Ordinal)), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int?>())
+            .Returns(PathBudgetResult.Exceeded(required, 260, -1));
+
+        var fewer = await sweep.RunAsync([ChargeBound, DepthType]);
+
+        Assert.Equal(2, WorkerFamily.DeeperThanBeside);
+        Assert.Equal(
+            $"2 arm(s): 2 passed; 1 of 2 workers: worker 2 would be kept at '{sweep.Worker(2)}', in the tree's .mutations"
+            + (said ? ", 2 character(s) deeper than a worker an earlier version of this tool kept beside the tree" : string.Empty)
+            + $", where its build needs paths of {required} characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, "
+            + "and every path must stay under 260: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build "
+            + "runs takes longer ones",
+            fewer.Detail);
     }
 
     /// <summary>
@@ -1924,7 +1950,7 @@ public sealed class MutationLegRunnerTests
         Assert.Equal(
             $"3 arm(s): 3 passed; 1 of 3 workers: running 2 needs ~{DiskSpace.Size(2 * ((1L << 30) + copy))}, each worker's build as declared; "
             + $"{DiskSpace.Size((1L << 30) + copy + 100)} free on '/data'; and worker 3 would be kept at '{tight.Worker(3)}', "
-            + "in the tree's .mutations, two characters deeper than a worker an earlier version of this tool kept beside the tree, where its "
+            + "in the tree's .mutations, where its "
             + "build needs paths of 300 characters, as worktrees.pathBudgetReserve and pathBudgetMargin reckon them, and every path must stay under "
             + "260: keep the tree at a shorter path, or set worktrees.pathLimit where every tool its build runs takes longer ones",
             fewer.Detail);

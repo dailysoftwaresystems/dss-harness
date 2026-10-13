@@ -79,7 +79,7 @@ public sealed class LegRunPlanTests
     }
 
     /// <summary>
-    /// A leg that works in a copy of its tree kept beside the tree on this machine is synced and in a copy, and is
+    /// A leg that works in a copy of its tree kept in the tree's own .legs on this machine is synced and in a copy, and is
     /// dispatched nowhere: this machine makes its tree, and this machine's own process runs it. The executor is given
     /// its tree's key and its tree's name, as it is a host leg's, and neither for a leg that works in its own tree,
     /// which no sync makes.

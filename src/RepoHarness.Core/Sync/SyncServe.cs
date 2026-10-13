@@ -319,8 +319,8 @@ public static class SyncServe
 
     /// <summary>
     /// Removes the mutation workers kept in the tree its root names - none where that tree is not there - as removing
-    /// the tree's copy asks first, and a clean of a leg: <c>remove-workers &lt;root&gt;</c>, and
-    /// <see cref="MeasureOnly"/> after it to say what would go and remove nothing.
+    /// the tree's copy asks first: <c>remove-workers &lt;root&gt;</c>, and <see cref="MeasureOnly"/> after it to say what
+    /// would go and remove nothing.
     /// </summary>
     public const string RemoveWorkers = "remove-workers";
 

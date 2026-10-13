@@ -2029,13 +2029,14 @@ worktrees root, `.orchestrators`, `.mutations` and `.legs`, costs one shallow wa
 other trees building below it - an agent's worktree, a sweep's worker, a leg's copy - are
 never heard. Measured: watched all the way down, an agent's build below the
 worktrees root overflowed the operating system's buffer, and a run in the main tree that
-only read its own inputs ended `unmeasured`. Past 64 directories holding inputs - those
-above them are watched besides, and never counted - the top-level directories holding the
-most of them are watched all the way down instead, until the rest fit, each hearing the
-directories inside it through its own watch, and a tree whose inputs lie in more
-top-level directories than 64, the root among them where it holds one, is watched whole,
-other trees' builds below the worktrees root heard with the rest. The bound is the
-watcher's, not the watch's: each one .NET makes is a handle, a buffer and a thread.
+only read its own inputs ended `unmeasured`. Past 64 directories besides the root's own -
+each holding inputs and each above them, watched for names alone, counted alike - the
+top-level directories watching the most of them are watched all the way down instead, until
+the rest fit, each hearing the directories inside it through its own watch, and a tree whose
+inputs lie in more top-level directories than 64 is watched whole, other trees' builds below
+the worktrees root heard with the rest. Inputs in exactly 64 top-level directories still keep
+a watch each. The bound is the watcher's, not the watch's: each one .NET makes is a handle,
+a buffer and a thread, and on Linux, where it stands in, an inotify instance of a user's 128.
 
 On Linux there is no such bound. Every directory that holds an input is watched for its
 own entries, each above one for the names of the directories in it, and none all the way
@@ -3160,7 +3161,8 @@ arm's target, proves every object that depends on the site was rebuilt, runs the
 whole, judges what reddened against the declaration as an exact set, and puts the site back,
 checked by its hash. A BUILD-RED arm must instead stop the build at an object that depends on its
 site, and its paired positive control must build. All of it happens in worker copies of the leg's
-tree, never in the tree itself, which is only ever read. A leg's verdict is the worst of its own -
+tree, kept in the tree's `.mutations`, never in the tree's own files, which a sweep only ever
+reads. A leg's verdict is the worst of its own -
 its workers' builds and its test binaries' controls - and its arms' (see *Verdict vocabulary*).
 
 ### The registry

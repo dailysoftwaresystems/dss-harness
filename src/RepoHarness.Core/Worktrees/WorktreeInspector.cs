@@ -42,11 +42,7 @@ internal sealed record SubmoduleLoss(string Path, int Commits, bool HasStash);
 /// In an orchestrator's directory, each directory directly in it holding a .git entry of its own that git records no
 /// worktree at, as this machine spells it: a person's to look in and delete.
 /// </param>
-internal sealed record WorktreesBelow(IReadOnlyList<string> Worktrees, IReadOnlyList<string> Unrecorded)
-{
-    /// <summary>Whether anything is below it that deleting it would delete with it.</summary>
-    public bool Any => Worktrees.Count + Unrecorded.Count > 0;
-}
+internal sealed record WorktreesBelow(IReadOnlyList<string> Worktrees, IReadOnlyList<string> Unrecorded);
 
 /// <summary>Everything that stops a worktree being deleted without --force, found before anything is touched.</summary>
 /// <param name="Changes">Paths with uncommitted changes, including edits status cannot see.</param>

@@ -24,7 +24,7 @@ namespace RepoHarness.Core.Runs;
 /// <param name="HostTreeRoot">
 /// The tree the work happens in, on the machine it happens on: the same as <paramref name="TreeRoot"/>
 /// for a leg this machine runs in its tree, and a copy of that tree for every other - a host's own, or
-/// one kept beside the tree here (<see cref="LocalCopy"/>). Every path that describes the work
+/// one kept in the tree's own .legs here (<see cref="LocalCopy"/>). Every path that describes the work
 /// derives from this one, because a path derived from <paramref name="TreeRoot"/> for a leg that works
 /// in a copy names a directory the work never touches: on a host, one on the machine that typed the
 /// command rather than on the one being measured.
@@ -60,7 +60,7 @@ public sealed record PlacedLeg(
     /// </remarks>
     public string TreeKey => CompositeKey.Of(Host.Host.ToString(), HostTreeRoot);
 
-    /// <summary>Whether the leg works in a copy of its tree kept beside the tree on this machine.</summary>
+    /// <summary>Whether the leg works in a copy of its tree kept in the tree's own .legs on this machine.</summary>
     public bool LocalCopy { get; init; }
 
     /// <summary>Whether another machine's process runs the leg's work: a WSL distribution's, or an ssh host's.</summary>

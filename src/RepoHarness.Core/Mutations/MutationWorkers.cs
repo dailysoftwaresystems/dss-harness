@@ -53,9 +53,17 @@ public sealed record WorkerFamily
 
     /// <summary>
     /// How many characters the first worker of a family adds to its tree's path: the separator, the slot, the separator,
-    /// the family's name, and <c>-1</c>. Kept in the tree, a worker is two characters longer than one kept beside it was.
+    /// the family's name, and <c>-1</c>. Kept in the tree, a worker is <see cref="DeeperThanBeside"/> characters longer
+    /// than one kept beside it was.
     /// </summary>
     public static int AddedToItsTreesPath { get; } = 1 + HarnessLayout.MutationsDirectoryName.Length + 1 + VariantKey.CopyKeyLength + 1 + "-1".Length;
+
+    /// <summary>
+    /// How many characters deeper a worker is kept than one an earlier version of this tool kept beside its tree, as
+    /// <c>&lt;tree&gt;.mutation-&lt;key&gt;&lt;mark&gt;-&lt;n&gt;</c>: what a tree that fitted such a worker within the
+    /// path limit, and fits no worker kept in it, lacks.
+    /// </summary>
+    public static int DeeperThanBeside { get; } = AddedToItsTreesPath - (".mutation-".Length + VariantKey.CopyKeyLength + 1 + "-1".Length);
 
     /// <summary>What every worker of the family is named after: its path, before the hyphen and the worker's number.</summary>
     public string Root => HarnessLayout.InSlot(TreeRoot, HarnessLayout.MutationsDirectoryName, Name);
@@ -124,8 +132,8 @@ public sealed record WorkerFamily
 /// A worker is <c>&lt;tree&gt;/.mutations/&lt;key&gt;w-&lt;n&gt;</c>, numbered from 1, its build directory the
 /// variant's own within it, as the leg's is within the tree; a repository of its own, as every copy a sync makes is, so
 /// git and the harness answer there for the worker, never for the tree around it. It stays between sweeps, synced again
-/// by content before each, so its build is warm: the sweep only ever reads the tree, and builds and mutates in its
-/// workers alone. A self-test's workers are kept the same way, in a family of their own
+/// by content before each, so its build is warm: the sweep reads the tree's own files and writes none of them, and builds
+/// and mutates in its workers alone. A self-test's workers are kept the same way, in a family of their own
 /// (<see cref="WorkerFamily.SelfTestMark"/>): copies of the fixture this tool carries, in the tree of the leg whose
 /// toolchain builds them.
 /// </para>

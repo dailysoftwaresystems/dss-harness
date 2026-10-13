@@ -958,8 +958,9 @@ internal static class HelpCommand
             + $"({HarnessExit.Refused}), naming init, with nothing made - asked on the machine that makes the workers, so a "
             + "host answers for its own copy. Before every "
             + "sweep each is synced again from one reading of the tree, by content - so its build stays warm, and a site a "
-            + "killed sweep left mutated is put back - and built whole before it drives an arm. The tree itself is only "
-            + "ever read.");
+            + "killed sweep left mutated is put back - and built whole before it drives an arm. Of the tree itself a sweep "
+            + "reads every file and writes none: what it writes there - its workers, and the claims on them - is in "
+            + $"{HarnessLayout.MutationsDirectoryName} alone.");
         builder.AppendLine();
         AppendWrapped(
             builder,
@@ -996,8 +997,11 @@ internal static class HelpCommand
             + "with the worktree, or the host's copy, as everything else in it does, and is said. No copy of a tree carries "
             + "its workers, and a sync into a host's "
             + "copy never deletes that copy's own. Workers an earlier version of this tool kept beside a tree, as "
-            + "<tree>.mutation-<key><mark>-<n>, are known to nothing here: nothing lists, counts or removes them, and they "
-            + "are yours to delete.");
+            + "<tree>.mutation-<key><mark>-<n>, are no workers to anything here: nothing counts or removes one as a worker, and "
+            + "they are yours to delete. Each holds a .git of its own that git records no worktree at, so one below the "
+            + "worktrees root is said as any such directory: list-worktree warns of it, and delete-orchestrator, and "
+            + $"delete-worktree of an orchestrator's directory with or without --force, refuse ({HarnessExit.Refused}) while one "
+            + "is below it.");
         builder.AppendLine();
         builder.AppendLine("An arm's turn");
         builder.AppendLine();
@@ -1919,7 +1923,9 @@ internal static class HelpCommand
             "An orchestrator's agents' worktrees sit below the directory named for it, <worktrees.root>/<orchestrator>/<agent>, "
             + "made by create-agent with its records, never by create-worktree. list-worktree lists each as orchestrator/agent, "
             + "and delete-worktree takes that address. The directory named for an orchestrator is never deleted as one while "
-            + $"worktrees are below it, --force or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git "
+            + "worktrees are below it, or a directory holding a .git of its own that git records no worktree at - what a "
+            + "removal left, or a worker an earlier version of this tool kept beside an agent's worktree, a person's to look "
+            + $"in and delete - --force or not ({HarnessExit.Refused}), nor any directory with no .git of its own while git "
             + $"cannot list its worktrees ({HarnessExit.CommandFailed}); a worktree's own submodules are never taken for worktrees. "
             + "A plain worktree cannot take an orchestrator's name. An agent's copies on hosts are kept under "
             + "orchestrator--agent, so two orchestrators' agents of one name keep theirs apart.");
@@ -2443,7 +2449,9 @@ internal static class HelpCommand
             + "inside the worktree it removes, and so does its dry run, "
             + "and an agent made under a worktrees root the configuration no longer names is refused with nothing touched. "
             + "delete-orchestrator deletes the orchestrator once every agent of it is deleted and no worktree is left below its "
-            + "directory, and the evidence and transcripts its agents kept only with --delete-evidence; it removes the record "
+            + "directory, nor any directory holding a .git of its own that git records no worktree at - until then it refuses "
+            + $"({HarnessExit.Refused}), naming each - and the evidence and transcripts its agents kept only with "
+            + "--delete-evidence; it removes the record "
             + "last, so one that stops part way finishes when run again.");
 
         return builder.ToString();
@@ -2667,10 +2675,10 @@ internal static class HelpCommand
             + "directory above one, the root among them, for the names of the directories in it alone - so a build in another "
             + "tree below the worktrees root, which init keeps in git by a placeholder, is never heard. On Linux every such "
             + "directory is watched, however many there are, through one inotify instance for the whole process. On Windows "
-            + $"and macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories holding inputs, those above "
-            + "them besides, so past them the top-level directories holding the most are watched all the way down, and a tree "
-            + "whose inputs lie in more top-level directories than that, the root counted among them where it holds one, is "
-            + "watched whole. Where inotify cannot be called directly "
+            + $"and macOS a watch takes at most {FileSystemWatcherKind.MostDirectoriesWatched} directories besides the root's own, "
+            + "those holding inputs and those above them alike, so past them the top-level directories watching the most are "
+            + "watched all the way down, until the rest fit, and a tree whose inputs lie in more top-level directories than that "
+            + "is watched whole. Where inotify cannot be called directly "
             + "on Linux, .NET's watcher stands in, as on Windows and macOS, each directory taking an inotify instance of its "
             + "own, and the process says so once. A directory that holds inputs, or lies above some, going, arriving or "
             + "changing its name counts every input in or below it, under both names of a rename, though it be back when the "

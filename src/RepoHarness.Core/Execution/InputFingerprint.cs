@@ -437,15 +437,15 @@ public sealed class InputWatch : IDisposable, IWatchSink
     /// The directories to watch, and how: each directory that holds a tracked input, for its own
     /// entries only; each directory above one - the root among them - for the names of the
     /// directories in it alone, so that one of those going, arriving or changing its name is heard
-    /// wherever the inputs lie; and, where the directories holding inputs are more than
-    /// <paramref name="most"/>, the top-level directories holding the most of them all the way down
-    /// instead, until the rest fit. With no bound, none is watched all the way down.
+    /// wherever the inputs lie; and, where those directories are more than <paramref name="most"/>,
+    /// the top-level directories holding the most of them all the way down instead, until the rest
+    /// fit. With no bound, none is watched all the way down.
     /// </summary>
     /// <param name="most">
-    /// The kind's bound on the directories that hold inputs, or <see langword="null"/> where it has none.
-    /// Those above them are watched besides and never counted against it, so a tree's inputs take the
-    /// watches they took before those were watched at all; inside a top-level directory taken whole, its
-    /// own watch hears them.
+    /// The kind's bound on the directories it watches besides the root, or <see langword="null"/> where it
+    /// has none. A directory watched for names alone counts as one holding inputs does - each is a watcher
+    /// of its own - and the root's own watch, which every tree takes, does not; inside a top-level directory
+    /// taken whole, its one watch hears them all.
     /// </param>
     /// <remarks>
     /// Not one watch over the whole tree, nor over a whole top-level directory. A build writes its
@@ -482,12 +482,13 @@ public sealed class InputWatch : IDisposable, IWatchSink
 
         static string TopOf(string directory) => directory.IndexOf('/', StringComparison.Ordinal) is var at and > 0 ? directory[..at] : directory;
 
-        // The widest first: each taken whole saves a watch for every directory holding inputs below it but one.
+        // Every directory watched but the root, against the bound; the widest first: each taken whole saves a watch for
+        // every directory it watched, for files or for names, but one.
+        var watched = holding.Concat(above).Where(directory => directory.Length > 0).ToList();
         var whole = new HashSet<string>(comparer);
-        var count = holding.Count;
+        var count = watched.Count;
 
-        foreach (var group in holding
-            .Where(directory => directory.Length > 0)
+        foreach (var group in watched
             .GroupBy(TopOf, comparer)
             .Select(group => (Top: group.Key, Count: group.Count()))
             .OrderByDescending(group => group.Count)
@@ -557,7 +558,10 @@ public sealed class InputWatch : IDisposable, IWatchSink
         }
     }
 
-    /// <summary>Each directory watched, and whether all the way down, in the order of their paths.</summary>
+    /// <summary>
+    /// Each directory watched, and how - for its files, for the names in it alone, or all the way down - in the order of
+    /// their paths.
+    /// </summary>
     internal IReadOnlyList<WatchTarget> Watched
         => [.. _targets.OrderBy(watched => watched.Directory, StringComparer.Ordinal)];
 

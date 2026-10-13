@@ -383,7 +383,8 @@ public sealed class RunnerRunServiceTests
 
         Assert.Equal(HarnessExit.HostUnavailable, refusal.ExitCode);
         Assert.Equal(LegVerdict.SkippedUnavailable, Verdicts.ForRefusal(refusal.ExitCode));
-        Assert.Contains("git could not say whether this action's 'build/' is ignored", refusal.Message, StringComparison.Ordinal);
+        Assert.StartsWith("git could not say whether it ignores '.harness-config/runner/actions/corpus/build/", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("so whether what this run writes in this action's 'build/' would be committed is unknown", refusal.Message, StringComparison.Ordinal);
         Assert.Contains("Nothing has run", refusal.Message, StringComparison.Ordinal);
         Assert.Contains("not a git repository", refusal.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(Directory.Exists(Path.Combine(temp.Path, ".harness-config", "runner", "actions", "corpus", "build")));

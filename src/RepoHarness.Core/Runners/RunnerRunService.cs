@@ -1492,26 +1492,9 @@ public sealed class RunnerRunService(
         })
         {
             var probe = Path.Combine(relative, "probe").Replace('\\', '/');
-            bool ignored;
 
-            try
-            {
-                ignored = await _gitClient.IsIgnoredAsync(request.TreeRoot, probe, cancellationToken).ConfigureAwait(false);
-            }
-            catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
-            {
-                // A question that could not be asked is no verdict on the code, and not an answer
-                // either way. It is about this leg's tree - a worktree whose link to its repository
-                // is broken, a copy git can no longer read - so this leg cannot run here, in git's own
-                // words, and the legs on other trees still report: raised as a refusal of the run, it
-                // ended every leg over one tree's repository.
-                throw new HarnessException(
-                    HarnessExit.HostUnavailable,
-                    $"git could not say whether this action's '{kind}/' is ignored in '{request.TreeRoot}', "
-                    + $"so whether this run would write where git commits is unknown. Nothing has run. {ex.Message}");
-            }
-
-            if (!ignored)
+            // A question git cannot answer leaves this leg unable to run in its tree, as every such question does.
+            if (!await SlotIgnored.IsIgnoredAsync(_gitClient, request.TreeRoot, probe, $"what this run writes in this action's '{kind}/'", cancellationToken).ConfigureAwait(false))
             {
                 uncovered.Add(kind);
             }

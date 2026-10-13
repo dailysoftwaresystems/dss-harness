@@ -563,10 +563,10 @@ public sealed class InputFingerprintTests
     }
 
     /// <summary>
-    /// A watch takes as many watches for the directories its inputs lie in as the tool allows itself and no more - the
-    /// directories above them, the root among them, watched for names besides and never counted: directories of inputs
-    /// that fit are each watched for their own files, and where taking top-level directories whole still leaves more than
-    /// fit, the tree is watched whole, as one watch.
+    /// A watch takes as many watches as the tool allows itself besides the root's own, and no more: directories of inputs
+    /// that fit are each watched for their own files - inputs in exactly as many top-level directories as it allows each
+    /// keep a watch of their own - and where taking top-level directories whole still leaves more than fit, the tree is
+    /// watched whole, as one watch.
     /// </summary>
     [Theory]
     [InlineData(false)]
@@ -595,6 +595,58 @@ public sealed class InputFingerprintTests
                 ? [WatchTarget.AllTheWayDown(temp.Path)]
                 : [WatchTarget.NamesOnly(temp.Path), .. inputs.Select(input => WatchTarget.Entries(temp.Combine(input[..input.IndexOf('/')])))],
             watch.Watched);
+    }
+
+    /// <summary>
+    /// A directory watched only for the names in it counts against what the tool allows itself as one holding inputs
+    /// does - each is a watcher of its own - so modules whose inputs lie deep each take a module whole, the most first, until
+    /// the rest fit: twenty modules of a build file and one source six directories down are thirteen modules whole and
+    /// seven watched directory by directory, within the bound with the root's own watch besides.
+    /// </summary>
+    [Fact]
+    public void DirectoriesWatchedForNamesAlone_CountAgainstTheBound_AsDirectoriesOfInputsDo()
+    {
+        using var temp = new TempDirectory();
+        var inputs = Enumerable.Range(0, 20)
+            .SelectMany(module => new[] { $"m{module:00}/pom.xml", $"m{module:00}/src/main/java/com/acme/m/A.java" })
+            .ToList();
+
+        foreach (var input in inputs)
+        {
+            temp.WriteFile(input, "f");
+        }
+
+        var kind = new ScriptedWatchKind();
+
+        using var watch = new InputWatch(temp.Path, inputs, StringComparer.Ordinal, kind);
+
+        // Each module watched apart takes seven: the module and its source's directory for their files, the five between
+        // for names.
+        static IEnumerable<WatchTarget> Apart(TempDirectory temp, int module)
+        {
+            var top = $"m{module:00}";
+
+            return
+            [
+                WatchTarget.Entries(temp.Combine(top)),
+                WatchTarget.NamesOnly(temp.Combine(top, "src")),
+                WatchTarget.NamesOnly(temp.Combine(top, "src", "main")),
+                WatchTarget.NamesOnly(temp.Combine(top, "src", "main", "java")),
+                WatchTarget.NamesOnly(temp.Combine(top, "src", "main", "java", "com")),
+                WatchTarget.NamesOnly(temp.Combine(top, "src", "main", "java", "com", "acme")),
+                WatchTarget.Entries(temp.Combine(top, "src", "main", "java", "com", "acme", "m")),
+            ];
+        }
+
+        Assert.Null(watch.Failure);
+        Assert.Equal(
+            [
+                WatchTarget.NamesOnly(temp.Path),
+                .. Enumerable.Range(0, 13).Select(module => WatchTarget.AllTheWayDown(temp.Combine($"m{module:00}"))),
+                .. Enumerable.Range(13, 7).SelectMany(module => Apart(temp, module)),
+            ],
+            watch.Watched);
+        Assert.True(kind.Targets!.Count - 1 <= FileSystemWatcherKind.MostDirectoriesWatched, $"{kind.Targets.Count} watches");
     }
 
     /// <summary>
