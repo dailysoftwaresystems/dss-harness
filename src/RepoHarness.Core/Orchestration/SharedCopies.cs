@@ -1,4 +1,5 @@
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 
 namespace RepoHarness.Core.Orchestration;
@@ -15,39 +16,50 @@ internal sealed record SharedCopy(string File, bool Holds);
 /// written before any copy was kept reads as it always did, and has none.
 /// </summary>
 /// <remarks>
-/// A copy is made from a file required to hold the digest it is named by, and proved (<see cref="VerifiedFileCopy"/>),
+/// A copy is written from bytes required to hash to the digest it is named by, and proved (<see cref="VerifiedFileCopy"/>),
 /// so none is ever kept that is not the bytes recorded; read back, it is hashed again and used only where it still
-/// hashes to its name. The copies are pruned to what the seed names each time the seed is written, and removed when
-/// their agent is deleted. One that cannot be kept, pruned or removed never fails the command that met it: the path is
-/// recorded all the same, and why is said.
+/// hashes to its name. It is a file of the agent's own, whatever the file it was kept from: never read-only, and never one
+/// that can be run. A digest whose copy still holds its bytes is kept already, and is not written again. The copies are
+/// pruned to what the seed names each time the seed is written, and removed when their agent is deleted. One that cannot
+/// be kept, pruned or removed never fails the command that met it: the path is recorded all the same, and why is said.
 /// </remarks>
 /// <param name="fileSystem">Reads and writes the copies.</param>
+/// <param name="permissions">Writes each copy as a file that is not run.</param>
 /// <param name="layout">The agent's orchestrator, which spells where they are kept.</param>
 /// <param name="agent">The agent's name.</param>
-internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout layout, string agent)
+internal sealed class SharedCopies(IFileSystem fileSystem, IFilePermissions permissions, OrchestratorLayout layout, string agent)
 {
     /// <summary>The directory the copies are kept in.</summary>
     public string Directory { get; } = layout.SharedDirectory(agent);
 
     /// <summary>
-    /// Keeps the bytes of the file at <paramref name="holding"/> under <paramref name="digest"/>, in place of any copy
-    /// already kept under it; a file above <see cref="TwoChanges.MostBytes"/> is recorded as shared and not kept, since no
+    /// Keeps the bytes of the file at <paramref name="holding"/> under <paramref name="digest"/>, where no copy kept under
+    /// it holds them already; a file above <see cref="TwoChanges.MostBytes"/> is recorded as shared and not kept, since no
     /// merge is offered above that size either and a copy would serve nothing.
     /// </summary>
     /// <param name="digest">The SHA-256 the seed records, which <paramref name="holding"/> must hold.</param>
     /// <param name="holding">A file that holds those bytes: one of the two trees' copies.</param>
     /// <param name="cancellationToken">Stops it before the copy is put in place.</param>
-    /// <returns>Why they could not be kept; null where they were, or where the file is above the bound.</returns>
+    /// <returns>Why they could not be kept; null where they were, or are already, or where the file is above the bound.</returns>
     public async Task<string?> KeepAsync(string digest, string holding, CancellationToken cancellationToken)
     {
         try
         {
-            if (LengthOf(fileSystem, holding) > TwoChanges.MostBytes)
+            if (await KeptAlreadyAsync(digest, cancellationToken).ConfigureAwait(false) || LengthOf(fileSystem, holding) > TwoChanges.MostBytes)
             {
                 return null;
             }
 
-            await VerifiedFileCopy.CopyAsync(fileSystem, holding, layout.SharedFile(agent, digest), digest, cancellationToken).ConfigureAwait(false);
+            // Read as bytes and written anew, never copied: a copy carries the attributes of the file it was made from, and
+            // one kept from a read-only file could not be replaced, nor taken back where it failed.
+            var contents = await fileSystem.ReadAllBytesAsync(holding, cancellationToken).ConfigureAwait(false);
+
+            if (FileContent.Of(contents) is var read && read.Content != digest)
+            {
+                return $"'{holding}' holds other content now than when it was measured - SHA-256 {read.Content}, where it was {digest} - so it was not kept";
+            }
+
+            await WriteAsync(digest, contents, cancellationToken).ConfigureAwait(false);
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -57,15 +69,15 @@ internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout la
     }
 
     /// <summary>
-    /// Keeps <paramref name="contents"/>, bytes in hand that hash to <paramref name="digest"/>, under it: what a search of
-    /// the main tree's history found for a seed whose bytes no copy was kept of, so the search is made once.
+    /// Keeps <paramref name="contents"/>, bytes in hand that hash to <paramref name="digest"/>, under it, where no copy kept
+    /// under it holds them already: what a search of the main tree's history found for a seed whose bytes no copy was kept
+    /// of, so the search is made once.
     /// </summary>
     /// <param name="digest">The SHA-256 the seed records.</param>
     /// <param name="contents">Bytes proved to hash to it.</param>
-    /// <param name="permissions">Writes the copy as a file that is not run.</param>
     /// <param name="cancellationToken">Stops it before the copy is put in place.</param>
-    /// <returns>Why they could not be kept; null where they were, or where they are not those bytes or above the bound.</returns>
-    public async Task<string?> KeepAsync(string digest, byte[] contents, IFilePermissions permissions, CancellationToken cancellationToken)
+    /// <returns>Why they could not be kept; null where they were, or are already, or where they are not those bytes or above the bound.</returns>
+    public async Task<string?> KeepAsync(string digest, byte[] contents, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(contents);
 
@@ -76,7 +88,11 @@ internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout la
 
         try
         {
-            await VerifiedFileCopy.WriteAsync(fileSystem, permissions, contents, layout.SharedFile(agent, digest), executable: false, cancellationToken).ConfigureAwait(false);
+            if (!await KeptAlreadyAsync(digest, cancellationToken).ConfigureAwait(false))
+            {
+                await WriteAsync(digest, contents, cancellationToken).ConfigureAwait(false);
+            }
+
             return null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -84,6 +100,14 @@ internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout la
             return ex.Message.TrimEnd('.');
         }
     }
+
+    /// <summary>Whether the copy kept under <paramref name="digest"/> holds its bytes already: kept, and not written again.</summary>
+    private async Task<bool> KeptAlreadyAsync(string digest, CancellationToken cancellationToken)
+        => await FindAsync(digest, cancellationToken).ConfigureAwait(false) is { Holds: true };
+
+    /// <summary>Writes <paramref name="contents"/> as the copy kept under <paramref name="digest"/>: a new file, proved, that is not run.</summary>
+    private Task WriteAsync(string digest, byte[] contents, CancellationToken cancellationToken)
+        => VerifiedFileCopy.WriteAsync(fileSystem, permissions, contents, layout.SharedFile(agent, digest), executable: false, cancellationToken);
 
     /// <summary>The copy kept under <paramref name="digest"/>, read again and hashed, or null where none was kept.</summary>
     /// <param name="digest">A SHA-256 the seed records.</param>
@@ -112,13 +136,13 @@ internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout la
     {
         ArgumentNullException.ThrowIfNull(seed);
 
-        var left = new List<string>();
+        var left = new List<(string File, string Why)>();
 
         try
         {
             if (!fileSystem.DirectoryExists(Directory))
             {
-                return left;
+                return [];
             }
 
             var named = seed.Paths.Values.ToHashSet(StringComparer.Ordinal);
@@ -131,16 +155,23 @@ internal sealed class SharedCopies(IFileSystem fileSystem, OrchestratorLayout la
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
-                    left.Add($"a kept copy the seed no longer names, '{file}', could not be removed: {ex.Message.TrimEnd('.')}; the next write of the seed removes it");
+                    left.Add((file, ex.Message.TrimEnd('.')));
                 }
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            left.Add($"the copies kept in '{Directory}' could not be pruned to what the seed names: {ex.Message.TrimEnd('.')}; the next write of the seed prunes them");
+            return [$"the copies kept in '{Directory}' could not be pruned to what the seed names: {ex.Message.TrimEnd('.')}; the next write of the seed prunes them"];
         }
 
-        return left;
+        // One line however many: a directory nothing can be removed from would otherwise say so for every file in it.
+        return left switch
+        {
+            [] => [],
+            [var (file, why)] => [$"a kept copy the seed no longer names, '{file}', could not be removed: {why}; the next write of the seed removes it"],
+            _ => [$"{left.Count} kept copies the seed no longer names, in '{Directory}', could not be removed - {ReportText.Listed([.. left.Select(copy => Path.GetFileName(copy.File))])}: "
+                + $"{left[0].Why}; the next write of the seed removes them"],
+        };
     }
 
     /// <summary>Removes every copy, with their directory: what deleting the agent does, once its record says it is deleted.</summary>

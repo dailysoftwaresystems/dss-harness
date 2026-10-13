@@ -348,6 +348,31 @@ public sealed class ProcessRunnerTests
     }
 
     /// <summary>
+    /// Output a caller reads under an encoding it names is decoded exactly so, from its first byte: bytes that begin as a
+    /// byte order mark does are bytes like any other there, and are neither dropped nor taken to say how the rest is
+    /// written. A file's bytes read back through git begin so wherever the file does.
+    /// </summary>
+    [Theory]
+    [InlineData(new byte[] { 0xEF, 0xBB, 0xBF })]
+    [InlineData(new byte[] { 0xFF, 0xFE })]
+    [InlineData(new byte[] { 0xFE, 0xFF })]
+    [InlineData(new byte[] { 0xFF, 0xFE, 0x00, 0x00 })]
+    public async Task RunAsync_ReadsOutputUnderTheEncodingTheCallerNames_ByteForByte_AByteOrderMarkIncluded(byte[] mark)
+    {
+        using var temp = new TempDirectory();
+        byte[] bytes = [.. mark, .. Encoding.UTF8.GetBytes("João été\r\nline\n"), 0x00, 0x80, 0xFF];
+        var file = temp.Combine("printed.bin");
+        File.WriteAllBytes(file, bytes);
+
+        var result = await CreateRunner().RunAsync(
+            TestHost.ChildRequest("print-bytes", file) with { StandardOutputEncoding = Encoding.Latin1, Timeout = TimeSpan.FromSeconds(60) },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(bytes, Encoding.Latin1.GetBytes(result.StandardOutput));
+    }
+
+    /// <summary>
     /// An input a writer writes as it makes it reaches the child whole and in order, and is closed once written, as text
     /// is: the child, reading to the end, finishes only once it is.
     /// </summary>

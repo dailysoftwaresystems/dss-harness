@@ -200,12 +200,17 @@ public interface IGitClient
     /// <param name="directory">The work tree's root.</param>
     /// <param name="attributes">The attributes to ask about.</param>
     /// <param name="paths">Paths relative to the root, with forward separators, whether or not a file is there.</param>
+    /// <param name="unread">
+    /// What git failing to answer leaves undone, as its refusal says it after "git check-attr failed, so"; null says that
+    /// what the attributes declare for the paths could not be read.
+    /// </param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
     /// <exception cref="HarnessException">git could not answer.</exception>
     Task<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>> ReadAttributesAsync(
         string directory,
         IReadOnlyList<string> attributes,
         IReadOnlyList<string> paths,
+        string? unread = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Lists every worktree attached to the repository, the main worktree first.</summary>

@@ -150,7 +150,7 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
 
         // Both streams are read from the moment the process starts: a child that fills a
         // pipe nobody is reading blocks forever.
-        var standardOutput = CaptureAsync(process.StandardOutput, request.OnOutputLine, request.OutputKept, request.CutLine);
+        var standardOutput = CaptureAsync(OutputOf(process, request), request.OnOutputLine, request.OutputKept, request.CutLine);
         var standardError = CaptureAsync(process.StandardError, request.OnErrorLine, request.ErrorKept, request.CutLine);
 
         // Written while both output streams are being read, so a child that answers as it reads
@@ -548,6 +548,17 @@ public sealed class ProcessRunner(IHostPlatform platform, IFilePermissions fileP
             }
         }
     }
+
+    /// <summary>
+    /// How the child's standard output is read: under the encoding the caller named, exactly, from its first byte - a reader
+    /// .NET makes for a child takes bytes that begin as a byte order mark does for the mark, drops them and decodes the rest
+    /// as the mark says, which turns the output of a caller that reads bytes through Latin-1 into other bytes. Text read as
+    /// UTF-8, the caller naming none, is read as .NET reads it.
+    /// </summary>
+    private static StreamReader OutputOf(Process process, ProcessRequest request)
+        => request.StandardOutputEncoding is { } exact
+            ? new StreamReader(process.StandardOutput.BaseStream, exact, detectEncodingFromByteOrderMarks: false)
+            : process.StandardOutput;
 
     /// <summary>A stream read to its end: what is kept of it, and what its line handler raised, where it raised anything.</summary>
     private sealed record Captured(string Text, ExceptionDispatchInfo? Failed);

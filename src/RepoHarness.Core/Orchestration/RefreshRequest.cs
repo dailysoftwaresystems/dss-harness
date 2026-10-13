@@ -59,5 +59,5 @@ public sealed record RefreshRequest
     /// <summary>The arguments that leave <paramref name="paths"/> as the agent changed them, each as a command line takes it.</summary>
     /// <param name="paths">The paths, as git names them.</param>
     public static string ExceptArguments(IEnumerable<string> paths)
-        => string.Join(' ', paths.SelectMany(path => new[] { ExceptOption, OrchestrationReports.Argument(path) }));
+        => string.Join(' ', OrchestrationReports.PathArguments(ExceptOption, paths));
 }

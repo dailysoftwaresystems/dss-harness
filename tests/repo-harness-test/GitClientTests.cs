@@ -540,6 +540,25 @@ public sealed class GitClientTests
         Assert.Contains("git lists 'lost.txt' at HEAD but could not read it", refused.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A commit git cannot read is refused, never answered as holding nothing: git answers a path of a commit it cannot
+    /// read exactly as it answers one the commit does not hold, and every file would be taken for one never there.
+    /// </summary>
+    [Fact]
+    public async Task HeldAtAsync_RefusesACommitGitCannotRead_RatherThanAnsweringNothingThere()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        const string Unknown = "0123456789abcdef0123456789abcdef01234567";
+
+        var refused = await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.HeldAtAsync(temp.Path, Unknown, ["README.md"], cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refused.ExitCode);
+        Assert.StartsWith($"git cannot read commit {Unknown}, so which files {Unknown} holds cannot be told: ", refused.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ListWorktreesAsync_ListsTheMainWorktreeFirst_AndNamesEachBranch()
     {
@@ -1160,6 +1179,25 @@ public sealed class GitClientTests
     }
 
     /// <summary>
+    /// A name may begin with the character a byte order mark is, and git's answer then begins with its bytes: they are
+    /// the name's, and are kept, rather than taken to say how the answer is written and dropped.
+    /// </summary>
+    [Fact]
+    public async Task ANameThatBeginsAsAByteOrderMarkDoes_IsListedWithIt()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        var head = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
+        const string Name = "﻿marked.md";
+        temp.WriteFile(Name, "text\n");
+        await harness.RunGitAsync(temp.Path, ["add", "--", Name], cancellationToken);
+
+        Assert.Equal([Name], await harness.GitClient.ListChangedSinceAsync(temp.Path, head, cancellationToken));
+    }
+
+    /// <summary>
     /// One path this machine spelled has this machine's separator turned into git's: on Windows,
     /// 'docs\notes.md' is the file git calls 'docs/notes.md'.
     /// </summary>
@@ -1396,6 +1434,36 @@ public sealed class GitClientTests
     }
 
     /// <summary>
+    /// A file that begins with a byte order mark is bytes like any other: its merge, and its checkout, are read back
+    /// byte for byte - the mark kept, and the text after it not decoded as the mark would say it is written.
+    /// </summary>
+    [Fact]
+    public async Task AFileThatBeginsWithAByteOrderMark_IsMergedAndCheckedOut_ByteForByte()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await CommitCheckedOutWithCrlfAsync(harness, temp.Path, cancellationToken);
+        byte[] mark = [0xEF, 0xBB, 0xBF];
+
+        byte[] Version(string first, string last) => [.. mark, .. Utf8($"{first}\ncafé\nthree\nfour\nfive\n{last}\n")];
+
+        var merge = await harness.GitClient.MergeTextAsync(Version("one", "six"), Version("ONÉ", "six"), Version("one", "SÍX"), MergeNames, cancellationToken);
+
+        Assert.True(merge.IsClean);
+        Assert.Equal(Version("ONÉ", "SÍX"), merge.Merged);
+
+        byte[] checkedOut = [.. mark, .. Utf8("café\r\nmerged\r\n")];
+
+        Assert.Equal(checkedOut, await harness.GitClient.ReadCheckedOutAsync(temp.Path, "a.txt", [.. mark, .. Utf8("café\nmerged\n")], cancellationToken));
+
+        // Nor does a mark of another encoding say how what follows it is read: these bytes are no UTF-16.
+        byte[] other = [0xFF, 0xFE, .. Utf8("café\n")];
+
+        Assert.Equal(other, await harness.GitClient.ReadCheckedOutAsync(temp.Path, "a.bin", other, cancellationToken));
+    }
+
+    /// <summary>
     /// git reads a file as it would store it by storing it, and what it stores for a question goes to a directory of the
     /// question's own: a merge that was only measured leaves the repository as it found it.
     /// </summary>
@@ -1576,6 +1644,29 @@ public sealed class GitClientTests
             conflict.Shown);
     }
 
+    /// <summary>
+    /// Each of a conflict's marks alone, beginning a line of a file, makes the markers longer than it: a line of any one
+    /// of them would read as the marker made of it.
+    /// </summary>
+    [Theory]
+    [InlineData('<')]
+    [InlineData('=')]
+    [InlineData('>')]
+    [InlineData('|')]
+    public async Task ALineOfSevenOfAnyOneMark_MakesTheMarkersLonger(char mark)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        byte[] Version(string fifth) => Utf8($"one\n{new string(mark, 7)} not a marker\nthree\nfour\n{fifth}\nsix\n");
+
+        var conflict = await new HarnessFactory().GitClient.MergeTextAsync(Version("five"), Version("OURS"), Version("THEIRS"), MergeNames, cancellationToken);
+
+        Assert.Equal(1, conflict.Conflicts);
+        Assert.Equal(
+            ["<<<<<<<< the main tree", "OURS", "|||||||| what both held", "five", "========", "THEIRS", ">>>>>>>> the agent"],
+            conflict.Shown);
+    }
+
     [Fact]
     public async Task ABinaryFile_IsNotMerged_InGitsWords_AndIsNotAnErrorOfTheQuestion()
     {
@@ -1733,6 +1824,76 @@ public sealed class GitClientTests
         Assert.False(history.Cut);
     }
 
+    /// <summary>
+    /// A path is the path it names, never a pattern: the history of <c>[id].tsx</c> - a name a web project's routes use -
+    /// is the commits that changed that file, and not those that changed <c>i.tsx</c> or <c>d.tsx</c> beside it.
+    /// </summary>
+    [Fact]
+    public async Task TheHistoryOfAPathThatReadsAsAPattern_IsTheHistoryOfThatPathAlone()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        temp.WriteFile("[id].tsx", "the route");
+        await harness.CommitAllAsync(temp.Path, "a route", cancellationToken);
+        var made = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
+        var blob = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:[id].tsx"], cancellationToken)).StandardOutput.Trim();
+
+        foreach (var (file, content) in new[] { ("i.tsx", "one"), ("d.tsx", "two"), ("i.tsx", "three") })
+        {
+            temp.WriteFile(file, content);
+            await harness.CommitAllAsync(temp.Path, $"{file}: {content}", cancellationToken);
+        }
+
+        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", ["[id].tsx"], 64, cancellationToken);
+
+        Assert.Equal(1, history.Commits);
+        Assert.Equal([new GitHeldAt(made, blob)], history.Held["[id].tsx"]);
+    }
+
+    /// <summary>
+    /// A path holding a line break - which git allows, and no line of git's input can carry - has its history read too:
+    /// named to the walk as an argument, and read from each commit apart, beside a path read the usual way.
+    /// </summary>
+    [Fact]
+    public async Task TheHistoryOfAPathHoldingALineBreak_IsRead_BesideAnotherPaths()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "git for Windows refuses a name holding a line break.");
+
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+        const string Wrapped = "docs/line\nbreak.md";
+
+        async Task<string> CommitAsync(string message)
+        {
+            await harness.RunGitAsync(temp.Path, ["commit", "--quiet", "-m", message], cancellationToken);
+
+            return (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD"], cancellationToken)).StandardOutput.Trim();
+        }
+
+        async Task<string> BlobAsync(string commit)
+            => (await harness.RunGitAsync(temp.Path, ["rev-parse", $"{commit}:{Wrapped}"], cancellationToken)).StandardOutput.Trim();
+
+        await harness.StageAsync(temp.Path, "\"docs/line\\nbreak.md\"", "first\n", cancellationToken);
+        var first = await CommitAsync("a wrapped name");
+        await harness.StageAsync(temp.Path, "\"plain.md\"", "beside it\n", cancellationToken);
+        var plain = await CommitAsync("another file");
+        await harness.StageAsync(temp.Path, "\"docs/line\\nbreak.md\"", "second\n", cancellationToken);
+        var second = await CommitAsync("the wrapped name changed");
+
+        var history = await harness.GitClient.ListHeldInHistoryAsync(temp.Path, "HEAD", [Wrapped, "plain.md"], 64, cancellationToken);
+
+        Assert.False(history.Cut);
+        Assert.Equal(2, history.Commits);
+        Assert.Equal([new GitHeldAt(second, await BlobAsync(second)), new GitHeldAt(first, await BlobAsync(first))], history.Held[Wrapped]);
+        Assert.Equal(
+            [new GitHeldAt(plain, (await harness.RunGitAsync(temp.Path, ["rev-parse", $"{plain}:plain.md"], cancellationToken)).StandardOutput.Trim())],
+            history.Held["plain.md"]);
+    }
+
     [Fact]
     public async Task TheEntriesOfACommit_AreListedForThePathsAskedAlone_EachWithItsMode()
     {
@@ -1831,7 +1992,7 @@ public sealed class GitClientTests
             temp.Path,
             ["text", "eol", "merge"],
             ["a.txt", "b.bin", "c.gen", "d.own", "e.never", "with space.other", .. many],
-            cancellationToken);
+            cancellationToken: cancellationToken);
 
         Assert.Equal(456, declared.Count);
         Assert.Equal((GitAttributes.Set, "lf", GitAttributes.Unspecified), (declared["a.txt"]["text"], declared["a.txt"]["eol"], declared["a.txt"]["merge"]));
@@ -1841,7 +2002,7 @@ public sealed class GitClientTests
         Assert.Equal(GitAttributes.Unset, declared["e.never"]["merge"]);
         Assert.All(declared["with space.other"].Values, value => Assert.Equal(GitAttributes.Unspecified, value));
         Assert.All(many, path => Assert.Equal("lf", declared[path]["eol"]));
-        Assert.Empty(await harness.GitClient.ReadAttributesAsync(temp.Path, ["text"], [], cancellationToken));
+        Assert.Empty(await harness.GitClient.ReadAttributesAsync(temp.Path, ["text"], [], cancellationToken: cancellationToken));
     }
 }
 

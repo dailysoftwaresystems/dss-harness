@@ -131,7 +131,8 @@ public sealed record Handable(IReadOnlyList<string> Files, IReadOnlyList<string>
 /// <summary>
 /// What an agent shares with the main tree, as one command adds to it: the one recorder of a shared path, whichever
 /// command shares it - handed, folded, or found already in. Each file recorded has its bytes kept beside the seed
-/// (<see cref="SharedCopies"/>), so the seed and the copies it names are written from one value.
+/// (<see cref="SharedCopies"/>), so the seed and the copies it names are written from one value - except by a command
+/// that deletes the agent, which keeps none: they would go with it moments later.
 /// </summary>
 /// <remarks>
 /// A command writes in one order: the trees, the kept copies - made here, as each path is recorded - the seed, and then
@@ -139,19 +140,37 @@ public sealed record Handable(IReadOnlyList<string> Files, IReadOnlyList<string>
 /// as recorded, and a copy the seed does not name is pruned at the next write.
 /// </remarks>
 /// <param name="seed">What the agent shared before.</param>
-/// <param name="kept">Where the bytes of what it shares are kept.</param>
-internal sealed class SharedLedger(SeedRecord seed, SharedCopies kept)
+/// <param name="kept">Where the bytes of what it shares are kept; null where none are kept, as the agent is being deleted.</param>
+internal sealed class SharedLedger(SeedRecord seed, SharedCopies? kept)
 {
     private readonly Dictionary<string, string> _shared = new(seed.Paths, StringComparer.Ordinal);
     private readonly HashSet<string> _executable = (seed.Executable ?? []).ToHashSet(StringComparer.Ordinal);
     private readonly HashSet<string> _absent = (seed.Absent ?? []).ToHashSet(StringComparer.Ordinal);
-    private readonly List<string> _notKept = [];
+    private readonly List<(string Path, string Why)> _notKept = [];
 
-    /// <summary>Where the bytes of what the agent shares are kept: pruned to the seed once it is written.</summary>
-    public SharedCopies Kept => kept;
+    /// <summary>Where the bytes of what the agent shares are kept, pruned to the seed once it is written; null where none are.</summary>
+    public SharedCopies? Kept => kept;
 
-    /// <summary>Each path recorded whose bytes could not be kept, with why: said, and never a failure of the command that recorded it.</summary>
-    public IReadOnlyList<string> NotKept => _notKept;
+    /// <summary>
+    /// What is said of the paths recorded whose bytes could not be kept: never a failure of the command that recorded them,
+    /// and one line however many there are - which paths, as many as a line names, how many more, and why - since a full
+    /// disk would otherwise say it for every file a command records.
+    /// </summary>
+    public IReadOnlyList<string> NotKept => _notKept switch
+    {
+        [] => [],
+        [var (path, why)] => [$"'{ReportText.Printable(path)}' is recorded as shared, and its bytes were not kept in '{kept!.Directory}': {why}"],
+        _ => [$"{_notKept.Count} path(s) are recorded as shared, and their bytes were not kept in '{kept!.Directory}' - "
+            + $"{ReportText.Listed([.. _notKept.Select(notKept => notKept.Path)])}: {Why()}"],
+    };
+
+    /// <summary>Why the paths' bytes were not kept: the first reason, and how many others there were where they differ.</summary>
+    private string Why()
+    {
+        var others = _notKept.Select(notKept => notKept.Why).Distinct(StringComparer.Ordinal).Count() - 1;
+
+        return others == 0 ? _notKept[0].Why : $"{_notKept[0].Why}; and {ReportText.Counted(others, "other reason")}";
+    }
 
     /// <summary>
     /// Records <paramref name="path"/> as a file both trees hold, and keeps its bytes. Never interrupted: a path the
@@ -175,9 +194,9 @@ internal sealed class SharedLedger(SeedRecord seed, SharedCopies kept)
             _executable.Remove(path);
         }
 
-        if (await kept.KeepAsync(digest, holding, CancellationToken.None).ConfigureAwait(false) is { } why)
+        if (kept is not null && await kept.KeepAsync(digest, holding, CancellationToken.None).ConfigureAwait(false) is { } why)
         {
-            _notKept.Add($"'{ReportText.Printable(path)}' is recorded as shared, and its bytes were not kept in '{kept.Directory}': {why}");
+            _notKept.Add((path, why));
         }
     }
 
@@ -469,7 +488,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
             if (TwoChanges.Taken(policy, offer))
             {
-                merged.Add(new MergedPath(path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed));
+                merged.Add(new MergedPath(path, offer.Working!, offer.Digest!, offer.Executable, offer.Listed, look.Main.File!.Value, look.Agent.File!.Value));
                 mainContent[path] = look.Main.File!.Value.Digest;
                 agentContent[path] = look.Agent.File!.Value.Digest;
                 continue;
@@ -508,7 +527,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         // fold that stopped part way runs again; one it does not weigh is the misspelling it most likely is.
         foreach (var stray in policy.NamedAsText().Where(path => !candidates.Contains(path, StringComparer.Ordinal)))
         {
-            refused.Add((stray, $"{TwoChangePolicy.MergeOption} '{stray}' names no path this fold weighs, so it merges nothing: check its spelling"));
+            refused.Add((stray, $"{FoldAllowances.MergeOption} '{stray}' names no path this fold weighs, so it merges nothing: check its spelling"));
         }
 
         refused.AddRange(policy.NamedNeverMerged());
@@ -578,10 +597,10 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 var inMain = Path.Combine(main, merge.Path);
                 var inAgent = Path.Combine(worktree, merge.Path);
 
-                // Both copies are asked before either is written: the merge is of the two files that were weighed, and one
-                // written over a file changed since would lose what nobody merged.
-                await RequireMeasuredAsync(inMain, merge.Path, plan.MainContent[merge.Path], MainTreeName, "written over").ConfigureAwait(false);
-                await RequireMeasuredAsync(inAgent, merge.Path, plan.AgentContent[merge.Path], AgentTreeName, "written over").ConfigureAwait(false);
+                // Both copies are asked before either is written: the merge is of the two files that were weighed - each its
+                // content and its bit - and one written over a file changed since would lose what nobody merged.
+                await RequireWeighedAsync(inMain, merge.Path, merge.MainWeighed, MainTreeName).ConfigureAwait(false);
+                await RequireWeighedAsync(inAgent, merge.Path, merge.AgentWeighed, AgentTreeName).ConfigureAwait(false);
 
                 // The main tree first, and recorded only once both hold it: stopped between the two, a fold run again merges
                 // what the main tree then holds with the agent's copy, and comes to the same bytes.
@@ -608,7 +627,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     {
         ArgumentNullException.ThrowIfNull(merge);
 
-        if (await IdentityAsync(file, CancellationToken.None).ConfigureAwait(false) != new Identity(merge.Digest, merge.Executable))
+        if (await IdentityAsync(file, CancellationToken.None).ConfigureAwait(false) != new FileIdentity(merge.Digest, merge.Executable))
         {
             await VerifiedFileCopy.WriteAsync(_fileSystem, _permissions, merge.Working, file, merge.Executable, CancellationToken.None).ConfigureAwait(false);
         }
@@ -1475,7 +1494,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         };
 
     /// <summary>What the file at <paramref name="path"/> is: its content, and whether it could be run.</summary>
-    private async Task<Identity> IdentityAsync(string path, CancellationToken cancellationToken)
+    private async Task<FileIdentity> IdentityAsync(string path, CancellationToken cancellationToken)
         => new((await FileContentHash.OfAsync(_fileSystem, path, cancellationToken).ConfigureAwait(false)).Content, IsExecutable(path));
 
     /// <summary>
@@ -1514,6 +1533,27 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         }
     }
 
+    /// <summary>
+    /// Stops a write over the file at <paramref name="file"/> where it is no longer the file weighed - its content, or,
+    /// where the platform keeps one, its bit: a file made runnable since is another file, and a merge written over it would
+    /// take that change away unrecorded.
+    /// </summary>
+    /// <param name="file">The file about to be written over.</param>
+    /// <param name="path">Its path in the tree, as the stop names it.</param>
+    /// <param name="weighed">What it was when it was weighed.</param>
+    /// <param name="tree">The tree it is in, as the stop names it.</param>
+    private async Task RequireWeighedAsync(string file, string path, FileIdentity weighed, string tree)
+    {
+        await RequireMeasuredAsync(file, path, weighed.Digest, tree, "written over").ConfigureAwait(false);
+
+        if (IsExecutable(file) != weighed.Executable)
+        {
+            throw new IOException(weighed.Executable
+                ? $"'{path}' can no longer be run in {tree}, which it could when it was measured, so it was not written over"
+                : $"'{path}' can now be run in {tree}, which it could not when it was measured, so it was not written over");
+        }
+    }
+
     /// <summary>What a path is in one tree.</summary>
     private enum Kind
     {
@@ -1522,11 +1562,8 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         Directory,
     }
 
-    /// <summary>What a file is: its content, and whether it could be run.</summary>
-    private readonly record struct Identity(string Digest, bool Executable);
-
     /// <summary>What one tree holds at a path.</summary>
-    private readonly record struct Side(Kind Kind, Identity? File);
+    private readonly record struct Side(Kind Kind, FileIdentity? File);
 
     /// <summary>What both trees hold at a path, or the link along it that stops it being read.</summary>
     private sealed record Look(string Path, string? Link, bool Escapes, Side Agent, Side Main);
@@ -1545,7 +1582,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 
         /// <summary>What both trees held at <paramref name="path"/> when the agent was last handed it or folded; null where it shares nothing for it.</summary>
         public Side? Of(string path)
-            => seed.Paths.TryGetValue(path, out var digest) ? new Side(Kind.File, new Identity(digest, _executable.Contains(path)))
+            => seed.Paths.TryGetValue(path, out var digest) ? new Side(Kind.File, new FileIdentity(digest, _executable.Contains(path)))
                 : _absent.Contains(path) ? new Side(Kind.Absent, null)
                 : null;
     }

@@ -155,30 +155,17 @@ public sealed partial class GitClient
             return blobs;
         }
 
-        var result = await RunCoreAsync(
+        var objects = await ObjectsAtAsync(
                 directory,
-                ["cat-file", "--batch-check=%(objecttype) %(objectname)"],
-                echoOutput: false,
-                untranslated: false,
-                indexFile: null,
-                string.Concat(pairs.Select(pair => $"{pair.Commit}:{pair.Path}\n")),
+                pairs,
+                ReportText.Counted(commits.Count, "commit"),
+                $"what the history held at {ReportText.Counted(paths.Count, "path")}",
                 cancellationToken)
             .ConfigureAwait(false);
 
-        Ensure(result, $"read what {ReportText.Counted(commits.Count, "commit")} hold at {ReportText.Counted(paths.Count, "path")}");
-
-        var lines = result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r')).ToList();
-
-        if (lines.Count != pairs.Count)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"git answered {ReportText.Counted(lines.Count, "line")} for the {pairs.Count} it was asked, so what the history held at {ReportText.Counted(paths.Count, "path")} cannot be told.");
-        }
-
         for (var at = 0; at < pairs.Count; at++)
         {
-            if (lines[at].Split(' ') is ["blob", var id])
+            if (objects[at] is ("blob", var id))
             {
                 blobs[pairs[at]] = id;
             }
@@ -351,18 +338,15 @@ public sealed partial class GitClient
             // else is no merge at all - a binary file, for one - said in git's own words.
             if (merged is { TimedOut: false, ExitCode: 0 })
             {
-                return new GitTextMerge(
+                return GitTextMerge.Clean(
                     Encoding.Latin1.GetBytes(merged.StandardOutput),
-                    0,
-                    [],
                     await HunksAsync(scratch, OursFile, cancellationToken).ConfigureAwait(false),
-                    await HunksAsync(scratch, TheirsFile, cancellationToken).ConfigureAwait(false),
-                    null);
+                    await HunksAsync(scratch, TheirsFile, cancellationToken).ConfigureAwait(false));
             }
 
             return merged is { TimedOut: false, ExitCode: >= 1 and <= GitTextMerge.MostConflictsCounted }
-                ? new GitTextMerge(null, merged.ExitCode, ConflictsShown(Encoding.Latin1.GetBytes(merged.StandardOutput), size), 0, 0, null)
-                : new GitTextMerge(null, 0, [], 0, 0, merged.FailureMessage);
+                ? GitTextMerge.Conflicting(merged.ExitCode, ConflictsShown(Encoding.Latin1.GetBytes(merged.StandardOutput), size))
+                : GitTextMerge.Unmerged(merged.FailureMessage);
         });
     }
 
@@ -379,6 +363,7 @@ public sealed partial class GitClient
         string directory,
         IReadOnlyList<string> attributes,
         IReadOnlyList<string> paths,
+        string? unread = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(attributes);
@@ -395,7 +380,12 @@ public sealed partial class GitClient
                 var result = await RunCoreAsync(directory, ["check-attr", "-z", .. attributes, "--", .. batch], echoOutput: false, untranslated: false, cancellationToken)
                     .ConfigureAwait(false);
 
-                Ensure(result, $"read what git's attributes declare for {ReportText.Counted(batch.Count, "path")}");
+                if (!result.Succeeded)
+                {
+                    throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"git check-attr failed, so {unread ?? $"what git's attributes declare for {ReportText.Counted(batch.Count, "path")} could not be read"}: {result.FailureMessage}");
+                }
 
                 // NUL-separated triples of path, attribute and value. A path carrying a space or a quote
                 // survives this where git's default quoting would have to be undone first.

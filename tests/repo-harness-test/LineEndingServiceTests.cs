@@ -1,6 +1,8 @@
 using System.Text;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Git;
 using RepoHarness.Core.LineEndings;
+using RepoHarness.Core.Processes;
 using RepoHarness.Core.Results;
 
 namespace RepoHarness.Tests;
@@ -211,6 +213,43 @@ public sealed class LineEndingServiceTests
             cancellationToken);
 
         Assert.Equal("declared.txt", Assert.Single(report.Changed, change => change.Path == "declared.txt").Path);
+    }
+
+    /// <summary>
+    /// Where git cannot say what the attributes declare, the refusal says so in the words it always has - which git
+    /// command failed, what that left undone, and git's own reason - and no file is rewritten.
+    /// </summary>
+    [Fact]
+    public async Task APolicyGitCannotRead_IsRefusedInItsOwnWords_AndNothingIsRewritten()
+    {
+        using var temp = new TempDirectory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var harness = await PrepareAsync(temp);
+        var git = new GitClient(new UnansweredCheckAttr(harness.ProcessRunner), harness.Output, localVariables: harness.LocalVariables);
+
+        var refusal = await Assert.ThrowsAsync<HarnessException>(() => new LineEndingService(harness.ContextLoader, git, harness.FileSystem).ApplyAsync(
+            temp.Path,
+            new LineEndingRequest(LineEndingScope.All, CheckOnly: false),
+            cancellationToken));
+
+        Assert.Equal(HarnessExit.CommandFailed, refusal.ExitCode);
+        Assert.Equal(
+            $"git check-attr failed, so the declared policy could not be read and nothing was rewritten: {UnansweredCheckAttr.Reason}",
+            refusal.Message);
+        Assert.Equal("one\r\ntwo\r\n", Read(temp, "declared.txt"));
+    }
+
+    /// <summary>Runs every program as it is, but answers <c>git check-attr</c> with a failure of its own.</summary>
+    private sealed class UnansweredCheckAttr(IProcessRunner inner) : IProcessRunner
+    {
+        public const string Reason = "fatal: the attributes could not be read";
+
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken = default)
+            => request.Arguments.Contains("check-attr")
+                ? Task.FromResult(new ProcessResult(128, string.Empty, Reason, TimeSpan.Zero, TimedOut: false))
+                : inner.RunAsync(request, cancellationToken);
+
+        public string? FindExecutable(string command) => inner.FindExecutable(command);
     }
 
     private static LineEndingService Service(HarnessFactory harness)

@@ -349,6 +349,51 @@ public sealed class AgentFoldMergeTests
         Assert.Equal(Text((9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
     }
 
+    /// <summary>
+    /// A version of the main tree's history git cannot check out - a filter that fails on it - is not taken for what both
+    /// trees held, and stops nothing else: the path is offered no merge, saying why, and the fold's other refusals are said.
+    /// </summary>
+    [Fact]
+    public async Task AVersionOfTheHistoryGitCannotCheckOut_LeavesThePathWithNoMerge_AndTheFoldsOtherRefusalsAreSaid()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        const string Dos = "src/h.dos";
+
+        static string Ended(string text) => text.Replace("\n", "\r\n", StringComparison.Ordinal);
+
+        OrchestrationKit.Write(kit.Main, ".gitattributes", "*.dos text eol=crlf\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "how one kind of file is checked out", Token);
+        OrchestrationKit.Write(kit.Main, Dos, Ended(Text((5, "AS HANDED"))));
+        var worktree = await kit.CreateAgentAsync(Agent);
+        var recorded = Seed(kit).Paths[Dos];
+        Directory.Delete(kit.Layout.SharedDirectory(Agent), recursive: true);
+        await kit.Harness.CommitAllAsync(kit.Main, "what the agent was handed", Token);
+        OrchestrationKit.Write(worktree, Dos, Ended(Text((2, "AGENT 2"), (5, "AS HANDED"))));
+        OrchestrationKit.Write(kit.Main, Dos, Ended(Text((5, "AS HANDED"), (9, "MAIN 9"))));
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+
+        // The version the history holds, as git stores it: checked out, it is what the seed recorded.
+        var stored = Encoding.UTF8.GetBytes(Text((5, "AS HANDED")));
+        const string Failed = "Could not read 'src/h.dos' as git would check it out: error: external filter 'smudge' failed";
+        var git = new InterceptingGitClient(kit.Harness.GitClient)
+        {
+            CheckOutFailure = (_, staged) => staged.AsSpan().SequenceEqual(stored) ? new HarnessException(HarnessExit.CommandFailed, Failed) : null,
+        };
+        var agents = kit.Harness.Agents(kit.Harness.FileSystem, kit.Harness.AnchorRegistryService, git);
+
+        var refused = await agents.FoldAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, Merging(Dos), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains(refused.Details!, line => line.StartsWith($"  '{Dos}': ", StringComparison.Ordinal) && line.EndsWith(
+            $"; no three-way merge is offered: the bytes both trees shared (SHA-256 {recorded[..8]}...) were recorded by a build that kept no copy of them, and none of the "
+            + $"1 version(s) of the path in the last 512 commit(s) of the main tree that changed it is those bytes - 1 of them could not be checked out to compare: {Failed}",
+            StringComparison.Ordinal));
+        Assert.Contains(refused.Details!, line => line.StartsWith("  'b.txt': the main tree changed it after the agent's base", StringComparison.Ordinal));
+        Assert.Equal(Ended(Text((5, "AS HANDED"), (9, "MAIN 9"))), OrchestrationKit.Read(kit.Main, Dos));
+    }
+
     [Fact]
     public async Task AKeptCopyThatNoLongerHashesToItsName_IsNotUsed_AndSaid()
     {
@@ -383,7 +428,11 @@ public sealed class AgentFoldMergeTests
 
         // The main tree's copy is read when it is weighed, when its size is asked, and when the write asks whether it is
         // still what was weighed: the agent saves its own just before that third.
-        var saving = new SavingFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, Both), read: 3, Path.Combine(worktree, Both), Text((2, "AGENT 2"), (4, "SAVED MEANWHILE")));
+        var saving = new MeanwhileFileSystem(
+            kit.Harness.FileSystem,
+            Path.Combine(kit.Main, Both),
+            read: 3,
+            () => File.WriteAllText(Path.Combine(worktree, Both), Text((2, "AGENT 2"), (4, "SAVED MEANWHILE"))));
         var agents = kit.Harness.Agents(saving, kit.Harness.AnchorRegistryService);
 
         var stopped = await agents.FoldAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, Merging(Both), apply: true, Token);
@@ -397,6 +446,88 @@ public sealed class AgentFoldMergeTests
         Assert.Equal(Text((9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
         Assert.Equal(Text((2, "AGENT 2"), (4, "SAVED MEANWHILE")), OrchestrationKit.Read(worktree, Both));
         Assert.False(Seed(kit).Paths.ContainsKey(Both));
+    }
+
+    /// <summary>
+    /// A file is its content and whether it can be run: a merged file either tree made runnable after it was weighed is
+    /// not what was weighed, and stops the fold with neither copy written, as a change of its content does.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "the main tree")]
+    [InlineData(false, "the agent's worktree")]
+    public async Task AMergedFileMadeRunnableAfterItWasWeighed_StopsTheFold_WithNeitherCopyWritten(bool inMain, string tree)
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows keeps no execute bit with a file.");
+
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AtItsBaseAsync(temp);
+        OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2")));
+        OrchestrationKit.Write(kit.Main, Both, Text((9, "MAIN 9")));
+        var changed = Path.Combine(inMain ? kit.Main : worktree, Both);
+        var meanwhile = new MeanwhileFileSystem(
+            kit.Harness.FileSystem,
+            Path.Combine(kit.Main, Both),
+            read: 3,
+            () => kit.Harness.FilePermissions.SetExecutable(changed, executable: true));
+        var agents = kit.Harness.Agents(meanwhile, kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.FoldAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, Merging(Both), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Contains($": '{Both}' can now be run in {tree}, which it could not when it was measured, so it was not written over.", stopped.Message, StringComparison.Ordinal);
+        Assert.Equal(Text((9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
+        Assert.Equal(Text((2, "AGENT 2")), OrchestrationKit.Read(worktree, Both));
+        Assert.False(Seed(kit).Paths.ContainsKey(Both));
+    }
+
+    /// <summary>
+    /// --merge reaches the fold from the command line, once for each path, and a path no tree could hold is refused there as
+    /// a usage error. The line that names the command taking every clean merge keeps every option the fold was given.
+    /// </summary>
+    [Fact]
+    public async Task TheCommandLine_TakesMergeOnceForEachPath_AndTheLineNamingEveryCleanMergeKeepsTheOtherOptions()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        const string Other = "src/n.txt";
+        const string Settled = "notes/a b.txt";
+        OrchestrationKit.Write(kit.Main, Both, Text());
+        OrchestrationKit.Write(kit.Main, Other, Text());
+        await kit.Harness.CommitAllAsync(kit.Main, "two files two will change", Token);
+        var worktree = await kit.CreateAgentAsync(Agent);
+
+        foreach (var path in new[] { Both, Other })
+        {
+            OrchestrationKit.Write(worktree, path, Text((2, "AGENT 2")));
+            OrchestrationKit.Write(kit.Main, path, Text((9, "MAIN 9")));
+        }
+
+        OrchestrationKit.Write(worktree, Settled, "reconciled by hand\n");
+
+        var usage = await CliRunner.RunAsync(["fold-agent", "o1", Agent, "--merge", "../outside.txt"], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.UsageError, usage.ExitCode);
+        Assert.Contains("--merge", usage.StandardOutput + usage.StandardError, StringComparison.Ordinal);
+
+        var dry = await CliRunner.RunAsync(["fold-agent", "o1", Agent, "--merge", Both, "--settled", Settled], Token, workingDirectory: kit.Main);
+
+        Assert.Equal(HarnessExit.Refused, dry.ExitCode);
+        Assert.Contains(
+            $"to merge the 1 path(s) that merge clean: '{ToolPackage.Command} fold-agent o1 {Agent} --merge {Both} --merge {Other} --settled \"{Settled}\"'",
+            dry.StandardOutput,
+            StringComparison.Ordinal);
+
+        var applied = await CliRunner.RunAsync(["fold-agent", "o1", Agent, "--apply", "--merge", Both, "--merge", Other, "--settled", Settled], Token, workingDirectory: kit.Main);
+
+        Assert.True(applied.Succeeded, applied.StandardOutput + applied.StandardError);
+
+        foreach (var path in new[] { Both, Other })
+        {
+            Assert.Equal(Text((2, "AGENT 2"), (9, "MAIN 9")), OrchestrationKit.Read(kit.Main, path));
+            Assert.Equal(Text((2, "AGENT 2"), (9, "MAIN 9")), OrchestrationKit.Read(worktree, path));
+        }
+
+        Assert.False(File.Exists(Path.Combine(kit.Main, Settled)));
     }
 
     /// <summary>
@@ -531,6 +662,36 @@ public sealed class AgentFoldMergeTests
         Assert.Equal(AgentStates.Deleted, kit.Record(Agent).State);
         Assert.Equal(Text((2, "AGENT 2"), (9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
         Assert.False(Directory.Exists(worktree));
+    }
+
+    /// <summary>
+    /// Deleting an agent keeps nothing it finds in the main tree's history for a seed with no kept copy, since its copies
+    /// go with it moments later: a deletion that stops before its closing has kept none.
+    /// </summary>
+    [Fact]
+    public async Task ADeletion_KeepsNothingItFindsInTheMainTreesHistory()
+    {
+        using var temp = new TempDirectory();
+        using var claude = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        kit.Harness.ClaudeConfigDirectory = claude.Path;
+        var transcript = claude.WriteFile(Path.Combine("projects", "some-project", "sess1.jsonl"), "{}\n");
+        OrchestrationKit.Write(kit.Main, Both, Text((5, "AS HANDED")));
+        var worktree = await kit.CreateAgentAsync(Agent, session: "sess1");
+        var recorded = Seed(kit).Paths[Both];
+        File.Delete(kit.Layout.SharedFile(Agent, recorded));
+        await kit.Harness.CommitAllAsync(kit.Main, "what the agent was handed", Token);
+        OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2"), (5, "AS HANDED")));
+        OrchestrationKit.Write(kit.Main, Both, Text((5, "AS HANDED"), (9, "MAIN 9")));
+        var agents = kit.Harness.Agents(new UnreadableFile(kit.Harness.FileSystem, transcript), kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.DeleteAsync(kit.Main, OrchestrationKit.Orchestrator, Agent, Merging(Both), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith("Agent 'ag' of 'o1' was not deleted, because its transcripts could not be kept:", stopped.Message, StringComparison.Ordinal);
+        Assert.Equal(Text((2, "AGENT 2"), (5, "AS HANDED"), (9, "MAIN 9")), OrchestrationKit.Read(kit.Main, Both));
+        Assert.False(File.Exists(kit.Layout.SharedFile(Agent, recorded)), "A deletion kept the bytes it found in the main tree's history.");
+        Assert.False(File.Exists(kit.Layout.SharedFile(Agent, Seed(kit).Paths[Both])), "A deletion kept the bytes of the merge it wrote.");
     }
 
     [Fact]
@@ -733,8 +894,8 @@ public sealed class AgentFoldMergeTests
         Assert.Null(Seed(kit).Executable);
     }
 
-    /// <summary>The real file system, except that one file is saved anew just before another is read for the given time: an agent still at work.</summary>
-    private sealed class SavingFileSystem(IFileSystem inner, string watched, int read, string saved, string text) : PassThroughFileSystem(inner)
+    /// <summary>The real file system, except that something is done just before one file is read for the given time: an agent still at work.</summary>
+    private sealed class MeanwhileFileSystem(IFileSystem inner, string watched, int read, Action meanwhile) : PassThroughFileSystem(inner)
     {
         private int _reads;
 
@@ -742,11 +903,20 @@ public sealed class AgentFoldMergeTests
         {
             if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(watched), StringComparison.OrdinalIgnoreCase) && Interlocked.Increment(ref _reads) == read)
             {
-                File.WriteAllText(saved, text);
+                meanwhile();
             }
 
             return base.OpenRead(path);
         }
+    }
+
+    /// <summary>The real file system, except that one file cannot be read, as while another program holds it.</summary>
+    private sealed class UnreadableFile(IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    {
+        public override Stream OpenRead(string path)
+            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase)
+                ? throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.")
+                : base.OpenRead(path);
     }
 
     /// <summary>The real file system, except that nothing can be put in place at one path, as while another program holds the file open.</summary>

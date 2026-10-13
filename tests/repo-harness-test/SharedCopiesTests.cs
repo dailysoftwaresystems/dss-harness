@@ -134,7 +134,7 @@ public sealed class SharedCopiesTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "o1");
-        var copies = new SharedCopies(harness.FileSystem, layout, "ag");
+        var copies = new SharedCopies(harness.FileSystem, harness.FilePermissions, layout, "ag");
         var source = temp.WriteFile("source.txt", "shared\n");
         var digest = Digest("shared\n");
 
@@ -158,7 +158,7 @@ public sealed class SharedCopiesTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "o1");
-        var copies = new SharedCopies(harness.FileSystem, layout, "ag");
+        var copies = new SharedCopies(harness.FileSystem, harness.FilePermissions, layout, "ag");
         var source = temp.WriteFile("source.txt", "changed since\n");
 
         var why = await copies.KeepAsync(Digest("shared\n"), source, Token);
@@ -277,6 +277,331 @@ public sealed class SharedCopiesTests
     }
 
     /// <summary>
+    /// Every command that keeps the bytes an agent shares names where they are kept, beside its seed, on each way out once
+    /// it wrote them: create-agent, seed-agent - handing something or nothing more - refresh-agent and fold-agent.
+    /// </summary>
+    [Fact]
+    public async Task EachCommandThatKeepsCopies_NamesWhereTheyAreKept()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var created = await kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "ag", "model-b", false, null, Token);
+
+        NamesShared(kit, "ag", created);
+
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit again\n");
+
+        NamesShared(kit, "ag", await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: true, Token));
+        NamesShared(kit, "ag", await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: true, force: false, Token));
+
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit once more\n");
+
+        NamesShared(kit, "ag", await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token));
+
+        OrchestrationKit.Write(kit.Worktree("ag"), "b.txt", "two\nagent edit\n");
+
+        NamesShared(kit, "ag", await kit.FoldAsync("ag", apply: true));
+    }
+
+    /// <summary>An agent handed nothing keeps no bytes, and no directory of them is named.</summary>
+    [Fact]
+    public async Task AnAgentHandedNothing_KeepsNoCopies_AndNamesNoDirectoryOfThem()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+
+        var created = await kit.Harness.AgentService.CreateAsync(kit.Main, "o1", "ag", "model-b", true, null, Token);
+
+        Assert.True(created.Succeeded, OrchestrationKit.Describe(created));
+        Assert.False(Directory.Exists(kit.Layout.SharedDirectory("ag")));
+        Assert.DoesNotContain(created.Details!, line => line.StartsWith("shared ", StringComparison.Ordinal));
+        Assert.Contains($"seed {kit.Layout.SeedFile("ag")}", created.Details!);
+    }
+
+    /// <summary>
+    /// A command that stopped part way names the bytes it kept as well as the seed that records them: a hand-over that
+    /// stopped - making an agent, seeding it, refreshing it - and a fold that stopped, which kept the first bytes of an
+    /// agent handed nothing before.
+    /// </summary>
+    [Fact]
+    public async Task ACommandThatStoppedPartWay_NamesWhereTheBytesItKeptAre()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        var stopping = kit.Harness.Agents(new UncopyableFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "b.txt")), kit.Harness.AnchorRegistryService);
+
+        var created = await stopping.CreateAsync(kit.Main, "o1", "ag", "model-b", false, null, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, created.ExitCode);
+        NamesShared(kit, "ag", created, succeeded: false);
+
+        var seeded = await stopping.SeedAsync(kit.Main, "o1", "ag", empty: false, force: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, seeded.ExitCode);
+        NamesShared(kit, "ag", seeded, succeeded: false);
+
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit again\n");
+        var refreshed = await stopping.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt", "b.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, refreshed.ExitCode);
+        NamesShared(kit, "ag", refreshed, succeeded: false);
+
+        // An agent handed nothing has no copies until its fold keeps the first.
+        await kit.CreateAgentAsync("bare", empty: true);
+        OrchestrationKit.Write(kit.Worktree("bare"), "c.txt", "three\n");
+        OrchestrationKit.Write(kit.Worktree("bare"), "d.txt", "four\n");
+        var unwritable = kit.Harness.Agents(new UnplaceableFileSystem(kit.Harness.FileSystem, Path.Combine(kit.Main, "d.txt")), kit.Harness.AnchorRegistryService);
+
+        Assert.False(Directory.Exists(kit.Layout.SharedDirectory("bare")));
+
+        var folded = await unwritable.FoldAsync(kit.Main, "o1", "bare", new FoldAllowances(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, folded.ExitCode);
+        Assert.Equal([Digest("three\n")], await KeptAsync(kit, "bare"));
+        NamesShared(kit, "bare", folded, succeeded: false);
+    }
+
+    /// <summary>
+    /// The seed is written before the copies are pruned to it: a seed that cannot be written leaves the one on disk naming
+    /// what it named, and every copy it names is still there. The command says it could not record what it did, and names
+    /// where the copies it kept are - making an agent, seeding, refreshing and folding alike.
+    /// </summary>
+    [Fact]
+    public async Task ASeedThatCannotBeWritten_LeavesEveryCopyTheSeedOnDiskNames_AndItsCommandNamesWhereTheyAre()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        await kit.CreateAgentAsync("ag");
+        var before = kit.Layout.SharedFile("ag", Digest("one\nmain edit\n"));
+        var unrecorded = kit.Harness.Agents(new UnwritableFileSystem(kit.Harness.FileSystem, kit.Layout.SeedFile("ag")), kit.Harness.AnchorRegistryService);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit again\n");
+
+        var refreshed = await unrecorded.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, refreshed.ExitCode);
+        Assert.StartsWith("Refreshing agent 'ag' of 'o1' handed over what it could and could not record it:", refreshed.Message, StringComparison.Ordinal);
+        Assert.Equal(Digest("one\nmain edit\n"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["a.txt"]);
+        Assert.True(File.Exists(before), "A copy the seed on disk names was pruned before the seed that no longer names it was written.");
+        NamesShared(kit, "ag", refreshed, succeeded: false);
+
+        var seeded = await unrecorded.SeedAsync(kit.Main, "o1", "ag", empty: false, force: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, seeded.ExitCode);
+        Assert.True(File.Exists(before));
+        NamesShared(kit, "ag", seeded, succeeded: false);
+
+        OrchestrationKit.Write(kit.Worktree("ag"), "b.txt", "two\nagent edit\n");
+        var folded = await unrecorded.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, folded.ExitCode);
+        Assert.True(File.Exists(before));
+        NamesShared(kit, "ag", folded, succeeded: false);
+
+        var making = kit.Harness.Agents(new UnwritableFileSystem(kit.Harness.FileSystem, kit.Layout.SeedFile("other")), kit.Harness.AnchorRegistryService);
+        var created = await making.CreateAsync(kit.Main, "o1", "other", "model-b", false, null, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, created.ExitCode);
+        Assert.False(File.Exists(kit.Layout.SeedFile("other")));
+        Assert.DoesNotContain(created.Details!, line => line.StartsWith("seed ", StringComparison.Ordinal));
+        NamesShared(kit, "other", created, succeeded: false);
+    }
+
+    /// <summary>One file is kept for a digest however many paths hold it, and it stays while any of them still does.</summary>
+    [Fact]
+    public async Task ACopyTwoPathsShare_StaysWhenOneOfThemChanges()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "the same\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "the same\n");
+        await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "changed\n");
+
+        var refreshed = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
+
+        Assert.True(refreshed.Succeeded, OrchestrationKit.Describe(refreshed));
+        Assert.Equal(new[] { Digest("the same\n"), Digest("changed\n") }.Order(StringComparer.Ordinal), await KeptAsync(kit, "ag"));
+    }
+
+    /// <summary>
+    /// Seeding an agent again keeps the bytes it hands, and the bytes of what it no longer shares go; a fold that removes a
+    /// path both trees shared prunes the bytes nothing names any more.
+    /// </summary>
+    [Fact]
+    public async Task SeedingAgainKeepsWhatItHands_AndAFoldThatRemovesASharedPath_PrunesItsBytes()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        OrchestrationKit.Write(kit.Main, "b.txt", "two\nmain edit\n");
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit again\n");
+
+        var seeded = await kit.Harness.AgentService.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.True(seeded.Succeeded, OrchestrationKit.Describe(seeded));
+        Assert.Equal(new[] { Digest("one\nmain edit again\n"), Digest("two\nmain edit\n") }.Order(StringComparer.Ordinal), await KeptAsync(kit, "ag"));
+
+        File.Delete(Path.Combine(worktree, "b.txt"));
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.False(File.Exists(Path.Combine(kit.Main, "b.txt")));
+        Assert.Equal([Digest("one\nmain edit again\n")], await KeptAsync(kit, "ag"));
+    }
+
+    /// <summary>
+    /// Copies that cannot be kept are said in one line whatever their number - which paths, as many as a line names, how
+    /// many more, and why - never a line for each: a full disk would otherwise print one for every file handed.
+    /// </summary>
+    [Fact]
+    public async Task ManyCopiesThatCannotBeKept_AreSaidInOneLine()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+
+        foreach (var name in new[] { "a", "b", "c", "d", "e" })
+        {
+            OrchestrationKit.Write(kit.Main, $"{name}.txt", $"{name}\nmain edit\n");
+        }
+
+        var shared = kit.Layout.SharedDirectory("ag");
+        var agents = kit.Harness.Agents(new NoRoomFileSystem(kit.Harness.FileSystem, shared), kit.Harness.AnchorRegistryService);
+
+        var created = await agents.CreateAsync(kit.Main, "o1", "ag", "model-b", false, null, Token);
+
+        Assert.True(created.Succeeded, OrchestrationKit.Describe(created));
+        Assert.Equal(
+            $"5 path(s) are recorded as shared, and their bytes were not kept in '{shared}' - a.txt, b.txt, c.txt and 2 more: There is not enough space on the disk",
+            Assert.Single(created.Details!, line => line.Contains("were not kept", StringComparison.Ordinal)));
+        Assert.Equal(5, kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths.Count);
+    }
+
+    /// <summary>
+    /// Deleting an agent keeps no copy of what its fold writes: they would be removed with the agent moments later. So
+    /// none is made, nothing is said of one that could not be, and a deletion that stops before its closing has made none.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionsFold_KeepsNoCopy_AndSaysNothingOfOne()
+    {
+        using var temp = new TempDirectory();
+        using var claude = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        kit.Harness.ClaudeConfigDirectory = claude.Path;
+        var transcript = claude.WriteFile(Path.Combine("projects", "some-project", "sess1.jsonl"), "{}\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "one\nmain edit\n");
+        var worktree = await kit.CreateAgentAsync("ag", session: "sess1");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        var unreadable = kit.Harness.Agents(new UnreadableFileSystem(kit.Harness.FileSystem, transcript), kit.Harness.AnchorRegistryService);
+
+        var stopped = await unreadable.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.Equal(AgentStates.Live, kit.Record("ag").State);
+        Assert.Equal("two\nagent edit\n", OrchestrationKit.Read(kit.Main, "b.txt"));
+        Assert.Equal(Digest("two\nagent edit\n"), kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Paths["b.txt"]);
+        Assert.Equal([Digest("one\nmain edit\n")], await KeptAsync(kit, "ag", proved: false));
+        NamesShared(kit, "ag", stopped, succeeded: false);
+
+        OrchestrationKit.Write(worktree, "c.txt", "three\nagent edit\n");
+        var full = kit.Harness.Agents(new NoRoomFileSystem(kit.Harness.FileSystem, kit.Layout.SharedDirectory("ag")), kit.Harness.AnchorRegistryService);
+
+        var deleted = await full.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, discardUncommitted: false, Token);
+
+        Assert.True(deleted.Succeeded, OrchestrationKit.Describe(deleted));
+        Assert.Equal(AgentStates.Deleted, kit.Record("ag").State);
+        Assert.DoesNotContain(deleted.Details!, line => line.Contains("were not kept", StringComparison.Ordinal));
+        Assert.DoesNotContain(deleted.Details!, line => line.StartsWith("shared ", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A copy is a file of the agent's own, whatever the file it was kept from was: never read-only, and never one that
+    /// can be run. A digest already kept is kept: a copy that holds those bytes is not written again, so one made
+    /// read-only meanwhile stops nothing.
+    /// </summary>
+    [Fact]
+    public async Task AKeptCopy_IsNeverReadOnly_AndADigestAlreadyKept_IsNotWrittenAgain()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var layout = OrchestratorLayout.Of(new HarnessLayout(temp.Path, temp.Path), "o1");
+        var copies = new SharedCopies(harness.FileSystem, harness.FilePermissions, layout, "ag");
+        var digest = Digest("shared\n");
+        var source = temp.WriteFile("source.txt", "shared\n");
+        var again = temp.WriteFile("again.txt", "shared\n");
+        var kept = layout.SharedFile("ag", digest);
+
+        try
+        {
+            harness.FilePermissions.SetExecutable(source, executable: true);
+            MakeReadOnly(source);
+            MakeReadOnly(again);
+
+            Assert.Null(await copies.KeepAsync(digest, source, Token));
+            Assert.False(IsReadOnly(kept), "The kept copy is read-only, as the file it was kept from was.");
+
+            // Windows keeps no such bit: what runs there is decided by a file's name.
+            Assert.False(!OperatingSystem.IsWindows() && harness.FilePermissions.IsExecutable(kept), "The kept copy can be run, as the file it was kept from could.");
+
+            MakeReadOnly(kept);
+            var written = new DateTime(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(kept, written);
+
+            Assert.Null(await copies.KeepAsync(digest, again, Token));
+            Assert.Null(await copies.KeepAsync(digest, System.Text.Encoding.UTF8.GetBytes("shared\n"), Token));
+            Assert.Equal(written, File.GetLastWriteTimeUtc(kept));
+            Assert.Equal([digest], Directory.EnumerateFiles(copies.Directory).Select(file => Path.GetFileName(file)));
+        }
+        finally
+        {
+            foreach (var file in new[] { source, again, kept }.Where(File.Exists))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+
+                if (!OperatingSystem.IsWindows())
+                {
+                    File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                }
+            }
+        }
+    }
+
+    /// <summary>Makes <paramref name="file"/> read-only as this platform does: its attribute on Windows, its mode elsewhere.</summary>
+    private static void MakeReadOnly(string file)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.ReadOnly);
+        }
+        else
+        {
+            File.SetUnixFileMode(file, File.GetUnixFileMode(file) & ~(UnixFileMode.UserWrite | UnixFileMode.GroupWrite | UnixFileMode.OtherWrite));
+        }
+    }
+
+    /// <summary>Whether <paramref name="file"/> is read-only as this platform says it.</summary>
+    private static bool IsReadOnly(string file)
+        => OperatingSystem.IsWindows()
+            ? File.GetAttributes(file).HasFlag(FileAttributes.ReadOnly)
+            : !File.GetUnixFileMode(file).HasFlag(UnixFileMode.UserWrite);
+
+    /// <summary>
+    /// Asserts that <paramref name="outcome"/> names where the bytes <paramref name="agent"/> shares are kept, beside its
+    /// seed's line where the seed is there, and that they are there.
+    /// </summary>
+    private static void NamesShared(OrchestrationKit kit, string agent, CommandOutcome outcome, bool succeeded = true)
+    {
+        Assert.True(!succeeded || outcome.Succeeded, OrchestrationKit.Describe(outcome));
+        Assert.True(Directory.Exists(kit.Layout.SharedDirectory(agent)), "No copies were kept.");
+        Assert.Contains($"shared {kit.Layout.SharedDirectory(agent)}", outcome.Details!);
+    }
+
+    /// <summary>
     /// The files kept for <paramref name="agent"/>, by name, each read again and found to hash to its name; and, where
     /// <paramref name="proved"/>, exactly one for each digest its seed records.
     /// </summary>
@@ -303,18 +628,79 @@ public sealed class SharedCopiesTests
     /// <summary>The digest a seed records for a file holding <paramref name="text"/>.</summary>
     private static string Digest(string text) => FileContentHash.Of(System.Text.Encoding.UTF8.GetBytes(text));
 
-    /// <summary>The real file system, except that nothing can be copied into one directory, as onto a disk with no room left.</summary>
+    /// <summary>The real file system, except that nothing can be copied or written into one directory, as onto a disk with no room left.</summary>
     private sealed class NoRoomFileSystem(IFileSystem inner, string directory) : PassThroughFileSystem(inner)
     {
         public override void CopyFile(string source, string destination, bool overwrite = false)
+        {
+            Refuse(destination);
+            base.CopyFile(source, destination, overwrite);
+        }
+
+        public override Task WriteAllBytesAtomicAsync(string path, byte[] contents, CancellationToken cancellationToken = default)
+        {
+            Refuse(path);
+            return base.WriteAllBytesAtomicAsync(path, contents, cancellationToken);
+        }
+
+        private void Refuse(string destination)
         {
             if (string.Equals(Path.GetDirectoryName(Path.GetFullPath(destination)), Path.GetFullPath(directory), StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException("There is not enough space on the disk.");
             }
-
-            base.CopyFile(source, destination, overwrite);
         }
+    }
+
+    /// <summary>The real file system, except that one file cannot be copied, as while another program holds it.</summary>
+    private sealed class UncopyableFileSystem(IFileSystem inner, string source) : PassThroughFileSystem(inner)
+    {
+        public override void CopyFile(string from, string destination, bool overwrite = false)
+        {
+            if (string.Equals(Path.GetFullPath(from), Path.GetFullPath(source), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException($"The process cannot access the file '{from}' because it is being used by another process.");
+            }
+
+            base.CopyFile(from, destination, overwrite);
+        }
+    }
+
+    /// <summary>The real file system, except that nothing can be put in place at one path, as while another program holds the file open.</summary>
+    private sealed class UnplaceableFileSystem(IFileSystem inner, string file) : PassThroughFileSystem(inner)
+    {
+        public override void ReplaceFile(string source, string destination)
+        {
+            if (string.Equals(Path.GetFullPath(destination), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("The process cannot access the file because it is being used by another process.");
+            }
+
+            base.ReplaceFile(source, destination);
+        }
+    }
+
+    /// <summary>The real file system, except that one record cannot be written, as onto a disk with no room left.</summary>
+    private sealed class UnwritableFileSystem(IFileSystem inner, string record) : PassThroughFileSystem(inner)
+    {
+        public override void WriteAllTextAtomic(string path, string contents)
+        {
+            if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(record), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("There is not enough space on the disk.");
+            }
+
+            base.WriteAllTextAtomic(path, contents);
+        }
+    }
+
+    /// <summary>The real file system, except that one file cannot be read, as while another program holds it.</summary>
+    private sealed class UnreadableFileSystem(IFileSystem inner, string held) : PassThroughFileSystem(inner)
+    {
+        public override Stream OpenRead(string path)
+            => string.Equals(Path.GetFullPath(path), Path.GetFullPath(held), StringComparison.OrdinalIgnoreCase)
+                ? throw new IOException($"The process cannot access the file '{path}' because it is being used by another process.")
+                : base.OpenRead(path);
     }
 
     /// <summary>The real file system, except that one file cannot be deleted, as while another program holds it open.</summary>

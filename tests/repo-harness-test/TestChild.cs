@@ -39,6 +39,7 @@ internal static class TestChild
             "flood-error" => Flood(standardError, arguments),
             "flood-both" => Flood(standardOutput, arguments) + Flood(standardError, arguments),
             "print-file" => PrintFile(standardOutput, arguments),
+            "print-bytes" => PrintBytes(arguments),
             "spawn-grandchild" => SpawnGrandchild(arguments),
             "last-resort" => LastResort(standardOutput, arguments),
             "print-env" => PrintEnvironment(standardOutput, arguments),
@@ -329,6 +330,17 @@ internal static class TestChild
     private static int PrintFile(TextWriter output, string[] arguments)
     {
         output.Write(File.ReadAllText(arguments[0], Utf8NoBom));
+        return 0;
+    }
+
+    /// <summary>
+    /// Writes the bytes of the file <c>arguments[0]</c> names to standard output as they are, a byte order mark among them
+    /// included, for a test of output a caller reads byte for byte.
+    /// </summary>
+    private static int PrintBytes(string[] arguments)
+    {
+        using var output = Console.OpenStandardOutput();
+        output.Write(File.ReadAllBytes(arguments[0]));
         return 0;
     }
 

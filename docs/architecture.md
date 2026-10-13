@@ -602,16 +602,23 @@ named as git's quoting writes it: no file opens here by such a name.
 
 Every path recorded as shared - handed, folded, or found already in the main tree - is recorded by one recorder
 (`SharedLedger`), which keeps the bytes it records as well (`SharedCopies`): a plain file under the agent's
-`shared/`, named by the SHA-256 the seed already records for the path, copied from the tree's own file and proved to
-hold that digest (`VerifiedFileCopy`), so no copy is kept that is not the bytes recorded. They are what both trees
-held at a shared path, kept to merge from. `seed.json` gains no member for them - it names digests, and a digest
+`shared/`, named by the SHA-256 the seed already records for the path, read from the tree's own file, required to
+hash to that digest and written anew as a file of the agent's own - never read-only, never one that can be run,
+whatever the file it was read from - and proved (`VerifiedFileCopy.WriteAsync`), so no copy is kept that is not the
+bytes recorded. A digest whose copy still holds its bytes is kept already, and is not written again. They are what
+both trees held at a shared path, kept to merge from. `seed.json` gains no member for them - it names digests, and a digest
 names a file - so a seed written before any copy was kept reads as it did, and has none; a copy is read back by
 hashing it again, and counts only where it still hashes to its name. A command writes in one order: the trees, the
 kept copies, the seed, and then the prune of the copies to what that seed names (`AgentService.WriteSeed`, the one
 place a seed is written). Stopped anywhere, the seed never names a path the trees do not hold as recorded, and a copy
 the seed does not name goes at the next write. A file above 16 MiB (`TwoChanges.MostBytes`) is recorded and not
 kept. A copy that cannot be kept or pruned never fails the command that met it: the path is recorded all the same,
-and a line says why. list-orchestrator `--json` names the directory as each agent's `shared`.
+and one line says so however many paths it was - which, as many as a line names, how many more, and why - since a
+full disk would otherwise say it for every file a command records. Deleting an agent keeps no copy of what its fold
+writes (`SharedLedger` without `SharedCopies`, and no history search kept either): they would be removed with it
+moments later. Every command that writes an agent's records names where they are on each way out once it has -
+`record`, `seed`, `shared <directory>` where the agent keeps any, `applied rows` - each that is there
+(`AgentService.Records`). list-orchestrator `--json` names the directory as each agent's `shared`.
 
 Merging two changes of one file is git's work, never a comparison of lines made here (`GitClient.Merge.cs`). Each of
 the three versions - what both held, and each side's - is first read as git would store it at the path
@@ -635,8 +642,13 @@ SHA-256, put in place in one step (`VerifiedFileCopy.WriteAsync`) - with the exe
 (`IFilePermissions.SetExecutable`, which changes nothing on Windows, where no such bit is kept), not the bit of the
 file replaced. What a history held at a path is asked with `git rev-list --full-history` (`ListHeldInHistoryAsync`),
 since a version a merge dropped was still that history's, for one more commit than its bound, which is how a history
-cut short is told from one read whole; and what git's attributes declare for a path is asked of `git check-attr`
-(`ReadAttributesAsync`), by this and by fix-line-endings alike.
+cut short is told from one read whole, its paths taken literally (`--literal-pathspecs`), so `[id].tsx` is that file
+and never a pattern; and what git's attributes declare for a path is asked of `git check-attr`
+(`ReadAttributesAsync`), by this and by fix-line-endings alike, whose refusal where git cannot answer reads as it
+always has: `git check-attr failed, so the declared policy could not be read and nothing was rewritten: <git's
+words>`. Every answer read as bytes - a blob, a merge, a checkout, a listing of names - is decoded from its first byte
+under the encoding asked for (`ProcessRunner`): bytes that begin as a byte order mark does are the file's, or the
+name's, never taken to say how the rest is written.
 
 rebase-agent moves an agent's base to the main tree's HEAD (`AgentFold.MeasureRebaseAsync`). Each path the two commits
 hold differently (`git diff --name-only`, commit to commit) is shared - kept as its seed records it, since the seed,
@@ -688,7 +700,10 @@ needs a directory, or files the agent did not delete in a directory one replaces
 the base stopped part way are refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
 against the registry the fold would otherwise have written over. `--settled` is the way out of any path's refusal -
 `--merge` only of a path whose merge is clean - asked before the deletion branch so a
-deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. A path the main
+deletion can be settled too; a settled path the fold does not weigh is refused as a misspelling. So is a `--merge`
+naming no path the fold weighs, while one naming a path it weighs with nothing left to merge is let stand, so the
+command line of a fold that stopped part way runs again. A path named with both `--merge` and `--settled` is a usage
+error, exit 10, before anything is read, and a `--merge` naming an anchor registry or the arm registry is refused. A path the main
 tree already holds as the agent does is already in, so a fold run again finds its own writes. A path this process
 cannot look at is never read as absent, which would take the agent's file for its deletion: the fold fails before
 anything is written. A file of either tree that changed after it was weighed is never written over: the agent's copy is
@@ -710,8 +725,9 @@ registry are never merged by line. What both held is, for a path the agent share
 its seed records, used only where they still hash to it; where the seed was written by a build that kept none, the
 versions of the path in the main tree's history are read (`ListHeldInHistoryAsync`, at most 64 among the last 512
 commits that changed it), each as its commit holds it and then as a checkout writes it, and the first that hashes
-to the recorded digest is taken - kept by a run that goes on to write, so it is looked for once, and never by a dry
-run. For any other path it is the blob at the agent's base. Nothing is merged against a guess: where neither gives
+to the recorded digest is taken - kept by a fold that goes on to write, so it is looked for once, and never by a dry
+run. A version git cannot check out - a filter that fails on it - is passed over and said with the rest: the path is
+offered no merge, and nothing else of the fold depends on it. For any other path it is the blob at the agent's base. Nothing is merged against a guess: where neither gives
 it, no merge is offered, and the line says why. A fold merges in the main tree's forms, since the same bytes go to
 both trees and one digest is then true of both. Whether a file can be run is merged with its content
 (`TwoChanges.MergedBit`): the merged bit is the one that differs from what both held, where either side's does. A
@@ -719,8 +735,8 @@ bit has two values, so two sides that both changed it changed it alike, and it n
 held is the seed's record of the bit for a shared path - whichever source gave the bytes, since a kept copy is bytes
 under a digest and holds no bit - and the base's entry for any other (`ListEntriesAtAsync`, for those paths alone);
 each side's is its file's. Where the platform keeps no such bit, as on Windows, none is read, merged or set. A merged
-path is written after the fold's own writes: both trees' copies are asked to be what was weighed before either is
-written, the main tree's is written first, and the path is recorded as shared, at the merged bytes and bit, only once
+path is written after the fold's own writes: both trees' copies are asked to be what was weighed - the content, and
+the bit where the platform keeps one (`MergedPath.MainWeighed`, `AgentWeighed`) - before either is written, the main tree's is written first, and the path is recorded as shared, at the merged bytes and bit, only once
 both hold it. Stopped between the two, the main tree holds the merge, the agent its own copy and the seed what both
 held before; the same command run again merges those again, and since every change of the agent's is already in the
 merge, comes to the same bytes. A tree that already holds what the merge gives is not written again.

@@ -1636,6 +1636,11 @@ public sealed partial class HelpTests
         Assert.Contains("agents/<agent>/seed.json", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("agents/<agent>/shared/<sha256>", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("the bytes of each file it shares, kept to merge from", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "Every command that writes an agent's records names where they are on each way out once it has: its record, its seed, the directory "
+            + "of the bytes it shares where it keeps any, and the rows its folds applied - each that is there.",
+            text,
+            StringComparison.Ordinal);
         Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
         Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
         Assert.Contains($"  {ToolPackage.Command} refresh-agent <o> <a> [<path>... | --all] [--except <path>]... [--apply]", result.StandardOutput, StringComparison.Ordinal);
@@ -1729,6 +1734,12 @@ public sealed partial class HelpTests
             "--merge <path>, once for each, takes a clean merge: written into both trees, the main tree's first, and recorded as shared once both "
             + "hold it, so a fold that stopped between the two merges again to the same bytes. It is never taken unasked, a conflict never, and a "
             + "clean textual merge proves nothing about the program",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "A --merge naming no path the fold weighs is refused as the misspelling it most likely is, and one naming a path with nothing left to "
+            + "merge is let stand, so the command line of a fold that stopped part way runs again; a path named with both --merge and --settled is "
+            + $"a usage error, exit {HarnessExit.UsageError}, and a --merge naming an anchor registry or the arm registry is refused.",
             text,
             StringComparison.Ordinal);
         Assert.Contains(

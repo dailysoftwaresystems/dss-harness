@@ -301,16 +301,13 @@ public sealed class LineEndingService(
         IReadOnlyList<string> paths,
         CancellationToken cancellationToken)
     {
-        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> answered;
-
-        try
-        {
-            answered = await _gitClient.ReadAttributesAsync(root, [TextAttribute, EndingAttribute], paths, cancellationToken).ConfigureAwait(false);
-        }
-        catch (HarnessException ex) when (ex.ExitCode == HarnessExit.CommandFailed)
-        {
-            throw new HarnessException(HarnessExit.CommandFailed, $"The declared policy could not be read and nothing was rewritten. {ex.Message}", ex);
-        }
+        var answered = await _gitClient.ReadAttributesAsync(
+                root,
+                [TextAttribute, EndingAttribute],
+                paths,
+                "the declared policy could not be read and nothing was rewritten",
+                cancellationToken)
+            .ConfigureAwait(false);
 
         var declared = new Dictionary<string, DeclaredLineEnding>(StringComparer.Ordinal);
 

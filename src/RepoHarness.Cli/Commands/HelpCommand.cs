@@ -2135,7 +2135,9 @@ internal static class HelpCommand
             + $"{AnchorCellNames.Priority}{AgentRows.CellExtension} where it declares one, each read as write-anchor reads a cell file. "
             + "An agent's worktree is <worktrees.root>/<orchestrator>/<agent>, which list-worktree and delete-worktree name "
             + "orchestrator/agent; the copies hosts keep of it are named orchestrator--agent. Agents write their handoffs, pause "
-            + "and stop points as .md files in their own directory.");
+            + "and stop points as .md files in their own directory. Every command that writes an agent's records names where they are "
+            + "on each way out once it has: its record, its seed, the directory of the bytes it shares where it keeps any, and the rows "
+            + "its folds applied - each that is there.");
         builder.AppendLine();
         builder.AppendLine("Commands");
         builder.AppendLine($"  {command} {OrchestratorService.CreateCommand} <o> --model <id> [--parallel <n>] [--session <id>]");
@@ -2237,7 +2239,11 @@ internal static class HelpCommand
             + "first, and recorded as shared once both hold it, so a fold that stopped between the two merges again to the same "
             + "bytes. It is never taken unasked, a conflict never, and a clean textual merge proves nothing about the program: "
             + "build and test the tree before you commit it, and have the agent's session read the file again before it writes "
-            + "it. Never merged, whatever is named: a deletion against a change, a path both trees made, a file git reads as "
+            + $"it. A {FoldAllowances.MergeOption} naming no path the fold weighs is refused as the misspelling it most likely is, and one "
+            + "naming a path with nothing left to merge is let stand, so the command line of a fold that stopped part way runs again; "
+            + $"a path named with both {FoldAllowances.MergeOption} and {FoldAllowances.SettledOption} is a usage error, exit "
+            + $"{HarnessExit.UsageError}, and a {FoldAllowances.MergeOption} naming an anchor registry or the arm registry is refused. "
+            + "Never merged, whatever is named: a deletion against a change, a path both trees made, a file git reads as "
             + "binary or will not merge, one whose merge attribute asks for another merge, a file above 16 MiB, and an anchor "
             + "registry; nor is the arm registry ever merged by line. Whether a file can be run is merged with its content: the "
             + "merged file takes the bit of the side that "

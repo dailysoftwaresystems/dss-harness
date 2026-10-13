@@ -251,53 +251,15 @@ public sealed partial class GitClient(
         var tree = paths.Any(HoldsLineBreak) ? await ListTreeAsync(directory, commit, cancellationToken).ConfigureAwait(false) : null;
         var asked = paths.Where(path => !HoldsLineBreak(path)).Distinct(StringComparer.Ordinal).ToList();
 
-        // The commit is asked about first, in the same process: git answers "missing" for a commit it cannot read
-        // exactly as it does for a path the commit does not hold, and an unreadable commit passed off as absent files
-        // would let a fold take every file for one the agent added.
-        var input = new StringBuilder().Append(commit).Append("^{commit}\n");
-
-        foreach (var path in asked)
-        {
-            input.Append(commit).Append(':').Append(path).Append('\n');
-        }
-
-        var result = await RunCoreAsync(
-                directory,
-                ["cat-file", "--batch-check=%(objecttype) %(objectname)"],
-                echoOutput: false,
-                untranslated: false,
-                indexFile: null,
-                input.ToString(),
-                cancellationToken)
-            .ConfigureAwait(false);
-
-        Ensure(result, $"read which files {commit} holds");
-
-        var lines = result.StandardOutput
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.TrimEnd('\r'))
-            .ToList();
-
-        if (lines.Count != asked.Count + 1)
-        {
-            throw new HarnessException(
-                HarnessExit.CommandFailed,
-                $"git answered {ReportText.Counted(lines.Count, "line")} for the {asked.Count + 1} it was asked about {commit}, so which files it holds cannot be told.");
-        }
-
-        if (!lines[0].StartsWith("commit ", StringComparison.Ordinal))
-        {
-            throw new HarnessException(HarnessExit.CommandFailed, $"git cannot read commit {commit}, so which files it holds cannot be told: {lines[0]}");
-        }
-
+        var objects = await ObjectsAtAsync(directory, [.. asked.Select(path => (commit, path))], commit, $"which files {commit} holds", cancellationToken).ConfigureAwait(false);
         var unanswered = new List<string>();
 
         for (var index = 0; index < asked.Count; index++)
         {
-            held[asked[index]] = lines[index + 1].Split(' ') switch
+            held[asked[index]] = objects[index] switch
             {
-                ["blob", var id] => GitHeld.File(id),
-                ["tree", _] => GitHeld.Directory,
+                ("blob", var id) => GitHeld.File(id),
+                ("tree", _) => GitHeld.Directory,
                 _ => Unanswered(asked[index]),
             };
         }
@@ -334,6 +296,74 @@ public sealed partial class GitClient(
             unanswered.Add(path);
             return GitHeld.Nothing;
         }
+    }
+
+    /// <summary>
+    /// The object each commit of <paramref name="pairs"/> holds at its path - its type and id - asked of one git process,
+    /// or null where the commit holds none there. Each commit is asked about first, in the same process: git answers
+    /// "missing" for a commit it cannot read exactly as it does for a path the commit does not hold, and an unreadable
+    /// commit passed off as absent files would let a fold take every file for one the agent added.
+    /// </summary>
+    /// <param name="directory">Where git is asked.</param>
+    /// <param name="pairs">Each commit and path asked about, neither holding a line break.</param>
+    /// <param name="about">What was asked about, as a refusal names it: a commit, or how many.</param>
+    /// <param name="unknown">What cannot be told where git cannot answer, to end a sentence.</param>
+    /// <param name="cancellationToken">Cancels git.</param>
+    /// <exception cref="HarnessException">git could not answer, answered other than it was asked, or cannot read one of the commits.</exception>
+    private async Task<IReadOnlyList<(string Type, string Id)?>> ObjectsAtAsync(
+        string directory,
+        IReadOnlyList<(string Commit, string Path)> pairs,
+        string about,
+        string unknown,
+        CancellationToken cancellationToken)
+    {
+        var commits = pairs.Select(pair => pair.Commit).Distinct(StringComparer.Ordinal).ToList();
+        var input = new StringBuilder();
+
+        foreach (var commit in commits)
+        {
+            input.Append(commit).Append("^{commit}\n");
+        }
+
+        foreach (var (commit, path) in pairs)
+        {
+            input.Append(commit).Append(':').Append(path).Append('\n');
+        }
+
+        var result = await RunCoreAsync(
+                directory,
+                ["cat-file", "--batch-check=%(objecttype) %(objectname)"],
+                echoOutput: false,
+                untranslated: false,
+                indexFile: null,
+                input.ToString(),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        Ensure(result, $"read {unknown}");
+
+        var lines = result.StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r'))
+            .ToList();
+
+        if (lines.Count != commits.Count + pairs.Count)
+        {
+            throw new HarnessException(
+                HarnessExit.CommandFailed,
+                $"git answered {ReportText.Counted(lines.Count, "line")} for the {commits.Count + pairs.Count} it was asked about {about}, so {unknown} cannot be told.");
+        }
+
+        for (var at = 0; at < commits.Count; at++)
+        {
+            if (!lines[at].StartsWith("commit ", StringComparison.Ordinal))
+            {
+                throw new HarnessException(HarnessExit.CommandFailed, $"git cannot read commit {commits[at]}, so {unknown} cannot be told: {lines[at]}");
+            }
+        }
+
+        // An answer is the object's type and id; anything else is git's word that the commit holds nothing there.
+        return [.. lines.Skip(commits.Count).Select(line => line.Split(' ') is [var type and ("blob" or "tree" or "commit" or "tag"), var id] ? (type, id) : ((string Type, string Id)?)null)];
     }
 
     public async Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(

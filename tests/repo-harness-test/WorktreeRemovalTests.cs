@@ -1187,6 +1187,12 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// <summary>Whether resolving a reference, given the directory and the reference, fails as a git that cannot look would.</summary>
     public Func<string, string, bool>? ResolveCommitFails { get; init; }
 
+    /// <summary>
+    /// A failure reading bytes as a checkout of a path writes them throws instead of asking git, given the path and the
+    /// bytes: a filter that fails on them, for one; null asks git.
+    /// </summary>
+    public Func<string, byte[], HarnessException?>? CheckOutFailure { get; init; }
+
     public Task<int> CountRepositoryCommitsAsync(
         string gitDirectory,
         IReadOnlyList<string> revisions,
@@ -1250,7 +1256,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         => Call(() => inner.ReadStagedAsync(directory, path, contents, Token(cancellationToken)));
 
     public Task<byte[]> ReadCheckedOutAsync(string directory, string path, byte[] staged, CancellationToken cancellationToken = default)
-        => Call(() => inner.ReadCheckedOutAsync(directory, path, staged, Token(cancellationToken)));
+        => CheckOutFailure?.Invoke(path, staged) is { } failure
+            ? Task.FromException<byte[]>(failure)
+            : Call(() => inner.ReadCheckedOutAsync(directory, path, staged, Token(cancellationToken)));
 
     public Task<GitTextMerge> MergeTextAsync(byte[] ancestor, byte[] ours, byte[] theirs, GitMergeNames names, CancellationToken cancellationToken = default)
         => Call(() => inner.MergeTextAsync(ancestor, ours, theirs, names, Token(cancellationToken)));
@@ -1262,8 +1270,9 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
         string directory,
         IReadOnlyList<string> attributes,
         IReadOnlyList<string> paths,
+        string? unread = null,
         CancellationToken cancellationToken = default)
-        => Call(() => inner.ReadAttributesAsync(directory, attributes, paths, Token(cancellationToken)));
+        => Call(() => inner.ReadAttributesAsync(directory, attributes, paths, unread, Token(cancellationToken)));
 
     public Task<IReadOnlyList<GitWorktree>> ListWorktreesAsync(string directory, CancellationToken cancellationToken = default)
         => ListWorktreesFailure is { } failure && (ListWorktreesFailsWhen?.Invoke() ?? true)
