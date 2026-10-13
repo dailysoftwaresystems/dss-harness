@@ -1510,6 +1510,8 @@ public sealed partial class HelpTests
         }
 
         Assert.Contains("agents/<agent>/seed.json", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("agents/<agent>/shared/<sha256>", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("the bytes of each file it shares, kept to merge from", text, StringComparison.Ordinal);
         Assert.Contains("--settled <path> leaves out a path you reconciled by hand, so the rest goes in; it is not a --force", text, StringComparison.Ordinal);
         Assert.Contains("put back as the main tree's HEAD holds it included", text, StringComparison.Ordinal);
         Assert.Contains($"  {ToolPackage.Command} refresh-agent <o> <a> [<path>... | --all] [--except <path>]... [--apply]", result.StandardOutput, StringComparison.Ordinal);

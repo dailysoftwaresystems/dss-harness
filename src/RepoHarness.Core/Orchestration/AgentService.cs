@@ -332,9 +332,9 @@ public sealed class AgentService(
             _fileSystem.CreateDirectory(layout.PlansDirectory(agent));
             _fileSystem.CreateDirectory(layout.RowsDirectory(agent));
 
-            var start = new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = empty, Paths = [] };
-            var (seed, handed, stopped) = await _fold.HandAsync(context.Layout.MainCheckoutRoot, created.Path, handable, start, CancellationToken.None).ConfigureAwait(false);
-            _store.WriteSeed(layout, agent, seed);
+            var ledger = Ledger(layout, agent, new SeedRecord { SeededAt = _clock.GetUtcNow(), Empty = empty, Paths = [] });
+            var (handed, stopped) = await _fold.HandAsync(context.Layout.MainCheckoutRoot, created.Path, handable, ledger, CancellationToken.None).ConfigureAwait(false);
+            var (seed, notes) = WriteSeed(layout, agent, ledger);
             records.Add($"seed {layout.SeedFile(agent)}");
 
             if (stopped is not null)
@@ -343,7 +343,7 @@ public sealed class AgentService(
                     HarnessExit.Incomplete,
                     $"{what}, and handing it the main tree's uncommitted state stopped after {handed} of {ReportText.Counted(handable.Count, "path")}: {stopped}. "
                     + $"Its seed records the {handed} it was handed. {Remedy(orchestrator, agent, based)}",
-                    records);
+                    [.. notes, .. records]);
             }
 
             return CommandOutcome.Ok(
@@ -353,6 +353,7 @@ public sealed class AgentService(
                     $"base {OrchestrationReports.Base(baseCommit)}",
                     seed.Empty ? "handed nothing, as asked" : $"handed {ReportText.Counted(handed, "path")} of the main tree's uncommitted state",
                     .. NotHanded(handable),
+                    .. notes,
                     .. records,
                     $"plans {layout.PlansDirectory(agent)}",
                     $"work {layout.WorkDirectory(agent)}",
@@ -498,12 +499,13 @@ public sealed class AgentService(
             };
             int handed;
             string? stopped;
+            IReadOnlyList<string> notes;
 
             try
             {
-                SeedRecord seed;
-                (seed, handed, stopped) = await _fold.HandAsync(main, path, handable, start, CancellationToken.None).ConfigureAwait(false);
-                _store.WriteSeed(layout, record.Name, seed);
+                var ledger = Ledger(layout, record.Name, start);
+                (handed, stopped) = await _fold.HandAsync(main, path, handable, ledger, CancellationToken.None).ConfigureAwait(false);
+                (_, notes) = WriteSeed(layout, record.Name, ledger);
             }
             catch (Exception ex) when (Unfinished(ex))
             {
@@ -520,7 +522,7 @@ public sealed class AgentService(
                     HarnessExit.Incomplete,
                     $"Seeding {Lower(Agent(record))} stopped after {handed} of {ReportText.Counted(handable.Count, "path")}: {stopped}. Its seed records what it was handed; "
                     + $"run {OrchestrationReports.Line(SeedCommand, record.Orchestrator, record.Name, "--force")} again once that is dealt with.",
-                    [seedLine]);
+                    [.. notes, seedLine]);
             }
 
             if (empty)
@@ -529,12 +531,12 @@ public sealed class AgentService(
                     previous is { } before && before.Weighed.Any()
                         ? $"seeded {Lower(Agent(record))} with nothing more, as asked: what it was handed before stays recorded"
                         : $"seeded {Lower(Agent(record))} with nothing, as asked",
-                    [.. await BehindAsync(main, record).ConfigureAwait(false), seedLine]);
+                    [.. await BehindAsync(main, record).ConfigureAwait(false), .. notes, seedLine]);
             }
 
             return CommandOutcome.Ok(
                 $"seeded {Lower(Agent(record))} with {ReportText.Counted(handed, "path")}",
-                [.. NotHanded(handable), .. await BehindAsync(main, record).ConfigureAwait(false), seedLine]);
+                [.. NotHanded(handable), .. await BehindAsync(main, record).ConfigureAwait(false), .. notes, seedLine]);
         }
     }
 
@@ -719,12 +721,13 @@ public sealed class AgentService(
         {
             int handed;
             string? stopped;
+            IReadOnlyList<string> notes;
 
             try
             {
-                SeedRecord updated;
-                (updated, handed, stopped) = await _fold.HandAsync(main, path, moved, seed, CancellationToken.None).ConfigureAwait(false);
-                _store.WriteSeed(layout, record.Name, updated);
+                var ledger = Ledger(layout, record.Name, seed);
+                (handed, stopped) = await _fold.HandAsync(main, path, moved, ledger, CancellationToken.None).ConfigureAwait(false);
+                (_, notes) = WriteSeed(layout, record.Name, ledger);
             }
             catch (Exception ex) when (Unfinished(ex))
             {
@@ -740,10 +743,10 @@ public sealed class AgentService(
                     HarnessExit.Incomplete,
                     $"Refreshing {Lower(Agent(record))} stopped after {handed} of {ReportText.Counted(all.Count, "path")}: {stopped}. Its seed records the {handed} handed; "
                     + $"run {again} again once that is dealt with.",
-                    [seedLine])
+                    [.. notes, seedLine])
                 : CommandOutcome.Ok(
                     $"refreshed {ReportText.Counted(all.Count, "path")} into {Lower(Agent(record))}, recorded as handed to it, so its fold leaves them out",
-                    [.. all.Select(relative => $"  {relative}"), .. leftLines, .. NotHanded(handable), .. behind, seedLine]);
+                    [.. all.Select(relative => $"  {relative}"), .. leftLines, .. NotHanded(handable), .. behind, .. notes, seedLine]);
         }
 
         // The paths whose main-tree copy the agent does not hold already.
@@ -1145,7 +1148,7 @@ public sealed class AgentService(
                 $"folded {Lower(Agent(record))}: wrote {ReportText.Counted(measured.Plan!.Written.Count, "path")} into the main tree, removed "
                 + $"{measured.Plan.Deleted.Count} and applied {ReportText.Counted(written.Rows.Planned, "row")}; its worktree is kept, and what the fold wrote is "
                 + "recorded as shared, so a fold after a review weighs the agent's change of it",
-                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, written.Rows, layout.RowsDirectory(record.Name)), .. Records(layout, record)]);
+                [.. OrchestrationReports.FoldAndRowLines(measured.Plan, written.Rows, layout.RowsDirectory(record.Name)), .. written.Notes, .. Records(layout, record)]);
         }
     }
 
@@ -1335,6 +1338,7 @@ public sealed class AgentService(
 
                 seed = written.Seed;
                 lines.AddRange(OrchestrationReports.FoldAndRowLines(fold.Plan, written.Rows, layout.RowsDirectory(record.Name)));
+                lines.AddRange(written.Notes);
             }
 
             // Until the closing is recorded, the agent is live: anything that stops it here says what is in, and a run again
@@ -1696,6 +1700,13 @@ public sealed class AgentService(
 
         _store.UpdateAgent(target.Layout, record.Name, current => current with { State = AgentStates.Deleted, DeletedAt = _clock.GetUtcNow(), Abandoned = abandoned });
 
+        // Nothing merges from them any more: they go once its record says it is deleted, and one that cannot is said, never
+        // a deletion left unfinished.
+        if (new SharedCopies(_fileSystem, target.Layout, record.Name).Remove() is { } stillKept)
+        {
+            lines.Add(stillKept);
+        }
+
         return CommandOutcome.Ok(
             $"deleted {Lower(Agent(record))}: {(abandoned ? "abandoned, with nothing folded" : "its fold and rows are in the main tree")}, "
             + "and its worktree, git's record of it and every copy of it recorded on a host are gone; its directory is kept as its history",
@@ -2023,14 +2034,16 @@ public sealed class AgentService(
         var main = context.Layout.MainCheckoutRoot;
         var plan = measured.Plan!;
         var applied = await _fold.ApplyAsync(main, path, plan).ConfigureAwait(false);
-        var records = Records(layout, record);
+        IReadOnlyList<string> records = Records(layout, record);
         var progress = $"after writing {applied.Written.Count} of {ReportText.Counted(plan.Written.Count, "path")} and removing {applied.Deleted.Count} of {plan.Deleted.Count}";
         SeedRecord folded;
+        IReadOnlyList<string> notes;
 
         try
         {
-            folded = _fold.Folded(seed, plan, applied, path);
-            _store.WriteSeed(layout, record.Name, folded);
+            var ledger = Ledger(layout, record.Name, seed);
+            await _fold.FoldedAsync(ledger, plan, applied, main, path).ConfigureAwait(false);
+            (folded, notes) = WriteSeed(layout, record.Name, ledger);
         }
         catch (Exception ex) when (Unfinished(ex))
         {
@@ -2042,8 +2055,12 @@ public sealed class AgentService(
                     + "wrote already in, records it, and measures the rest afresh.",
                     records),
                 measured.Rows,
-                seed);
+                seed,
+                []);
         }
+
+        // What is said of the kept copies stands beside the records on every way out from here.
+        records = [.. notes, .. records];
 
         if (applied.Stopped is { } why)
         {
@@ -2054,12 +2071,13 @@ public sealed class AgentService(
                     + "as shared, and its rows were not applied; run it again once that is dealt with - a fold run again measures the rest afresh.",
                     records),
                 measured.Rows,
-                folded);
+                folded,
+                notes);
         }
 
         if (measured.Request is not { Rows.Count: > 0 } request)
         {
-            return new Written(null, measured.Rows, folded);
+            return new Written(null, measured.Rows, folded, notes);
         }
 
         AnchorBatch batch;
@@ -2085,7 +2103,8 @@ public sealed class AgentService(
                     + "is not written again.",
                     [.. OrchestrationReports.RowLines(batch), .. records]),
                 rows,
-                folded);
+                folded,
+                notes);
         }
 
         try
@@ -2108,10 +2127,11 @@ public sealed class AgentService(
                     + $"written: {ex.Message.TrimEnd('.')}. Run it again once that is dealt with: a row already as declared is recorded, not written again.",
                     [.. OrchestrationReports.RowLines(batch), .. records]),
                 rows,
-                folded);
+                folded,
+                notes);
         }
 
-        return new Written(null, rows, folded);
+        return new Written(null, rows, folded, notes);
     }
 
     /// <summary>
@@ -2412,6 +2432,26 @@ public sealed class AgentService(
 
     private WorktreeInspector Inspector() => new(_gitClient, _fileSystem, _platform, _output);
 
+    /// <summary>The recorder of what <paramref name="agent"/> shares with the main tree, starting from <paramref name="seed"/>, its bytes kept beside its seed.</summary>
+    private SharedLedger Ledger(OrchestratorLayout layout, string agent, SeedRecord seed) => new(seed, new SharedCopies(_fileSystem, layout, agent));
+
+    /// <summary>
+    /// Writes what <paramref name="ledger"/> recorded as the agent's seed, then prunes the bytes kept beside it to what that
+    /// seed names: the last two of a command's writes, after the trees and the kept copies, so that, stopped anywhere, the
+    /// seed never names a path the trees do not hold as recorded. Every command that writes a seed writes it here.
+    /// </summary>
+    /// <returns>
+    /// The seed written, and what is said of the kept copies: each path whose bytes could not be kept, and each copy the
+    /// seed no longer names that could not be removed.
+    /// </returns>
+    private (SeedRecord Seed, IReadOnlyList<string> Notes) WriteSeed(OrchestratorLayout layout, string agent, SharedLedger ledger)
+    {
+        var seed = ledger.Build();
+        _store.WriteSeed(layout, agent, seed);
+
+        return (seed, [.. ledger.NotKept, .. ledger.Kept.Prune(seed)]);
+    }
+
     private static IReadOnlyList<string> Floor(HarnessContext context) => TreeFloor.Of(context.Config.Worktrees.Root);
 
     private static string? Shape(string orchestrator, string agent)
@@ -2486,8 +2526,11 @@ public sealed class AgentService(
     /// </summary>
     private sealed record Measured(FoldPlan? Plan, AnchorBatchRequest? Request, IReadOnlyList<AnchorRowDeclaration> All, AgentRowsPlan Rows, CommandOutcome? Refusal);
 
-    /// <summary>What writing a fold did: why it stopped where it did, the rows as applied, and the seed as recorded.</summary>
-    private sealed record Written(CommandOutcome? Failure, AgentRowsPlan Rows, SeedRecord Seed);
+    /// <summary>
+    /// What writing a fold did: why it stopped where it did, the rows as applied, the seed as recorded, and what is said of
+    /// the bytes kept of what it shares.
+    /// </summary>
+    private sealed record Written(CommandOutcome? Failure, AgentRowsPlan Rows, SeedRecord Seed, IReadOnlyList<string> Notes);
 
     /// <summary>What deleting a live agent measured before writing anything, and why it cannot go on where it cannot.</summary>
     private sealed record ClosingMeasure(Measured? Fold, IReadOnlyList<string> Discarded, EvidenceFound Evidence, CommandOutcome? Refusal);

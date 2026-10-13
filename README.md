@@ -198,7 +198,7 @@ in `config.json`.
 .orchestrators/<o>/logs/<name>.jsonl         ignored; a line for each run that reached it or one of its agents, refusals included; a dry run writes none
 .orchestrators/<o>/plans/<name>/             ignored; its plans, and each agent's
 .orchestrators/<o>/work/<agent>/             ignored; an agent's scratch and task files
-.orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, rows, the rows applied, kept evidence
+.orchestrators/<o>/agents/<agent>/           ignored; an agent's record, seed, the bytes it shares, rows, the rows applied, kept evidence
 .harness-config/runs/                        ignored; one directory of logs per run
 .harness-config/lock.json                    ignored; records in-progress runs
 .plans/_deferred-anchor-registry.md          tracked; live anchors

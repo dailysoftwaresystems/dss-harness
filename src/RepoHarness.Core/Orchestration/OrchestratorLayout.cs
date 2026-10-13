@@ -15,6 +15,7 @@ namespace RepoHarness.Core.Orchestration;
 /// plans/&lt;name&gt;/              plans, the orchestrator's own and one directory for each agent
 /// agents/&lt;agent&gt;/agent.json   the agent's record
 /// agents/&lt;agent&gt;/seed.json    what it shares with the main tree: each path handed to it or folded, with its digest
+/// agents/&lt;agent&gt;/shared/&lt;sha256&gt;   the bytes of each file it shares, kept to merge from
 /// agents/&lt;agent&gt;/rows/        the anchor rows it files, one directory for each
 /// agents/&lt;agent&gt;/applied-rows.json   the rows its folds applied, each as declared then
 /// agents/&lt;agent&gt;/evidence/    what its worktree's evidence roots held when it was deleted
@@ -43,6 +44,9 @@ public sealed record OrchestratorLayout(string Name, string Directory)
 
     /// <summary>The name of the file an agent's seed is kept in.</summary>
     public const string SeedFileName = "seed.json";
+
+    /// <summary>The directory the bytes of the files an agent shares with the main tree are kept in.</summary>
+    public const string SharedDirectoryName = "shared";
 
     /// <summary>The directory an agent files its anchor rows in.</summary>
     public const string RowsDirectoryName = "rows";
@@ -109,6 +113,15 @@ public sealed record OrchestratorLayout(string Name, string Directory)
     /// <summary>The seed of <paramref name="agent"/>.</summary>
     /// <param name="agent">The agent's name.</param>
     public string SeedFile(string agent) => Path.Combine(AgentDirectory(agent), SeedFileName);
+
+    /// <summary>Where the bytes of the files <paramref name="agent"/> shares with the main tree are kept, one file for each digest its seed records.</summary>
+    /// <param name="agent">The agent's name.</param>
+    public string SharedDirectory(string agent) => Path.Combine(AgentDirectory(agent), SharedDirectoryName);
+
+    /// <summary>The kept bytes of a file <paramref name="agent"/> shares: a file named by their SHA-256, as its seed records it.</summary>
+    /// <param name="agent">The agent's name.</param>
+    /// <param name="digest">The SHA-256 its seed records for the file.</param>
+    public string SharedFile(string agent, string digest) => Path.Combine(SharedDirectory(agent), digest);
 
     /// <summary>Where <paramref name="agent"/> files its anchor rows.</summary>
     /// <param name="agent">The agent's name.</param>

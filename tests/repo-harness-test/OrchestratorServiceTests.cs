@@ -511,7 +511,10 @@ public sealed class OrchestratorServiceTests
         return path;
     }
 
-    /// <summary>list-orchestrator's JSON names each orchestrator and each agent with where it stands and where its records are.</summary>
+    /// <summary>
+    /// list-orchestrator's JSON names each orchestrator and each agent with where it stands and where its records are, the
+    /// directory the bytes of what it shares are kept in among them.
+    /// </summary>
     [Fact]
     public async Task TheListing_NamesEachAgentAndWhereItStands()
     {
@@ -535,6 +538,8 @@ public sealed class OrchestratorServiceTests
         Assert.True((bool?)agent["worktreeExists"]);
         Assert.Equal("sess-1", (string?)agent["session"]);
         Assert.Equal(kit.Layout.AgentRecordFile("ag"), (string?)agent["record"]);
+        Assert.Equal(kit.Layout.SeedFile("ag"), (string?)agent["seed"]);
+        Assert.Equal(kit.Layout.SharedDirectory("ag"), (string?)agent["shared"]);
     }
 
     /// <summary>

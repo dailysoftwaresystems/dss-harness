@@ -138,6 +138,7 @@ public static class OrchestrationReports
             ["abandoned"] = record.Abandoned,
             ["record"] = layout.AgentRecordFile(name),
             ["seed"] = layout.SeedFile(name),
+            ["shared"] = layout.SharedDirectory(name),
             ["appliedRows"] = layout.AppliedRowsFile(name),
             ["log"] = layout.LogFile(name),
             ["plans"] = layout.PlansDirectory(name),

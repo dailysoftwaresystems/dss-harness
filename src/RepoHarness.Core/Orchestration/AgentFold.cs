@@ -115,6 +115,79 @@ public sealed record Handable(IReadOnlyList<string> Files, IReadOnlyList<string>
 }
 
 /// <summary>
+/// What an agent shares with the main tree, as one command adds to it: the one recorder of a shared path, whichever
+/// command shares it - handed, folded, or found already in. Each file recorded has its bytes kept beside the seed
+/// (<see cref="SharedCopies"/>), so the seed and the copies it names are written from one value.
+/// </summary>
+/// <remarks>
+/// A command writes in one order: the trees, the kept copies - made here, as each path is recorded - the seed, and then
+/// the prune of the copies to what that seed names. Stopped anywhere, the seed never names a path the trees do not hold
+/// as recorded, and a copy the seed does not name is pruned at the next write.
+/// </remarks>
+/// <param name="seed">What the agent shared before.</param>
+/// <param name="kept">Where the bytes of what it shares are kept.</param>
+internal sealed class SharedLedger(SeedRecord seed, SharedCopies kept)
+{
+    private readonly Dictionary<string, string> _shared = new(seed.Paths, StringComparer.Ordinal);
+    private readonly HashSet<string> _executable = (seed.Executable ?? []).ToHashSet(StringComparer.Ordinal);
+    private readonly HashSet<string> _absent = (seed.Absent ?? []).ToHashSet(StringComparer.Ordinal);
+    private readonly List<string> _notKept = [];
+
+    /// <summary>Where the bytes of what the agent shares are kept: pruned to the seed once it is written.</summary>
+    public SharedCopies Kept => kept;
+
+    /// <summary>Each path recorded whose bytes could not be kept, with why: said, and never a failure of the command that recorded it.</summary>
+    public IReadOnlyList<string> NotKept => _notKept;
+
+    /// <summary>
+    /// Records <paramref name="path"/> as a file both trees hold, and keeps its bytes. Never interrupted: a path the
+    /// trees already hold as recorded is recorded.
+    /// </summary>
+    /// <param name="path">The path, relative to both trees.</param>
+    /// <param name="digest">The SHA-256 of the file both hold.</param>
+    /// <param name="executable">Whether it can be run, where the platform has such a bit.</param>
+    /// <param name="holding">One tree's copy of it, which the bytes are kept from.</param>
+    public async Task FileAsync(string path, string digest, bool executable, string holding)
+    {
+        _shared[path] = digest;
+        _absent.Remove(path);
+
+        if (executable)
+        {
+            _executable.Add(path);
+        }
+        else
+        {
+            _executable.Remove(path);
+        }
+
+        if (await kept.KeepAsync(digest, holding, CancellationToken.None).ConfigureAwait(false) is { } why)
+        {
+            _notKept.Add($"'{ReportText.Printable(path)}' is recorded as shared, and its bytes were not kept in '{kept.Directory}': {why}");
+        }
+    }
+
+    /// <summary>Records <paramref name="path"/> as absent from both trees.</summary>
+    /// <param name="path">The path, relative to both trees.</param>
+    public void Absent(string path)
+    {
+        _shared.Remove(path);
+        _executable.Remove(path);
+        _absent.Add(path);
+    }
+
+    /// <summary>The seed with everything recorded: handed nothing only where it still names nothing.</summary>
+    public SeedRecord Build()
+        => seed with
+        {
+            Paths = new Dictionary<string, string>(_shared, StringComparer.Ordinal),
+            Empty = seed.Empty && _shared.Count == 0 && _absent.Count == 0,
+            Executable = _executable.Count > 0 ? [.. _executable.Order(StringComparer.Ordinal)] : null,
+            Absent = _absent.Count > 0 ? [.. _absent.Order(StringComparer.Ordinal)] : null,
+        };
+}
+
+/// <summary>
 /// Measures and applies an agent's fold: what the agent changed, told apart from what it shares with the main tree and
 /// from what the main tree did meanwhile, and written into the main tree only where nothing can be lost.
 /// </summary>
@@ -135,6 +208,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
 {
     /// <summary>What cannot be done with a path the main tree changes that no record can keep, to end a sentence.</summary>
     private const string HandingConsequence = "it cannot be handed to an agent";
+
+    /// <summary>The main tree, as a write that stopped names the tree whose file is not what was measured.</summary>
+    private const string MainTreeName = "the main tree";
 
     private readonly IGitClient _gitClient = gitClient;
     private readonly IFileSystem _fileSystem = fileSystem;
@@ -378,7 +454,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             foreach (var path in plan.Deleted)
             {
                 var file = Path.Combine(main, path);
-                await RequireMeasuredAsync(file, path, plan.MainContent[path], "removed").ConfigureAwait(false);
+                await RequireMeasuredAsync(file, path, plan.MainContent[path], MainTreeName, "removed").ConfigureAwait(false);
                 _fileSystem.DeleteFile(file);
                 deleted.Add(path);
                 _fileSystem.RemoveEmptiedDirectories(main, Path.GetDirectoryName(file), _platform.PathComparison);
@@ -387,7 +463,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             foreach (var path in plan.Written)
             {
                 var destination = Path.Combine(main, path);
-                await RequireMeasuredAsync(destination, path, plan.MainContent[path], "written over").ConfigureAwait(false);
+                await RequireMeasuredAsync(destination, path, plan.MainContent[path], MainTreeName, "written over").ConfigureAwait(false);
                 await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(worktree, path), destination, plan.AgentContent[path], CancellationToken.None).ConfigureAwait(false);
                 written.Add(path);
             }
@@ -401,45 +477,39 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     }
 
     /// <summary>
-    /// What <paramref name="seed"/> becomes once a fold is applied, as far as it went: each path it wrote, and each the main
-    /// tree already held as the agent does, shared as the file both trees now hold - or as absent from both - and each it
-    /// removed as absent from both. A later fold weighs those paths against that, never against the agent's base: a review
-    /// that sends the agent back, and the agent putting a path back as it was, is then its change to fold like any other.
+    /// Records in <paramref name="ledger"/> what the agent shares once a fold is applied, as far as it went: each path it
+    /// wrote, and each the main tree already held as the agent does, shared as the file both trees now hold - or as absent
+    /// from both - and each it removed as absent from both. A later fold weighs those paths against that, never against the
+    /// agent's base: a review that sends the agent back, and the agent putting a path back as it was, is then its change to
+    /// fold like any other.
     /// </summary>
-    /// <param name="seed">What the agent shared with the main tree before.</param>
+    /// <param name="ledger">What the agent shares with the main tree, to add them to.</param>
     /// <param name="plan">The fold measured.</param>
     /// <param name="applied">What applying it did.</param>
+    /// <param name="main">The main checkout's root, whose copies - the fold's own writes among them - the shared bytes are kept from.</param>
     /// <param name="worktree">The agent's worktree, whose copies say which files could be run.</param>
-    public SeedRecord Folded(SeedRecord seed, FoldPlan plan, FoldApplied applied, string worktree)
+    public async Task FoldedAsync(SharedLedger ledger, FoldPlan plan, FoldApplied applied, string main, string worktree)
     {
-        ArgumentNullException.ThrowIfNull(seed);
+        ArgumentNullException.ThrowIfNull(ledger);
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(applied);
-
-        var shared = new Dictionary<string, string>(seed.Paths, StringComparer.Ordinal);
-        var executable = (seed.Executable ?? []).ToHashSet(StringComparer.Ordinal);
-        var absent = (seed.Absent ?? []).ToHashSet(StringComparer.Ordinal);
 
         foreach (var path in applied.Written.Concat(plan.AlreadyIn))
         {
             if (plan.AgentContent[path] is { } digest)
             {
-                shared[path] = digest;
-                absent.Remove(path);
-                Mark(executable, path, IsExecutable(Path.Combine(worktree, path)));
+                await ledger.FileAsync(path, digest, IsExecutable(Path.Combine(worktree, path)), Path.Combine(main, path)).ConfigureAwait(false);
             }
             else
             {
-                MarkAbsent(shared, executable, absent, path);
+                ledger.Absent(path);
             }
         }
 
         foreach (var path in applied.Deleted)
         {
-            MarkAbsent(shared, executable, absent, path);
+            ledger.Absent(path);
         }
-
-        return Shared(seed, shared, executable, absent);
     }
 
     /// <summary>
@@ -732,28 +802,25 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     /// Hands the agent what <paramref name="handable"/> names - each deletion made in its worktree, with the directories that
     /// leaves empty, then each file copied from the main tree there and proved, so a file the main tree turned into a
     /// directory, or a directory it turned into a file, makes room for what replaced it - and records in
-    /// <paramref name="seed"/> what it was handed as it goes: a hand-over that stops part way leaves a record of exactly what
-    /// was handed, never one that takes a copied file for the agent's own work.
+    /// <paramref name="ledger"/> what it was handed as it goes: a hand-over that stops part way leaves a record of exactly
+    /// what was handed, never one that takes a copied file for the agent's own work.
     /// </summary>
     /// <param name="main">The main checkout's root.</param>
     /// <param name="worktree">The agent's worktree.</param>
     /// <param name="handable">What to hand it, as <see cref="HandableAsync"/> gives it.</param>
-    /// <param name="seed">The seed to add them to.</param>
+    /// <param name="ledger">What the agent shares with the main tree, to add them to.</param>
     /// <param name="cancellationToken">Stops it between one path and the next.</param>
-    /// <returns>The seed with what was handed, how many paths were, and why it stopped where it did not hand everything.</returns>
-    public async Task<(SeedRecord Seed, int Handed, string? Stopped)> HandAsync(
+    /// <returns>How many paths were handed, and why it stopped where it did not hand everything.</returns>
+    public async Task<(int Handed, string? Stopped)> HandAsync(
         string main,
         string worktree,
         Handable handable,
-        SeedRecord seed,
+        SharedLedger ledger,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(handable);
-        ArgumentNullException.ThrowIfNull(seed);
+        ArgumentNullException.ThrowIfNull(ledger);
 
-        var shared = new Dictionary<string, string>(seed.Paths, StringComparer.Ordinal);
-        var executable = (seed.Executable ?? []).ToHashSet(StringComparer.Ordinal);
-        var absent = (seed.Absent ?? []).ToHashSet(StringComparer.Ordinal);
         var count = 0;
         string? stopped = null;
 
@@ -775,16 +842,17 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                         throw new IOException($"'{path}' is a directory in the agent's worktree, where the main tree deleted a file");
                 }
 
-                MarkAbsent(shared, executable, absent, path);
+                ledger.Absent(path);
                 count++;
             }
 
             foreach (var path in handable.Files)
             {
                 var copy = Path.Combine(worktree, path);
-                shared[path] = (await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(main, path), copy, cancellationToken: cancellationToken).ConfigureAwait(false)).Content;
-                absent.Remove(path);
-                Mark(executable, path, IsExecutable(copy));
+                var handed = await VerifiedFileCopy.CopyAsync(_fileSystem, Path.Combine(main, path), copy, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                // Kept from the copy just written and proved: what the seed records the agent as holding.
+                await ledger.FileAsync(path, handed.Content, IsExecutable(copy), copy).ConfigureAwait(false);
                 count++;
             }
         }
@@ -793,7 +861,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
             stopped = ex is OperationCanceledException ? "it was interrupted" : ex.Message.TrimEnd('.');
         }
 
-        return (Shared(seed, shared, executable, absent), count, stopped);
+        return (count, stopped);
     }
 
     /// <summary>
@@ -1277,51 +1345,27 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         };
 
     /// <summary>
-    /// Stops a write or a removal where the main tree's file at <paramref name="file"/> no longer holds what was measured -
-    /// another program wrote it since - so the fold never loses what it never weighed.
+    /// Stops a write or a removal where the file at <paramref name="file"/>, in the tree named <paramref name="tree"/>, no
+    /// longer holds what was measured - another program wrote it since - so nothing is lost that was never weighed.
     /// </summary>
-    private async Task RequireMeasuredAsync(string file, string path, string? measured, string what)
+    /// <param name="file">The file about to be written over or removed.</param>
+    /// <param name="path">Its path in the tree, as the stop names it.</param>
+    /// <param name="measured">The digest it held when it was measured; null where it held no file.</param>
+    /// <param name="tree">The tree it is in, as the stop names it.</param>
+    /// <param name="what">What was not done to it, to end the sentence.</param>
+    private async Task RequireMeasuredAsync(string file, string path, string? measured, string tree, string what)
     {
         var now = _fileSystem.KindOf(file) switch
         {
             PathKind.File => (await FileContentHash.OfAsync(_fileSystem, file, CancellationToken.None).ConfigureAwait(false)).Content,
             PathKind.None => null,
-            _ => throw new IOException($"'{path}' is no longer a file in the main tree, so it was not {what}"),
+            _ => throw new IOException($"'{path}' is no longer a file in {tree}, so it was not {what}"),
         };
 
         if (now != measured)
         {
-            throw new IOException($"'{path}' holds other content in the main tree now than when it was measured, so it was not {what}");
+            throw new IOException($"'{path}' holds other content in {tree} now than when it was measured, so it was not {what}");
         }
-    }
-
-    /// <summary>A seed holding <paramref name="shared"/>, <paramref name="executable"/> and <paramref name="absent"/>: handed nothing only where it still names nothing.</summary>
-    private static SeedRecord Shared(SeedRecord seed, Dictionary<string, string> shared, HashSet<string> executable, HashSet<string> absent)
-        => seed with
-        {
-            Paths = shared,
-            Empty = seed.Empty && shared.Count == 0 && absent.Count == 0,
-            Executable = executable.Count > 0 ? [.. executable.Order(StringComparer.Ordinal)] : null,
-            Absent = absent.Count > 0 ? [.. absent.Order(StringComparer.Ordinal)] : null,
-        };
-
-    private static void Mark(HashSet<string> executable, string path, bool runnable)
-    {
-        if (runnable)
-        {
-            executable.Add(path);
-        }
-        else
-        {
-            executable.Remove(path);
-        }
-    }
-
-    private static void MarkAbsent(Dictionary<string, string> shared, HashSet<string> executable, HashSet<string> absent, string path)
-    {
-        shared.Remove(path);
-        executable.Remove(path);
-        absent.Add(path);
     }
 
     /// <summary>What a path is in one tree.</summary>

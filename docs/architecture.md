@@ -598,6 +598,19 @@ agent's base stands stopped part way, or its HEAD is off its base. Both say when
 tree's HEAD, seed-agent --empty too. A path named otherwise than in UTF-8, committed or not, refuses any hand-over,
 named as git's quoting writes it: no file opens here by such a name.
 
+Every path recorded as shared - handed, folded, or found already in the main tree - is recorded by one recorder
+(`SharedLedger`), which keeps the bytes it records as well (`SharedCopies`): a plain file under the agent's
+`shared/`, named by the SHA-256 the seed already records for the path, copied from the tree's own file and proved to
+hold that digest (`VerifiedFileCopy`), so no copy is kept that is not the bytes recorded. They are what both trees
+held at a shared path, kept to merge from. `seed.json` gains no member for them - it names digests, and a digest
+names a file - so a seed written before any copy was kept reads as it did, and has none; a copy is read back by
+hashing it again, and counts only where it still hashes to its name. A command writes in one order: the trees, the
+kept copies, the seed, and then the prune of the copies to what that seed names (`AgentService.WriteSeed`, the one
+place a seed is written). Stopped anywhere, the seed never names a path the trees do not hold as recorded, and a copy
+the seed does not name goes at the next write. A file above 16 MiB (`SharedCopies.MostBytes`) is recorded and not
+kept. A copy that cannot be kept or pruned never fails the command that met it: the path is recorded all the same,
+and a line says why. list-orchestrator `--json` names the directory as each agent's `shared`.
+
 rebase-agent moves an agent's base to the main tree's HEAD (`AgentFold.MeasureRebaseAsync`). Each path the two commits
 hold differently (`git diff --name-only`, commit to commit) is shared - kept as its seed records it, since the seed,
 not the base, is what a shared path is weighed against - or held as the new base holds it already, or held as the old
@@ -690,7 +703,10 @@ same path does not share) and every path it held with its digest. It deletes the
 what was kept - one that cannot be deleted is named and left, and stops the removal - and asks delete-worktree for
 the removal - never forced, its evidence check kept, so a file written after the copy was read back stops it rather
 than going with it - then proves the removal: directory gone, git's record gone, no copy recorded on a host. A
-question it cannot answer is named as that, never read as nothing left. An agent made under a worktrees root the
+question it cannot answer is named as that, never read as nothing left. Once its record says it is deleted, the bytes
+kept of what it shared go (`SharedCopies.Remove`): nothing merges from them any more, and they are not evidence, so
+delete-orchestrator asks no `--delete-evidence` for them; where they cannot be removed a line says so, and the
+deletion stands. An agent made under a worktrees root the
 configuration no longer names is refused with nothing touched, since delete-worktree looks under the root the
 configuration names.
 
