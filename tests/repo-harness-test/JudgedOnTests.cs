@@ -376,7 +376,8 @@ public sealed class JudgedOnTests
     /// of its entries that is. Every other arm is pending, and says why as a listing would: its record unread or newer,
     /// nothing recorded, the verdict on the key read now no passed, the entry shown swept with no key, a table of it the
     /// record could not give, or what differs between the newest entry and now - what only a sweep reads among it - or
-    /// what it is judged on now could not be read.
+    /// what it is judged on now could not be read. A passed swept with no key never holds one whose key cannot be read
+    /// now: neither is a key.
     /// </summary>
     [Fact]
     public void UnderPending_AnArmIsHeldOnlyByARecordedPassedOfItsKey_AndOtherwiseSaysWhyAsAListingWould()
@@ -424,6 +425,14 @@ public sealed class JudgedOnTests
         Assert.Equal(
             [("key-unreadable", "what it would be judged on cannot be read now: 'a.h' is gone")],
             Why(Holding(Entry(compiled)), Again(now, unread: "'a.h' is gone")));
+
+        // A passed swept with no key never holds an arm whose key cannot be read now either: two keys unread are no one key.
+        Assert.Equal(
+            [
+                ("not-keyed", "what it was judged on could not be read when it was swept: 'a.h' is gone"),
+                ("key-unreadable", "what it would be judged on cannot be read now: 'a.h' is gone"),
+            ],
+            Why(Holding(Entry(now) with { Key = null, KeyUnread = "'a.h' is gone" }), Again(now, unread: "'a.h' is gone")));
     }
 
     /// <summary>
