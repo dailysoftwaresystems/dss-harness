@@ -909,7 +909,13 @@ public sealed class LegRunServiceTests
         }
         else
         {
+            // The closing block names the leg's records, and the line said as its verdict is names them the same way,
+            // with the host that ran the leg before them.
             Assert.Contains($"logs of arm on ssh {HostName}: {Records} (build.log, test.log)", outcome.Details ?? [], StringComparer.Ordinal);
+            Assert.Contains(
+                $"test: arm: logs of arm on ssh {HostName}: {Records} (build.log, test.log)",
+                (harness.StandardOutput.ToString() + harness.StandardError.ToString()).Split('\n').Select(line => line.TrimEnd('\r')),
+                StringComparer.Ordinal);
         }
     }
 

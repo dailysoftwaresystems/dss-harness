@@ -72,7 +72,7 @@ public sealed class LegExecutorTests
         Assert.Contains("clean: linux-arm64-debug: removing its build directory", said, StringComparison.Ordinal);
         Assert.Equal(
             [!dispatched, !dispatched, !dispatched],
-            new[] { "clean: starting 1 leg(s) across 1 machine(s)", "clean: linux-arm64-debug: starting on this machine", "clean: linux-arm64-debug: passed" }
+            new[] { "clean: starting 1 leg(s) across 1 machine(s)", "clean: linux-arm64-debug: starting on local", "clean: linux-arm64-debug: passed" }
                 .Select(line => said.Contains(line, StringComparison.Ordinal)));
         Assert.Equal("linux-arm64-debug", Assert.Single(ledger.Entries).Leg);
     }

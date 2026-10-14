@@ -3570,7 +3570,18 @@ public sealed class SyncServiceTests
             Assert.Equal(HarnessExit.Refused, outcome.ExitCode);
             Assert.Contains("ssh pi: This sync would delete 12 of the ", outcome.Message, StringComparison.Ordinal);
             Assert.Contains("sync.maxDeleteFraction allows", outcome.Message, StringComparison.Ordinal);
-            Assert.EndsWith("Nothing was changed.", outcome.Message, StringComparison.Ordinal);
+
+            // The bound's own sentence closes the refusal, and the clause is not said twice: each refusal carries it
+            // once, its own.
+            Assert.EndsWith(
+                unclaimed
+                    ? "then run with --dry-run to see the list, or raise sync.maxDeleteFraction."
+                    : "then raise sync.maxDeleteFraction or run with --dry-run to see the list.",
+                outcome.Message,
+                StringComparison.Ordinal);
+            Assert.Equal(
+                1 + (unclaimed ? 1 : 0),
+                System.Text.RegularExpressions.Regex.Matches(outcome.Message, "Nothing was changed.").Count);
             Assert.Equal(unclaimed, outcome.Message.Contains("hold a directory the harness did not create", StringComparison.Ordinal));
             Assert.Equal(unclaimed, outcome.Message.Contains("directory you meant to take over", StringComparison.Ordinal));
         }

@@ -146,6 +146,37 @@ public sealed class LegRunPlanTests
     }
 
     /// <summary>
+    /// A leg never works in a copy of a copy: where the command was typed in a synced copy - a host's copy, served on
+    /// the host itself - the tree already is that machine's copy, and whatever the leg's key, the default or the
+    /// command's option says, it works in that tree.
+    /// </summary>
+    [Fact]
+    public void ALegTypedInASyncedCopy_IsNeverPlacedInACopyOfIt()
+    {
+        using var temp = new TempDirectory();
+        var config = new HarnessConfig { Defaults = new HarnessDefaults { LocalCopy = true } };
+        var leg = new LegConfig { Os = "linux", Processor = "x86_64", Config = "debug", LocalCopy = true };
+        var variant = VariantKey.For(config, leg, "linux");
+        var comparison = HostDoubles.Platform(PlatformId.Linux).PathComparison;
+
+        var inATree = LegTrees.For(new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config), leg, variant, HostId.Local, here: null, comparison, LocalTrees.Copy);
+        var inACopy = LegTrees.For(
+            new HarnessContext(new HarnessLayout(temp.Path, temp.Path), config) { IsSyncedCopy = true },
+            leg,
+            variant,
+            HostId.Local,
+            here: null,
+            comparison,
+            LocalTrees.Copy);
+
+        PathAssert.Same(LegCopies.PathOf(temp.Path, variant), inATree.Work);
+        Assert.True(inATree.LocalCopy);
+
+        PathAssert.Same(temp.Path, inACopy.Work);
+        Assert.False(inACopy.LocalCopy);
+    }
+
+    /// <summary>
     /// Where a leg this machine runs itself works is said by the first of these that says anything - the command's
     /// option, the leg's own key, the repository's default, the tree - so a leg with the key works in
     /// <c>&lt;tree&gt;/.legs/&lt;key&gt;</c>, its own <see langword="false"/> turns a <see langword="true"/> default off,

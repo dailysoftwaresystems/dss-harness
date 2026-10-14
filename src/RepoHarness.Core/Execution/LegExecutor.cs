@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 using RepoHarness.Core.Platform;
 using RepoHarness.Core.Results;
@@ -46,6 +47,13 @@ public sealed record LegPlan
 
     /// <summary>The host as a message names it, such as <c>local</c> or <c>ssh vps</c>.</summary>
     public string Host { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The host the leg runs on, as the placement names it - itself, where this machine runs the leg. Null where
+    /// nothing says, read as this machine. The one carrier of it: whether a line then names another machine as the
+    /// leg's is <see cref="LegRecords.Said"/>'s to answer.
+    /// </summary>
+    public HostId? Named { get; init; }
 
     /// <summary>
     /// Where this machine's leg works, as its starting line says it - <c>, in its copy '&lt;path&gt;'</c> or
@@ -324,7 +332,7 @@ public sealed class LegExecutor(IHostPlatform platform, IHarnessOutput output)
             return null;
         }
 
-        ledger.Starting(leg.Name, leg.Host.Length > 0 ? leg.Host : "this machine", leg.WorksIn);
+        ledger.Starting(leg.Name, leg.Named ?? HostId.Local, leg.WorksIn);
 
         try
         {

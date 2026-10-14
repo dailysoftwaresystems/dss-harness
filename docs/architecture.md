@@ -1188,7 +1188,9 @@ that host's copy of its tree, whatever anything else says. A leg this machine ru
 where the first of these says anything - `--local-copy` or `--in-place` on the command, for that
 run of `build`, `test` or `run`; a runner's `writesTree`, which works in place, its legs refused
 before any host is measured for a leg a host would run and for `--local-copy`, since what it wrote
-in a copy the next sync would make the tree again; the leg's own `localCopy`, `true` or `false`;
+in a copy the next sync would make the tree again - and a run check's runner, which runs within the
+leg's own work, is refused instead, wherever the leg it checks would work in a copy; the leg's own
+`localCopy`, `true` or `false`;
 the repository's `defaults.localCopy`; and, where none says, its tree itself. The key is refused
 when the configuration is read on a leg that names a host, whichever value it gives, since a
 host's leg always works in that host's copy; the default never is, for it says nothing of such a
@@ -1479,8 +1481,8 @@ PowerShell there, which all read a leading `~` as the home.
   `--verbose` a defect's report.
 - **The paths in its ledger**: `runDirectory`, a leg's `detail`, `records` and `space`, what a
   timing pattern matched, and the instance a developer environment was set up from. The machine
-  that asked prints the host's `runDirectory` beside the leg's own records in its `logs of` lines.
-  A survey's answer
+  that asked names each leg's own `records` in its `logs of` lines; the host's `runDirectory`
+  reaches it as `--json` alone. A survey's answer
   names where each program is, the mount of a filesystem, and every reason the same way. The
   directories the programs were found in stay whole, because the machine that asked hands them
   back for a hold there to look for its command in; so does each build directory it asked

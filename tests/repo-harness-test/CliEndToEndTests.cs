@@ -726,6 +726,200 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// A writesTree runner is refused for a leg pinned to a host of its own system too - the leg is that host's alone,
+    /// whatever this machine could run - and is not refused for a leg no host can run: the run says so its own way,
+    /// without naming a machine that does not exist.
+    /// </summary>
+    [Fact]
+    public async Task ARunnerThatWritesTheTree_IsRefusedForALegPinnedToAHostOfItsOwnSystem_AndNotForALegNoHostCanRun()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+        var elsewhere = platform.PlatformKey == PlatformNames.Linux ? PlatformNames.Windows : PlatformNames.Linux;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            SshItems = { "vps" },
+            Hosts = new HostsConfig { Ssh = { ["vps"] = new SshHostConfig { RepositoryPath = "/home/dev/repo" } } },
+            Legs =
+            {
+                ["there"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Ssh = "vps" },
+                ["nowhere"] = new LegConfig { Os = elsewhere, Processor = "x86_64", Config = "debug" },
+            },
+            PredefinedRunners =
+            {
+                ["format"] = new RunnerConfig
+                {
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }],
+                },
+            },
+        });
+
+        var pinned = await CliRunner.RunAsync(["run", "format", "--legs", "there", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.Refused, pinned.ExitCode);
+        Assert.Contains(
+            "Runner 'format' writes the tree (writesTree), and leg 'there' would work in a copy of it on ssh vps, "
+                + "which the next sync makes the tree again. Nothing was run. Run it on a leg this machine runs itself.",
+            pinned.StandardError,
+            StringComparison.Ordinal);
+
+        // A leg no host can run, in a repository that declares none: not refused over where it would work - the run
+        // says so its own way, and no machine exists to name.
+        using var alone = new TempDirectory();
+
+        await harness.InitializeHarnessAsync(alone.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs = { ["nowhere"] = new LegConfig { Os = elsewhere, Processor = "x86_64", Config = "debug" } },
+            PredefinedRunners =
+            {
+                ["format"] = new RunnerConfig
+                {
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }],
+                },
+            },
+        });
+
+        var noHost = await CliRunner.RunAsync(["run", "format", "--legs", "nowhere", "-C", alone.Path], token);
+
+        Assert.Equal(LegsExit.Unavailable, noHost.ExitCode);
+        Assert.DoesNotContain("writes the tree", noHost.StandardOutput + noHost.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An emulated leg of this machine's system may run here through the emulator, and a writesTree runner is not
+    /// refused for it - though the repository declares a host that would run it too: the emulator's own check is the
+    /// placement's to ask, after the refusal, not the command's.
+    /// </summary>
+    [Fact]
+    public async Task ARunnerThatWritesTheTree_IsNotRefusedForAnEmulatedLegOfThisSystem()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            SshItems = { "vps" },
+            Hosts = new HostsConfig { Ssh = { ["vps"] = new SshHostConfig { RepositoryPath = "/home/dev/repo" } } },
+            Emulators =
+            {
+                ["veiled"] = new EmulatorConfig
+                {
+                    HostOs = platform.PlatformKey,
+                    HostProcessor = platform.Processor,
+                    Processor = "arm64",
+                    Witness = new EmulatorWitness { Command = ["dotnet", "--version"], Pattern = @"\d" },
+                },
+            },
+            Defaults = new HarnessDefaults { LocalCopy = true },
+            Legs = { ["emu"] = new LegConfig { Os = platform.PlatformKey, Processor = "arm64", Config = "debug", Emulator = "veiled" } },
+            PredefinedRunners =
+            {
+                ["format"] = new RunnerConfig
+                {
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }],
+                },
+            },
+        });
+
+        var inPlace = await CliRunner.RunAsync(["run", "format", "--legs", "emu", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.Success, inPlace.ExitCode);
+        Assert.Contains($"emu: starting on local, in '{temp.Path}' itself", inPlace.StandardOutput, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetDirectories(Path.Combine(temp.Path, HarnessLayout.LegsDirectoryName)));
+    }
+
+    /// <summary>
+    /// A run check's runner runs within the leg's own work, so one that writes the tree is refused wherever the leg it
+    /// checks would work in a copy: pinned to a host, or in a copy of its own by its localCopy key - and --local-copy is
+    /// refused with it. The command's own runner, which writes nothing, runs as ever.
+    /// </summary>
+    [Fact]
+    public async Task ARunCheckWhoseRunnerWritesTheTree_IsRefusedWhereverItsLegWouldWorkInACopy()
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            SshItems = { "vps" },
+            Hosts = new HostsConfig { Ssh = { ["vps"] = new SshHostConfig { RepositoryPath = "/home/dev/repo" } } },
+            Legs =
+            {
+                ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", LocalCopy = true },
+                ["there"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", Ssh = "vps" },
+            },
+            PredefinedRunners =
+            {
+                ["format"] = new RunnerConfig
+                {
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }],
+                },
+                ["probe"] = new RunnerConfig
+                {
+                    Phases = [new RunnerPhase { Name = "look", Command = ["dotnet", "--version"] }],
+                    ExpectedExceptions =
+                    [
+                        new ExpectedException
+                        {
+                            ExceptionType = "Flake",
+                            Messages = ["it flaked"],
+                            Message = "excused: the device was busy",
+                            EarnedOn = "2026-10-13",
+                            EarnedAt = "local",
+                            Mechanism = "the device is shared",
+                            Anchor = "D-AREA-TOPIC-ONE",
+                            RunChecks = [new RunCheck { PredefinedRunner = "format" }],
+                        },
+                    ],
+                },
+            },
+        });
+
+        var inACopy = await CliRunner.RunAsync(["run", "probe", "--legs", "native", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.Refused, inACopy.ExitCode);
+        Assert.Contains(
+            "Run check 'format' of runner 'probe' writes the tree (writesTree), and leg 'native' would work in a copy of "
+                + "it, as its own localCopy key or the repository's default says. Nothing was run. Run it with --in-place.",
+            inACopy.StandardError,
+            StringComparison.Ordinal);
+
+        var onAHost = await CliRunner.RunAsync(["run", "probe", "--legs", "there", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.Refused, onAHost.ExitCode);
+        Assert.Contains(
+            "Run check 'format' of runner 'probe' writes the tree (writesTree), and leg 'there' would work in a copy of "
+                + "it on ssh vps, which the next sync makes the tree again. Nothing was run. Run it on a leg this machine "
+                + "runs itself.",
+            onAHost.StandardError,
+            StringComparison.Ordinal);
+
+        var askedForACopy = await CliRunner.RunAsync(["run", "probe", "--legs", "there", "--local-copy", "-C", temp.Path], token);
+
+        Assert.Equal(HarnessExit.UsageError, askedForACopy.ExitCode);
+        Assert.Contains(
+            "Run check 'format' of runner 'probe' writes the tree (writesTree), which --local-copy would have it write in "
+                + "a copy. Leave --local-copy out.",
+            askedForACopy.StandardError,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A run check whose runner's steps cannot be read leaves the run to go on, its legs counted heavy and not built for
     /// it, and says so as the run begins: refused here, a run was refused for a check that may never run, and the check
     /// that runs it refuses it as it always did; taken as light, its legs could build with no slot at all.

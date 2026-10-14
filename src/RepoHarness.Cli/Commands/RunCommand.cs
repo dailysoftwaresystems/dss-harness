@@ -211,8 +211,12 @@ internal static class RunCommand
             // Where this run's own legs work, as the command's two options say - and as the runner says too: one that
             // writes the tree works in place whatever the leg's own key or the repository's default says, for what it
             // wrote in a copy the next sync would make the tree again. Both refusals are made here, as a leg that
-            // would run nothing is refused: before a host is measured, and naming every such leg.
+            // would run nothing is refused: before a host is measured, naming the leg it refuses. A run check's runner
+            // runs within the leg's own work, so it writes wherever the leg works and is held to the key's contract
+            // the same way.
             var where = DispatchOptions.WhereWorkRuns(arguments);
+            var platform = context.Get<IHostPlatform>();
+            var here = arguments.GetValue(DispatchOptions.Here) is not null;
 
             if (runner.WritesTree)
             {
@@ -224,18 +228,56 @@ internal static class RunCommand
                         + "in a copy. Leave --local-copy out.");
                 }
 
-                var platform = context.Get<IHostPlatform>();
-
-                foreach (var leg in legs.Where(leg => !RunsHere(platform, leg.Leg)))
+                foreach (var leg in legs.Where(leg => !RunsHere(platform, harness.Config, leg.Leg, here)))
                 {
+                    if (WhereItWouldRun(harness.Config, leg.Leg) is not { } on)
+                    {
+                        continue;
+                    }
+
                     throw new HarnessException(
                         HarnessExit.Refused,
                         $"Runner '{runnerName}' writes the tree (writesTree), and leg '{leg.Name}' would work in a copy of "
-                        + $"it on {WhereItWouldRun(harness.Config, leg.Leg)}, which the next sync makes the tree again. "
-                        + "Nothing was run. Run it on a leg this machine runs itself.");
+                        + $"it on {on}, which the next sync makes the tree again. Nothing was run. "
+                        + "Run it on a leg this machine runs itself.");
                 }
 
                 where = LocalTrees.InPlace;
+            }
+
+            foreach (var check in checks.Where(check => check.Runner.WritesTree))
+            {
+                var who = $"Run check '{check.Name}' of runner '{runnerName}'";
+
+                if (where == LocalTrees.Copy)
+                {
+                    throw new HarnessException(
+                        HarnessExit.UsageError,
+                        $"{who} writes the tree (writesTree), which --local-copy would have it write in a copy. "
+                        + "Leave --local-copy out.");
+                }
+
+                foreach (var leg in legs.Where(leg => !RunsHere(platform, harness.Config, leg.Leg, here)))
+                {
+                    if (WhereItWouldRun(harness.Config, leg.Leg) is not { } on)
+                    {
+                        continue;
+                    }
+
+                    throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"{who} writes the tree (writesTree), and leg '{leg.Name}' would work in a copy of it on "
+                        + $"{on}, which the next sync makes the tree again. Nothing was run. "
+                        + "Run it on a leg this machine runs itself.");
+                }
+
+                foreach (var leg in legs.Where(leg => where == LocalTrees.AsConfigured && LegTrees.Configured(harness.Config, leg.Leg)))
+                {
+                    throw new HarnessException(
+                        HarnessExit.Refused,
+                        $"{who} writes the tree (writesTree), and leg '{leg.Name}' would work in a copy of it, as its own "
+                        + "localCopy key or the repository's default says. Nothing was run. Run it with --in-place.");
+                }
             }
 
             return await context.Get<LegRunService>()
@@ -262,15 +304,34 @@ internal static class RunCommand
         return command;
     }
 
-    /// <summary>Whether this machine would run <paramref name="leg"/> itself: no emulator, and its own system and processor.</summary>
-    private static bool RunsHere(IHostPlatform platform, LegConfig leg)
-        => leg.Emulator is null
-            && string.Equals(leg.Os, platform.PlatformKey, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(leg.Processor, platform.Processor, StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// Whether this machine would run <paramref name="leg"/> itself, as the placement's own rule answers it: a leg
+    /// pinned to a host is that host's alone, and of the rest this machine takes one whose system and processor are its
+    /// own. An emulator's check is the placement's to ask of the machine after this refusal, so an emulated leg of this
+    /// machine's system is not refused here.
+    /// </summary>
+    private static bool RunsHere(IHostPlatform platform, HarnessConfig config, LegConfig leg, bool here)
+    {
+        if (!LegPlacement.Candidates(config, leg, here).Contains(HostId.Local))
+        {
+            return false;
+        }
 
-    /// <summary>The first host that would run <paramref name="leg"/> where this machine cannot, as a line names it.</summary>
-    private static string WhereItWouldRun(HarnessConfig config, LegConfig leg)
-        => LegPlacement.Candidates(config, leg).FirstOrDefault(host => host != HostId.Local)?.ToString() ?? "another machine";
+        return leg.Emulator is not null
+            ? string.Equals(leg.Os, platform.PlatformKey, StringComparison.OrdinalIgnoreCase)
+            : LegPlacement.PlatformObstacle(
+                leg,
+                new HostReport { Host = HostId.Local, Os = platform.PlatformKey, Processor = platform.Processor })
+                is null;
+    }
+
+    /// <summary>
+    /// The first host that would run <paramref name="leg"/> where this machine cannot, as a line names it, or
+    /// <see langword="null"/> where the configuration names none: a leg nothing can run is not refused over where it
+    /// would work, for the run says so its own way.
+    /// </summary>
+    private static string? WhereItWouldRun(HarnessConfig config, LegConfig leg)
+        => LegPlacement.Candidates(config, leg).FirstOrDefault(host => host != HostId.Local)?.ToString();
 
     private static RunnerConfig Resolve(HarnessConfig config, string runnerName)
     {

@@ -954,6 +954,98 @@ public sealed class CleanServiceTests
         Assert.True(Directory.Exists(directory));
     }
 
+    /// <summary>
+    /// A dry run of a clean of a leg on a host ends as the clean would: a run of this machine building the leg there
+    /// holds this machine's lock for it, so the dry run is refused-locked, the holder named - and the host is sent
+    /// nothing, nor its copy asked.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfACleanOfALegOnAHostARunOfThisMachineIsBuilding_IsRefusedLocked_AndTheHostIsSentNothing()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var hosts = new ScriptedHostCommands((_, command) => throw HostResults.Unexpected(command));
+        var transports = Substitute.For<ISyncTransportFactory>();
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            PlacedLeg.BuildLock(HostId.Ssh(HostName), HostTree, VariantKey.For(OneHostLeg(), OneHostLeg().Legs["arm"], "linux"), RunId.New(), "test"),
+            TestContext.Current.CancellationToken);
+
+        var (outcome, leg) = await CleanAsync(temp, harness, OneHostLeg(), OnTheHost(), runLock, hosts, transports: transports, dryRun: true);
+
+        Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.RefusedLocked), outcome.ExitCode);
+        Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
+        Assert.Contains(held.Entry.Holder.RunId, leg.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Empty(hosts.Calls);
+        transports.DidNotReceiveWithAnyArgs().For(default!);
+    }
+
+    /// <summary>
+    /// A dry run of a clean whose leg's mutation workers a sweep holds ends as the clean would: refused-locked, the
+    /// workers said as the clean says them, with what they hold still measured - and nothing removed.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfAClean_WhoseWorkersASweepHolds_IsRefusedLocked_WithEachStillMeasured()
+    {
+        using var temp = new TempDirectory();
+        using var workers = new Workers(temp);
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var held = workers.Made(variant, 1, 1000);
+        var sweep = RunId.New();
+
+        await using var taken = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            MutationWorkers.SweepLock(HostId.Local, MutationWorkers.Of(temp.Path, variant), sweep, "check-mutations"),
+            TestContext.Current.CancellationToken);
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config, runLock: runLock, dryRun: true);
+        var detail = leg.GetProperty("detail").GetString()!;
+
+        Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.RefusedLocked), outcome.ExitCode);
+        Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
+        Assert.Contains($"its mutation workers were left, as a sweep of the leg holds them: ", detail);
+        Assert.Contains($"run {sweep.Value}", detail, StringComparison.Ordinal);
+        Assert.Contains($"1 mutation worker(s): {DiskSpace.Size(Workers.Holding(1000))} in '{held}'", detail, StringComparison.Ordinal);
+        Assert.Equal(Workers.Holding(1000), leg.GetProperty("space").GetProperty("workerBytes").GetInt64());
+        Assert.True(Directory.Exists(held), "a dry run removes nothing");
+    }
+
+    /// <summary>
+    /// A dry run of a clean holding one of the leg's copies ends as the clean would: refused-locked, the copy said as
+    /// left and who holds it, both copies' sizes still in its space - and nothing removed.
+    /// </summary>
+    [Fact]
+    public async Task ADryRunOfAClean_HoldingALegCopy_IsRefusedLocked_WithEachStillMeasured()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = OneLocalLeg(harness);
+        var variant = Variant(harness, config);
+        var runLock = new RunLock(harness.FileSystem, harness.Output, harness.Identity);
+        var own = Copy(temp, variant, 100);
+        var orphan = Copy(temp, variant with { Config = "relwithdebinfo" }, 40);
+
+        await using var held = await runLock.AcquireAsync(
+            new HarnessLayout(temp.Path, temp.Path),
+            PlacedLeg.BuildLock(HostId.Local, own, variant, RunId.New(), "test"),
+            TestContext.Current.CancellationToken);
+
+        var (outcome, leg) = await CleanAsync(temp, harness, config, runLock: runLock, dryRun: true);
+        var detail = leg.GetProperty("detail").GetString()!;
+
+        Assert.Equal(Verdicts.ExitCodeFor(LegVerdict.RefusedLocked), outcome.ExitCode);
+        Assert.Equal("refused-locked", leg.GetProperty("verdict").GetString());
+        Assert.Contains($"its copy '{own}' was left, as a run holds it: ", detail);
+        Assert.Contains(held.Entry.Holder.RunId, detail, StringComparison.Ordinal);
+        Assert.Equal(Workers.Holding(100) + Workers.Holding(40), leg.GetProperty("space").GetProperty("copyBytes").GetInt64());
+        Assert.All(new[] { own, orphan }, path => Assert.True(Directory.Exists(path), path));
+    }
+
     /// <summary>A copy of the tree its legs work in, marked as a sync makes one, its build holding <paramref name="bytes"/>.</summary>
     private static string Copy(TempDirectory temp, VariantKey variant, int bytes)
     {

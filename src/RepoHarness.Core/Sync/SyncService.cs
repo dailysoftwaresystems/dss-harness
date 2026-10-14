@@ -692,15 +692,17 @@ public sealed class SyncService(
 
             if (needAdopting.Count > 0)
             {
+                // Each refusal closes with the clause itself: one over the bound already holds it, and a second would
+                // follow it word for word.
                 refusals.Add(
                     $"{ReportText.Counted(needAdopting.Count, "host")} hold a directory the harness did not create, so a run "
                     + $"would refuse them: {string.Join(", ", needAdopting)}. What taking each over would "
-                    + "cost is listed above.");
+                    + "cost is listed above. Nothing was changed.");
             }
 
             refusals.AddRange(overTheBound);
 
-            return CommandOutcome.Failed(HarnessExit.Refused, string.Join(" ", refusals) + " Nothing was changed.", details);
+            return CommandOutcome.Failed(HarnessExit.Refused, string.Join(" ", refusals), details);
         }
 
         // Reaching here means every copy was confirmed: a copy that still differed raised from the
@@ -1916,12 +1918,6 @@ public sealed class SyncService(
                 ? $"{opening} {remedy}"
                 : $"{opening} {remedy} It holds:\n  "
                     + string.Join("\n  ", plan.DescribeLoss(links: links));
-        }
-
-        if (plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0)
-        {
-            return $"{opening} {verb} is {take}, and {cost}. "
-                + $"{configuration} Nothing has been changed by this run.";
         }
 
         if (plan.Overwrites.Count == 0 && plan.Deletes.Count == 0 && links.Count == 0)

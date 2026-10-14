@@ -653,7 +653,9 @@ internal static class HelpCommand
         builder.AppendLine("their trees themselves, whatever the leg's own localCopy or defaults.localCopy");
         builder.AppendLine("says ('help legs'), for what it wrote in a copy the next sync would make the tree");
         builder.AppendLine("again. A leg a host would run is refused before any host is measured, and so is");
-        builder.AppendLine("--local-copy on the command.");
+        builder.AppendLine("--local-copy on the command. A run check's runner runs within the leg's own work,");
+        builder.AppendLine("so it is held to the same: one that writes the tree is refused wherever the leg it");
+        builder.AppendLine("checks would work in a copy, --local-copy among them.");
         builder.AppendLine();
         builder.AppendLine("Every key");
         builder.AppendLine();

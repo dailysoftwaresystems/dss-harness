@@ -550,11 +550,7 @@ public sealed class LegRunService(
         {
             var host = placed.FirstOrDefault(leg => leg.Name == line.Leg)?.Host.Host;
 
-            yield return LegRecords.Said(
-                line.Leg,
-                host is { } named && named != HostId.Local ? named.ToString() : null,
-                line.Records!,
-                [.. (line.Logs ?? []).Select(log => Path.GetFileName(log.File))]);
+            yield return LegRecords.Said(line.Leg, host, line.Records!, [.. (line.Logs ?? []).Select(log => Path.GetFileName(log.File))]);
         }
     }
 
@@ -674,10 +670,13 @@ public sealed class LegRunService(
             return (held, null);
         }
 
+        // The tree with its host, as every line names one - RunLock.TreeNamed, the one owner of that shape.
+        var named = RunLock.TreeNamed(leg.Named.ToString(), leg.HostTreeRoot, variant: null);
+
         return (null, found is { Exists: true, Mark: CopyMark.Complete }
-            ? $"'{leg.HostTreeRoot}' on {leg.Named} was synced again{(found.Reading?.ReadBy is { } by ? $" by {RunLine.Message(by)}" : string.Empty)} after "
+            ? $"{named} was synced again{(found.Reading?.ReadBy is { } by ? $" by {RunLine.Message(by)}" : string.Empty)} after "
                 + "this run made it the tree it read, so it no longer holds that tree."
-            : $"'{leg.HostTreeRoot}' on {leg.Named} no longer holds the tree this run read into it: "
+            : $"{named} no longer holds the tree this run read into it: "
                 + (found.Exists && SyncService.PartMade(found.Mark) is { } stopped ? $"it {stopped}." : "it is not there, or no sync of this tool finished it."));
     }
 

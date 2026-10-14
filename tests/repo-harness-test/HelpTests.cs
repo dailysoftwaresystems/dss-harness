@@ -957,6 +957,11 @@ public sealed partial class HelpTests
                 + "and so is --local-copy on the command.",
             Words(result.StandardOutput),
             StringComparison.Ordinal);
+        Assert.Contains(
+            "A run check's runner runs within the leg's own work, so it is held to the same: one that writes the tree is "
+                + "refused wherever the leg it checks would work in a copy, --local-copy among them.",
+            Words(result.StandardOutput),
+            StringComparison.Ordinal);
     }
 
     /// <summary>

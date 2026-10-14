@@ -288,6 +288,7 @@ public sealed record PlacedLeg(
         Emulated = Emulated,
         MachineKey = Host.Host.MachineKey,
         Host = Named.ToString(),
+        Named = Named,
 
         // Where this machine's leg works, as its starting line says it; a host's leg says nothing of it, since the
         // machine that sent it says where.
@@ -372,7 +373,7 @@ public static class LegRunPlan
 
         RefuseSharedBuildDirectories(placed, platform);
         RefuseSharedHostCopies(placed, platform);
-        RefusePathsTooLong(context, placed, pathBudget, report.LocalTrees);
+        RefusePathsTooLong(context, placed, pathBudget);
 
         skipped = notRun;
         return placed;
@@ -448,7 +449,7 @@ public static class LegRunPlan
     /// Refuses a leg whose copy would pass this machine's path limit, before anything starts: a copy whose build passes
     /// it fails as compile errors in files nobody touched, so it is never made.
     /// </summary>
-    private static void RefusePathsTooLong(HarnessContext context, IReadOnlyList<PlacedLeg> placed, IPathBudget? budget, LocalTrees local)
+    private static void RefusePathsTooLong(HarnessContext context, IReadOnlyList<PlacedLeg> placed, IPathBudget? budget)
     {
         if (budget is null)
         {

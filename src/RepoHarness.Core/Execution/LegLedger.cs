@@ -1,3 +1,4 @@
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Output;
 
 namespace RepoHarness.Core.Execution;
@@ -275,10 +276,10 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
     private readonly bool _dispatched = dispatched;
 
     /// <summary>
-    /// Where each leg runs, as its starting line named the host: what names the leg's records where another machine ran
-    /// it. Said once, where the leg starts, for the machine that will say its records is the one that named its host.
+    /// Which host runs each leg, as its starting line named it: what names the leg's records where another machine ran
+    /// it. Said once, where the leg starts, for the machine that says its records is the one that named its host.
     /// </summary>
-    private readonly Dictionary<string, string> _where = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HostId> _where = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The command every line is reported under, so interleaved output stays attributable.</summary>
     public string CommandName => _commandName;
@@ -328,24 +329,24 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
 
     /// <summary>Says a leg is starting, and where - unless the machine that dispatched it here says so itself.</summary>
     /// <param name="leg">The leg.</param>
-    /// <param name="where">Where it runs, as a reader names the host.</param>
+    /// <param name="host">The host that runs it, as the placement names it.</param>
     /// <param name="worksIn">
     /// Where this machine's leg works, as its starting line says it (<see cref="LegPlan.WorksIn"/>), or empty for a leg
     /// another machine runs.
     /// </param>
-    public void Starting(string leg, string where, string worksIn = "")
+    public void Starting(string leg, HostId host, string worksIn = "")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(leg);
-        ArgumentException.ThrowIfNullOrWhiteSpace(where);
+        ArgumentNullException.ThrowIfNull(host);
 
         lock (_gate)
         {
-            _where[leg] = where;
+            _where[leg] = host;
         }
 
         if (!_dispatched)
         {
-            Transition(leg, $"starting on {where}{worksIn}");
+            Transition(leg, $"starting on {host}{worksIn}");
         }
     }
 
@@ -384,14 +385,14 @@ public sealed class LegLedger(IHarnessOutput output, string commandName, bool di
         // it, so the two cannot drift: a reader who follows the line finds the leg's logs, here or on a host.
         if (entry.Records is { Length: > 0 } records)
         {
-            string? where;
+            HostId? ranOn;
 
             lock (_gate)
             {
-                where = _where.GetValueOrDefault(entry.Leg) is { Length: > 0 } named && named != "local" && named != "this machine" ? named : null;
+                ranOn = _where.GetValueOrDefault(entry.Leg);
             }
 
-            Transition(entry.Leg, LegRecords.Said(entry.Leg, where, records, [.. (entry.Logs ?? []).Select(log => Path.GetFileName(log.File))]));
+            Transition(entry.Leg, LegRecords.Said(entry.Leg, ranOn, records, [.. (entry.Logs ?? []).Select(log => Path.GetFileName(log.File))]));
         }
     }
 

@@ -1,4 +1,5 @@
 using RepoHarness.Core.FileSystem;
+using RepoHarness.Core.Hosts;
 
 namespace RepoHarness.Core.Execution;
 
@@ -93,19 +94,21 @@ public sealed record LegRecords(string RunDirectory, string Leg)
 
     /// <summary>
     /// How a line names the records a leg kept: <c>logs of &lt;leg&gt; on &lt;host&gt;: &lt;directory&gt; (build.log, test.log)</c> -
-    /// the host only where another ran the leg, and the files by name, in the order of their names.
+    /// the host only where another machine ran the leg, and the files by name, in the order of their names. The one
+    /// answer to whether another machine ran the leg: this machine's own, <see cref="HostId.Local"/>, is not named, and
+    /// every other host is.
     /// </summary>
     /// <param name="leg">The leg, as the configuration names it.</param>
-    /// <param name="host">The host that ran it, or <see langword="null"/> where this machine did.</param>
+    /// <param name="host">The host that ran it, as the placement names it, or <see langword="null"/> where nothing said.</param>
     /// <param name="directory">The leg's own directory of records, as its machine spells it.</param>
     /// <param name="files">Each log file in it, by name, in the order of their names.</param>
-    public static string Said(string leg, string? host, string directory, IReadOnlyList<string> files)
+    public static string Said(string leg, HostId? host, string directory, IReadOnlyList<string> files)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(leg);
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentNullException.ThrowIfNull(files);
 
-        return $"logs of {leg}{(host is { Length: > 0 } named ? $" on {named}" : string.Empty)}: {directory}"
+        return $"logs of {leg}{(host is { } named && named != HostId.Local ? $" on {named}" : string.Empty)}: {directory}"
             + (files.Count > 0 ? $" ({string.Join(", ", files)})" : string.Empty);
     }
 }
