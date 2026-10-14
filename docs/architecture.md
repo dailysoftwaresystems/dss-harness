@@ -1314,9 +1314,12 @@ actions the reading carried, while values, secrets and the run lock are read whe
 keeps them, and its records stay in the run's own directory. Its starting line names where it
 works - `starting on local, in its copy '<path>'`, or `, in '<tree>' itself` - and a leg in place
 that ends `inputs-moved` names the remedy, the key, the default or the option that would have run
-it on a copy. A copy whose build would pass this machine's path limit refuses the run before
+it on a copy, where the placement's own rule (`LegTrees.InLocalCopy`) could have put it in one: a
+leg another machine sent here, or one typed in a copy a sync made, already works in a copy and is
+named none. A copy whose build would pass this machine's path limit refuses the run before
 anything starts, with the numbers and the way out; a tree whose `.legs` git does not ignore
-refuses it naming `init`, as a sweep's workers do. `check-mutations` makes no copy of its own -
+refuses it naming `init`, as a sweep's workers do, before the run claims its directory of records,
+so nothing is left for the next run to call abandoned. `check-mutations` makes no copy of its own -
 its workers are already copies of one reading - and `clean` and `sync` place nothing in one.
 
 ### Emulators
@@ -2807,11 +2810,14 @@ directory here cannot drift apart.
   copy before its legs take it, and another command's sync can run in between, so each leg asks the
   copy, under its own lock, whose reading it holds: another's ends the leg `inputs-moved`, `'<copy>'
   on <host> was synced again by run <id> after this run made it the tree it read, so it no longer
-  holds that tree.`, with nothing of it run. A build from before this one refuses a marker carrying
-  a reading as unreadable, as it refuses any member it does not know, so it reads no copy this one
-  finished. Only going back to such a build meets that - a host is brought to the build of the
-  machine that asks it, and one ahead of that machine is refused - and the remedy is to update
-  again, never to delete the marker, which would leave the copy one to take over.
+  holds that tree.`, with nothing of it run; and so does a copy gone, part made or unmarked by then,
+  `'<copy>' on <host> no longer holds the tree this run read into it: it is not there, or no sync of
+  this tool finished it.` - or, for one part made, what its marker says of it. A build from before
+  this one refuses a marker carrying a reading as unreadable, as it refuses any member it does not
+  know, so it reads no copy this one finished. Only going back to such a build meets that - a host
+  is brought to the build of the machine that asks it, and one ahead of that machine is refused -
+  and the remedy is to update again, never to delete the marker, which would leave the copy one to
+  take over.
   The run says each reading as it is made - `'<tree>' was read at commit <12> with 2 uncommitted
   change(s)`, or `with no commit yet` - and each leg on a copy says which it tested with its
   verdict, `tree read at <12>`, or under `--use-staged` what the copy records, `tree staged at

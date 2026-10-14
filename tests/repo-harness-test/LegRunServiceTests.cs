@@ -336,6 +336,59 @@ public sealed class LegRunServiceTests
     }
 
     /// <summary>
+    /// A leg that takes its host's copy once its run has synced it, and finds it gone, left part made by a sync or a
+    /// takeover that began and did not finish, or marked by no sync of this tool, tests nothing there: it is inputs-moved,
+    /// naming the copy and which, and its host is never asked to run it - never a build in a directory that is not there,
+    /// said as failed. The legs elsewhere run.
+    /// </summary>
+    [Theory]
+    [InlineData(false, CopyMark.None, "it is not there, or no sync of this tool finished it.")]
+    [InlineData(true, CopyMark.None, "it is not there, or no sync of this tool finished it.")]
+    [InlineData(true, CopyMark.Unfinished, "it is a copy whose sync began and did not finish, so it holds part of one tree and part of another.")]
+    [InlineData(
+        true,
+        CopyMark.AdoptionStopped,
+        "it was being taken over and the run stopped before it finished, so it is neither the checkout it was nor a copy of this tree.")]
+    public async Task ACopyGoneOrLeftPartMadeAfterThisRunsSync_EndsThisRunsLegInputsMoved_SayingWhich(bool exists, CopyMark mark, string why)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var asked = 0;
+
+        var copy = Substitute.For<ISyncTransport>();
+        copy.InspectAsync(Arg.Any<string>(), Arg.Any<GitHistoryWanted?>(), Arg.Any<CancellationToken>())
+            .Returns(new SyncInspectAnswer(exists, mark));
+
+        var transports = Substitute.For<ISyncTransportFactory>();
+        transports.For(Arg.Any<HostReport>()).Returns(copy);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Interlocked.Increment(ref asked);
+            ScriptedHostCommands.Answer(command, """{"legs": [{"leg": "arm", "verdict": "passed", "durationSeconds": 1, "commandSeconds": 1}]}""");
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var outcome = await OutcomeAsync(
+            temp,
+            harness,
+            TwoLegs(harness),
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.Copy },
+            hosts: hosts,
+            transports: transports);
+
+        var legs = Verdicts(outcome);
+
+        Assert.Equal("passed", legs["native"].Verdict);
+        Assert.Equal("inputs-moved", legs["arm"].Verdict);
+        Assert.Equal($"'{HostTree}' on ssh {HostName} no longer holds the tree this run read into it: {why}", legs["arm"].Detail);
+        Assert.Equal(LegExit.InputsMoved, outcome.ExitCode);
+        Assert.Equal(0, asked);
+    }
+
+    /// <summary>
     /// A run reads the tree its copies are made of once, says so without naming other machines, and then says the commit
     /// it was read at and how many of the paths it carries git calls changed - a path a sync withholds, never - or that it
     /// has no commit yet, on one line per tree.
@@ -2717,7 +2770,8 @@ public sealed class LegRunServiceTests
 
     /// <summary>
     /// A run whose leg is to work in a copy, in a tree whose .legs git does not ignore, is refused before anything is
-    /// made: naming init, exit 13, with no copy and no reading - as a sweep is for the workers it would make there.
+    /// made: naming init, exit 13, with no copy and no reading - as a sweep is for the workers it would make there - and
+    /// no claim on a directory of records, so the next run, once the refused one has ended, finds no run abandoned.
     /// </summary>
     [Fact]
     public async Task ARunWhoseLegWouldWorkInACopy_WhereGitDoesNotIgnoreTheLegs_IsRefusedNamingInit()
@@ -2725,6 +2779,14 @@ public sealed class LegRunServiceTests
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var token = TestContext.Current.CancellationToken;
+        var run = RunId.New();
+
+        // The refused run as a process of this machine that has ended by the time the next run starts, as a command's has.
+        var ended = Substitute.For<IProcessIdentity>();
+
+        ended.CurrentMachine.Returns(Environment.MachineName);
+        ended.CurrentId.Returns(int.MaxValue - 1);
+        ended.Current.Returns("a-process-that-has-gone");
         var config = new HarnessConfig
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
@@ -2752,6 +2814,8 @@ public sealed class LegRunServiceTests
             new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly },
             sync: ReadBy(SyncKit.Service(harness, loader: harness.ContextLoader, transports: transports), () => read = true),
             transports: transports,
+            logs: new LogOwnership(harness.FileSystem, harness.Output, ended),
+            runId: run,
             loader: harness.ContextLoader));
 
         Assert.Equal(HarnessExit.Refused, refusal.ExitCode);
@@ -2762,6 +2826,26 @@ public sealed class LegRunServiceTests
         var variant = VariantKey.For(config, config.Legs["native"], harness.Platform.PlatformKey);
 
         Assert.False(Directory.Exists(LegCopies.PathOf(temp.Path, variant)));
+
+        // No claim and no directory of records: --json names none, and none is there.
+        var records = new HarnessLayout(temp.Path, temp.Path).RunDirectory(run.Value);
+
+        Assert.False(File.Exists(LogOwnership.OwnerFile(records)), "the refused run left its claim on its directory of records");
+        Assert.False(Directory.Exists(records), "the refused run left a directory of records it never named");
+
+        // The next run, its leg in place, says no earlier run was abandoned: the refused one was not.
+        var before = harness.StandardError.ToString().Length;
+
+        var next = await OutcomeAsync(
+            temp,
+            harness,
+            config,
+            SshAndLocal(harness),
+            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly, LocalTrees = LocalTrees.InPlace },
+            loader: harness.ContextLoader);
+
+        Assert.Equal(HarnessExit.Success, next.ExitCode);
+        Assert.DoesNotContain("WARN", harness.StandardError.ToString()[before..], StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2912,25 +2996,47 @@ public sealed class LegRunServiceTests
     /// <summary>
     /// A leg in place that ends inputs-moved names the remedy after its detail - the leg's key, the default, the option -
     /// where the command could have run it on a copy; a leg that worked in a copy does not, nor a command that takes no
-    /// such option.
+    /// such option, nor a leg no command could run on a copy of its own: one another machine sent here, which works in
+    /// the copy that machine made whatever its key says, and one typed in a copy a sync made.
     /// </summary>
     [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public async Task ALegInPlaceThatEndsInputsMoved_NamesTheRemedy_WhereTheCommandCouldHaveRunItOnACopy(bool inPlace, bool namesIt)
-
+    [InlineData(false, null, false, true)]
+    [InlineData(true, null, false, false)]
+    [InlineData(false, "ssh", false, false)]
+    [InlineData(false, "wsl", false, false)]
+    [InlineData(false, null, true, false)]
+    public async Task ALegInPlaceThatEndsInputsMoved_NamesTheRemedy_WhereTheCommandCouldHaveRunItOnACopy(
+        bool inPlace,
+        string? sentBy,
+        bool syncedCopy,
+        bool namesIt)
     {
         using var temp = new TempDirectory();
         var harness = new HarnessFactory();
         var config = OneLeg(harness);
+
+        config.Hosts.Ssh[HostName] = new SshHostConfig { RepositoryPath = HostTree };
+        config.Hosts.Wsl["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo" };
+
+        HostId? here = sentBy switch
+        {
+            null => null,
+            "ssh" => HostId.Ssh(HostName),
+            "wsl" => HostId.Wsl("Ubuntu"),
+            _ => throw new ArgumentOutOfRangeException(nameof(sentBy), sentBy, "no host of that kind sends a leg here"),
+        };
 
         var verdicts = await RunAsync(
             temp,
             harness,
             config,
             SshAndLocal(harness),
-            new LegRunRequest(temp.Path, null, Json: true) { Workload = LegWorkload.BuildOnly, LocalTrees = inPlace ? LocalTrees.InPlace : LocalTrees.AsConfigured },
-            loader: LocalOnlyLoader(config, temp.Path),
+            new LegRunRequest(temp.Path, null, Json: true, Here: here)
+            {
+                Workload = LegWorkload.BuildOnly,
+                LocalTrees = inPlace ? LocalTrees.InPlace : LocalTrees.AsConfigured,
+            },
+            loader: HostDoubles.Loader(config, temp.Path, syncedCopy: syncedCopy),
             work: _ => new LegEntry { Leg = "native", Verdict = LegVerdict.InputsMoved, Detail = "1 input changed: src/a.c" });
 
         Assert.Equal("inputs-moved", verdicts["native"].Verdict);

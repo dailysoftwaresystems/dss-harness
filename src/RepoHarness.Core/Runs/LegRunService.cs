@@ -227,6 +227,26 @@ public sealed class LegRunService(
             return Stopped(request, runId, nothing.ExitCode, nothing.Message, skipped, factor, nothing.Details ?? [], runDirectory: null);
         }
 
+        // Before any copy is made: a tree whose .legs git does not ignore would have every copy a run made there committed
+        // by git add -A, so the run is refused naming init, with nothing made - as a sweep is for the workers it makes
+        // (SlotIgnored) - not even the run's directory of records. Not asked on what is already staged, which makes nothing.
+        if (!request.UseStaged)
+        {
+            foreach (var tree in placed.Where(leg => leg.LocalCopy).GroupBy(leg => leg.TreeRoot, _platform.PathComparer()))
+            {
+                if (await SlotIgnored.RefusalAsync(
+                        _gitClient,
+                        tree.Key,
+                        $"{HarnessLayout.LegsDirectoryName}/{tree.First().Variant.CopyKey}",
+                        $"the copies of '{tree.Key}' its legs work in",
+                        cancellationToken)
+                    .ConfigureAwait(false) is { } unignored)
+                {
+                    throw new HarnessException(HarnessExit.Refused, $"{unignored} Nothing was run.");
+                }
+            }
+        }
+
         var runDirectory = context.Layout.RunDirectory(runId.Value);
         var ledger = new LegLedger(_output, commandName, dispatched: request.Here is not null);
 
@@ -237,6 +257,8 @@ public sealed class LegRunService(
             ledger.Record(entry);
         }
 
+        // Every refusal of the whole run is asked above: once taken, the claim is followed at once by the try below that
+        // gives it up, so no run that ended here leaves it held for the next run to call abandoned.
         var claim = await _logOwnership.ClaimAsync(runDirectory, runId, request.ForceLock, cancellationToken).ConfigureAwait(false);
 
         if (!claim.Taken)
@@ -255,26 +277,6 @@ public sealed class LegRunService(
                 factor,
                 [$"logs: {runDirectory}"],
                 runDirectory);
-        }
-
-        // Before any copy is made: a tree whose .legs git does not ignore would have every copy a run made there committed
-        // by git add -A, so the run is refused naming init, with nothing made - as a sweep is for the workers it makes
-        // (SlotIgnored). Not asked on what is already staged, which makes nothing.
-        if (!request.UseStaged)
-        {
-            foreach (var tree in placed.Where(leg => leg.LocalCopy).GroupBy(leg => leg.TreeRoot, _platform.PathComparer()))
-            {
-                if (await SlotIgnored.RefusalAsync(
-                        _gitClient,
-                        tree.Key,
-                        $"{HarnessLayout.LegsDirectoryName}/{tree.First().Variant.CopyKey}",
-                        $"the copies of '{tree.Key}' its legs work in",
-                        cancellationToken)
-                    .ConfigureAwait(false) is { } unignored)
-                {
-                    throw new HarnessException(HarnessExit.Refused, $"{unignored} Nothing was run.");
-                }
-            }
         }
 
         // Trees another run holds, by tree: a verdict for the legs that need one, as a variant
@@ -949,8 +951,13 @@ public sealed class LegRunService(
 
         // The remedy a leg in place that ended inputs-moved is owed: where the command could have run it on a copy, one
         // name says how. Never for a leg that worked in one, nor under a command that takes no such option, whose reader
-        // the remedy would send nowhere.
-        if (entry.Verdict == LegVerdict.InputsMoved && !working.LocalCopy && !working.Dispatched && request.LocalTrees != LocalTrees.InPlace)
+        // the remedy would send nowhere - nor where the placement's own rule puts the leg in no copy of its own whatever
+        // the command says: a leg another machine sent here, or one typed in a copy a sync made, works in a copy already.
+        if (entry.Verdict == LegVerdict.InputsMoved
+            && !working.LocalCopy
+            && !working.Dispatched
+            && request.LocalTrees != LocalTrees.InPlace
+            && LegTrees.InLocalCopy(context, working.Leg, request.Here, LocalTrees.Copy))
         {
             entry = entry with
             {

@@ -791,12 +791,14 @@ internal static class HelpCommand
             "A leg on a copy of its tree - a host's, or one of its own in the tree's .legs - is inputs-moved with nothing of it "
             + "run where the copy cannot be the tree the run read: a file written, appearing or going while the tree was read, "
             + "named; a file to carry changed after it was read; another command synced the copy again between this run's sync "
-            + "and the leg taking it, naming that run; or, under --use-staged, the copy is part made, is not there, or holds no "
-            + "copy this tool made. Each leg on a copy says which tree it tested with its verdict - 'tree read at <commit>', "
-            + "with the uncommitted changes the reading carried, or under --use-staged 'tree staged at <commit> by run <id>' as "
-            + "the copy records it - and --json's 'tree' holds its path, the tree it is a copy of, and the commit, the count and "
-            + "the run. A leg that worked in its tree itself and is inputs-moved names the remedy after its detail, where its "
-            + "command could have run it on a copy: the leg's localCopy, defaults.localCopy, or --local-copy ('help legs').");
+            + "and the leg taking it, naming that run, or by then the copy is not there, is part made, or holds no copy this "
+            + "tool finished; or, under --use-staged, the copy is part made, is not there, or holds no copy this tool made. Each "
+            + "leg on a copy says which tree it tested with its verdict - 'tree read at <commit>', with the uncommitted changes "
+            + "the reading carried, or under --use-staged 'tree staged at <commit> by run <id>' as the copy records it - and "
+            + "--json's 'tree' holds its path, the tree it is a copy of, and the commit, the count and the run. A leg that "
+            + "worked in its tree itself and is inputs-moved names the remedy after its detail, where its command could have run "
+            + "it on a copy: the leg's localCopy, defaults.localCopy, or --local-copy ('help legs'). A leg another machine sent "
+            + "here, or one typed in a copy a sync made, is named none: it works in a copy already, and never in one of its own.");
         builder.AppendLine();
 
         // The words such a leg's line opens with, read from where the line is made.

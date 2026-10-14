@@ -876,9 +876,9 @@ public sealed partial class HelpTests
 
     /// <summary>
     /// The verdicts topic says when a leg on a copy is inputs-moved with nothing run - the tree moving while it was read,
-    /// a file to carry changing after, another command's sync of the copy in between, and under --use-staged a copy part
-    /// made, absent or unmarked - what its line and its --json say of the tree it tested, and the remedy a leg that
-    /// worked in its tree itself is named.
+    /// a file to carry changing after, another command's sync of the copy in between or the copy gone or part made by
+    /// then, and under --use-staged a copy part made, absent or unmarked - what its line and its --json say of the tree it
+    /// tested, and the remedy a leg that worked in its tree itself is named, and where it is not.
     /// </summary>
     [Fact]
     public async Task VerdictsTopic_SaysWhenALegOnACopyIsInputsMoved_AndWhichTreeItTested()
@@ -889,12 +889,14 @@ public sealed partial class HelpTests
             "A leg on a copy of its tree - a host's, or one of its own in the tree's .legs - is inputs-moved with nothing of it "
                 + "run where the copy cannot be the tree the run read: a file written, appearing or going while the tree was read, "
                 + "named; a file to carry changed after it was read; another command synced the copy again between this run's sync "
-                + "and the leg taking it, naming that run; or, under --use-staged, the copy is part made, is not there, or holds no "
-                + "copy this tool made. Each leg on a copy says which tree it tested with its verdict - 'tree read at <commit>', "
-                + "with the uncommitted changes the reading carried, or under --use-staged 'tree staged at <commit> by run <id>' as "
-                + "the copy records it - and --json's 'tree' holds its path, the tree it is a copy of, and the commit, the count and "
-                + "the run. A leg that worked in its tree itself and is inputs-moved names the remedy after its detail, where its "
-                + "command could have run it on a copy: the leg's localCopy, defaults.localCopy, or --local-copy ('help legs').",
+                + "and the leg taking it, naming that run, or by then the copy is not there, is part made, or holds no copy this "
+                + "tool finished; or, under --use-staged, the copy is part made, is not there, or holds no copy this tool made. Each "
+                + "leg on a copy says which tree it tested with its verdict - 'tree read at <commit>', with the uncommitted changes "
+                + "the reading carried, or under --use-staged 'tree staged at <commit> by run <id>' as the copy records it - and "
+                + "--json's 'tree' holds its path, the tree it is a copy of, and the commit, the count and the run. A leg that "
+                + "worked in its tree itself and is inputs-moved names the remedy after its detail, where its command could have run "
+                + "it on a copy: the leg's localCopy, defaults.localCopy, or --local-copy ('help legs'). A leg another machine sent "
+                + "here, or one typed in a copy a sync made, is named none: it works in a copy already, and never in one of its own.",
             Prose.Words(result.StandardOutput),
             StringComparison.Ordinal);
     }
