@@ -180,6 +180,21 @@ public sealed partial class GitClient(
     public Task<IReadOnlyList<GitStatusEntry>> GetStatusAsync(string directory, CancellationToken cancellationToken = default)
         => StatusAsync(directory, "normal", cancellationToken);
 
+    public async Task<bool> IgnoresCaseAsync(string directory, CancellationToken cancellationToken = default)
+    {
+        var result = await RunQueryAsync(directory, ["config", "--bool", "--get", "core.ignorecase"], cancellationToken).ConfigureAwait(false);
+
+        // git answers 1 for a key that is not set: its own default, which heeds case.
+        if (!result.TimedOut && result.ExitCode == 1)
+        {
+            return false;
+        }
+
+        Ensure(result, "read whether the repository ignores case");
+
+        return string.Equals(result.StandardOutput.Trim(), "true", StringComparison.Ordinal);
+    }
+
     public Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default)
         => StatusAsync(directory, "all", cancellationToken);
 

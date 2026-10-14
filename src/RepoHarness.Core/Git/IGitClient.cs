@@ -339,6 +339,13 @@ public interface IGitClient
     Task<bool> IsIgnoredAsync(string directory, string path, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Whether the repository at <paramref name="directory"/> ignores case in the names of its paths: its
+    /// <c>core.ignorecase</c>, which git sets where the file system it was made on does, and false where it is not set.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not read the configuration.</exception>
+    Task<bool> IgnoresCaseAsync(string directory, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Which rule decides each of <paramref name="paths"/> in the work tree at
     /// <paramref name="directory"/>, whether or not the path exists or is tracked.
     /// </summary>

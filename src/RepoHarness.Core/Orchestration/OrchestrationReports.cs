@@ -269,7 +269,7 @@ public static class OrchestrationReports
         }
 
         yield return "A path the main tree changed is usually two agents on one file: by an uncommitted edit while the other's fold is in the "
-            + $"tree, by a commit once it was committed. Where a three-way merge of the two is clean, {FoldAllowances.MergeOption} <path> writes it "
+            + $"tree, by a commit once it was committed, and by both where a committed change was edited again. Where a three-way merge of the two is clean, {FoldAllowances.MergeOption} <path> writes it "
             + "into both trees: it is never taken unasked, and a clean textual merge proves nothing about the program. Where it conflicts, or "
             + "none is offered, merge this agent's change into the main tree by hand, then run again naming the path with --settled <path>, "
             + "which hands the agent the main tree's copy and records it as shared, so the rest can go in and its next fold starts from what "

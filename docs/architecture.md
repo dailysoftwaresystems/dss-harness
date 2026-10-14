@@ -840,19 +840,24 @@ the file whole with its bit, so a bit its session changes after the weighing is 
 silently absorbed - so a later fold - after a review sends the agent back - weighs
 those paths against what the fold left, never against the base: the agent putting a path back as it was is its change
 to fold. A refusal of a main-tree path the agent shares nothing for, made, changed, made a directory of or removed since
-the agent's base, says whether a commit, an uncommitted edit or both did it, since the two are reconciled differently:
-a commit alone where the main tree's HEAD already holds what the main tree holds there now - nothing where it was
-removed, a directory where one was made, and where a file was made or changed, that file as the main tree holds it -
-its entry compared with the base's as git compares a commit, so a commit of a mode alone is a commit; an uncommitted
-edit alone where HEAD holds what the base holds; and both otherwise, the edit said after what the commit did. A file of
-the main tree in the way of the agent's - where one of its files needs a directory, or in a directory one replaces - is
-said made or changed since the base the same way (`Came.How`, the one wording of both), and a shared path's refusal
-says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
+the agent's base, says whether a commit, an uncommitted edit or a commit and then an edit did it, since each is
+reconciled differently: a commit alone where the main tree's HEAD already holds what the main tree holds there now,
+which `git status` - untracked files listed, its paths compared as `core.ignorecase` says, so a rename of case alone is
+the commit's - answers by listing nothing at the path (one process a fold, asked only where a commit moved a path or
+neither HEAD nor the base holds one); an uncommitted edit alone where HEAD holds what the base holds, each entry
+compared as git compares a commit, so a commit of a mode alone is a commit; and both otherwise, each said with what it
+did - the edit after what the commit did where the edit made what the main tree holds of another kind than HEAD's, and
+the commit then the edit's change where the commit already made it of that kind. A file of the main tree in the way of
+the agent's - where one of its files needs a directory, or in a directory one replaces - is a file the fold does not
+remove, said made or changed since the base where the main tree did either, the same way, and a file git ignores
+where neither HEAD nor the base holds one is said ignored by git, with no word of when it came (`Came`, the one
+wording of how a path came to be held, and `Since`, of what the main tree did, both decided once). A shared path's
+refusal says the main tree changed it after the agent was last handed it or folded, which the seed records alike. A deletion needs the same baseline proof a copy does. A directory with no `.git` of its own
 holds no file at its path, so a file the agent turned into a directory folds as the file's deletion and the directory's
 files, and a directory it turned into a file as the files' deletions and the file: every removal is made first, with
 the directories it empties, then every file written. A path reached through a link in either tree, a repository of
 its own - a submodule, or the agent's own - what the main tree holds in the way of the agent's files (a file where one
-needs a directory, or files the agent did not delete in a directory one replaces), a HEAD off the base and a move of
+needs a directory, or files the fold does not remove in a directory one replaces), a HEAD off the base and a move of
 the base stopped part way are refused, and so is an anchor registry the agent changed as a file: its rows go in through its rows directory, weighed
 against the registry the fold would otherwise have written over. `--settled` is the way out of any path's refusal -
 `--merge` only of a path whose merge is clean - and a deletion can be settled too; a settled path the fold does not

@@ -425,13 +425,9 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         var unseeded = looks.Where(look => look.Link is null && shared.Of(look.Path) is null).ToList();
         var atBase = await _gitClient.HeldAtAsync(worktree, baseCommit, [.. unseeded.Select(look => look.Path)], cancellationToken).ConfigureAwait(false);
         var baseBlobs = atBase.ToDictionary(held => held.Key, held => held.Value.Blob, StringComparer.Ordinal);
-        IReadOnlySet<string>? movedFromBase = null;
-
-        async Task<IReadOnlySet<string>> MovedFromBaseAsync()
-            => movedFromBase ??= await _gitClient.ListChangedSinceAsync(main, baseCommit, cancellationToken).ConfigureAwait(false);
-
+        var answers = new MainTreeAnswers(_gitClient, main, baseCommit, cancellationToken);
         IReadOnlySet<string> mainMoved = unseeded.Any(look => baseBlobs[look.Path] is not null)
-            ? await MovedFromBaseAsync().ConfigureAwait(false)
+            ? await answers.MovedFromBaseAsync().ConfigureAwait(false)
             : new HashSet<string>(StringComparer.Ordinal);
 
         var written = new List<string>();
@@ -507,9 +503,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                 // nothing was reconciled, and handing the main tree's would undo the agent's work.
                 var reconciled = baseline is { } ancestor
                     ? look.Main != ancestor
-                    : baseBlobs[path] is null
-                        ? look.Main.Kind != Kind.Absent
-                        : look.Main.Kind == Kind.Absent || mainMoved.Contains(path);
+                    : Since.Of(baseBlobs[path], HoldsAt(main, look), mainMoved.Contains(path)) is not null;
 
                 if (reconciled)
                 {
@@ -542,7 +536,7 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                     {
                         (Kind.File, Kind.Absent) => $"'{path}' was in both trees when the agent was last handed it or folded, and the main tree no longer holds it",
                         (Kind.Absent, _) => $"'{path}' was absent from both trees when the agent was last handed it or folded, and the main tree holds it now",
-                        _ => $"'{path}': the main tree changed it after the agent was last handed it or folded, {Lose(look.Agent.Kind == Kind.Absent)}",
+                        _ => $"'{path}': the main tree changed it after the agent was last handed it or folded, {Lose(look.Agent.Kind == Kind.Absent, "that change")}",
                     };
 
                     // Two changes of one file, where both trees hold one: what a merge of them gives is measured, from what
@@ -559,30 +553,15 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
                     continue;
                 }
             }
-            else if (baseBlobs[path] is not { } baseBlob)
+            else if (baseBlobs[path] is null && look.Agent.Kind == Kind.Absent)
             {
-                if (look.Agent.Kind == Kind.Absent)
-                {
-                    refused.Add((path, $"the agent deleted '{path}', which its base {at} does not hold, so nothing proves removing it from the main tree safe"));
-                    continue;
-                }
-
-                if (look.Main.Kind != Kind.Absent)
-                {
-                    // Both trees made it: nothing either held says what a merge would start from.
-                    sinceBase.Add((look, new Since.Made()));
-                    continue;
-                }
-            }
-            else if (look.Main.Kind == Kind.Absent)
-            {
-                // A directory with no .git of its own holds no file at its path: one the main tree made of the file is said.
-                sinceBase.Add((look, _fileSystem.KindOf(Path.Combine(main, path)) == PathKind.Directory ? new Since.MadeADirectory(baseBlob) : new Since.Removed(baseBlob)));
+                refused.Add((path, $"the agent deleted '{path}', which its base {at} does not hold, so nothing proves removing it from the main tree safe"));
                 continue;
             }
-            else if (mainMoved.Contains(path))
+            else if (Since.Of(baseBlobs[path], HoldsAt(main, look), mainMoved.Contains(path)) is { } since)
             {
-                sinceBase.Add((look, new Since.Changed(baseBlob)));
+                // What the main tree did there since the agent's base is weighed below, with how it came to.
+                sinceBase.Add((look, since));
                 continue;
             }
 
@@ -606,16 +585,17 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             // What the base held there is also what a merge is measured from: a link, which is no file to merge, and whether
             // it could be run, never read where the platform keeps no such bit.
-            var came = await CameAsync(main, worktree, baseCommit, [.. sinceBase.Select(since => (since.Look.Path, since.Change.Now))], cancellationToken).ConfigureAwait(false);
+            var came = await CameAsync(answers, worktree, baseCommit, [.. sinceBase.Select(since => (since.Look.Path, since.Change.Now))], cancellationToken).ConfigureAwait(false);
 
             foreach (var (look, change) in sinceBase)
             {
                 var path = look.Path;
                 var entry = came[path].Based;
-                var why = change.Said(path, at, came[path].How, Lose(look.Agent.Kind == Kind.Absent));
+                var why = change.Said(path, at, came[path], agentRemoved: look.Agent.Kind == Kind.Absent);
 
                 switch (change)
                 {
+                    // Both trees made it: nothing either held says what a merge would start from.
                     case Since.Made:
                         twice.Add((look, why, null));
                         break;
@@ -684,36 +664,49 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         }
 
         // What the agent's files are written over in the main tree is only what the same fold removes: a file where one of
-        // them needs a directory, or files in a directory where one of them stands in its place, the agent never deleted.
+        // them needs a directory, or files in a directory where one of them stands in its place, the fold does not remove.
         var ways = InTheWay(main, [.. written.Select(path => (path, true))], deleted.ToHashSet(StringComparer.Ordinal));
 
-        // Each file of the main tree's in the way is said made or changed since the agent's base as any other path the main
-        // tree moved since is: made where the base holds no file there, changed where it holds one the main tree moved from,
-        // and neither where the main tree holds the base's.
+        // Each file of the main tree's in the way is weighed against the agent's base as any path is (Since.Of) - made where
+        // the base holds no file there, changed where it holds one the main tree moved from, and neither where the main tree
+        // holds the base's - and said as it came to be.
         var inTheWay = ways.Count > 0
-            ? await CameAsync(main, worktree, baseCommit, [.. ways.Select(way => (way.Own, Holds.File))], cancellationToken).ConfigureAwait(false)
+            ? await CameAsync(answers, worktree, baseCommit, [.. ways.Select(way => (way.Own, Holds.File))], cancellationToken).ConfigureAwait(false)
             : new Dictionary<string, Came>(StringComparer.Ordinal);
         var movedInTheWay = inTheWay.Values.Any(came => came.Based is { IsBlob: true })
-            ? await MovedFromBaseAsync().ConfigureAwait(false)
+            ? await answers.MovedFromBaseAsync().ConfigureAwait(false)
             : new HashSet<string>(StringComparer.Ordinal);
 
-        string? MovedSinceBase(string own) => inTheWay[own] switch
-        {
-            { Based.IsBlob: true } when !movedInTheWay.Contains(own) => null,
-            { Based.IsBlob: true } came => $"changed since the agent's base {at} {came.How}",
-            var came => $"made since the agent's base {at} {came.How}",
-        };
+        Since? SinceInTheWay(string own)
+            => Since.Of(inTheWay[own].Based is { IsBlob: true } based ? based.ObjectId : null, Holds.File, movedInTheWay.Contains(own));
 
         foreach (var way in ways.Where(way => !way.Below).DistinctBy(way => way.Written))
         {
-            refused.Add((way.Written, $"'{way.Written}' needs a directory at '{way.Own}', where the main tree holds a file the agent did not delete"
-                + (MovedSinceBase(way.Own) is { } since ? $", {since}" : string.Empty)));
+            refused.Add((way.Written, $"'{way.Written}' needs a directory at '{way.Own}', where the main tree holds a file the fold does not remove"
+                + (SinceInTheWay(way.Own) is { } since ? $", {since.Short($"since the agent's base {at}", inTheWay[way.Own])}" : string.Empty)));
         }
 
         foreach (var file in ways.Where(way => way.Below).GroupBy(way => way.Written, StringComparer.Ordinal))
         {
-            refused.Add((file.Key, $"'{file.Key}': the main tree holds a directory there with files the agent did not delete - "
-                + $"{ReportText.Listed([.. file.Select(way => MovedSinceBase(way.Own) is { } since ? $"{way.Own} ({since})" : way.Own)])} - which writing it would remove"));
+            // The agent's base is named once, by the first file said to have come to be since it, and the rest since then.
+            var named = false;
+            var listed = new List<string>();
+
+            foreach (var way in file)
+            {
+                if (SinceInTheWay(way.Own) is not { } since)
+                {
+                    listed.Add(way.Own);
+                    continue;
+                }
+
+                var came = inTheWay[way.Own];
+                listed.Add($"{way.Own} ({since.Short(named ? "since then" : $"since the agent's base {at}", came)})");
+                named |= !came.Ignored;
+            }
+
+            refused.Add((file.Key, $"'{file.Key}': the main tree holds a directory there with files the fold does not remove - "
+                + $"{ReportText.Listed(listed)} - which writing it would remove"));
         }
 
         // What is settled by hand is sorted as any hand-over sorts what the main tree holds, and is handed over nothing of
@@ -2538,42 +2531,103 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         Directory,
     }
 
-    /// <summary>What the main tree holds at a path now, as how it came to hold it is weighed.</summary>
-    private enum Holds
+    /// <summary>What a tree holds at a path, as what the main tree did since the agent's base and how is weighed.</summary>
+    internal enum Holds
     {
-        /// <summary>Nothing: it removed what was there.</summary>
+        /// <summary>Nothing.</summary>
         Nothing,
 
-        /// <summary>A directory, with no <c>.git</c> of its own.</summary>
+        /// <summary>A directory: one with no <c>.git</c> of its own, a repository of its own, or a commit's tree.</summary>
         Directory,
 
-        /// <summary>A file, or a link.</summary>
+        /// <summary>A file, or a link: a commit's blob.</summary>
         File,
     }
 
+    /// <summary>What git's entry holds, of what <see cref="Holds"/> tells apart.</summary>
+    /// <param name="entry">A commit's entry at a path, or none.</param>
+    internal static Holds HoldsOf(GitEntry? entry) => entry switch
+    {
+        null => Holds.Nothing,
+        { IsBlob: true } => Holds.File,
+        _ => Holds.Directory,
+    };
+
+    /// <summary>What the main tree holds at the path <paramref name="look"/> looked at.</summary>
+    /// <param name="main">The main tree.</param>
+    /// <param name="look">What both trees hold at the path.</param>
+    private Holds HoldsAt(string main, Look look) => look.Main.Kind switch
+    {
+        Kind.File => Holds.File,
+        Kind.Directory => Holds.Directory,
+
+        // A directory with no .git of its own holds no file at its path, and is a directory all the same.
+        Kind.Absent => _fileSystem.KindOf(Path.Combine(main, look.Path)) == PathKind.Directory ? Holds.Directory : Holds.Nothing,
+        var kind => throw new ArgumentOutOfRangeException(nameof(look), kind, "Not what a tree holds at a path."),
+    };
+
     /// <summary>
-    /// What the main tree did since the agent's base at a path the agent shares nothing for, and changed too: what the main
-    /// tree holds there now, and the refusal that says it.
+    /// What the main tree did since the agent's base at a path the agent shares nothing for: what it holds there now, and
+    /// the words that say it.
     /// </summary>
-    private abstract record Since
+    internal abstract record Since
     {
         /// <summary>What the main tree holds at the path now.</summary>
         public abstract Holds Now { get; }
 
-        /// <summary>The refusal of the path.</summary>
+        /// <summary>
+        /// What the main tree did at a path since the agent's base, where it did anything - the one rule every weighing of
+        /// such a path reads: made a file where the base holds none, removed the base's file, made a directory of it, or
+        /// changed it; <see langword="null"/> where the main tree holds what the base holds, a file or none.
+        /// </summary>
+        /// <param name="baseBlob">The blob the base holds at the path, or none where it holds no file there.</param>
+        /// <param name="now">What the main tree holds there now.</param>
+        /// <param name="moved">Whether git says the main tree moved from the base there, as git status compares.</param>
+        public static Since? Of(string? baseBlob, Holds now, bool moved) => (baseBlob, now) switch
+        {
+            (null, Holds.File) => new Made(),
+            (null, Holds.Nothing or Holds.Directory) => null,
+            ({ } blob, Holds.Nothing) => new Removed(blob),
+            ({ } blob, Holds.Directory) => new MadeADirectory(blob),
+            ({ } blob, Holds.File) => moved ? new Changed(blob) : null,
+            var unknown => throw new ArgumentOutOfRangeException(nameof(now), unknown, "Not what a main tree holds at a path."),
+        };
+
+        /// <summary>The refusal of the path, saying how the main tree came to hold what it holds there.</summary>
         /// <param name="path">The path.</param>
         /// <param name="at">The agent's base, as a line names it.</param>
-        /// <param name="how">How the main tree came to hold what it holds there (<see cref="Came.How"/>).</param>
-        /// <param name="lose">What writing or removing the agent's would lose (<see cref="Lose"/>).</param>
-        public abstract string Said(string path, string at, string how, string lose);
+        /// <param name="came">How the main tree came to hold it.</param>
+        /// <param name="agentRemoved">Whether the agent removed the path, rather than holding a file there.</param>
+        public abstract string Said(string path, string at, Came came, bool agentRemoved);
 
-        /// <summary>Made a file where the base holds none, as the agent did.</summary>
+        /// <summary>
+        /// What it did, short, as a list of files in the way of the agent's says each: <paramref name="since"/> naming the
+        /// agent's base, or the base already named.
+        /// </summary>
+        /// <param name="since">When from: since the agent's base, named, or since then.</param>
+        /// <param name="came">How the main tree came to hold it.</param>
+        public abstract string Short(string since, Came came);
+
+        /// <summary>Made a file where the base holds none, as the agent did - or holds one git ignores, which says nothing of when it came.</summary>
         public sealed record Made : Since
         {
             public override Holds Now => Holds.File;
 
-            public override string Said(string path, string at, string how, string lose)
-                => $"'{path}' is not at the agent's base {at}, and the main tree made it since, {how}, {lose}";
+            public override string Said(string path, string at, Came came, bool agentRemoved)
+            {
+                ArgumentNullException.ThrowIfNull(came);
+
+                return came.Ignored
+                    ? $"'{path}' is not at the agent's base {at}, and the main tree holds a file there that git ignores, {Lose(agentRemoved, "that file")}"
+                    : $"'{path}' is not at the agent's base {at}, and the main tree made it since, {came.How}, {Lose(agentRemoved, "that change")}";
+            }
+
+            public override string Short(string since, Came came)
+            {
+                ArgumentNullException.ThrowIfNull(came);
+
+                return came.Ignored ? "ignored by git" : $"made {since} {came.How}";
+            }
         }
 
         /// <summary>
@@ -2589,8 +2643,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             public override Holds Now => Holds.File;
 
-            public override string Said(string path, string at, string how, string lose)
-                => $"'{path}': the main tree changed it after the agent's base {at}, {how}, {lose}";
+            public override string Said(string path, string at, Came came, bool agentRemoved)
+            {
+                ArgumentNullException.ThrowIfNull(came);
+
+                return $"'{path}': the main tree changed it after the agent's base {at}, {came.How}, {Lose(agentRemoved, "that change")}";
+            }
+
+            public override string Short(string since, Came came)
+            {
+                ArgumentNullException.ThrowIfNull(came);
+
+                return $"changed {since} {came.How}";
+            }
         }
 
         /// <summary>Made a directory of the file the base holds there.</summary>
@@ -2599,8 +2664,19 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             public override Holds Now => Holds.Directory;
 
-            public override string Said(string path, string at, string how, string lose)
-                => $"'{path}' is at the agent's base {at}, and the main tree holds a directory there now, made {how}, {lose}";
+            public override string Said(string path, string at, Came came, bool agentRemoved)
+            {
+                ArgumentNullException.ThrowIfNull(came);
+
+                return $"'{path}' is at the agent's base {at}, and the main tree holds a directory there now, made {came.How}, {Lose(agentRemoved, "that change")}";
+            }
+
+            public override string Short(string since, Came came)
+            {
+                ArgumentNullException.ThrowIfNull(came);
+
+                return $"made a directory {since} {came.How}";
+            }
         }
 
         /// <summary>Removed the file the base holds there.</summary>
@@ -2609,76 +2685,219 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
         {
             public override Holds Now => Holds.Nothing;
 
-            public override string Said(string path, string at, string how, string lose)
-                => $"'{path}' is at the agent's base {at}, and missing from the main tree, removed {how}, {lose}";
+            public override string Said(string path, string at, Came came, bool agentRemoved)
+            {
+                ArgumentNullException.ThrowIfNull(came);
+
+                return $"'{path}' is at the agent's base {at}, and missing from the main tree, removed {came.How}, {Lose(agentRemoved, "that change")}";
+            }
+
+            public override string Short(string since, Came came)
+            {
+                ArgumentNullException.ThrowIfNull(came);
+
+                return $"removed {since} {came.How}";
+            }
         }
     }
 
-    /// <summary>
-    /// How the main tree came to hold what it holds at a path since the agent's base.
-    /// </summary>
+    /// <summary>What an uncommitted edit did at a path, from what the main tree's HEAD holds there to what the main tree holds.</summary>
+    private enum Edit
+    {
+        /// <summary>Nothing: the main tree holds what its HEAD holds.</summary>
+        None,
+
+        /// <summary>Changed what its HEAD holds there, a file or a directory still.</summary>
+        Changed,
+
+        /// <summary>Made of it something of another kind than its HEAD holds there: a file, a directory, or nothing.</summary>
+        Replaced,
+
+        /// <summary>Made something its HEAD holds nothing of, which git ignores, so its status lists nothing there.</summary>
+        Ignored,
+    }
+
+    /// <summary>How the main tree came to hold what it holds at a path since the agent's base.</summary>
     /// <param name="Now">What the main tree holds there now.</param>
-    /// <param name="Head">Its HEAD's entry there - blob and mode, as git compares a commit - or none.</param>
     /// <param name="Based">The base's entry there, or none.</param>
-    /// <param name="EditedSinceHead">
-    /// Whether the main tree holds there otherwise than its HEAD, as git status compares; asked only where a commit moved a
-    /// path the main tree holds a file at, and false where it was not asked.
+    /// <param name="Head">
+    /// Its HEAD's entry there - blob and mode, as git compares a commit - or none: found as the main tree's git spells the
+    /// path, which where the repository ignores case may differ from the agent's spelling in case alone.
     /// </param>
-    private sealed record Came(Holds Now, GitEntry? Head, GitEntry? Based, bool EditedSinceHead)
+    /// <param name="HeadSpelledOtherwise">Whether its HEAD spells the path otherwise than the agent does: a rename of case alone.</param>
+    /// <param name="Listed">
+    /// Whether git status, untracked files listed and its paths compared as the repository's <c>core.ignorecase</c> says,
+    /// lists the path or anything below it: false where the main tree holds there what its HEAD holds, or what git ignores.
+    /// </param>
+    internal sealed record Came(Holds Now, GitEntry? Based, GitEntry? Head, bool HeadSpelledOtherwise, bool Listed)
     {
         /// <summary>
-        /// How, in the one wording every refusal of a path the main tree moved since the agent's base says it: by a commit
-        /// alone where its HEAD already holds what the main tree holds there now - nothing where it removed it, a directory
-        /// where it made one, and where it holds a file, that file as it holds it - so a commit of a mode alone is a commit;
-        /// by an uncommitted edit alone where its HEAD holds what the base holds; and by both otherwise, the edit said after
-        /// what the commit did, since neither alone reconciles it.
+        /// Whether the main tree holds there something git ignores where neither its HEAD nor the base holds anything: git
+        /// never recorded it, so nothing says when it came, and no refusal claims it came since the base.
         /// </summary>
-        public string How
+        public bool Ignored => Edited == Edit.Ignored && !Committed;
+
+        /// <summary>
+        /// How, in the one wording every refusal of a path the main tree moved since the agent's base says it: by a commit
+        /// alone where its HEAD already holds what the main tree holds there now; by an uncommitted edit alone where its HEAD
+        /// holds what the base holds; and where a commit moved it and an edit moved it again, both, each with what it did -
+        /// the edit after what the commit did where the edit made it of another kind than HEAD holds, an edit git ignores
+        /// where what it made is ignored, and the commit then the edit's change where the commit already made it of that
+        /// kind.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">It is <see cref="Ignored"/>: nothing says how it came.</exception>
+        public string How => (Edited, Committed) switch
         {
-            get
-            {
-                if (Head == Based)
-                {
-                    return "by an uncommitted edit";
-                }
+            (Edit.Ignored, false) => throw new InvalidOperationException("What git ignores where neither HEAD nor the base holds anything came no way a refusal can say."),
 
-                var held = Now switch
-                {
-                    Holds.Nothing => Head is null,
-                    Holds.Directory => Head is { IsBlob: false },
-                    Holds.File => Head is { IsBlob: true } && !EditedSinceHead,
-                    var now => throw new ArgumentOutOfRangeException(nameof(Now), now, "Not what a main tree holds at a path."),
-                };
+            // Nothing edited and nothing committed is git's two answers read at different moments: the main tree moved, uncommitted.
+            (Edit.None or Edit.Changed or Edit.Replaced, false) => "by an uncommitted edit",
+            (Edit.None, true) => "by a commit",
+            (Edit.Changed, true) => "by a commit, then changed by an uncommitted edit",
+            (Edit.Replaced, true) => $"by an uncommitted edit, after a commit {Did}",
+            (Edit.Ignored, true) => $"by an uncommitted edit git ignores, after a commit {Did}",
+            var unknown => throw new ArgumentOutOfRangeException(nameof(Edited), unknown, "Not something an uncommitted edit did."),
+        };
 
-                return held ? "by a commit" : $"by an uncommitted edit, after a commit {Did}";
-            }
-        }
+        /// <summary>Whether a commit moved the path: its HEAD's entry there not the base's, or spelled otherwise.</summary>
+        private bool Committed => Head != Based || HeadSpelledOtherwise;
 
-        /// <summary>What the commit did there, from the base's entry to its HEAD's: a directory is anything not a blob.</summary>
-        private string Did => (Based, Head) switch
+        /// <summary>What an uncommitted edit did there, from its HEAD's entry to what the main tree holds.</summary>
+        private Edit Edited => (Listed, HoldsOf(Head) == Now) switch
         {
-            (_, null) => "removed it",
-            (null, { IsBlob: true }) => "made it",
-            (null, _) => "made a directory there",
-            ({ IsBlob: true }, { IsBlob: true }) => "changed it",
-            ({ IsBlob: true }, _) => "made a directory of it",
-            (_, { IsBlob: true }) => "made a file of the directory there",
-            _ => "changed the directory there",
+            // Nothing there, as HEAD holds nothing: nothing in the tree an edit changed, whatever the index stages.
+            (_, true) when Now == Holds.Nothing => Edit.None,
+            (true, true) => Edit.Changed,
+            (true, false) => Edit.Replaced,
+            (false, true) => Edit.None,
+
+            // Unlisted, yet of another kind than HEAD holds: what git ignores where HEAD holds nothing, and otherwise git's
+            // two answers read at different moments.
+            (false, false) => Head is null ? Edit.Ignored : Edit.Replaced,
+        };
+
+        /// <summary>What the commit did there, from the base's entry to its HEAD's, where an edit made of it another kind since.</summary>
+        private string Did => (HoldsOf(Based), HoldsOf(Head)) switch
+        {
+            (Holds.File, Holds.File) when Head == Based => "renamed it",
+            (Holds.File, Holds.File) => "changed it",
+            (Holds.File, Holds.Nothing) => "removed it",
+            (Holds.File, Holds.Directory) => "made a directory of it",
+            (Holds.Directory, Holds.Directory) when Head == Based => "renamed the directory there",
+            (Holds.Directory, Holds.Directory) => "changed the directory there",
+            (Holds.Directory, Holds.Nothing) => "removed the directory there",
+            (Holds.Nothing, Holds.Directory) => "made a directory there",
+            var unsaid => throw new InvalidOperationException($"No refusal says a commit took {unsaid.Item1} to {unsaid.Item2} before an edit made of it another kind."),
         };
     }
 
     /// <summary>
-    /// How the main tree came to hold what it holds at each of <paramref name="paths"/> since the agent's base: its HEAD and
-    /// the base asked for their entries there, one git process each, and the main tree whether it holds otherwise than its
-    /// HEAD, one more, asked only where a commit moved a path it holds a file at. Nothing is written.
+    /// What git answers of the main tree in one measuring of a fold, each question asked once, and only where something
+    /// asks it: whether it moved from the agent's base, what its status lists, whether it ignores case, and what its HEAD
+    /// holds.
     /// </summary>
+    /// <param name="git">Asks git.</param>
     /// <param name="main">The main tree.</param>
+    /// <param name="baseCommit">The agent's base.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    private sealed class MainTreeAnswers(IGitClient git, string main, string baseCommit, CancellationToken cancellationToken)
+    {
+        private IReadOnlySet<string>? _movedFromBase;
+        private IReadOnlyList<string>? _listed;
+        private bool? _ignoresCase;
+        private IReadOnlyList<string>? _headFiles;
+
+        /// <summary>Every path where the main tree holds otherwise than the base, as git status compares.</summary>
+        public async Task<IReadOnlySet<string>> MovedFromBaseAsync()
+            => _movedFromBase ??= await git.ListChangedSinceAsync(main, baseCommit, cancellationToken).ConfigureAwait(false);
+
+        /// <summary>
+        /// Whether git status, untracked files listed one by one and ignored ones not, lists <paramref name="path"/> or
+        /// anything below it: the main tree holds there otherwise than its HEAD, or something untracked.
+        /// </summary>
+        /// <param name="path">The path, as the agent spells it.</param>
+        public async Task<bool> ListsAsync(string path)
+        {
+            _listed ??= [.. (await git.ReadStatusAsync(main, cancellationToken).ConfigureAwait(false))
+                .SelectMany(entry => entry.Paths)
+                .Where(name => name.IsUtf8)
+                .Select(name => name.Text.TrimEnd('/'))];
+
+            var comparison = await IgnoresCaseAsync().ConfigureAwait(false) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+            return _listed.Any(listed => string.Equals(listed, path, comparison) || Below(listed, path, comparison));
+        }
+
+        /// <summary>
+        /// Its HEAD's entry at each of <paramref name="paths"/>, found as the main tree's git spells the path: as asked, and
+        /// where the repository ignores case and HEAD holds nothing so spelled, as HEAD spells it in another case - with
+        /// whether it is spelled otherwise.
+        /// </summary>
+        /// <param name="paths">The paths, as the agent spells them.</param>
+        public async Task<IReadOnlyDictionary<string, (GitEntry Entry, bool SpelledOtherwise)>> HeadAsync(IReadOnlyList<string> paths)
+        {
+            var exact = await git.ListEntriesAtAsync(main, "HEAD", paths, cancellationToken).ConfigureAwait(false);
+            var found = exact.ToDictionary(held => held.Key, held => (held.Value, SpelledOtherwise: false), StringComparer.Ordinal);
+            var missing = paths.Where(path => !exact.ContainsKey(path)).ToList();
+
+            if (missing.Count == 0 || !await IgnoresCaseAsync().ConfigureAwait(false))
+            {
+                return found;
+            }
+
+            _headFiles ??= [.. (await git.ListFilesAtCommitAsync(main, "HEAD", cancellationToken).ConfigureAwait(false)).Where(name => name.IsUtf8).Select(name => name.Text)];
+
+            // A file spelled so in another case, or the directory a file lies in.
+            var spelled = new Dictionary<string, string>(StringComparer.Ordinal);
+
+            foreach (var path in missing)
+            {
+                var spelling = _headFiles.FirstOrDefault(file => string.Equals(file, path, StringComparison.OrdinalIgnoreCase))
+                    ?? (_headFiles.FirstOrDefault(file => Below(file, path, StringComparison.OrdinalIgnoreCase)) is { } below ? below[..path.Length] : null);
+
+                if (spelling is not null)
+                {
+                    spelled[path] = spelling;
+                }
+            }
+
+            if (spelled.Count > 0)
+            {
+                var otherwise = await git.ListEntriesAtAsync(main, "HEAD", [.. spelled.Values.Distinct(StringComparer.Ordinal)], cancellationToken).ConfigureAwait(false);
+
+                foreach (var (path, spelling) in spelled)
+                {
+                    if (otherwise.TryGetValue(spelling, out var entry))
+                    {
+                        found[path] = (entry, SpelledOtherwise: true);
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>Whether the repository ignores case in the names of its paths: its <c>core.ignorecase</c>.</summary>
+        private async Task<bool> IgnoresCaseAsync()
+            => _ignoresCase ??= await git.IgnoresCaseAsync(main, cancellationToken).ConfigureAwait(false);
+
+        /// <summary>Whether <paramref name="name"/> lies below the directory <paramref name="path"/>.</summary>
+        private static bool Below(string name, string path, StringComparison comparison)
+            => name.Length > path.Length && name[path.Length] == '/' && name.StartsWith(path, comparison);
+    }
+
+    /// <summary>
+    /// How the main tree came to hold what it holds at each of <paramref name="paths"/> since the agent's base: the base
+    /// asked for its entries there, and the main tree, through <paramref name="answers"/>, for its HEAD's and - where a commit
+    /// moved a path, or neither HEAD nor the base holds one - what its status lists. Nothing is written.
+    /// </summary>
+    /// <param name="answers">What git answers of the main tree in this measuring.</param>
     /// <param name="worktree">The agent's worktree, where its base is read.</param>
     /// <param name="baseCommit">The agent's base.</param>
     /// <param name="paths">Each path, with what the main tree holds there now.</param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
     private async Task<IReadOnlyDictionary<string, Came>> CameAsync(
-        string main,
+        MainTreeAnswers answers,
         string worktree,
         string baseCommit,
         IReadOnlyList<(string Path, Holds Now)> paths,
@@ -2686,21 +2905,34 @@ internal sealed class AgentFold(IGitClient gitClient, IFileSystem fileSystem, IF
     {
         var asked = paths.DistinctBy(path => path.Path, StringComparer.Ordinal).ToList();
         IReadOnlyList<string> names = [.. asked.Select(path => path.Path)];
-        var head = await _gitClient.ListEntriesAtAsync(main, "HEAD", names, cancellationToken).ConfigureAwait(false);
         var based = await _gitClient.ListEntriesAtAsync(worktree, baseCommit, names, cancellationToken).ConfigureAwait(false);
-        IReadOnlySet<string> edited = asked.Any(path => path.Now == Holds.File && head.GetValueOrDefault(path.Path) is { IsBlob: true } held && held != based.GetValueOrDefault(path.Path))
-            ? await _gitClient.ListChangedSinceAsync(main, "HEAD", cancellationToken).ConfigureAwait(false)
-            : new HashSet<string>(StringComparer.Ordinal);
+        var head = await answers.HeadAsync(names).ConfigureAwait(false);
+        var came = new Dictionary<string, Came>(StringComparer.Ordinal);
 
-        return asked.ToDictionary(
-            path => path.Path,
-            path => new Came(path.Now, head.GetValueOrDefault(path.Path), based.GetValueOrDefault(path.Path), edited.Contains(path.Path)),
-            StringComparer.Ordinal);
+        foreach (var (path, now) in asked)
+        {
+            var atBase = based.GetValueOrDefault(path);
+            var found = head.TryGetValue(path, out var held);
+            var atHead = found ? held.Entry : null;
+            var spelledOtherwise = found && held.SpelledOtherwise;
+
+            // Whether git lists it decides how only where a commit moved it, or where neither HEAD nor the base holds
+            // anything there and what the main tree holds may be what git ignores; otherwise it was an uncommitted edit.
+            var asks = atHead != atBase || spelledOtherwise || (atHead is null && atBase is null);
+            var listed = asks && await answers.ListsAsync(path).ConfigureAwait(false);
+
+            came[path] = new Came(now, atBase, atHead, spelledOtherwise, listed);
+        }
+
+        return came;
     }
 
-    /// <summary>What writing or removing the agent's copy of a path the main tree changed would lose: the one wording of it.</summary>
+    /// <summary>
+    /// What writing or removing the agent's copy of a path the main tree changed would lose: the one wording of it.
+    /// </summary>
     /// <param name="agentRemoved">Whether the agent removed the path, rather than holding a file there.</param>
-    private static string Lose(bool agentRemoved) => agentRemoved ? "so removing it would lose that change" : "so writing the agent's copy would lose that change";
+    /// <param name="lost">What would be lost: that change, or a file.</param>
+    private static string Lose(bool agentRemoved, string lost) => agentRemoved ? $"so removing it would lose {lost}" : $"so writing the agent's copy would lose {lost}";
 
     /// <summary>What one tree holds at a path.</summary>
     private readonly record struct Side(Kind Kind, FileIdentity? File);

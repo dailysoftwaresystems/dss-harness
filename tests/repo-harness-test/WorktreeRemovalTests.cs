@@ -1154,6 +1154,12 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     /// <summary>Runs at the start of every call.</summary>
     public Action? BeforeEveryCall { get; init; }
 
+    /// <summary>Runs before each status question that lists untracked files one by one, with the directory it asks about.</summary>
+    public Action<string>? BeforeReadStatus { get; init; }
+
+    /// <summary>Runs before each question of what a work tree changes since a commit, with the directory and the commit.</summary>
+    public Action<string, string>? BeforeListChangedSince { get; init; }
+
     /// <summary>Runs before each arbitrary git command, with its arguments.</summary>
     public Action<IReadOnlyList<string>>? BeforeRun { get; init; }
 
@@ -1234,11 +1240,22 @@ internal sealed class InterceptingGitClient(IGitClient inner) : IGitClient
     public Task<IReadOnlyList<GitStatusEntry>> GetStatusAsync(string directory, CancellationToken cancellationToken = default)
         => Call(() => inner.GetStatusAsync(directory, Token(cancellationToken)));
 
+    public Task<bool> IgnoresCaseAsync(string directory, CancellationToken cancellationToken = default)
+        => Call(() => inner.IgnoresCaseAsync(directory, Token(cancellationToken)));
+
     public Task<IReadOnlyList<GitStatusEntry>> ReadStatusAsync(string directory, CancellationToken cancellationToken = default)
-        => Call(() => inner.ReadStatusAsync(directory, Token(cancellationToken)));
+        => Call(() =>
+        {
+            BeforeReadStatus?.Invoke(directory);
+            return inner.ReadStatusAsync(directory, Token(cancellationToken));
+        });
 
     public Task<IReadOnlySet<string>> ListChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
-        => Call(() => inner.ListChangedSinceAsync(directory, commit, Token(cancellationToken)));
+        => Call(() =>
+        {
+            BeforeListChangedSince?.Invoke(directory, commit);
+            return inner.ListChangedSinceAsync(directory, commit, Token(cancellationToken));
+        });
 
     public Task<IReadOnlyList<GitName>> ListNamesChangedSinceAsync(string directory, string commit, CancellationToken cancellationToken = default)
         => Call(() => inner.ListNamesChangedSinceAsync(directory, commit, Token(cancellationToken)));

@@ -29,6 +29,31 @@ public sealed class GitClientTests
         Assert.Null(await git.GetMainWorktreeAsync(temp.Path, cancellationToken));
     }
 
+    /// <summary>
+    /// Whether a repository ignores case in the names of its paths is its core.ignorecase: as set where it is set, false
+    /// where it is not - git's own default - and a configuration git cannot read is refused, never answered as either.
+    /// </summary>
+    [Fact]
+    public async Task IgnoresCaseAsync_ReadsCoreIgnoreCase_FalseWhereItIsNotSet()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await harness.InitializeGitRepositoryAsync(temp.Path, cancellationToken);
+
+        await harness.RunGitAsync(temp.Path, ["config", "core.ignorecase", "true"], cancellationToken);
+        Assert.True(await harness.GitClient.IgnoresCaseAsync(temp.Path, cancellationToken));
+
+        await harness.RunGitAsync(temp.Path, ["config", "core.ignorecase", "false"], cancellationToken);
+        Assert.False(await harness.GitClient.IgnoresCaseAsync(temp.Path, cancellationToken));
+
+        await harness.RunGitAsync(temp.Path, ["config", "--unset", "core.ignorecase"], cancellationToken);
+        Assert.False(await harness.GitClient.IgnoresCaseAsync(temp.Path, cancellationToken));
+
+        File.AppendAllText(temp.Combine(".git", "config"), "[core\n");
+        await Assert.ThrowsAsync<HarnessException>(() => harness.GitClient.IgnoresCaseAsync(temp.Path, cancellationToken));
+    }
+
     [Fact]
     public async Task GetRepositoryRootAsync_FindsTheRoot_FromASubdirectory()
     {
