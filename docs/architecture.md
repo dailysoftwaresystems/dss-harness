@@ -3787,8 +3787,12 @@ read by no part, so editing it moves no key, and a recorded `passed` it would ch
   nothing. Declared, never found: what a binary opens at run
   time is said by no record a build keeps, and every file of the tree in every key would make every
   arm pending after every edit. A file that joins or leaves what the entries cover moves the key, as
-  one that holds something else does; an entry that covers no file of the reading leaves the arm no
-  key, naming the entry, as a text it cites that the reading lacks does. A runner no TEST-RED row of
+  one that holds something else does - and each is named by the path the reading spells, so a file
+  renamed by case alone, where the tree's file system folds case, is one that left and one that
+  joined, compared as the key spells them, never as the tree finds them (`KeyDifference`), as a file
+  of a target's table spelt otherwise changes what it is built from; an entry that covers no file of
+  the reading leaves the arm no key, naming the entry, as a text it cites that the reading lacks
+  does. A runner no TEST-RED row of
   the registry names, one given no file, an entry outside the tree, one holding a `*` anywhere but a
   leading `**/`, and one naming the whole tree, are refused - the runner when the registry is read,
   the rest when the configuration is.
@@ -3877,8 +3881,12 @@ machine reads as they arrive and never relays (`HostAgentLines.Error` hands each
 `RemoteLegRunner.RunAsync`'s `onNote`, fed from `LegRunRequest.HostNotes`), into the same
 record-writing sink a leg swept here feeds. So each arm is recorded on the dispatcher as it ends on
 the host - a sweep stopped part way, or cut off, keeps what it had judged - and the host's final
-answer carries the arms as today and no record material: it travels one way only. A command typed on
-a host by hand has no machine to tell and records nothing. These shapes are the host-agent protocol's
+answer carries the arms as today and no record material: it travels one way only. A sweep typed by
+hand in a copy the harness synced (`HarnessContext.IsSyncedCopy`) - a host's - has no machine to tell
+and records nothing (`MutationService.RunAsync`): the record is the main checkout's on the machine
+the copy was synced from, and one kept in the copy would hold what that machine never sees and decide
+what a later sweep typed there holds. It says so once, as a warning, and names no record; under
+`--pending` it holds nothing, and sweeps every selected arm. These shapes are the host-agent protocol's
 rise to 10.
 
 A record that cannot be read - not JSON, a member this build does not know, or a hand's damage: a
@@ -3917,10 +3925,14 @@ cannot be read, or a newer build wrote it; its leg cannot be swept; it was never
 the verdict shown is no `passed`; it was swept with no key; or the judge's revision, its rows, a
 text it cites, a site it mutates, a file of the tree its targets are built from (one gone said as
 gone), a file its runner reads at run time, what of the configuration its build, run or judge is
-given, or the host its leg names changed. Every other arm is *unmoved here*, never said to hold: a listing reads the rows, the texts,
-the tree's files and the settings, and never how a target is built, a file the build makes, the
+given, or the host its leg names changed. A leg that names no host is read as though swept where
+its verdict was judged - which host a sweep would place it on is not read here, so the host is taken
+as recorded - and the environment its build is given is the one that host declares now
+(`HostsConfig.SettingsFor`), as the sweep that judged it was given what that host declared; a host
+the record spells as none declares nothing. Every other arm is *unmoved here*, never said to hold:
+a listing reads the rows, the texts, the tree's files and the settings, and never how a target is built, a file the build makes, the
 dependency sources it fetched, a file outside the tree it reads, the compilers or the developer
-environment - only a sweep on the leg's machine reads those, and eight reasons are a sweep's alone
+environment - only a sweep on the leg's machine reads those, and nine reasons are a sweep's alone
 for that. An arm unmoved here whose build is generated from a file that moved since, or whose
 configure would be given something else, says so: the causes kept beside the key name it. A
 listing exits `0` whatever is pending - a listing is no gate - and otherwise as a sweep gives it:
@@ -3943,14 +3955,19 @@ A host sweeping one leg of a run is given the same thing for that leg alone, as 
 `--held` of its own command line (`LegRunRequest.RemoteArgumentsOf`, the one way a dispatched leg is
 given an argument no other leg has; `--pending` travels among the run's arguments) - refused without
 `--here` - and decides held and pending by the one rule there, from its own reading of its copy and
-its own worker. A host given `--pending` and no `--held` holds nothing and sweeps every selected arm.
+its own worker. A record this machine cannot read, or one a newer build wrote, crosses as that
+(`RecordUnread`, read back by its one constructor), and every arm of the leg is pending there for it.
+A host given `--pending` and no `--held` holds nothing and sweeps every selected arm.
 An arm whose key is a recorded `passed`'s is held: it is not driven, its line is
 `skipped-not-selected` - the vocabulary kept, its detail naming the run whose `passed` holds and
 when - with `held` beneath it, and the record is told, in one change for every arm held, that this
 run verified it (`verified`). Every other arm is pending, its first reason said on its progress
 line and as `pending` beneath it, compared with the entry a listing would show - the newest on the
 key read now, which is then no `passed`, else the newest - by the comparisons every reader of a key
-shares (`KeyDifference.Between`), so the eight reasons a listing cannot give are a sweep's here. The
+shares (`KeyDifference.Between`), so the nine reasons a listing cannot give are a sweep's here - the
+last, `key-moved`, closing the list where the key is not the entry's and nothing else says how
+(`KeyDifference.Closed`): no arm is pending for nothing, and two keys that differ are never said to
+be one, a self-test's workers' among them. The
 pending arms are queued, the workers they need beyond the first made (`WorkerRoom.Wanted` of their
 count), and the sweep goes on as ever, the first worker driving with the graph it read. With nothing
 pending, no other worker is made, the first is given back, and the leg reaches `passed` as its own

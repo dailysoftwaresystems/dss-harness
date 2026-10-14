@@ -427,22 +427,58 @@ public sealed class JudgedOnTests
     }
 
     /// <summary>
-    /// The paths of what a runner reads at run time are compared as the leg's tree compares names, as every other path of
-    /// a key is: a recorded spelling that differs only in case is no move where the tree folds case, and a move where it
-    /// tells the spellings apart.
+    /// The paths of what a runner reads at run time are compared as the key spells them - as the tree's reading spells
+    /// each, whatever the tree's file system folds - as a file of a target's table is: a run-time read the reading spells
+    /// otherwise, renamed by case alone, moves the key, and is a move of what the runner reads, naming both spellings.
     /// </summary>
     [Fact]
-    public void RunReadPaths_AreComparedAsTheLegsTreeComparesNames()
+    public void RunReadPaths_AreComparedAsTheKeySpellsThem()
     {
         var arm = Arms(Registry).Find("one")!;
         var now = KeyOf(arm, new Dictionary<string, string?>(StringComparer.Ordinal));
         var recorded = Again(now, on => on with { RunReads = new Dictionary<string, string>(StringComparer.Ordinal) { ["Data/Golden.txt"] = "golden" } });
         var tables = now.Tables.ToDictionary(table => table.Key, table => table.Value, StringComparer.Ordinal);
 
-        Assert.Empty(KeyDifference.Between(recorded.JudgedOn, tables, now, StringComparer.OrdinalIgnoreCase));
+        Assert.NotEqual(recorded.Key, now.Key);
         Assert.Equal(
             [("run-reads-moved", "what its runner reads at run time moved: Data/Golden.txt, data/golden.txt")],
-            Said(KeyDifference.Between(recorded.JudgedOn, tables, now, StringComparer.Ordinal)));
+            Said(KeyDifference.Between(recorded.JudgedOn, tables, now)));
+    }
+
+    /// <summary>
+    /// Two keys that differ are never said to be one, nor is an arm pending for nothing: where no part compared names how
+    /// they differ, the list closes with the key itself moving - an arm under --pending is pending for that, never ending
+    /// its leg, and two workers of a self-test that read an arm otherwise differ for it.
+    /// </summary>
+    [Fact]
+    public void TwoKeysThatDiffer_WithNoPartNamingHow_AreSaidToHaveMoved()
+    {
+        var arm = Arms(Registry).Find("one")!;
+        var now = KeyOf(arm, new Dictionary<string, string?>(StringComparer.Ordinal));
+        var table = now.Tables.Values.Single();
+
+        // An entry recorded under a key that is not of what it says it was judged on: nothing it was judged on moved.
+        var recorded = new RecordedArms
+        {
+            Arms = new Dictionary<string, IReadOnlyList<RecordedVerdict>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["one"] = [new RecordedVerdict { Verdict = "passed", Run = "r1", At = DateTimeOffset.UnixEpoch, SweptIn = "the main checkout", Key = "another", JudgedOn = now.JudgedOn }],
+            },
+            Tables = new Dictionary<string, BuiltFromTable>(StringComparer.Ordinal) { [table.Digest()] = table },
+        };
+
+        var standing = ArmHolding.Of(recorded, "one", now);
+
+        Assert.Null(standing.Held);
+        Assert.Equal([("key-moved", "its key moved, in no part another reason names")], Said(standing.Why));
+        Assert.Equal("whose key moved", standing.Why[0].Counted);
+
+        // A worker that read a target the other did not: no target both read differs, and no other part does.
+        var wider = ArmKey.Of(now.JudgedOn, [BuiltFromReading.Read(table), BuiltFromReading.Read(table with { Target = "lib_extra" })]);
+
+        Assert.NotEqual(now.Key, wider.Key);
+        Assert.Equal([("key-moved", "its key moved, in no part another reason names")], Said(KeyDifference.Between(now, wider)));
+        Assert.Empty(KeyDifference.Between(now, Again(now)));
     }
 
     /// <summary>

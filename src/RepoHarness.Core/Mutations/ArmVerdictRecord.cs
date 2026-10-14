@@ -62,10 +62,22 @@ public sealed record RecordedVerdict
 }
 
 /// <summary>Why a leg's record of verdicts cannot be read: what reading it said, or the newer format it was written in.</summary>
+/// <remarks>
+/// Made by <see cref="Because"/> or <see cref="Newer"/>, and read back by its one constructor where a dispatch carried
+/// it to the host that sweeps the leg (<see cref="RecordedArms.Carried"/>): one of the two, never both, never neither.
+/// </remarks>
 public sealed record RecordUnread
 {
-    private RecordUnread(string? why, int? format)
+    /// <summary>A record unreadable for <paramref name="why"/>, or written in the newer <paramref name="format"/>: exactly one.</summary>
+    /// <exception cref="ArgumentException">Neither is given, both are, or <paramref name="why"/> says nothing.</exception>
+    [JsonConstructor]
+    private RecordUnread(string? why = null, int? format = null)
     {
+        if ((why is null) == (format is null) || (why is not null && string.IsNullOrWhiteSpace(why)))
+        {
+            throw new ArgumentException("A record that cannot be read is so for what reading it said, or for the newer format it was written in: exactly one.");
+        }
+
         Why = why;
         Format = format;
     }
@@ -90,6 +102,7 @@ public sealed record RecordUnread
     public static RecordUnread Newer(int format) => new(null, format);
 
     /// <summary>Why it cannot be read, in one clause: what reading it said, or which newer format it is in.</summary>
+    [JsonIgnore]
     public string Said
         => Format is { } format
             ? $"it was written by a newer {ToolPackage.Id} (format {format}; this one reads {ArmVerdictRecord.Format})"

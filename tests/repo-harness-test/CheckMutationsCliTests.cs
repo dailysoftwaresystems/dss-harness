@@ -1,5 +1,6 @@
 using System.Text.Json;
 using RepoHarness.Core.Configuration;
+using RepoHarness.Core.Mutations;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
 
@@ -302,6 +303,29 @@ public sealed class CheckMutationsCliTests
         Assert.Equal(HarnessExit.UsageError, result.ExitCode);
         Assert.Contains("--held is given by the machine that dispatches a leg's sweep to the host that sweeps it, so it needs --here: leave it out.", result.StandardError, StringComparison.Ordinal);
         Assert.DoesNotContain("check-mutations: run ", result.StandardError, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A host sweeping one leg of a run reads the --held it was given whatever the record it carries holds - a record the
+    /// dispatching machine cannot read, or one a newer build wrote, among them - and goes on to read its registry as ever:
+    /// here refusing TEST-RED arms with no report arguments, as configuration, rather than ending on what it was given.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AHostGivenARecordItsDispatcherCannotRead_ReadsIt_AndGoesOn(bool newer)
+    {
+        using var temp = new TempDirectory();
+        await PrepareListedAsync(temp);
+        var unread = newer ? RecordUnread.Newer(2) : RecordUnread.Because("it is not JSON");
+        var held = Convert.ToBase64String(RecordedArms.Unreadable(unread).Carried());
+
+        var result = await CliRunner.RunAsync(
+            ["check-mutations", "--pending", "--legs", "native", "--here", "ssh far", "--held", held, "-C", temp.Path],
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.ConfigInvalid, result.ExitCode);
+        Assert.Contains("mutations.reportArgs is not set", result.StandardError, StringComparison.Ordinal);
     }
 
     /// <summary>

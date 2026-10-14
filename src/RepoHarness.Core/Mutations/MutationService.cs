@@ -200,9 +200,20 @@ public sealed class MutationService(
             CommandName);
 
         // A sweep typed on this machine records each verdict as its arm ends; one a host runs for it keeps no record
-        // there - it tells this machine instead, as each arm ends - and nothing of a self-test is kept. Where this one
-        // records, it says where, as a listing does.
-        var records = request.Here is null && !request.SelfTest;
+        // there - it tells this machine instead, as each arm ends - and nothing of a self-test is kept. Nor does a sweep
+        // typed by hand in a copy the harness synced: the record is the main checkout's on the machine the copy was synced
+        // from, and one kept in the copy would hold what that machine never sees, and decide what a later sweep typed
+        // there holds - which it says, once. Where this one records, it says where, as a listing does.
+        var sweepsHere = request.Here is null && !request.SelfTest;
+        var records = sweepsHere && !context.IsSyncedCopy;
+
+        if (sweepsHere && context.IsSyncedCopy)
+        {
+            _output.Warn(
+                CommandName,
+                "this tree is a copy the harness synced, so this sweep records nothing: the record of verdicts is kept in the main "
+                + "checkout it was synced from" + (request.Pending ? ", and --pending holds nothing here, so every selected arm is swept" : string.Empty));
+        }
 
         if (records && !request.Json)
         {
@@ -380,7 +391,11 @@ public sealed class MutationService(
                 TableOf,
                 files,
                 named?.ToString(),
-                SweepSettings.Of(config, leg.Leg, config.Hosts.SettingsFor(named ?? HostId.Local)),
+
+                // Asked of the host the leg names, or of the one an entry was judged on where it names none: which host a
+                // sweep would place it on is not read here, so it is read as it was, and the environment its build is
+                // given with it - what that host declares, as the sweep that judged it was given what it declared.
+                host => SweepSettings.Of(config, leg.Leg, config.Hosts.SettingsFor(host)),
                 config.Mutations,
                 project is null ? null : JudgedCauses.GenerationOf(config, VariantKey.For(config, leg.Leg, leg.Leg.Os), project))));
         }

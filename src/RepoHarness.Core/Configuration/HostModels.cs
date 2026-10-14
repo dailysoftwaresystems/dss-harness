@@ -40,12 +40,33 @@ public sealed class HostsConfig
     {
         ArgumentNullException.ThrowIfNull(host);
 
-        HostSettings? declared = host.Kind switch
-        {
-            HostKind.Local => Local,
-            HostKind.Wsl => Wsl.GetValueOrDefault(host.Name),
-            _ => Ssh.GetValueOrDefault(host.Name),
-        };
+        return Declared(host);
+    }
+
+    /// <summary>
+    /// What the host spelt <paramref name="host"/> declares for itself: spelt as a machine that dispatches a leg names the
+    /// host it sends it to (<see cref="HostId.ToString"/>), as a recorded verdict names the host it was judged on.
+    /// </summary>
+    /// <param name="host">The host, as it was spelt.</param>
+    /// <remarks>A spelling that names no host - a hand's - names none with a section, so declares nothing.</remarks>
+    public HostSettings SettingsFor(string host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+
+        return Declared(HostId.TryParse(host, out var named) ? named : null);
+    }
+
+    /// <summary>What <paramref name="host"/> declares for itself: nothing where it has no section, or is no host.</summary>
+    private HostSettings Declared(HostId? host)
+    {
+        HostSettings? declared = host is null
+            ? null
+            : host.Kind switch
+            {
+                HostKind.Local => Local,
+                HostKind.Wsl => Wsl.GetValueOrDefault(host.Name),
+                _ => Ssh.GetValueOrDefault(host.Name),
+            };
 
         return declared ?? new LocalHostConfig();
     }

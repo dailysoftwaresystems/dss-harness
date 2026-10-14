@@ -492,7 +492,7 @@ internal sealed class MutationLegRunner(
             foreach (var arm in driven)
             {
                 var key = keys[arm.Id];
-                var standing = ArmHolding.Of(recorded, arm.Id, key, PathCase.In(_runner._fileSystem, _subject.TreeRoot));
+                var standing = ArmHolding.Of(recorded, arm.Id, key);
 
                 if (standing.Held is { } held)
                 {

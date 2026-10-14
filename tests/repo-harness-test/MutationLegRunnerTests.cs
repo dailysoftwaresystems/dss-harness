@@ -2796,6 +2796,66 @@ public sealed class MutationLegRunnerTests
     }
 
     /// <summary>
+    /// A host sweeping one leg of a run under <c>--pending</c>, given a record the machine that dispatched it cannot read -
+    /// one that cannot be, or one a newer build wrote - reads what it was given as it was: every arm of its leg is pending
+    /// for that, saying so, and swept, and the leg reaches its own verdict.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARecordTheDispatcherCannotRead_LeavesEveryArmPendingOnTheHost_SayingWhy(bool newer)
+    {
+        var unread = newer ? RecordUnread.Newer(2) : RecordUnread.Because("it is not JSON");
+        using var sweep = new Sweep { Workers = 1, Recorded = RecordedArms.OfCarried(RecordedArms.Unreadable(unread).Carried()) };
+
+        var entry = await sweep.RunAsync([ChargeBound, DepthType]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+
+        Assert.True(entry.Verdict == LegVerdict.Passed, entry.Detail);
+        Assert.Equal(new PendingSweep(0, 2), entry.PendingSweep);
+        Assert.All(entry.Arms, arm => Assert.Equal(
+            newer
+                ? ("record-newer", $"the record of this leg was written by a newer {ToolPackage.Id}")
+                : ("record-unreadable", "the record of this leg cannot be read: it is not JSON"),
+            (arm.Pending?.Code, arm.Pending?.Said)));
+    }
+
+    /// <summary>
+    /// A file its runner reads at run time renamed by case alone, in a tree whose file system folds case, is spelt
+    /// otherwise by the tree's reading, and so by the key: a sweep under <c>--pending</c> finds the arm pending for what
+    /// its runner reads at run time, naming both spellings, and sweeps it - never ending the leg over a key that moved
+    /// with nothing said for it.
+    /// </summary>
+    [Fact]
+    public async Task ARunTimeReadRenamedByCaseAlone_IsPendingForWhatItsRunnerReads_UnderPending()
+    {
+        var spelt = "data/golden/expected.txt";
+
+        using var sweep = new Sweep
+        {
+            Workers = 1,
+            RunReads = new() { ["fixture_tests"] = ["data/golden"] },
+            ReadingSpells = path => path == "data/golden/expected.txt" ? spelt : path,
+        };
+
+        sweep.More["data/golden/expected.txt"] = "3 passed";
+        sweep.Files = new CaseOf(sweep.Harness.FileSystem, sweep.Tree, folds: true);
+        sweep.Sink = sweep.Recording();
+        Assert.Equal(LegVerdict.Passed, (await sweep.RunAsync([ChargeBound])).Verdict);
+
+        spelt = "data/golden/Expected.txt";
+        sweep.Recorded = sweep.RecordedOf(ChargeBound);
+
+        var entry = await sweep.RunAsync([ChargeBound]).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        var arm = Assert.Single(entry.Arms);
+
+        Assert.True(entry.Verdict == LegVerdict.Passed, entry.Detail);
+        Assert.Equal(
+            ("run-reads-moved", "what its runner reads at run time moved: data/golden/Expected.txt, data/golden/expected.txt"),
+            (arm.Pending?.Code, arm.Pending?.Said));
+        Assert.Equal(LegVerdict.Passed, arm.Verdict);
+    }
+
+    /// <summary>
     /// The workers a sweep under <c>--pending</c> makes beyond its first are as many as the arms it found pending need -
     /// never as many as it would drive without it - and its line counts the arms it swept apart from those that held.
     /// </summary>

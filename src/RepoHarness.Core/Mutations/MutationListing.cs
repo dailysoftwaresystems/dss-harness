@@ -75,7 +75,10 @@ public sealed record ListedLeg(string Leg, string? Unsweepable, string RecordFil
 /// <param name="Table">Reads a table of its record by its digest - called for at most one table to a digest, and for no entry older than the newest nothing moved for.</param>
 /// <param name="Tree">The one reading of the tree it acts on here.</param>
 /// <param name="Host">The host it names, as a dispatcher names it; <see langword="null"/> where it names none.</param>
-/// <param name="Settings">The settings it would be swept with, on the host it names or on this machine.</param>
+/// <param name="Settings">
+/// The settings it would be swept with on a host, as a dispatcher names it: asked of the host it names, or - where it names
+/// none - of the host each entry was judged on.
+/// </param>
 /// <param name="Mutations">The mutation settings a sweep of it runs by: what each runner reads at run time among them.</param>
 /// <param name="Generation">The digest of what its configure would be given (<see cref="JudgedCauses.GenerationOf"/>); <see langword="null"/> where it builds nothing.</param>
 internal sealed record ListingInput(
@@ -86,7 +89,7 @@ internal sealed record ListingInput(
     Func<string, RecordedTable> Table,
     TreeFiles Tree,
     string? Host,
-    SweepSettings Settings,
+    Func<string, SweepSettings> Settings,
     MutationSettings Mutations,
     string? Generation);
 

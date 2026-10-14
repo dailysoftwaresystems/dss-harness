@@ -901,6 +901,42 @@ public sealed class MutationServiceTests
     }
 
     /// <summary>
+    /// A sweep typed by hand in a copy the harness synced - a host's - records nothing: the record of verdicts is the main
+    /// checkout's on the machine the copy was synced from, and a record kept in the copy would hold what that machine
+    /// never sees and decide what a later sweep typed there holds. It says so once, under --json too, names no record in
+    /// its lines or its ledger, and writes none; under --pending it holds nothing, so every selected arm is swept.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ASweepTypedByHandInASyncedCopy_RecordsNothing_AndSaysSoOnce(bool pending)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var inspector = new RecordingInspector(host => new HostReport { Host = host, Os = "linux", Processor = "x86_64" });
+        var (service, context) = Prepare(temp, Sweepable(), harness: harness, inspector: inspector, syncedCopy: true);
+        var record = new ArmVerdictRecord(harness.FileSystem, context.Layout);
+
+        var outcome = await service.RunAsync(new MutationRequest(temp.Path, ["native"], null, Json: true, Pending: pending), RunId.New(), TestContext.Current.CancellationToken);
+
+        using (var document = JsonDocument.Parse(Assert.Single(outcome.Data)))
+        {
+            Assert.False(document.RootElement.TryGetProperty("mutationRecord", out _));
+        }
+
+        await service.RunAsync(new MutationRequest(temp.Path, ["native"], null, Pending: pending), RunId.New(), TestContext.Current.CancellationToken);
+
+        var said = "check-mutations: WARN - this tree is a copy the harness synced, so this sweep records nothing: the record of "
+            + "verdicts is kept in the main checkout it was synced from"
+            + (pending ? ", and --pending holds nothing here, so every selected arm is swept" : string.Empty);
+        var warnings = harness.StandardError.ToString().Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+
+        Assert.Equal(2, warnings.Count(line => line == said));
+        Assert.DoesNotContain("the record is '", harness.StandardOutput.ToString(), StringComparison.Ordinal);
+        Assert.False(Directory.Exists(record.Directory), "a sweep typed in a synced copy wrote a record there");
+    }
+
+    /// <summary>
     /// A sweep, or a self-test, in a tree whose git does not ignore what it would make in the slot its workers are kept
     /// in - a branch whose rules predate init's - is refused before anything is made, naming init, and the run ends
     /// there: a worker committed by <c>git add -A</c> would travel to every clone. It is asked of the tree on the machine
@@ -1133,6 +1169,70 @@ public sealed class MutationServiceTests
         {
             Assert.Equal("what 'fixture' is built from moved: SRC/Fixture.cpp (gone)", listedArm.GetProperty("why")[0].GetProperty("said").GetString());
         }
+    }
+
+    /// <summary>
+    /// A listing reads a leg that names no host as though it ran where the verdict shown was judged - which host a sweep
+    /// would place it on is no part of what a listing reads - so the environment its build is given is the one that host
+    /// declares: a leg placed on a WSL distribution that declares an environment is unmoved right after its sweep, and
+    /// moved once what that distribution declares changes, whatever this machine's own section says.
+    /// </summary>
+    [Fact]
+    public async Task AListing_OfALegNamingNoHost_ReadsTheEnvironmentOfTheHostItsVerdictWasJudgedOn()
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var config = Sweepable();
+        var token = TestContext.Current.CancellationToken;
+        var ubuntu = HostId.Wsl("Ubuntu");
+
+        config.Hosts.Wsl["Ubuntu"] = new WslHostConfig { RepositoryPath = "/home/dev/repo", Env = { ["MODE"] = "fast" } };
+
+        var (service, context) = Prepare(temp, config, harness: harness);
+
+        temp.WriteFile(Path.Combine("src", "fixture.cpp"), "bool within(int c, int b) { return c <= b; }\n");
+        harness.WriteConfig(temp.Path, config);
+
+        var arm = (await service.ReadAsync(context, ["charge"], token)).Selected[0];
+        string Held(string path) => FileContentHash.Of(File.ReadAllBytes(temp.Combine(path)));
+        var on = new JudgedOn
+        {
+            Judge = ArmJudge.Revision,
+            Rows = JudgedOn.RowsOf(arm),
+            Texts = JudgedOn.TextsOf(arm).ToDictionary(path => path, path => (string?)Held(path), StringComparer.Ordinal),
+            Sites = arm.Sites.ToDictionary(site => site.Site, site => (string?)Held(site.Site), StringComparer.Ordinal),
+            Built = new Dictionary<string, string>(StringComparer.Ordinal),
+            Compilers = [],
+            Settings = SweepSettings.Of(config, config.Legs["native"], config.Hosts.SettingsFor(ubuntu)),
+            RunReads = new Dictionary<string, string>(StringComparer.Ordinal),
+            Host = ubuntu.ToString(),
+        };
+
+        Assert.Null(new ArmVerdictRecord(harness.FileSystem, context.Layout).Merge(
+            "native",
+            "charge",
+            new RecordedVerdict { Verdict = "passed", Run = "20261012-145059-ba433418", At = DateTimeOffset.UnixEpoch, SweptIn = RepositoryTree.MainCheckout, Key = on.Key(), JudgedOn = on },
+            []));
+
+        async Task<JsonElement> ListedAsync()
+        {
+            var listed = await service.ListAsync(new MutationRequest(temp.Path, null, ["charge"], Json: true, List: true), token);
+
+            using var document = JsonDocument.Parse(Assert.Single(listed.Data));
+
+            return document.RootElement.GetProperty("legs")[0].GetProperty("arms")[0].Clone();
+        }
+
+        config.Hosts.Local.Env["MODE"] = "slow";
+
+        Assert.Equal("unmoved", (await ListedAsync()).GetProperty("state").GetString());
+
+        config.Hosts.Wsl["Ubuntu"].Env["MODE"] = "slow";
+
+        var moved = await ListedAsync();
+
+        Assert.Equal("pending", moved.GetProperty("state").GetString());
+        Assert.Equal("build-environment-changed", moved.GetProperty("why")[0].GetProperty("code").GetString());
     }
 
     /// <summary>
@@ -1918,9 +2018,9 @@ public sealed class MutationServiceTests
 
     /// <summary>
     /// The service over a repository in <paramref name="temp"/> holding the registry - <paramref name="rows"/>, or the two
-    /// arms with their rows - and every text it cites, with the context a run of it loads; writing where
-    /// <paramref name="harness"/> writes, or a harness of its own, its hosts measured by <paramref name="inspector"/>, or
-    /// as ones no leg runs on.
+    /// arms with their rows - and every text it cites, with the context a run of it loads, a copy the harness synced
+    /// where <paramref name="syncedCopy"/> says; writing where <paramref name="harness"/> writes, or a harness of its own,
+    /// its hosts measured by <paramref name="inspector"/>, or as ones no leg runs on.
     /// </summary>
     private static (MutationService Service, HarnessContext Context) Prepare(
         TempDirectory temp,
@@ -1932,7 +2032,8 @@ public sealed class MutationServiceTests
         ScriptedHostCommands? hosts = null,
         IGitClient? git = null,
         KnownTrees? trees = null,
-        ISyncService? reading = null)
+        ISyncService? reading = null,
+        bool syncedCopy = false)
     {
         harness ??= new HarnessFactory();
 
@@ -1944,7 +2045,7 @@ public sealed class MutationServiceTests
             temp.WriteFile(Path.Combine("mutations", "texts", name), text);
         }
 
-        var loader = HostDoubles.Loader(config, temp.Path, temp.Path);
+        var loader = HostDoubles.Loader(config, temp.Path, temp.Path, syncedCopy);
 
         return (
             Service(harness, temp, loader, inspector ?? new RecordingInspector(host => new HostReport { Host = host }), files, hosts, git, trees, reading),

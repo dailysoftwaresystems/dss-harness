@@ -36,7 +36,7 @@ public sealed class PendingReason
         "record-unreadable", "record-newer", "leg-unsweepable", "never-swept", "last-not-passed", "not-keyed", "judge-revised",
         "rows-changed", "text-moved", "site-moved", "files-moved", "run-reads-moved", "build-environment-changed", "run-settings-changed",
         "judge-settings-changed", "host-changed", "lines-changed", "set-changed", "made-moved", "fetched-moved", "outside-moved",
-        "compiler-changed", "environment-changed", "key-unreadable",
+        "compiler-changed", "environment-changed", "key-unreadable", "key-moved",
     ];
 
     /// <summary>The words a leg's count of its pending arms groups an arm pending for this reason by: <c>20 never swept</c>.</summary>
@@ -168,6 +168,12 @@ public sealed class PendingReason
         => new("key-unreadable", $"what it would be judged on cannot be read now: {why}") { Counted = "whose key cannot be read now" };
 
     /// <summary>
+    /// The key is not the one it is compared with, and no other reason names how: the reason that closes the list, so two
+    /// keys that differ are never said to be one.
+    /// </summary>
+    public static PendingReason KeyMoved { get; } = new("key-moved", "its key moved, in no part another reason names") { Counted = "whose key moved" };
+
+    /// <summary>
     /// Arms pending, counted by the first reason each is pending for, in the words a count groups them by - the largest
     /// group first, groups of one size in the order they first came: <c>9 never swept, 2 whose files moved</c>.
     /// </summary>
@@ -197,7 +203,10 @@ public sealed class PendingReason
 /// <param name="Sites">Each site the arm mutates, as its rows spell it, with what the reading holds of it; nothing where it holds none.</param>
 /// <param name="Tree">The tree's one reading.</param>
 /// <param name="RunReads">Each file the arm's runner reads at run time, as the reading holds it (<see cref="JudgedOn.RunReadsOf"/>).</param>
-/// <param name="Settings">What of the configuration the build, the run and the judge would be given.</param>
+/// <param name="Settings">
+/// What of the configuration the build, the run and the judge would be given on a host, as a dispatcher names it: the
+/// environment the build is given holds what that host declares.
+/// </param>
 /// <param name="Host">The host the leg names, as a dispatcher names it; <see langword="null"/> where it names none.</param>
 internal sealed record ReadHere(
     int Judge,
@@ -206,7 +215,7 @@ internal sealed record ReadHere(
     IReadOnlyDictionary<string, string?> Sites,
     TreeFiles Tree,
     IReadOnlyDictionary<string, string> RunReads,
-    SweepSettings Settings,
+    Func<string, SweepSettings> Settings,
     string? Host);
 
 /// <summary>
@@ -224,7 +233,23 @@ internal static class KeyDifference
         ArgumentNullException.ThrowIfNull(then);
         ArgumentNullException.ThrowIfNull(now);
 
-        return (now.Unread ?? then.Unread) is { } why ? [PendingReason.KeyUnreadable(why)] : Between(then.JudgedOn, then.Tables, now);
+        return (now.Unread ?? then.Unread) is { } why
+            ? [PendingReason.KeyUnreadable(why)]
+            : Closed(Between(then.JudgedOn, then.Tables, now), then.Key, now.Key);
+    }
+
+    /// <summary>
+    /// <paramref name="reasons"/>, closed: where they are none and the two keys differ, the reason that the key moved - so
+    /// two keys that differ are never said to be one, and nothing is pending for no reason. The one place that rule is.
+    /// </summary>
+    /// <param name="reasons">Every reason gathered.</param>
+    /// <param name="then">The key compared with.</param>
+    /// <param name="now">The key now.</param>
+    public static IReadOnlyList<PendingReason> Closed(IReadOnlyList<PendingReason> reasons, string? then, string? now)
+    {
+        ArgumentNullException.ThrowIfNull(reasons);
+
+        return reasons.Count == 0 && !string.Equals(then, now, StringComparison.Ordinal) ? [PendingReason.KeyMoved] : reasons;
     }
 
     /// <summary>
@@ -236,8 +261,7 @@ internal static class KeyDifference
     /// <param name="was">What the arm was judged on, as recorded.</param>
     /// <param name="tables">The tables of it the record could give, by target.</param>
     /// <param name="now">What it would be judged on now, as a worker's build read it.</param>
-    /// <param name="names">How the leg's tree compares names, as its file system does.</param>
-    public static IReadOnlyList<PendingReason> Between(JudgedOn was, IReadOnlyDictionary<string, BuiltFromTable> tables, ArmKey now, StringComparer? names = null)
+    public static IReadOnlyList<PendingReason> Between(JudgedOn was, IReadOnlyDictionary<string, BuiltFromTable> tables, ArmKey now)
     {
         ArgumentNullException.ThrowIfNull(was);
         ArgumentNullException.ThrowIfNull(tables);
@@ -263,7 +287,7 @@ internal static class KeyDifference
             }
         }
 
-        RunRead(was.RunReads, @is.RunReads, names ?? StringComparer.Ordinal, reasons);
+        RunRead(was.RunReads, @is.RunReads, reasons);
         Configured(was, @is.Settings, @is.Host, reasons);
 
         foreach (var (target, before, after) in compared)
@@ -307,7 +331,9 @@ internal static class KeyDifference
     /// Every reason what a listing reads here (<paramref name="now"/>) is not what the arm <paramref name="was"/> judged on, in
     /// the order a line names them: the parts a listing reads, each by the rule a sweep compares it by, and of each table
     /// the files of the tree it names, as the reading holds them now - a file the reading no longer holds is gone, and
-    /// moved. None where nothing read here moved, which is never to say the arm holds.
+    /// moved. The settings are those of the host the leg names, or - where it names none, so which host a sweep would
+    /// place it on is not read here - of the host it was judged on, as the host is compared. None where nothing read here
+    /// moved, which is never to say the arm holds.
     /// </summary>
     /// <param name="was">What the arm was judged on, as recorded.</param>
     /// <param name="tables">The tables of it the record could give, by target.</param>
@@ -336,8 +362,10 @@ internal static class KeyDifference
             }
         }
 
-        RunRead(was.RunReads, now.RunReads, now.Tree.Names, reasons);
-        Configured(was, now.Settings, now.Host ?? was.Host, reasons);
+        var host = now.Host ?? was.Host;
+
+        RunRead(was.RunReads, now.RunReads, reasons);
+        Configured(was, now.Settings(host), host, reasons);
 
         return reasons;
     }
@@ -384,11 +412,13 @@ internal static class KeyDifference
 
     /// <summary>
     /// The reason of what the runner reads at run time: each file that holds something else, or that joined or left what
-    /// it reads, its paths compared as <paramref name="names"/> compares them.
+    /// it reads, its paths compared as the key spells them - as the tree's reading spells each - so a file the reading
+    /// spells otherwise, renamed by case alone where the tree's file system folds case, is one that left and one that
+    /// joined, as a file of a target's table spelt otherwise changes what the target is built from.
     /// </summary>
-    private static void RunRead(IReadOnlyDictionary<string, string> was, IReadOnlyDictionary<string, string> now, StringComparer names, List<PendingReason> reasons)
+    private static void RunRead(IReadOnlyDictionary<string, string> was, IReadOnlyDictionary<string, string> now, List<PendingReason> reasons)
     {
-        if (Moved(new Dictionary<string, string>(was, names), new Dictionary<string, string>(now, names), names) is { Count: > 0 } moved)
+        if (Moved(was, now) is { Count: > 0 } moved)
         {
             reasons.Add(PendingReason.RunReadsMoved(moved));
         }
@@ -427,13 +457,10 @@ internal static class KeyDifference
             .Order(StringComparer.Ordinal)
             .Select(target => (target, then[target], now[target]))];
 
-    /// <summary>
-    /// Each key of the two maps whose value differs, or that only one holds, in ordinal order - keys compared as
-    /// <paramref name="names"/> compares them, the maps being keyed so; ordinally where it is left out.
-    /// </summary>
-    private static List<string> Moved<T>(IReadOnlyDictionary<string, T> before, IReadOnlyDictionary<string, T> after, StringComparer? names = null)
+    /// <summary>Each key of the two maps whose value differs, or that only one holds, in ordinal order - keys compared ordinally, as a key spells them.</summary>
+    private static List<string> Moved<T>(IReadOnlyDictionary<string, T> before, IReadOnlyDictionary<string, T> after)
         => [.. before.Keys
-            .Union(after.Keys, names ?? StringComparer.Ordinal)
+            .Union(after.Keys, StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .Where(key => !(before.TryGetValue(key, out var was) && after.TryGetValue(key, out var @is) && Equals(was, @is)))];
 

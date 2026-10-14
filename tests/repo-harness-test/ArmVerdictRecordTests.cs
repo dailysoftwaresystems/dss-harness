@@ -399,6 +399,30 @@ public sealed class ArmVerdictRecordTests : IDisposable
     }
 
     /// <summary>
+    /// What a dispatch carries of a record that cannot be read - one that cannot be, or one a newer build wrote - reads
+    /// back on the host as it was, so every arm of the leg is pending there for it; the words it is said in are made where
+    /// they are said, and never cross. A record said unreadable for neither reason, or for both, is no such record: refused.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData(2)]
+    public void ARecordThatCannotBeRead_CrossesToTheHostAsItIs(int? newer)
+    {
+        var unread = newer is { } format ? RecordUnread.Newer(format) : RecordUnread.Because("it is not JSON.");
+        var carried = RecordedArms.Unreadable(unread).Carried();
+        var read = RecordedArms.OfCarried(carried);
+
+        Assert.Equal((unread.Why, unread.Format, unread.Said), (read.Unread?.Why, read.Unread?.Format, read.Unread?.Said));
+        Assert.Empty(read.Arms);
+        Assert.DoesNotContain("\"said\"", System.Text.Encoding.UTF8.GetString(carried), StringComparison.Ordinal);
+
+        foreach (var neitherOrBoth in new[] { """{"unread":{}}""", """{"unread":{"why":"it is not JSON","format":2}}""" })
+        {
+            Assert.Throws<ArgumentException>(() => RecordedArms.OfCarried(System.Text.Encoding.UTF8.GetBytes(neitherOrBoth)));
+        }
+    }
+
+    /// <summary>
     /// What a sweep under --pending found holding is kept in one change of the record: each arm's entry on the key that
     /// held is marked with the run that verified it, every other entry left as it was, an entry no longer there passed
     /// over - and where the record cannot be read nothing is written, said once as a warning and on the leg's line.

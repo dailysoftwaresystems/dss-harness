@@ -558,7 +558,7 @@ public sealed class MutationListingTests
                 digest => digest != Lost && tables.TryGetValue(digest, out var table) ? AskedTable(digest, table) : AskedLost(digest),
                 new TreeFiles(reading, StringComparer.Ordinal),
                 Host,
-                Now,
+                _ => Now,
                 new MutationSettings { RunReads = new() { ["lib_tests"] = ["data"] } },
                 "generation");
         }

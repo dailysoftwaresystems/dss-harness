@@ -344,7 +344,8 @@ public sealed partial class HelpTests
             + "made and what they read outside the tree, the worker's own path told wherever it stands; the compilers CMake identified; ",
             "An arm a part of whose key could not be read has none.",
             "the leg's developer environment; what of the configuration the build, the run and the judge are given; what its runner "
-            + "reads at run time, as runReads names it; and the host.",
+            + "reads at run time, as runReads names it, each file by the path the reading spells, so one renamed by case alone "
+            + "moves the key; and the host.",
             "runReads names, for each runner as the A rows name it, the files of the tree its runs read at run time - a data file, a "
             + "golden output, a plugin it opens - each a path, everything below a directory, or **/name at any depth: what the "
             + "sweep's reading of the tree holds of each is part of the key of every arm that runner runs.",
@@ -384,8 +385,9 @@ public sealed partial class HelpTests
             + $"for each leg, and the tables its entries name in {ArmVerdictRecord.TablesDirectoryName}/<leg>/",
             "a host's copy keeps none, so a leg swept there tells this machine instead - each verdict as a "
             + "line on the host's standard error that this machine reads as the arm ends there and never relays, a sweep "
-            + "stopped part way or cut off keeping what it had judged - and a sweep typed on a host by hand records "
-            + "nothing.",
+            + "stopped part way or cut off keeping what it had judged - and a sweep typed by hand in a copy the harness "
+            + "synced records nothing, saying so once as a warning: under --pending it then holds nothing, and sweeps every "
+            + "selected arm.",
             $"an arm keeps {ArmVerdictRecord.KeptPerArm} keys on a leg, the oldest by its place in the file going first, never by its date.",
             "clean, a deleted worktree and a removed host copy leave it as it was; deleting it is the one way to forget it, and "
             + "every arm is then pending.",
@@ -462,6 +464,8 @@ public sealed partial class HelpTests
             + "it mutates, a file of the tree its targets are built from, a file its runner reads at run time, what of the "
             + "configuration its build, its run or its judge is given, or the host its leg names changed",
             "the row says the first that applies, in that order, and --json every one.",
+            "A leg that names no host is read as though swept where its verdict was judged - which host a sweep would place it "
+            + "on is not read here - so the environment its build is given is the one that host declares.",
             "Every other arm is unmoved here, which is never to say it holds: a listing reads the rows, the texts, the tree's "
             + "files and the settings, never how a target is built, a file its build makes, the dependency sources it fetched, "
             + "a file outside the tree it reads, the compilers or the developer environment - only a sweep on the leg's machine "
@@ -497,7 +501,7 @@ public sealed partial class HelpTests
             "the first worker is made alone - claimed, synced, built whole - and the key of every arm is read from its build before any arm is mutated.",
             "An arm whose key is a recorded passed's holds: it is not driven, and is skipped-not-selected on that leg, its detail naming the run whose passed holds and when",
             "in as many workers beyond the first as the pending arms need",
-            "how a target is built, a file joined or left what it is built from, a file its build makes, the dependency sources it fetched or a file outside the tree it reads moved, its compiler or its developer environment changed, or what it would be judged on cannot be read now.",
+            "how a target is built, a file joined or left what it is built from, a file its build makes, the dependency sources it fetched or a file outside the tree it reads moved, its compiler or its developer environment changed, or what it would be judged on cannot be read now - and, where nothing else says how its key moved, that it moved.",
             "A host sweeping one leg of a run under --pending is given what the record holds of that leg's own arms - each arm's newest entry "
             + "and every recorded passed, as bytes in a hidden option of that leg alone - and decides held and pending "
             + "there, from its own reading of its copy and its own worker; given --pending and no record it holds nothing "
