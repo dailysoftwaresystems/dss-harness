@@ -412,6 +412,35 @@ public sealed class LedgerReportTests
             notApplied.Select(each => (each.GetProperty("name").GetString(), each.GetProperty("value")[0].GetString(), SetUpBy(each))));
     }
 
+    /// <summary>
+    /// The document says why ctest could not say what it registered for a control's red cases, in the ctest
+    /// object's own member: a control ctest answered nothing for carries the reason beside no match, so the
+    /// reader is told which of the two it holds.
+    /// </summary>
+    [Fact]
+    public void TheDocument_SaysWhyCtestCouldNotSay_AControlAsked()
+    {
+        var stopped = new ControlEntry(
+            "lex_tests",
+            "failed",
+            "the unmutated lex_tests has 1 red: CacheTest.ReadsWarm",
+            ["CacheTest.ReadsWarm"],
+            "/home/dev/repo/.harness-config/runs/r/lin/controls/lex_tests",
+            new CtestControl(Matched: null, Unread: "ctest did not answer within 120s", Tests: []));
+        var report = LedgerReport.From(
+        [
+            Entry("lin", LegVerdict.Failed, TimeSpan.FromSeconds(1), string.Empty) with { Controls = [stopped] },
+        ],
+        durationWarningFactor: 0);
+
+        using var document = JsonDocument.Parse(report.ToJson(cancelled: false, unfinished: []));
+        var ctest = document.RootElement.GetProperty("legs")[0].GetProperty("controls")[0].GetProperty("ctest");
+
+        Assert.Equal("ctest did not answer within 120s", ctest.GetProperty("unread").GetString());
+        Assert.False(ctest.TryGetProperty("matched", out _));
+        Assert.Empty(ctest.GetProperty("tests").EnumerateArray());
+    }
+
     [Fact]
     public void TheTable_HasTheFourColumnsInOrder()
     {

@@ -197,7 +197,9 @@ public static class HostAgentProtocol
     /// <summary>
     /// One line of a note: what a command a host runs for the machine that asked tells it while it runs, which that
     /// machine reads and never relays. The note's text crosses as the base64 of pieces of at most
-    /// <see cref="CarriedPiece"/> bytes, each piece one line, <paramref name="last"/> marking the last of them.
+    /// <see cref="NotePiece"/> bytes - each small enough that its whole line fits what that machine hands lines on
+    /// in (<see cref="Processes.ProcessRunner.LongestLine"/>), so no piece is cut in two on the way - each piece
+    /// one line, <paramref name="last"/> marking the last of them.
     /// </summary>
     /// <param name="nonce">The nonce of the request whose command writes the note.</param>
     /// <param name="kind">The note's kind, which says what its text holds.</param>

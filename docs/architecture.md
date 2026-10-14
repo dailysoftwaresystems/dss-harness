@@ -3752,7 +3752,9 @@ stops admitting arms turn every recorded `passed` into `not-admitted`. Never: a 
 subject has no sink. A leg swept on a host writes no record there - its copy keeps none - but tells
 the machine that dispatched it: each verdict, and the tables it names, as notes on the host's
 standard error (`NoteSink`, `HostNotes`), lines of the form `host-agent: note <nonce> <kind>
-<more|last> <base64>` carrying the text as base64 pieces of at most `CarriedPiece` bytes, which that
+<more|last> <base64>` carrying the text as base64 pieces of at most `NotePiece` bytes - each small
+enough that its whole line fits what that machine hands lines on in as it reads the host's standard
+error kept as a tail (`ProcessRunner.LongestLine`), so no piece is cut in two on the way - which that
 machine reads as they arrive and never relays (`HostAgentLines.Error` hands each whole note to
 `RemoteLegRunner.RunAsync`'s `onNote`, fed from `LegRunRequest.HostNotes`), into the same
 record-writing sink a leg swept here feeds. So each arm is recorded on the dispatcher as it ends on
@@ -3762,8 +3764,10 @@ a host by hand has no machine to tell and records nothing. These shapes are the 
 rise to 10.
 
 A record that cannot be read - not JSON, a member this build does not know, or a hand's damage: a
-null where entries or tables go, an entry with a key and nothing it was judged on - or one a newer build
-wrote (its `format` above this build's) is never written: every arm of its leg is pending, a sweep
+null where entries or tables go, an entry with a key and nothing it was judged on, a null inside what
+an entry was judged on (a target named by no digest, a run-time read named by no hash, a compiler
+that is no compiler) - or one a newer build wrote (its `format` above this build's) is never written:
+every arm of its leg is pending, a sweep
 of that leg says so once as a warning naming the file - delete it to start again, or update the tool
 - and once on the leg's line, and records none; so is a record that cannot be written. Either is the
 record's, never the arm's: its verdict stands as reached. A sweep typed on this machine names the

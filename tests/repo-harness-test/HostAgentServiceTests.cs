@@ -255,6 +255,26 @@ public sealed class HostAgentServiceTests
         Assert.Equal([(NoteSink.VerifiedKind, text)], noted);
     }
 
+    /// <summary>
+    /// The architecture names the cut a note crosses by - pieces of at most <see cref="HostAgentProtocol.NotePiece"/>
+    /// bytes, each small enough that its whole line fits what the machine that asked hands lines on in
+    /// (<see cref="ProcessRunner.LongestLine"/>) - in the words the protocol owns, and names no other cut.
+    /// </summary>
+    [Fact]
+    public void TheArchitecture_SaysTheCutANoteCrossesBy_InTheProtocolsOwnWords()
+    {
+        var architecture = Words(File.ReadAllText(Path.Combine(RepositoryRoot(), "docs", "architecture.md")));
+
+        Assert.Contains(
+            "carrying the text as base64 pieces of at most `NotePiece` bytes - each small enough that its whole line "
+                + "fits what that machine hands lines on in as it reads the host's standard error kept as a tail "
+                + "(`ProcessRunner.LongestLine`), so no piece is cut in two on the way",
+            architecture,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain("`CarriedPiece`", architecture, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Run_FindsACopyNamedFromTheHomeDirectory()
     {
@@ -1280,6 +1300,22 @@ public sealed class HostAgentServiceTests
                 lastResort ?? new RecordingLastResort(),
                 patience);
     }
+
+    /// <summary>The repository this test was built from: the first directory above it holding the solution.</summary>
+    private static string RepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "RepoHarness.slnx")))
+            {
+                return directory.FullName;
+            }
+        }
+
+        throw new InvalidOperationException($"No directory above '{AppContext.BaseDirectory}' holds RepoHarness.slnx.");
+    }
+
+    private static string Words(string text) => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     /// <summary>The real file system, except that every filesystem is mounted at <paramref name="mount"/>.</summary>
     private sealed class MountedAt(string mount) : PassThroughFileSystem(new PhysicalFileSystem(FilePermissionsFactory.Create()))

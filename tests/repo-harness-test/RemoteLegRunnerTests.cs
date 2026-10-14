@@ -550,6 +550,66 @@ public sealed class RemoteLegRunnerTests
     }
 
     /// <summary>
+    /// Why ctest on a host could not say what it registered for a control's red cases travels on its leg's line too,
+    /// read from the very document a host writes and named by the host this machine knows, as the leg's own detail is:
+    /// a control ctest answered nothing for carries the reason beside no match, in the host's words as the
+    /// configuration declares them, never by an address its name resolved to.
+    /// </summary>
+    [Fact]
+    public async Task WhyCtestOnAHostCouldNotSay_IsCarriedOnItsLegsLine_NamedByTheHostThisMachineKnows()
+    {
+        var written = LedgerReport
+            .From(
+                [
+                    new LegEntry
+                    {
+                        Leg = "wsl-debug",
+                        Verdict = LegVerdict.Failed,
+                        Detail = "the unmutated fixture_tests has 1 red: Fixture.Depth",
+                        Controls =
+                        [
+                            new ControlEntry(
+                                "fixture_tests",
+                                "failed",
+                                "the unmutated fixture_tests has 1 red: Fixture.Depth",
+                                ["Fixture.Depth"],
+                                "/home/dev/repo/.harness-config/runs/r/wsl-debug/controls/fixture_tests",
+                                new CtestControl(
+                                    Matched: null,
+                                    Unread: "ctest exited 2: no route to 192.0.2.10",
+                                    Tests: [])),
+                        ],
+                    },
+                ],
+                durationWarningFactor: 0)
+            .ToJson(cancelled: false, unfinished: []);
+
+        var hosts = new ScriptedHostCommands((_, command) =>
+        {
+            Answer(command, written);
+
+            return HostResults.Finished(command, 0);
+        });
+
+        var mac = HostId.Ssh("mac");
+        var connection = new HostConnection
+        {
+            Host = mac,
+            Address = "mac.invalid",
+            Resolved = new ResolvedAddresses(new AddressResolution("mac.invalid", Attempts: 1, ["192.0.2.10"]), NSubstitute.Substitute.For<IHostAddressResolver>()),
+        };
+        var leg = Leg() with { Host = Leg().Host with { Host = mac, Session = new HostSession(connection, ".dotnet/tools/dssharness") } };
+
+        var entry = await Runner(hosts).RunAsync(MutationService.CommandName, leg, [], cancellationToken: TestContext.Current.CancellationToken);
+
+        var ctest = Assert.Single(entry.Controls).Ctest!;
+
+        Assert.Null(ctest.Matched);
+        Assert.Equal("ctest exited 2: no route to mac.invalid", ctest.Unread);
+        Assert.Empty(ctest.Tests);
+    }
+
+    /// <summary>
     /// The last lines the phase that failed on a host printed travel on the leg's line, read from the very
     /// document the host writes: its log stays on that host, and a reader here has nothing else.
     /// </summary>
