@@ -601,8 +601,10 @@ no dry run and so takes the trees at once, does too. `--json` on the four verbs 
 `applied`, `lines` - with `request`, which tells the three meanings of 13 apart, and `heldNow`, every holder that
 decides the code, with `holds` tree or copy - each a `held now:` line names, and each holding a copy kept in the
 worktree, its `said` the line its family says of it and, where a claim rather than the lock names its holder, what
-only the lock's entry says null - and `heldUnread`, why the lock file could not be read. A command line refused before
-anything is weighed answers with the stopped document, which has no `request`.
+only the lock's entry says null - and `heldUnread`, why the lock file could not be read. A command stopped before
+anything is weighed - a `--directory` that is not there, a repository not initialised, a usage error - answers with the
+same document, empty (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no
+`lines`, its `exitCode` and `summary` the code it exits with and the line it ends on.
 
 An agent's worktree is `<worktrees.root>/<orchestrator>/<agent>`, addressed `orchestrator/agent` by list-worktree
 and delete-worktree, its host copies named `orchestrator--agent` (`WorktreeAddress`). The directory named for an
@@ -2070,6 +2072,12 @@ tool replaces, where a green result had quietly stopped meaning anything.
   the process exits with and the line it ends on. An interruption is said as one: `cancelled`,
   with exit 130, so a script never reads it as red. A machine that dispatched a leg reads the
   host's answer this way, so a host's refusal arrives as that refusal, in the host's words.
+- Every other command asked for `--json` that stops before it has anything of its own to say
+  answers in its own document's shape, never the ledger's: the agent verbs with the agent
+  document, empty; `list-orchestrator` and `list-worktree` with their listing, listing nothing,
+  after `exitCode` and `summary` (`ReportJson.Stopped`); `check-mutations --list` with its
+  listing, no legs. Each command registers which with `CommandRunner.Wrap` (`JsonAnswer`), so
+  the plumbing that stops a command answers for it without choosing by its name.
 - An emulated leg's emulator has passed its witness on that host before the leg starts.
 
 ### Inputs that hold still

@@ -307,7 +307,7 @@ internal static class RunCommand
                     (work, token) => RunLegAsync(runners, builds, toolchains, runnerName, inputs, manualSteps, workload, work, token),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonOption));
+        }, JsonAnswer.Ledger(JsonOption)));
         return command;
     }
 

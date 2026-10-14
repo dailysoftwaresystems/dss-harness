@@ -104,6 +104,15 @@ public sealed class MutationService(
     public const string CommandName = "check-mutations";
 
     /// <summary>
+    /// The listing <c>--list --json</c> answers with where the command stops before it lists anything: the listing's own
+    /// document, listing no leg, with the code it exits with and the line it ends on (<see cref="MutationListing.Stopped"/>).
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    /// <param name="show">Tells a line of the harness's own as it is told to whoever reads the document.</param>
+    public static string ListStopped(int exitCode, string summary, Func<string, string> show) => MutationListing.Stopped(exitCode, summary, show);
+
+    /// <summary>
     /// What a sweep exits with where no selected leg can run and no failure turned one away: incomplete, which is what
     /// such a run is - nothing failed, and no leg reached a verdict. The 1 a build, a test and a run give there is, of a
     /// sweep, an arm <c>violated</c>: a caller sorting by exit code would be sent to fix an arm's declaration by a sweep

@@ -27,6 +27,15 @@ internal static class OrchestrationArguments
             + "of you before --apply would go through, and who holds what it needs.",
     };
 
+    /// <summary>
+    /// The --json of fold-agent, delete-agent, refresh-agent and rebase-agent, which a verb that stops before it weighs
+    /// anything answers with the agent document for, empty.
+    /// </summary>
+    internal static readonly JsonAnswer AgentAnswer = new(Json, (_, exitCode, summary, _, _) => OrchestrationReports.Stopped(exitCode, summary));
+
+    /// <summary>The --json of list-orchestrator, which a listing that stops before it lists anything answers with its listing for, listing nothing.</summary>
+    internal static readonly JsonAnswer ListAnswer = new(Json, (_, exitCode, summary, _, _) => OrchestrationReports.ListStopped(exitCode, summary));
+
     /// <summary>The option that takes a clean three-way merge of a path both trees changed: one name, whichever command takes it.</summary>
     internal static Option<string[]> Merge(string description) => new(FoldAllowances.MergeOption) { HelpName = "path", Description = description };
 }
@@ -181,7 +190,7 @@ internal static class ListOrchestratorCommand
             Name,
             (context, cancellationToken) => context.Get<IOrchestratorService>()
                 .ListAsync(context.Directory, context.ParseResult.GetValue(NameArgument), context.ParseResult.GetValue(OrchestrationArguments.Json), cancellationToken),
-            OrchestrationArguments.Json));
+            OrchestrationArguments.ListAnswer));
 
         return command;
     }

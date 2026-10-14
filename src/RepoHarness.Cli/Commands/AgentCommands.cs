@@ -172,7 +172,7 @@ internal static class RefreshAgentCommand
                     context.ParseResult.GetValue(ApplyOption),
                     cancellationToken: cancellationToken,
                     json: context.ParseResult.GetValue(OrchestrationArguments.Json)),
-            OrchestrationArguments.Json));
+            OrchestrationArguments.AgentAnswer));
 
         return command;
     }
@@ -231,7 +231,7 @@ internal static class RebaseAgentCommand
                     context.ParseResult.GetValue(ApplyOption),
                     cancellationToken: cancellationToken,
                     json: context.ParseResult.GetValue(OrchestrationArguments.Json)),
-            OrchestrationArguments.Json));
+            OrchestrationArguments.AgentAnswer));
 
         return command;
     }
@@ -274,7 +274,7 @@ internal static class FoldAgentCommand
                     context.ParseResult.GetValue(ApplyOption),
                     cancellationToken: cancellationToken,
                     json: context.ParseResult.GetValue(OrchestrationArguments.Json)),
-            OrchestrationArguments.Json));
+            OrchestrationArguments.AgentAnswer));
 
         return command;
     }
@@ -321,7 +321,7 @@ internal static class DeleteAgentCommand
                     context.ParseResult.GetValue(DiscardUncommittedOption),
                     cancellationToken: cancellationToken,
                     json: context.ParseResult.GetValue(OrchestrationArguments.Json)),
-            OrchestrationArguments.Json));
+            OrchestrationArguments.AgentAnswer));
 
         return command;
     }

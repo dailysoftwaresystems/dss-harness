@@ -57,6 +57,16 @@ internal static class CheckMutationsCommand
         Hidden = true,
     };
 
+    /// <summary>
+    /// The document a stop answers with under --json: a listing's, listing no leg, where --list was given, and a sweep's
+    /// ledger, with no legs, where it was not.
+    /// </summary>
+    private static readonly JsonAnswer Answer = new(
+        JsonOption,
+        (arguments, exitCode, summary, shown, run) => arguments.GetValue(ListOption)
+            ? MutationService.ListStopped(exitCode, summary, shown)
+            : JsonAnswer.Ledger(JsonOption).Stopped(arguments, exitCode, summary, shown, run));
+
     internal static Command Create()
     {
         var command = new Command(
@@ -111,7 +121,7 @@ internal static class CheckMutationsCommand
             return list
                 ? await service.ListAsync(request, cancellationToken).ConfigureAwait(false)
                 : await service.RunAsync(request, run!, cancellationToken).ConfigureAwait(false);
-        }, beginsRun: arguments => !arguments.GetValue(ListOption), JsonOption));
+        }, beginsRun: arguments => !arguments.GetValue(ListOption), Answer));
 
         return command;
     }

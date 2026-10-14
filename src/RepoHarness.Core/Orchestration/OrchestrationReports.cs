@@ -25,6 +25,15 @@ public static class OrchestrationReports
             : CommandOutcome.Ok(message, [.. Lines(orchestrators)]);
     }
 
+    /// <summary>
+    /// The listing list-orchestrator answers with where it stops before it lists anything - a --directory that does not
+    /// exist, a repository not initialised: its own document, listing no orchestrator, after the code it exits with and
+    /// the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string ListStopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, Document([]));
+
     private static IEnumerable<string> Lines(IReadOnlyList<OrchestratorInventory> orchestrators)
     {
         foreach (var orchestrator in orchestrators)
@@ -515,10 +524,30 @@ public static class OrchestrationReports
             lines.Add(line);
         }
 
-        var document = new JsonObject
+        // Null where the lock file could not be read - nobody was named, and heldUnread says why - and an empty array
+        // where it was read and nobody held.
+        var document = AgentDocument(outcome.ExitCode, outcome.Message, applied, standing, holders is { Unread: not null } ? null : heldNow, holders?.Unread, lines);
+
+        return outcome with { Data = [document], Quiet = true };
+    }
+
+    /// <summary>
+    /// The document fold-agent, delete-agent, refresh-agent or rebase-agent answers with where it stops before it weighs
+    /// anything - a --directory that does not exist, a repository not initialised, a usage error: the same document,
+    /// empty - nothing applied, no request weighed, nobody asked who holds anything, no lines - with the code it exits
+    /// with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string Stopped(int exitCode, string summary)
+        => AgentDocument(exitCode, summary, applied: false, standing: null, heldNow: null, heldUnread: null, []);
+
+    /// <summary>The one document of the four verbs, member by member, as text.</summary>
+    private static string AgentDocument(int exitCode, string summary, bool applied, RequestStanding? standing, JsonArray? heldNow, string? heldUnread, JsonArray lines)
+        => new JsonObject
         {
-            ["exitCode"] = outcome.ExitCode,
-            ["summary"] = outcome.Message,
+            ["exitCode"] = exitCode,
+            ["summary"] = summary,
             ["applied"] = applied,
             ["request"] = standing switch
             {
@@ -527,16 +556,10 @@ public static class OrchestrationReports
                 RequestStanding.Refused => "refused",
                 _ => null,
             },
-
-            // Null where the lock file could not be read - nobody was named, and heldUnread says why - and an empty array
-            // where it was read and nobody held.
-            ["heldNow"] = holders is { Unread: not null } ? null : heldNow,
-            ["heldUnread"] = holders?.Unread,
+            ["heldNow"] = heldNow,
+            ["heldUnread"] = heldUnread,
             ["lines"] = lines,
-        };
-
-        return outcome with { Data = [document.ToJsonString(ReportJson.Options)], Quiet = true };
-    }
+        }.ToJsonString(ReportJson.Options);
 
     /// <summary>An agent's base as reports name it, where none may be recorded.</summary>
     /// <param name="commit">The commit, or null where none is recorded.</param>

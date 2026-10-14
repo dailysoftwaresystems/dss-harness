@@ -54,7 +54,7 @@ internal static class CleanCommand
                         arguments.GetValue(DispatchOptions.Here)),
                     cancellationToken)
                 .ConfigureAwait(false);
-        }, JsonOption));
+        }, JsonAnswer.Ledger(JsonOption)));
 
         return command;
     }

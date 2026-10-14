@@ -57,17 +57,16 @@ internal static class CommandRunner
     /// <summary>Wraps a command body into an action the parser can invoke.</summary>
     /// <param name="commandName">The command, which prefixes every line it writes.</param>
     /// <param name="body">What the command does.</param>
-    /// <param name="ledger">
-    /// For a command that runs legs, its <c>--json</c>. Asked for its ledger as data, it answers with
-    /// a ledger on every exit - one with no legs, when it stopped before any leg had a line: a leg
-    /// nobody declared, a configuration that does not load, a runner nobody declared. A script
-    /// reading standard output has one document to read whatever happened.
+    /// <param name="json">
+    /// The command's <c>--json</c>, with the document it answers with where it stops before its body has an outcome -
+    /// its own document's shape, empty (<see cref="JsonAnswer"/>). Asked for it, the command answers with one document
+    /// on every exit: a script reading standard output has one document to read whatever happened.
     /// </param>
     internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
         string commandName,
         Func<CommandContext, CancellationToken, Task<CommandOutcome>> body,
-        Option<bool>? ledger = null)
-        => Wrap(commandName, (context, _, cancellationToken) => body(context, cancellationToken), ledger, beginsRun: _ => false);
+        JsonAnswer? json = null)
+        => Wrap(commandName, (context, _, cancellationToken) => body(context, cancellationToken), json, beginsRun: _ => false);
 
     /// <summary>
     /// Wraps the body of a command that keeps runs - build, test, run and check-mutations - into an action the parser
@@ -75,7 +74,7 @@ internal static class CommandRunner
     /// </summary>
     /// <param name="commandName">The command, which prefixes every line it writes.</param>
     /// <param name="body">What the command does, given the run it began.</param>
-    /// <param name="ledger">The command's <c>--json</c>, as <see cref="Wrap(string, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, Option{bool}?)"/> takes it.</param>
+    /// <param name="json">The command's <c>--json</c>, as <see cref="Wrap(string, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, JsonAnswer?)"/> takes it.</param>
     /// <remarks>
     /// The run is named in the command's first line, and as <c>runId</c> in its <c>--json</c> ledger on every exit, and
     /// is the one its records are kept under: a run refused before it had a directory keeps no records, and its id is
@@ -84,8 +83,8 @@ internal static class CommandRunner
     internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
         string commandName,
         Func<CommandContext, RunId, CancellationToken, Task<CommandOutcome>> body,
-        Option<bool>? ledger = null)
-        => Wrap(commandName, (context, run, cancellationToken) => body(context, run!, cancellationToken), ledger, beginsRun: _ => true);
+        JsonAnswer? json = null)
+        => Wrap(commandName, (context, run, cancellationToken) => body(context, run!, cancellationToken), json, beginsRun: _ => true);
 
     /// <summary>
     /// Wraps the body of a command whose parsed command line decides whether it begins a run - check-mutations, whose
@@ -94,20 +93,20 @@ internal static class CommandRunner
     /// <param name="commandName">The command, which prefixes every line it writes.</param>
     /// <param name="body">What the command does, given the run it began, or nothing where it began none.</param>
     /// <param name="beginsRun">Whether the parsed command line begins a run.</param>
-    /// <param name="ledger">The command's <c>--json</c>, as <see cref="Wrap(string, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, Option{bool}?)"/> takes it.</param>
+    /// <param name="json">The command's <c>--json</c>, as <see cref="Wrap(string, Func{CommandContext, CancellationToken, Task{CommandOutcome}}, JsonAnswer?)"/> takes it.</param>
     /// <remarks>A command line that begins no run prints no <c>run &lt;id&gt;</c> line, and keeps no records.</remarks>
     internal static Func<ParseResult, CancellationToken, Task<int>> Wrap(
         string commandName,
         Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
         Func<ParseResult, bool> beginsRun,
-        Option<bool>? ledger = null)
-        => Wrap(commandName, body, ledger, beginsRun);
+        JsonAnswer? json = null)
+        => Wrap(commandName, body, json, beginsRun);
 
     /// <summary>Wraps a command body, given its run where its parsed command line <paramref name="beginsRun"/>, into an action the parser can invoke.</summary>
     private static Func<ParseResult, CancellationToken, Task<int>> Wrap(
         string commandName,
         Func<CommandContext, RunId?, CancellationToken, Task<CommandOutcome>> body,
-        Option<bool>? ledger,
+        JsonAnswer? json,
         Func<ParseResult, bool> beginsRun)
     {
         return async (parseResult, cancellationToken) =>
@@ -116,13 +115,16 @@ internal static class CommandRunner
             var prompting = !parseResult.GetValue(GlobalOptions.NoPrompt);
             await using var services = HarnessServices.Build(verbose, prompting, Origin.Value ?? CommandOrigin.Typed);
             var output = services.GetRequiredService<IHarnessOutput>();
-            var answersWithLedger = ledger is not null && parseResult.GetValue(ledger);
+            var run = beginsRun(parseResult) ? RunId.New() : null;
+
+            // Asked for its document, a command that stops answers in its own document's shape, as it registered it.
+            Func<int, string, string>? stopped = json is not null && parseResult.GetValue(json.Option)
+                ? (exitCode, summary) => json.Stopped(parseResult, exitCode, summary, output.Shown, run)
+                : null;
 
             // The document is the whole of standard output from the first line, not from the moment
             // the legs are surveyed: a line written before then would sit in front of it.
-            using var document = answersWithLedger ? output.DataOnly() : null;
-
-            var run = beginsRun(parseResult) ? RunId.New() : null;
+            using var document = stopped is not null ? output.DataOnly() : null;
 
             if (run is not null)
             {
@@ -133,7 +135,7 @@ internal static class CommandRunner
             {
                 if (!TryResolveDirectory(parseResult, services, out var directory, out var problem))
                 {
-                    return Stop(output, commandName, HarnessExit.UsageError, problem, answersWithLedger, run);
+                    return Stop(output, commandName, HarnessExit.UsageError, problem, stopped);
                 }
 
                 var context = new CommandContext(services, parseResult, directory);
@@ -144,7 +146,7 @@ internal static class CommandRunner
             }
             catch (Exception ex)
             {
-                return Fail(output, commandName, ex, answersWithLedger, run);
+                return Fail(output, commandName, ex, stopped);
             }
             finally
             {
@@ -163,13 +165,15 @@ internal static class CommandRunner
     /// <param name="output">Where the command writes.</param>
     /// <param name="commandName">The command, which prefixes its failure line.</param>
     /// <param name="exception">What ended it.</param>
-    /// <param name="ledger">Whether the command was asked for its ledger as data, which it then answers with.</param>
-    /// <param name="run">The run the command had begun, which its ledger names; <see langword="null"/> where it began none.</param>
-    internal static int Fail(IHarnessOutput output, string commandName, Exception exception, bool ledger = false, RunId? run = null)
+    /// <param name="stopped">
+    /// The document the command answers with, given the code it exits with and the line it ends on, where it was asked
+    /// for one (<see cref="JsonAnswer"/>); <see langword="null"/> where it was not.
+    /// </param>
+    internal static int Fail(IHarnessOutput output, string commandName, Exception exception, Func<int, string, string>? stopped = null)
     {
         var (exitCode, message, defect) = Meaning(exception);
 
-        Stop(output, commandName, exitCode, message, ledger, run);
+        Stop(output, commandName, exitCode, message, stopped);
 
         // A defect's stack trace is there under --verbose, where someone is actually diagnosing it. It is the
         // harness's own report, which repeats the message its failure line said, so it is told as that line is.
@@ -212,14 +216,14 @@ internal static class CommandRunner
     }
 
     /// <summary>
-    /// Ends a command that did not succeed: with its ledger first, as the whole of standard output,
+    /// Ends a command that did not succeed: with its document first, as the whole of standard output,
     /// when it was asked for one, and then the line that says why.
     /// </summary>
-    private static int Stop(IHarnessOutput output, string commandName, int exitCode, string message, bool ledger, RunId? run = null)
+    private static int Stop(IHarnessOutput output, string commandName, int exitCode, string message, Func<int, string, string>? stopped)
     {
-        if (ledger)
+        if (stopped is not null)
         {
-            output.Data(LedgerReport.Stopped(exitCode, message, output.Shown, run));
+            output.Data(stopped(exitCode, message));
         }
 
         output.Fail(commandName, message);

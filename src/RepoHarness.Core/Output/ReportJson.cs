@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace RepoHarness.Core.Output;
@@ -23,4 +24,25 @@ public static class ReportJson
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
+
+    /// <summary>
+    /// The document a listing answers with where its command stops before it lists anything: the code it exits with and
+    /// the line it ends on, then the listing's own members, as <paramref name="empty"/> holds them listing nothing.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    /// <param name="empty">The listing's own document, listing nothing.</param>
+    public static string Stopped(int exitCode, string summary, JsonObject empty)
+    {
+        ArgumentNullException.ThrowIfNull(empty);
+
+        var document = new JsonObject { ["exitCode"] = exitCode, ["summary"] = summary };
+
+        foreach (var (member, value) in empty)
+        {
+            document[member] = value?.DeepClone();
+        }
+
+        return document.ToJsonString(Options);
+    }
 }

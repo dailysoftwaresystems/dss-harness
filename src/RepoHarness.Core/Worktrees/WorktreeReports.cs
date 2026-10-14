@@ -49,6 +49,15 @@ public static class WorktreeReports
             : CommandOutcome.Failed(copies.ExitCode, message, lines);
     }
 
+    /// <summary>
+    /// The listing list-worktree answers with where it stops before it lists anything - a --directory that does not
+    /// exist, a repository not initialised: its own document, listing no worktree and no copy, after the code it exits
+    /// with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    public static string Stopped(int exitCode, string summary) => ReportJson.Stopped(exitCode, summary, Document([], new HostCopyListing()));
+
     private static string Summary(IReadOnlyList<WorktreeListing> worktrees, HostCopyListing copies)
     {
         var said = worktrees.Count == 0 ? "no worktrees" : ReportText.Counted(worktrees.Count, "worktree");

@@ -133,7 +133,7 @@ internal static class ListWorktreeCommand
                 .ConfigureAwait(false);
 
             return WorktreeReports.List(worktrees, copies, context.ParseResult.GetValue(JsonOption));
-        }, JsonOption));
+        }, new JsonAnswer(JsonOption, (_, exitCode, summary, _, _) => WorktreeReports.Stopped(exitCode, summary))));
 
         return command;
     }

@@ -321,13 +321,33 @@ internal static class MutationListing
         ArgumentNullException.ThrowIfNull(legs);
         ArgumentNullException.ThrowIfNull(show);
 
-        return JsonSerializer.Serialize(
+        return Json(Results.HarnessExit.Success, Summary(legs), registry, show(record), legs, show);
+    }
+
+    /// <summary>
+    /// The listing <c>check-mutations --list --json</c> answers with where it stops before it lists anything - a
+    /// --directory that does not exist, a configuration that does not load, an option a listing refuses: the same
+    /// document, listing no leg, with the code it exits with and the line it ends on.
+    /// </summary>
+    /// <param name="exitCode">The code the command exits with.</param>
+    /// <param name="summary">The line it ends on.</param>
+    /// <param name="show">Tells a line of the harness's own as it is told to whoever reads the document.</param>
+    public static string Stopped(int exitCode, string summary, Func<string, string> show)
+    {
+        ArgumentNullException.ThrowIfNull(show);
+
+        return Json(exitCode, show(summary), registry: null, record: null, [], show);
+    }
+
+    /// <summary>The listing's one document, member by member.</summary>
+    private static string Json(int exitCode, string summary, string? registry, string? record, IReadOnlyList<ListedLeg> legs, Func<string, string> show)
+        => JsonSerializer.Serialize(
             new
             {
-                ExitCode = Results.HarnessExit.Success,
-                Summary = Summary(legs),
+                ExitCode = exitCode,
+                Summary = summary,
                 Registry = registry,
-                MutationRecord = show(record),
+                MutationRecord = record,
                 Legs = legs.Select(leg => new
                 {
                     leg.Leg,
@@ -368,7 +388,6 @@ internal static class MutationListing
                 }),
             },
             ReportJson.Options);
-    }
 
     /// <summary>What the listing found, in one line: how many arms on how many legs, pending and unmoved.</summary>
     /// <param name="legs">Each leg listed.</param>
