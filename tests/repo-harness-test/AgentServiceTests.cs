@@ -777,6 +777,34 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// seed-agent's removals are guarded as its copies are: a file the main tree deleted that the agent's session rewrote
+    /// after it was weighed stops it there, exit 21, never removed.
+    /// </summary>
+    [Fact]
+    public async Task ADeletionTheAgentChangedAfterItWasWeighed_StopsSeeding_AndIsNotRemoved()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        var copy = Path.Combine(worktree, "b.txt");
+
+        // Its second reading is the one that asks, before the removal, whether it is what was weighed: the session writes first.
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 2, () => File.WriteAllText(copy, "two\nthe session's edit\n")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.SeedAsync(kit.Main, "o1", "ag", empty: false, force: false, Token);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith(
+            "Seeding agent 'ag' of 'o1' stopped after 0 of 1 path(s): 'b.txt' holds other content in the agent's worktree now than when it was measured, so it was not removed.",
+            stopped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("two\nthe session's edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+    }
+
+    /// <summary>
     /// A file the agent's session makes runnable between the weighing and the copy - its content unchanged - is never
     /// written over either: the guard asks for the file whole, its digest and its bit, and the refresh stops there
     /// naming what changed.

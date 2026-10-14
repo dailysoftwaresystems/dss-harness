@@ -157,6 +157,35 @@ public sealed class AgentRowsTests
     }
 
     /// <summary>
+    /// A priority or a trigger the registries changed since the agent's earlier fold stays theirs where the agent declares
+    /// the row anew having changed another cell alone: what the agent's file still holds of it is what it declared then,
+    /// never written over the registries' change, and the agent's own change goes in beside it.
+    /// </summary>
+    /// <param name="cell">The cell the registries change: priority or trigger.</param>
+    [Theory]
+    [InlineData("priority")]
+    [InlineData("trigger")]
+    public async Task ACellTheRegistriesChangedSince_StaysTheirs_WhereTheAgentChangedAnotherCellAlone(string cell)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        await kit.CreateAgentAsync("ag");
+        kit.FileRow("ag", Id, Row);
+        Assert.True((await kit.FoldAsync("ag", apply: true, OrchestrationKit.Making(Id))).Succeeded);
+        var theirs = cell == "priority" ? new AnchorSetRequest(Id) { Priority = "P1" } : new AnchorSetRequest(Id) { Trigger = "something the registries restated" };
+        await kit.Harness.AnchorRegistryService.SetAsync(kit.Main, theirs, dryRun: false, Token);
+        kit.FileRow("ag", Id, new Dictionary<string, string>(Row) { ["closing"] = "the fix and a test that proves it" });
+
+        var folded = await kit.FoldAsync("ag", apply: true);
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        var row = await RowAsync(kit);
+        Assert.Equal(cell == "priority" ? "P1" : "P2", row.Priority);
+        Assert.Equal(cell == "trigger" ? "something the registries restated" : "something the agent found", row.Trigger);
+        Assert.Equal("the fix and a test that proves it", row.ClosingWork);
+    }
+
+    /// <summary>
     /// A row the registries closed since the agent's earlier fold stays closed and in the done registry while the trigger
     /// the agent restated goes in: the row that results is composed and judged as any change is.
     /// </summary>

@@ -1254,6 +1254,37 @@ public sealed class AgentFoldTests
         Assert.Contains("new.txt", seed.Paths.Keys);
     }
 
+    /// <summary>
+    /// A settled deletion is guarded as a settled copy is: a file the main tree removed, reconciled by hand, that the agent's
+    /// session rewrites after it was weighed is never removed, and the fold stops there, exit 21, naming it.
+    /// </summary>
+    [Fact]
+    public async Task ASettledDeletion_StopsWhereTheAgentsFileChangedSinceItWasWeighed()
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "b.txt", "two\nagent edit\n");
+        File.Delete(Path.Combine(kit.Main, "b.txt"));
+        var copy = Path.Combine(worktree, "b.txt");
+
+        // Its third reading is the one that asks, before the removal, whether it is what was weighed: the session writes first.
+        var agents = kit.Harness.Agents(
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, copy, 3, () => File.WriteAllText(copy, "two\nthe session's edit\n")),
+            kit.Harness.AnchorRegistryService);
+
+        var stopped = await agents.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances { Settled = ["b.txt"] }, apply: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HarnessExit.Incomplete, stopped.ExitCode);
+        Assert.StartsWith(
+            "Folding agent 'ag' of 'o1' stopped part way, after writing 0 of 0 path(s) and removing 0 of 0, then handing the agent 0 of 1 settled by hand: "
+                + "'b.txt' holds other content in the agent's worktree now than when it was measured, so it was not removed.",
+            stopped.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("two\nthe session's edit\n", OrchestrationKit.Read(worktree, "b.txt"));
+        Assert.DoesNotContain("b.txt", kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!.Absent ?? []);
+    }
+
     /// <summary>A settled path the fold does not weigh settles nothing, and is refused as the misspelling it most likely is.</summary>
     [Fact]
     public async Task ASettledPathTheFoldDoesNotWeigh_IsRefused()

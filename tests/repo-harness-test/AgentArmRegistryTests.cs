@@ -150,6 +150,63 @@ public sealed class AgentArmRegistryTests
     }
 
     /// <summary>
+    /// A merge by arm a refresh would write, whose text cites texts no tree will hold once it is written, does not read as a
+    /// registry: the refresh is refused, every problem listed as check-mutations words it, and nothing written into the
+    /// agent's worktree.
+    /// </summary>
+    [Fact]
+    public async Task AMergedRegistryCitingATextNoTreeWillHold_RefusesTheRefresh_EveryProblemListed()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha");
+        await MainAddsAsync(kit, "beta", "alpha");
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("delta")));
+
+        var refused = await RefreshAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Contains($"  {Registry}   (merged by arm, it does not read as a registry - 3 problem(s), listed below)", refused.Details!);
+        Assert.Equal(
+            [
+                $"The arms registry '{Registry}', as the refresh would write it, cannot be swept: 3 problem(s), each to fix:",
+                $"  - line 7: text '{Texts}/delta.before' is not a file in the tree",
+                $"  - line 7: text '{Texts}/delta.after' is not a file in the tree",
+                $"  - line 7: text '{Texts}/delta.diag' is not a file in the tree",
+            ],
+            refused.Details!.SkipWhile(line => !line.StartsWith("The arms registry", StringComparison.Ordinal)).Take(4));
+        Assert.Equal(Text(Arm("alpha"), Arm("delta")), OrchestrationKit.Read(worktree, Registry));
+        Assert.False(File.Exists(Path.Combine(worktree, Texts, "beta.before")), "The refresh handed the agent the main tree's texts though it was refused.");
+    }
+
+    /// <summary>
+    /// The merged registry a refresh would write is judged by the worktree as the refresh leaves it, without each file it
+    /// hands as deleted: a text it cites that the main tree removed is no file of that tree, and the refresh is refused,
+    /// the text listed and still in the agent's worktree.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshThatRemovesATextTheMergedRegistryCites_IsRefused_TheTextListed()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await RegistryAsync(temp, "alpha");
+        File.Delete(Path.Combine(kit.Main, Texts, "alpha.diag"));
+        await MainAddsAsync(kit, "beta", "alpha");
+        OrchestrationKit.Write(worktree, Registry, Text(Arm("alpha"), Arm("gamma")));
+        WriteTexts(worktree, "gamma");
+
+        var refused = await RefreshAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal(
+            [
+                $"The arms registry '{Registry}', as the refresh would write it, cannot be swept: 1 problem(s), each to fix:",
+                $"  - line 3: text '{Texts}/alpha.diag' is not a file in the tree",
+            ],
+            refused.Details!.SkipWhile(line => !line.StartsWith("The arms registry", StringComparison.Ordinal)).Take(2));
+        Assert.Equal(Text(Arm("alpha"), Arm("gamma")), OrchestrationKit.Read(worktree, Registry));
+        Assert.Equal("alpha exceeded", OrchestrationKit.Read(worktree, $"{Texts}/alpha.diag"));
+    }
+
+    /// <summary>
     /// A registry both trees added arms to - at one place, which git's merge of text would take for a conflict - is merged
     /// by arm with no option given: said in the dry run and the report, written into both trees, the main tree's addition
     /// first, and recorded as shared at the merged bytes. The texts the agent's arm cites are written by the same fold,

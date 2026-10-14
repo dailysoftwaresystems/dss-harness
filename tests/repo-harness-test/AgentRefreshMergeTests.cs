@@ -127,6 +127,32 @@ public sealed class AgentRefreshMergeTests
     }
 
     /// <summary>
+    /// What both trees held at a path the agent shares is what its seed records, never its base: a refresh merging a path an
+    /// earlier fold merged starts from the merged bytes, so the main tree changing again the line that fold brought merges
+    /// clean with the agent's change of another line - merged from the base, the two would conflict on it.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshMergeOfASharedPath_StartsFromWhatItsSeedRecords_NotFromItsBase()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await BothChangedAsync(temp);
+        var folded = await kit.FoldAsync(Agent, apply: true, new FoldAllowances { Merge = [Both] });
+
+        Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+
+        // The main tree changes the line the agent's fold brought; the agent changes another.
+        OrchestrationKit.Write(kit.Main, Both, Text((2, "MAIN 2, AFTER THE AGENT'S"), (9, "MAIN 9")));
+        OrchestrationKit.Write(worktree, Both, Text((2, "AGENT 2"), (6, "AGENT 6"), (9, "MAIN 9")));
+
+        var applied = await RefreshAsync(kit, apply: true, Both);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Contains($"  {Both}   (--merge: 1 hunk(s) from the agent, 1 from the main tree)", applied.Details!);
+        Assert.Equal(Text((2, "MAIN 2, AFTER THE AGENT'S"), (6, "AGENT 6"), (9, "MAIN 9")), OrchestrationKit.Read(worktree, Both));
+        Assert.Equal(Digest(Text((2, "MAIN 2, AFTER THE AGENT'S"), (9, "MAIN 9"))), Seed(kit).Paths[Both]);
+    }
+
+    /// <summary>
     /// A merge that conflicts is said beside the path, its conflicts shown, and is never taken, named or not; nothing names
     /// --merge for it.
     /// </summary>
