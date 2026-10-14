@@ -272,14 +272,13 @@ internal static class RunCommand
                 }
 
                 // The key alone does not decide where a copy would be made: only a leg this machine runs itself works
-                // in one, as the placement places it (LegTrees.For). A leg typed in a synced copy works in the tree
-                // itself whatever its key says, so the check is not refused there; and a leg no host can run works
-                // nowhere, so the copy this refusal exists to keep the check's writes out of is never made - the run
-                // says so its own way, not over its localCopy key.
-                foreach (var leg in legs.Where(leg => where == LocalTrees.AsConfigured
-                        && RunsHere(platform, harness.Config, leg.Leg, here)
-                        && !harness.IsSyncedCopy
-                        && LegTrees.Configured(harness.Config, leg.Leg)))
+                // in one, and only where the placement's own rule says so - LegTrees.InLocalCopy, the rule LegTrees.For
+                // places a leg by, asked whole so the two cannot differ. A leg typed in a synced copy, or sent here by
+                // another machine, works in the tree itself whatever its key says, so the check is not refused there;
+                // and a leg no host can run works nowhere, so the copy this refusal exists to keep the check's writes
+                // out of is never made - the run says so its own way, not over its localCopy key.
+                foreach (var leg in legs.Where(leg => RunsHere(platform, harness.Config, leg.Leg, here)
+                        && LegTrees.InLocalCopy(harness, leg.Leg, arguments.GetValue(DispatchOptions.Here), where)))
                 {
                     throw new HarnessException(
                         HarnessExit.Refused,

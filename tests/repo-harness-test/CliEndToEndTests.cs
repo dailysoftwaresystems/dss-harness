@@ -977,6 +977,72 @@ public sealed partial class CliEndToEndTests
     }
 
     /// <summary>
+    /// A run check whose runner writes the tree is not refused for a leg another machine sent here, though its localCopy
+    /// key says a copy and the tree holds no sync's marker: the placement never makes a copy of a copy, so the leg works
+    /// in the tree it was sent and the check writes that tree. Told it runs here as this machine's own, local, the leg's
+    /// tree is no copy, its key has it work in one, and the check is refused as ever.
+    /// </summary>
+    [Theory]
+    [InlineData("ssh mac", false)]
+    [InlineData("wsl Example-Linux", false)]
+    [InlineData("local", true)]
+    public async Task ARunCheckWhoseRunnerWritesTheTree_IsNotRefusedForALegAnotherMachineSentHere_AndIsForOneToldItRunsHereAsLocal(
+        string sentAs,
+        bool refused)
+    {
+        using var temp = new TempDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var harness = new HarnessFactory();
+        var platform = harness.Platform;
+
+        await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
+        {
+            BuildConfigs = { ["debug"] = new BuildConfiguration() },
+            Legs =
+            {
+                ["native"] = new LegConfig { Os = platform.PlatformKey, Processor = platform.Processor, Config = "debug", LocalCopy = true },
+            },
+            PredefinedRunners =
+            {
+                ["format"] = new RunnerConfig
+                {
+                    WritesTree = true,
+                    Phases = [new RunnerPhase { Name = "tidy", Command = ["dotnet", "--version"] }],
+                },
+                ["probe"] = new RunnerConfig
+                {
+                    Phases = [new RunnerPhase { Name = "look", Command = ["dotnet", "--version"] }],
+                    ExpectedExceptions =
+                    [
+                        new ExpectedException
+                        {
+                            ExceptionType = "Flake",
+                            Messages = ["it flaked"],
+                            Message = "excused: the device was busy",
+                            EarnedOn = "2026-10-13",
+                            EarnedAt = "local",
+                            Mechanism = "the device is shared",
+                            Anchor = "D-AREA-TOPIC-ONE",
+                            RunChecks = [new RunCheck { PredefinedRunner = "format" }],
+                        },
+                    ],
+                },
+            },
+        });
+
+        var run = await CliRunner.RunAsync(["run", "probe", "--legs", "native", RemoteLegRunner.HereOption, sentAs, "-C", temp.Path], token);
+
+        Assert.True((refused ? HarnessExit.Refused : HarnessExit.Success) == run.ExitCode, $"exit {run.ExitCode}: {run.StandardError}");
+        Assert.Equal(
+            refused,
+            run.StandardError.Contains(
+                "Run check 'format' of runner 'probe' writes the tree (writesTree), and leg 'native' would work in a copy of "
+                    + "it, as its own localCopy key or the repository's default says. Nothing was run. Run it with --in-place.",
+                StringComparison.Ordinal));
+        Assert.Empty(Directory.GetDirectories(Path.Combine(temp.Path, HarnessLayout.LegsDirectoryName)));
+    }
+
+    /// <summary>
     /// A run check whose runner writes the tree is not refused for a leg no host can run, though its localCopy key says
     /// a copy: the leg works nowhere, so no copy is ever made for the check's writes to be lost in, and the run says the
     /// leg cannot run its own way rather than offering --in-place as a remedy for a copy that would never exist.

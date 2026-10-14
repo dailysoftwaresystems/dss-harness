@@ -49,6 +49,31 @@ public static class LegTrees
     }
 
     /// <summary>
+    /// Whether <paramref name="leg"/>, where this machine runs it, works in a copy of its tree kept in the tree's own .legs:
+    /// never where that tree is itself a copy, and otherwise as <paramref name="local"/> says, the configuration deciding
+    /// where it leaves that open. The one expression of that rule, which placing a leg and refusing a runner that would
+    /// write in its copy both ask, so neither can find a copy the other does not.
+    /// </summary>
+    /// <param name="context">The repository and its configuration.</param>
+    /// <param name="leg">The leg.</param>
+    /// <param name="here">
+    /// The host this machine is to the machine that dispatched the leg here, or <see langword="null"/> where this machine
+    /// placed it itself.
+    /// </param>
+    /// <param name="local">Where this run's own legs work.</param>
+    public static bool InLocalCopy(HarnessContext context, LegConfig leg, HostId? here, LocalTrees local)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(leg);
+
+        // Never a copy of a copy: a host running a leg another machine sent it works in the copy it was sent, which is
+        // that machine's to replace, and nothing of the harness's is kept beside a tree anyway.
+        return HostCopies.KeptAs(here) is null
+            && !context.IsSyncedCopy
+            && (local == LocalTrees.Copy || local == LocalTrees.AsConfigured && Configured(context.Config, leg));
+    }
+
+    /// <summary>
     /// Where <paramref name="leg"/>'s work happens on <paramref name="host"/>: the tree itself, that machine's copy of it,
     /// or - where this machine runs the leg and <paramref name="local"/> puts it in one - the copy of its tree kept in the
     /// tree's own .legs (<see cref="LegCopies.PathOf"/>).
@@ -84,11 +109,7 @@ public static class LegTrees
             return new LegTree(tree, On(context, host, tree, comparison), LocalCopy: false);
         }
 
-        // Never a copy of a copy: a host running a leg another machine sent it works in the copy it was sent, which is
-        // that machine's to replace, and nothing of the harness's is kept beside a tree anyway.
-        var copy = HostCopies.KeptAs(here) is null
-            && !context.IsSyncedCopy
-            && (local == LocalTrees.Copy || local == LocalTrees.AsConfigured && Configured(context.Config, leg));
+        var copy = InLocalCopy(context, leg, here, local);
 
         return new LegTree(tree, copy ? LegCopies.PathOf(tree, variant) : tree, copy);
     }
