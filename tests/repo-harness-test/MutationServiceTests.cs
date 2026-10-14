@@ -1408,7 +1408,7 @@ public sealed class MutationServiceTests
             config.Hosts.SettingsFor(HostId.Local),
             Emulated: false);
 
-        var subject = service.Subject(new LegWork(placed, context, RunId.New(), temp.Path, Time: false), MutationService.SelfTestArms(null), force: false, new RepositoryTreesFound([]));
+        var subject = service.Subject(new LegWork(placed, context, RunId.New(), temp.Path, Time: false), MutationService.SelfTestArms(null), force: false, new RepositoryTreesFound([]), records: false);
 
         Assert.Equal([new FetchedSource("PLUMB", source.Replace('\\', '/'))], subject.Fetched.Found);
         Assert.Equal(temp.Path, subject.TreeRoot);
@@ -1532,7 +1532,6 @@ public sealed class MutationServiceTests
             harness.Identity,
             harness.Platform,
             TimeProvider.System,
-            harness.Platform,
             harness.Output);
     }
 

@@ -85,7 +85,6 @@ public sealed class MutationService(
     IProcessIdentity identity,
     IHostPlatform platform,
     TimeProvider clock,
-    IHostPlatform platform,
     IHarnessOutput output)
 {
     /// <summary>The command, as it is typed and as it reports.</summary>
@@ -126,7 +125,6 @@ public sealed class MutationService(
     private readonly IProcessIdentity _identity = identity;
     private readonly IHostPlatform _platform = platform;
     private readonly TimeProvider _clock = clock;
-    private readonly IHostPlatform _platform = platform;
     private readonly IHarnessOutput _output = output;
 
     /// <summary>Sweeps every selected leg, and reports the ledger, each arm beneath its leg.</summary>
