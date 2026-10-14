@@ -3721,6 +3721,9 @@ public sealed class MutationLegRunnerTests
         private readonly TempDirectory _temp = new();
         private readonly JumpingClock _clock = new();
 
+        /// <summary>Where the tree holds each file its reading names, by the reading's spelling of it (<see cref="ReadingSpells"/>).</summary>
+        private readonly Dictionary<string, string> _held = new(StringComparer.Ordinal);
+
         public Sweep()
         {
             foreach (var (path, text) in TreeFiles)
@@ -3728,7 +3731,7 @@ public sealed class MutationLegRunnerTests
                 _temp.WriteFile(Path.Combine("tree", path), text);
             }
 
-            Copies = new Copies(Tree);
+            Copies = new Copies(Tree, spelt => _held[spelt]);
             Builder = new Builder(() => _clock.GetUtcNow().UtcDateTime);
             Budget.Check(default!, default, default, default).ReturnsForAnyArgs(PathBudgetResult.Unbounded());
         }
@@ -3969,7 +3972,10 @@ public sealed class MutationLegRunnerTests
             }
         }
 
-        /// <summary>The tree as a sync reads it: each file by its size and hash, keyed as a row spells it.</summary>
+        /// <summary>
+        /// The tree as a sync reads it: each file by its size and hash, keyed as <see cref="ReadingSpells"/> spells it, with
+        /// where the tree holds it noted for the copies made of the reading.
+        /// </summary>
         private SyncSource Read(HarnessContext context)
         {
             var entries = new Dictionary<string, SyncEntry>(StringComparer.Ordinal);
@@ -3980,6 +3986,7 @@ public sealed class MutationLegRunnerTests
                 {
                     var bytes = File.ReadAllBytes(Path.Combine(Tree, path));
                     entries[spelt] = new SyncEntry(spelt, bytes.Length, FileContentHash.Of(bytes));
+                    _held[spelt] = path;
                 }
             }
 
@@ -4007,8 +4014,13 @@ public sealed class MutationLegRunnerTests
         }
     }
 
-    /// <summary>Workers' copies made by copying the tree's files, claimed, given up and removed as the test says.</summary>
-    private sealed class Copies(string tree) : IWorkerCopies
+    /// <summary>
+    /// Workers' copies made by copying the tree's files, claimed, given up and removed as the test says: each file the reading
+    /// names copied from where the tree holds it, as <paramref name="held"/> says.
+    /// </summary>
+    /// <param name="tree">The tree every copy is made of.</param>
+    /// <param name="held">Where the tree holds a file the reading names, by the reading's spelling of it.</param>
+    private sealed class Copies(string tree, Func<string, string> held) : IWorkerCopies
     {
         /// <summary>How a refusal names the sweep holding a worker.</summary>
         public const string Holder = "run 20250101-120000-deadbeef (pid 4242 on this machine)";
@@ -4089,10 +4101,14 @@ public sealed class MutationLegRunnerTests
 
             foreach (var path in source.Files.Entries.Keys)
             {
-                var copied = Path.Combine(worker, path);
+                // A reading that spells a file in another case than the tree holds it is one a file system that folds
+                // case read: copied from, and kept under, the name the tree holds it by - the one file such a file system
+                // gives for either name, and the only one this machine's may give.
+                var file = held(path);
+                var copied = Path.Combine(worker, file);
 
                 Directory.CreateDirectory(Path.GetDirectoryName(copied)!);
-                File.Copy(Path.Combine(tree, path), copied, overwrite: true);
+                File.Copy(Path.Combine(tree, file), copied, overwrite: true);
             }
 
             Synced.Enqueue((source, worker));
