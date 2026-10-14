@@ -724,7 +724,7 @@ public sealed class WorktreeService(
             => gone.Kept is { } kept
                 ? WorktreeOutcome.Failed(CommandOutcome.Failed(
                     gone.ExitCode!.Value,
-                    kept.As == WorkerLeftAs.Held
+                    kept.Verdict == LegVerdict.RefusedLocked
                         ? $"Worktree '{worktreeName}' was not deleted: {gone.KeptMember} kept in it is in use - '{kept.Path}': {kept.Why.TrimEnd('.')}. "
                             + $"Wait for it to end, or pass --force to delete the worktree with that copy in it. {nothing}."
                         : $"Worktree '{worktreeName}' was not deleted: {gone.KeptMember} kept in it could not be removed - {kept.Told().TrimEnd('.')}. "
@@ -869,7 +869,7 @@ public sealed class WorktreeService(
 
         try
         {
-            copies = await _local.RemoveInSlotAsync(path, HarnessLayout.LegsDirectoryName, LegCopies.Claims(_runLock, layout), measureOnly, cancellationToken).ConfigureAwait(false);
+            copies = await _local.RemoveInSlotAsync(path, HarnessLayout.LegsDirectoryName, LegCopies.Claims(_runLock, layout, DeleteCommand), measureOnly, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HarnessException)
         {
@@ -894,19 +894,10 @@ public sealed class WorktreeService(
             : [];
 
         // A leg copy a run holds is held by the lock, which is asked for its holder as its removal asks it.
+        var left = copies.Left.Select(copy => KeptCopyLine.Left(copy, LegCopies.Member, again, LegCopies.Whole(copy.Path, DeleteCommand))).ToList();
         var said = new WorkersGone(
-            [.. went, .. copies.Left.Select(copy => KeptCopyLine.Of(
-                copy,
-                copy.As switch
-                {
-                    WorkerLeftAs.Held => $"left the leg copy '{copy.Path}' kept in it: {copy.Why.TrimEnd('.')}; {again} removes it once nothing holds it",
-                    WorkerLeftAs.NotRemoved => $"left the leg copy '{copy.Path}' kept in it: {copy.Why.TrimEnd('.')}; {again} removes it once nothing stops it",
-                    _ => $"left '{copy.Path}', named as a leg copy kept in it: {copy.Why.TrimEnd('.')}",
-                },
-                LegCopies.Whole(copy.Path)))],
-            [.. went.Select(line => line.Line), .. copies.Left.Select(copy => copy.As == WorkerLeftAs.Somebodys
-                ? WorktreeReports.WentWithItsTree(copy.Path)
-                : $"the leg copy '{copy.Path}' kept in it went with it, forced: {copy.Why.TrimEnd('.')}")],
+            [.. went, .. left.Select(copy => copy.Told)],
+            [.. went.Select(line => line.Line), .. left.Select(copy => copy.WentWithIt)],
             copies,
             Failure: null);
 
@@ -975,18 +966,11 @@ public sealed class WorktreeService(
             : [];
 
         // A worker a sweep holds is held by that sweep's claim, which names its holder on the line.
+        var left = removal.Left.Select(worker => KeptCopyLine.Left(worker, MutationWorkers.Member, again)).ToList();
+
         return new WorkersGone(
-            [.. went, .. removal.Left.Select(worker => KeptCopyLine.Of(
-                worker,
-                worker.As switch
-                {
-                    WorkerLeftAs.Held => $"left the mutation worker '{worker.Path}' kept in it: {worker.Why.TrimEnd('.')}; {again} removes it once nothing holds it",
-                    WorkerLeftAs.NotRemoved => $"left the mutation worker '{worker.Path}' kept in it: {worker.Why.TrimEnd('.')}; {again} removes it once nothing stops it",
-                    _ => $"left '{worker.Path}', named as a mutation worker kept in it: {worker.Why.TrimEnd('.')}",
-                }))],
-            [.. went.Select(line => line.Line), .. removal.Left.Select(worker => worker.As == WorkerLeftAs.Somebodys
-                ? WorktreeReports.WentWithItsTree(worker.Path)
-                : $"the mutation worker '{worker.Path}' kept in it went with it, forced: {worker.Why.TrimEnd('.')}")],
+            [.. went, .. left.Select(worker => worker.Told)],
+            [.. went.Select(line => line.Line), .. left.Select(worker => worker.WentWithIt)],
             removal,
             Failure: null);
     }

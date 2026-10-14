@@ -544,7 +544,7 @@ public sealed class CleanService(
             try
             {
                 var held = made
-                    .Select(copy => (Copy: copy, Holder: _runLock.HeldBy(context.Layout, LegCopies.Whole(copy.Path))))
+                    .Select(copy => (Copy: copy, Holder: _runLock.HeldBy(context.Layout, LegCopies.Whole(copy.Path, CommandName))))
                     .Where(held => held.Holder is not null)
                     .ToList();
 
@@ -583,7 +583,7 @@ public sealed class CleanService(
             // Each copy under the lock a run takes on it: one a run holds is kept, saying who.
             foreach (var copy in made)
             {
-                var holder = _runLock.HeldBy(context.Layout, LegCopies.Whole(copy.Path), () =>
+                var holder = _runLock.HeldBy(context.Layout, LegCopies.Whole(copy.Path, CommandName), () =>
                 {
                     if (_fileSystem.DirectoryExists(copy.Path))
                     {

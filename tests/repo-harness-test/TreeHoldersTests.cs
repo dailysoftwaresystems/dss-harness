@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using RepoHarness.Core.Execution;
+using RepoHarness.Core.Hosts;
 using RepoHarness.Core.Orchestration;
 using RepoHarness.Core.Repository;
 using RepoHarness.Core.Results;
@@ -482,6 +483,125 @@ public sealed class TreeHoldersTests
     }
 
     /// <summary>
+    /// A lock file that cannot be read refuses a deletion's dry run alike whether a host keeps a copy of the worktree or
+    /// not: the copies hosts keep are asked of the lock with the trees the --apply takes, so the one row for a lock that
+    /// cannot be read decides - the same request, nobody named, the same reason why and the same lines - never a refusal
+    /// that says the lock was read and nobody holds anything.
+    /// </summary>
+    [Fact]
+    public async Task ALockThatCannotBeRead_RefusesADeletionsDryRunAlike_WithAHostsCopyRecordedOrWithout()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var agents = kit.Harness.Agents(
+            kit.Harness.FileSystem,
+            kit.Harness.AnchorRegistryService,
+            hostCopies: new HostCopyRemover(new NoHosts(), new NoHosts(), kit.Harness.RunLock, kit.Harness.FileSystem, kit.Harness.Platform));
+        File.WriteAllText(layout.LockFile, "not the lock");
+
+        var without = JsonNode.Parse((await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
+
+        new HostCopyRecord(kit.Harness.FileSystem, kit.Harness.Platform.PathComparison)
+            .Claim(layout, new HostCopyEntry(WorktreeAddress.Nested("o1", "ag").CopyName, "ssh pi", "/home/pi/repo--wt--o1--ag", worktree));
+
+        var with = JsonNode.Parse((await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
+
+        Assert.Equal(HarnessExit.Refused, with["exitCode"]!.GetValue<int>());
+        Assert.Equal("sound", with["request"]!.GetValue<string>());
+        Assert.Null(with["heldNow"]);
+        Assert.StartsWith("The run lock '", with["heldUnread"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.EndsWith("; --apply is refused until the lock file can be read", with["summary"]!.GetValue<string>(), StringComparison.Ordinal);
+
+        foreach (var member in new[] { "exitCode", "summary", "request", "heldNow", "heldUnread", "lines" })
+        {
+            Assert.Equal(without[member]?.ToJsonString(), with[member]?.ToJsonString());
+        }
+    }
+
+    /// <summary>
+    /// With <c>--json</c>, a holder's leg waiting in line says how many legs are ahead of it - and one holding a slot says
+    /// none, as no line is ahead of it.
+    /// </summary>
+    [Fact]
+    public async Task WithJson_AHoldersLegInLineSaysHowManyAreAhead_AndOneHoldingASlotNone()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        var run = RunId.New();
+
+        await using var held = await HoldAsync(kit, worktree, run);
+
+        WriteSlots(kit, InLine(kit, "/src/first", "run-first", "first"), InLine(kit, "/src/second", "run-second", "second"), InLine(kit, worktree, run.Value));
+
+        var waiting = JsonNode.Parse((await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, Token, json: true)).Data[0])!["heldNow"]!.AsArray().Single()!;
+
+        Assert.Equal("waiting", waiting["standing"]!.GetValue<string>());
+        Assert.Equal(2, waiting["ahead"]!.GetValue<int>());
+
+        WriteSlots(kit, InLine(kit, worktree, run.Value));
+
+        var holding = JsonNode.Parse((await kit.Harness.AgentService.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, Token, json: true)).Data[0])!["heldNow"]!.AsArray().Single()!;
+
+        Assert.Equal("holds-slot", holding["standing"]!.GetValue<string>());
+        Assert.Null(holding["ahead"]);
+    }
+
+    /// <summary>
+    /// A leg on an ssh host asks that host for its slot, as that host's own record says, whatever this machine's record
+    /// holds: where this machine's record cannot be read, a run holding a host's copy of the worktree is still said to ask
+    /// that host - on its <c>held now:</c> line and as <c>on-host</c> in <c>heldNow</c> - and only a leg of this machine
+    /// is said without where it stands.
+    /// </summary>
+    [Fact]
+    public async Task AnSshHoldersLegAsksThatHost_WhereThisMachinesRecordOfHeavyLegsCannotBeRead()
+    {
+        using var temp = new TempDirectory();
+        var (kit, worktree) = await AFoldToMakeAsync(temp);
+        var layout = new HarnessLayout(kit.Main, kit.Main);
+        var copy = "/home/pi/repo--wt--o1--ag";
+        var agents = kit.Harness.Agents(
+            kit.Harness.FileSystem,
+            kit.Harness.AnchorRegistryService,
+            hostCopies: new HostCopyRemover(new NoHosts(), new NoHosts(), kit.Harness.RunLock, kit.Harness.FileSystem, kit.Harness.Platform));
+        new HostCopyRecord(kit.Harness.FileSystem, kit.Harness.Platform.PathComparison)
+            .Claim(layout, new HostCopyEntry(WorktreeAddress.Nested("o1", "ag").CopyName, "ssh pi", copy, worktree));
+        var attempt = await kit.Harness.RunLock.TryAcquireAsync(
+            layout,
+            new LockRequest { Host = "ssh pi", Tree = copy, Scope = LockScope.TreeExclusive, RunId = RunId.New(), Command = "test" },
+            Token);
+
+        await using var held = attempt.Handle ?? throw new InvalidOperationException($"the test could not hold '{copy}': {attempt.HeldBy}");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(kit.Harness.Slots.Location)!);
+        File.WriteAllText(kit.Harness.Slots.Location, "not the record");
+
+        var dry = await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token);
+
+        Assert.Contains(
+            dry.Details!,
+            line => line.StartsWith($"held now: '{copy}' on ssh pi is held by ", StringComparison.Ordinal)
+                && line.EndsWith(", whose leg asks that host for its slot: whether it runs or waits is recorded there.", StringComparison.Ordinal));
+
+        var document = JsonNode.Parse((await agents.DeleteAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: false, discardUncommitted: false, Token, json: true)).Data[0])!;
+
+        Assert.Equal("on-host", document["heldNow"]!.AsArray().Single()!["standing"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// A leg copy is asked of the lock as a run takes it, whole on this machine, under the command that asks - clean's, or a
+    /// deletion's - never under another command's name.
+    /// </summary>
+    [Fact]
+    public void ALegCopyIsAskedOfTheLockWhole_UnderTheCommandThatAsks()
+    {
+        var asked = Core.Legs.LegCopies.Whole("/src/repo/.legs/357e24c", WorktreeService.DeleteCommand);
+
+        Assert.Equal((HostId.Local.ToString(), "/src/repo/.legs/357e24c", LockScope.TreeExclusive, WorktreeService.DeleteCommand), (asked.Host, asked.Tree, asked.Scope, asked.Command));
+        Assert.Equal(Core.Runs.CleanService.CommandName, Core.Legs.LegCopies.Whole("/src/repo/.legs/357e24c", Core.Runs.CleanService.CommandName).Command);
+    }
+
+    /// <summary>
     /// README and the architecture say what a deletion's dry run answers as the code decides it: 21 where its --apply
     /// would go as far as the removal and leave it unfinished, over a copy a run or a sweep holds or copies kept in the
     /// worktree it cannot remove as they stand, only below the rows that refuse that --apply at its hold; what each line
@@ -531,8 +651,21 @@ public sealed class TreeHoldersTests
             "each holding a copy kept in the worktree, its `said` the line its family says of it - its `processId`, `run` and "
                 + "`since` as the lock's entry records them or, where a claim of the copy's family rather than the lock names its "
                 + $"holder, as that claim records them (`{nameof(CopyHolder)}`), and what only a lock entry says, `command`, "
-                + "`variant` and `standing`, null for such a holder; `standing` is null too where the record of heavy legs cannot "
-                + "be read - and `heldUnread`, why the lock file could not be read.",
+                + "`variant` and `standing`, null for such a holder; `standing` is null too for a leg of this machine where this "
+                + "machine's record of heavy legs cannot be read - and `heldUnread`, why the lock file could not be read.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "a run that asked for no slot is said by the lock's own words alone, `running '<command>'`, and so is every run of a "
+                + "leg of this machine where that record cannot be read, which one line then says, while a leg on an ssh host asks "
+                + "that host for its slot whatever this machine's record holds).",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "names a copy a run holds - a host's through the lock, asked in the one reading of it that asks for the trees "
+                + $"(`{nameof(IHostCopyRemover)}.{nameof(IHostCopyRemover.RemovalLocks)}`, the same `{nameof(HostCopyRemover.RemovalLock)}` "
+                + $"the removal takes, asked by `{nameof(TreeHolders)}.{nameof(TreeHolders.Read)}`, so a lock that cannot be read is said "
+                + "by the one row for it, a host's copy recorded or not)",
             architecture,
             StringComparison.Ordinal);
     }

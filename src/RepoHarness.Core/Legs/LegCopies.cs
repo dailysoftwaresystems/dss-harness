@@ -51,13 +51,15 @@ public static class LegCopies
 
     /// <summary>
     /// What whatever would remove a copy of the family asks the run lock first: the copy taken whole on this machine, so
-    /// a run holding it any way - building in it, or replacing it - is named. The run and command it names are the
-    /// asking's own, and asking writes no entry.
+    /// a run holding it any way - building in it, or replacing it - is named. The run it names is the asking's own, new,
+    /// and the command the one asking - clean, or a deletion of the tree - and asking writes no entry.
     /// </summary>
     /// <param name="copy">The copy.</param>
-    public static LockRequest Whole(string copy)
+    /// <param name="command">The command asking.</param>
+    public static LockRequest Whole(string copy, string command)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(copy);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
         return new LockRequest
         {
@@ -65,7 +67,7 @@ public static class LegCopies
             Tree = copy,
             Scope = LockScope.TreeExclusive,
             RunId = RunId.New(),
-            Command = "clean",
+            Command = command,
         };
     }
 
@@ -75,16 +77,18 @@ public static class LegCopies
     /// </summary>
     /// <param name="runLock">Reads the run lock of the repository the tree belongs to.</param>
     /// <param name="layout">The repository, whose main checkout holds the lock file.</param>
-    public static ICopyClaims Claims(RunLock runLock, HarnessLayout layout)
+    /// <param name="command">The command asking, which the lock is asked under (<see cref="Whole"/>).</param>
+    public static ICopyClaims Claims(RunLock runLock, HarnessLayout layout, string command)
     {
         ArgumentNullException.ThrowIfNull(runLock);
         ArgumentNullException.ThrowIfNull(layout);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command);
 
-        return new LegCopyClaims(runLock, layout);
+        return new LegCopyClaims(runLock, layout, command);
     }
 
     /// <summary>How a copy of the family's name reads, as its removal says one it left aside.</summary>
-    private sealed class LegCopyClaims(RunLock runLock, HarnessLayout layout) : ICopyClaims
+    private sealed class LegCopyClaims(RunLock runLock, HarnessLayout layout, string command) : ICopyClaims
     {
         public bool Names(string name) => IsKey(name);
 
@@ -92,7 +96,7 @@ public static class LegCopies
 
         public string SaidHeld(string holder) => LegCopies.SaidHeld(holder);
 
-        public CopyHolder? HeldBy(string copy) => runLock.HeldBy(layout, Whole(copy)) is { } said ? new CopyHolder(said, Claim: null) : null;
+        public CopyHolder? HeldBy(string copy) => runLock.HeldBy(layout, Whole(copy, command)) is { } said ? new CopyHolder(said, Claim: null) : null;
 
         public void Forget(string copy)
         {

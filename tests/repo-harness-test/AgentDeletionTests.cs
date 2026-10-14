@@ -656,26 +656,6 @@ public sealed class AgentDeletionTests
     }
 
     /// <summary>
-    /// A host reacher that reaches nothing: the question a dry run asks of who holds a copy asks no host, so this stands
-    /// for the reaching and fails the test where anything else is asked of it.
-    /// </summary>
-    private sealed class NoHosts : Core.Hosts.IHostInspector, Core.Sync.ISyncTransportFactory
-    {
-        public Task<Core.Hosts.HostReport> InspectAsync(
-            HarnessContext context,
-            Core.Hosts.HostId host,
-            IReadOnlyDictionary<string, Core.Configuration.EmulatorConfig> emulators,
-            IReadOnlyDictionary<string, Core.Configuration.DeveloperEnvironmentConfig> developerEnvironments,
-            IReadOnlyList<string> programs,
-            Core.Hosts.RoomQuestions? room = null,
-            CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("the test asks no host.");
-
-        public Core.Sync.ISyncTransport For(Core.Hosts.HostReport host)
-            => throw new InvalidOperationException("the test reaches no host.");
-    }
-
-    /// <summary>
     /// Evidence is found as a removal reaches it: a link under an evidence root is never followed, so what it leads to is
     /// neither kept nor deleted.
     /// </summary>

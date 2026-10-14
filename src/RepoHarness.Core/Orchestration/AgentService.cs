@@ -2661,7 +2661,7 @@ public sealed class AgentService(
     {
         ArgumentNullException.ThrowIfNull(planned);
 
-        var holders = _treeHolders.Read(layout, Holds(command, RunId.New(), trees), (IReadOnlyList<LockRequest>)[]);
+        var holders = _treeHolders.Read(layout, Holds(command, RunId.New(), trees), [], []);
 
         return Dry(json, planned, standing, holders);
     }
@@ -2700,12 +2700,12 @@ public sealed class AgentService(
     {
         ArgumentNullException.ThrowIfNull(planned);
 
-        LockEntry[] copies;
+        IReadOnlyList<LockRequest> copies;
         IReadOnlyList<KeptCopyLine> leftInIt;
 
         try
         {
-            copies = [.. await _hostCopies.HeldNowAsync(target.Context, target.Address.CopyName, target.Path, RunId.New()).ConfigureAwait(false)];
+            copies = _hostCopies.RemovalLocks(target.Context, target.Address.CopyName, target.Path, RunId.New());
             leftInIt = await _worktrees.CopiesHeldAsync(target.Address.Name, target.Context.Layout, target.Path, cancellationToken).ConfigureAwait(false);
         }
         catch (HarnessException ex)
@@ -2713,9 +2713,10 @@ public sealed class AgentService(
             return CommandOutcome.Refused($"{Agent(target.Record)} was not deleted: {ex.Message.TrimEnd('.')} Nothing was removed.");
         }
 
-        // What is kept in the worktree that the removal cannot take as it stands is weighed by the one rule, in its order,
-        // with every holder: below a lock that cannot be read and a tree a run holds, either of which refuses the --apply
-        // before it goes anywhere near the removal.
+        // The lock is asked once, for the trees and the hosts' copies alike, so a lock that cannot be read is said by the one
+        // rule's row for it; and what is kept in the worktree that the removal cannot take as it stands is weighed by that
+        // rule, in its order, with every holder: below a lock that cannot be read and a tree a run holds, either of which
+        // refuses the --apply before it goes anywhere near the removal.
         return Dry(json, planned, standing, _treeHolders.Read(target.Context.Layout, Holds(DeleteCommand, RunId.New(), trees), copies, leftInIt));
     }
 

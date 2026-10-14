@@ -604,10 +604,14 @@ holder in the way is printed on a `held now:` line (`RunLock.Holders`, read as `
 nothing written), said with where that run's leg stands, from this machine's record of heavy legs (`HeavyLegSlots.Line`,
 joined by `TreeHolders`, the one sentence: it waits in line with how many are ahead, or it holds a slot, or a leg on
 an ssh host's own record says; a run that asked for no slot is said by the lock's own words alone, `running
-'<command>'`, and so is every run where that record cannot be read, which one line then says). A run holding a leg copy or a host's copy of the worktree is
+'<command>'`, and so is every run of a leg of this machine where that record cannot be read, which one line then says,
+while a leg on an ssh host asks that host for its slot whatever this machine's record holds). A run holding a leg copy
+or a host's copy of the worktree is
 not named by a fold's, a refresh's or a rebase's dry run, and their `--apply` is not refused for it: a copy is not the
 worktree. delete-agent, which removes every copy with the worktree, names a copy a run holds - a host's through the
-lock (`IHostCopyRemover.HeldNowAsync`, the same `RemovalLock` the removal takes), a leg copy's or a mutation worker's
+lock, asked in the one reading of it that asks for the trees (`IHostCopyRemover.RemovalLocks`, the same `RemovalLock`
+the removal takes, asked by `TreeHolders.Read`, so a lock that cannot be read is said by the one row for it, a host's
+copy recorded or not), a leg copy's or a mutation worker's
 through the measure-only question its removal asks (`WorktreeService.CopiesHeldAsync`), each in its family's own
 words, and asks them on every state the agent may stand in - live, closed or gone - since the removal that asks them
 is the same; its dry run asks that host's `.legs` nothing, as its removal asks nothing of them. Each line the two
@@ -622,8 +626,8 @@ decides the code, with `holds` tree or copy - each a `held now:` line names, and
 worktree, its `said` the line its family says of it - its `processId`, `run` and `since` as the lock's entry records
 them or, where a claim of the copy's family rather than the lock names its holder, as that claim records them
 (`CopyHolder`), and what only a lock entry says, `command`, `variant` and `standing`, null for such a holder;
-`standing` is null too where the record of heavy legs cannot be read - and `heldUnread`, why the lock file could not be
-read. A command stopped before
+`standing` is null too for a leg of this machine where this machine's record of heavy legs cannot be read - and
+`heldUnread`, why the lock file could not be read. A command stopped before
 anything is weighed - a `--directory` that is not there, a repository not initialised, a usage error, or a refusal met
 before then, an agent that is not there among them - answers with the same document, empty
 (`OrchestrationReports.Stopped`): `applied` false, `request`, `heldNow` and `heldUnread` null, no `lines`, its

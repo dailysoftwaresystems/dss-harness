@@ -575,8 +575,10 @@ public static class SyncServe
         {
             return JsonSerializer.Deserialize<T>(utf8, JsonOptions);
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
         {
+            // An answer's records refuse what no answer of this build holds, as they are made: a shape this build cannot
+            // read, whichever of the two says so.
             throw new HarnessException(
                 HarnessExit.CommandFailed,
                 $"The far side answered in a shape this build cannot read: {ex.Message}");
@@ -720,8 +722,14 @@ public sealed record WorkerRemoved(string Path, long Bytes);
 /// What the claim of its family's own that holds it records of the run holding it - its machine, its process, its run and
 /// when it claimed it - where it was left held and such a claim, read, names that run; <see langword="null"/> otherwise.
 /// </param>
+/// <exception cref="ArgumentException">A claim is given for a copy left otherwise than held - as made, or as a host's answer is read.</exception>
 public sealed record WorkerLeft(string Path, string Why, WorkerLeftAs As, LogOwner? Claim = null)
 {
+    /// <inheritdoc cref="WorkerLeft" path="/param[@name='Claim']"/>
+    public LogOwner? Claim { get; } = Claim is null || As == WorkerLeftAs.Held
+        ? Claim
+        : throw new ArgumentException($"Only a copy left held is held by a claim, and '{Path}' was left {As}.", nameof(Claim));
+
     /// <summary>
     /// What it says of its tree, as the one verdict every command that removes such copies reads, and every line that
     /// says one weighs: held, refused-locked, which ends by waiting; not removed, failed, which waiting never ends;

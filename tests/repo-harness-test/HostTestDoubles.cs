@@ -354,14 +354,33 @@ internal sealed class RecordingInspector(Func<HostId, HostReport> report) : IHos
     }
 }
 
+/// <summary>
+/// A host reacher that reaches nothing: the question a dry run asks of who holds a copy asks no host, so this stands for
+/// the reaching and fails the test where anything else is asked of it.
+/// </summary>
+internal sealed class NoHosts : IHostInspector, ISyncTransportFactory
+{
+    public Task<HostReport> InspectAsync(
+        HarnessContext context,
+        HostId host,
+        IReadOnlyDictionary<string, EmulatorConfig> emulators,
+        IReadOnlyDictionary<string, DeveloperEnvironmentConfig> developerEnvironments,
+        IReadOnlyList<string> programs,
+        RoomQuestions? room = null,
+        CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException("the test asks no host.");
+
+    public ISyncTransport For(HostReport host)
+        => throw new InvalidOperationException("the test reaches no host.");
+}
+
 /// <summary>Removes no copy from any host, and records none: a deletion that reaches no host.</summary>
 internal sealed class NoHostCopies : IHostCopyRemover
 {
     public Task<HostCopyRemoval> RemoveAsync(HarnessContext context, string worktree, string tree, HarnessConfig? treeConfig, CancellationToken cancellationToken = default)
         => Task.FromResult(HostCopyRemoval.None);
 
-    public Task<IReadOnlyList<LockEntry>> HeldNowAsync(HarnessContext context, string worktree, string tree, RunId runId)
-        => Task.FromResult<IReadOnlyList<LockEntry>>([]);
+    public IReadOnlyList<LockRequest> RemovalLocks(HarnessContext context, string worktree, string tree, RunId runId) => [];
 }
 
 /// <summary>

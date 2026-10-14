@@ -83,24 +83,32 @@ public sealed record KeptCopyLine
     }
 
     /// <summary>
-    /// The line its family says of <paramref name="left"/>, as the removal's verdict on it makes it
-    /// (<see cref="WorkerLeft.Verdict"/>, the one place that weighs what a copy was left as): refused-locked, a copy a run or
-    /// a sweep holds, with what its claim records of the holder where a claim holds it; failed, what the removal cannot
-    /// take as it stands; passed, only said.
+    /// What a deletion says of <paramref name="left"/>, a copy of a family kept in the worktree that its removal left, in
+    /// the family's own words - the line it says now, and the line it says once the worktree went with it - as the removal's
+    /// verdict on it makes both (<see cref="WorkerLeft.Verdict"/>, the one place that weighs what a copy was left as):
+    /// refused-locked, a copy a run or a sweep holds, with what its claim records of the holder where a claim holds it;
+    /// failed, what the removal cannot take as it stands; passed, somebody's, only said. The one place either line is
+    /// worded, for every family.
     /// </summary>
     /// <param name="left">The copy left.</param>
-    /// <param name="line">The line its family says of it.</param>
+    /// <param name="member">What a line calls one copy of its family, in the singular: <c>leg copy</c>, <c>mutation worker</c>.</param>
+    /// <param name="again">The command that removes it once nothing keeps it, as a line quotes it.</param>
     /// <param name="asked">What the run lock is asked for its holder, where the lock holds a copy of its family; <see langword="null"/> where a claim does.</param>
     /// <exception cref="ArgumentOutOfRangeException">The verdict on it is none a copy left can have.</exception>
-    public static KeptCopyLine Of(WorkerLeft left, string line, LockRequest? asked = null)
+    public static (KeptCopyLine Told, string WentWithIt) Left(WorkerLeft left, string member, string again, LockRequest? asked = null)
     {
         ArgumentNullException.ThrowIfNull(left);
+        ArgumentException.ThrowIfNullOrWhiteSpace(member);
+        ArgumentException.ThrowIfNullOrWhiteSpace(again);
+
+        var why = left.Why.TrimEnd('.');
+        var forced = $"the {member} '{left.Path}' kept in it went with it, forced: {why}";
 
         return left.Verdict switch
         {
-            LegVerdict.RefusedLocked => Held(left.Path, line, asked, left.Claim),
-            LegVerdict.Failed => Stopping(line),
-            LegVerdict.Passed => Said(line),
+            LegVerdict.RefusedLocked => (Held(left.Path, $"left the {member} '{left.Path}' kept in it: {why}; {again} removes it once nothing holds it", asked, left.Claim), forced),
+            LegVerdict.Failed => (Stopping($"left the {member} '{left.Path}' kept in it: {why}; {again} removes it once nothing stops it"), forced),
+            LegVerdict.Passed => (Said($"left '{left.Path}', named as a {member} kept in it: {why}"), WorktreeReports.WentWithItsTree(left.Path)),
             var verdict => throw new ArgumentOutOfRangeException(nameof(left), verdict, "A copy left is held, in the removal's way, or only said; this build cannot tell which this one is."),
         };
     }

@@ -70,16 +70,17 @@ public interface IHostCopyRemover
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Which runs hold a copy of the worktree at <paramref name="tree"/>, without asking any host anything: the run lock
-    /// read for each copy the worktree's removal takes, exactly as the removal takes it. Nothing is removed, written or
-    /// reclaimed.
+    /// The locks the removal of the copies hosts keep of the worktree at <paramref name="tree"/> takes, one for each copy,
+    /// exactly as the removal takes it (<see cref="HostCopyRemover.RemovalLock"/>), without asking any host anything or
+    /// reading the run lock: whoever asks the lock with them reads it, and says what it cannot read. Nothing is removed,
+    /// written or reclaimed.
     /// </summary>
     /// <param name="context">The repository, from the command that deletes the worktree.</param>
     /// <param name="worktree">The name the worktree's copies are kept under.</param>
     /// <param name="tree">The worktree's own directory on this machine.</param>
     /// <param name="runId">A run the question is asked under, never recorded: it names nothing.</param>
     /// <exception cref="HarnessException">The record of which hosts hold a copy cannot be read: refused.</exception>
-    Task<IReadOnlyList<LockEntry>> HeldNowAsync(HarnessContext context, string worktree, string tree, RunId runId);
+    IReadOnlyList<LockRequest> RemovalLocks(HarnessContext context, string worktree, string tree, RunId runId);
 }
 
 /// <inheritdoc cref="IHostCopyRemover"/>
@@ -141,14 +142,14 @@ public sealed class HostCopyRemover(
         };
     }
 
-    public Task<IReadOnlyList<LockEntry>> HeldNowAsync(HarnessContext context, string worktree, string tree, RunId runId)
+    public IReadOnlyList<LockRequest> RemovalLocks(HarnessContext context, string worktree, string tree, RunId runId)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(worktree);
         ArgumentException.ThrowIfNullOrWhiteSpace(tree);
         ArgumentNullException.ThrowIfNull(runId);
 
-        var holders = new List<LockEntry>();
+        var locks = new List<LockRequest>();
 
         foreach (var entry in _record.Of(context.Layout, worktree))
         {
@@ -161,11 +162,11 @@ public sealed class HostCopyRemover(
 
             if (HostId.TryParse(entry.Host, out var host) && host.Kind != HostKind.Local)
             {
-                holders.AddRange(_runLock.Holders(context.Layout, [RemovalLock(host, entry.Path, runId)]));
+                locks.Add(RemovalLock(host, entry.Path, runId));
             }
         }
 
-        return Task.FromResult<IReadOnlyList<LockEntry>>(holders);
+        return locks;
     }
 
     public async Task<HostCopyRemoval> RemoveAsync(
@@ -391,7 +392,7 @@ public sealed class HostCopyRemover(
                 ? null
                 : (workers.Kept switch
                     {
-                        { As: WorkerLeftAs.Held } busy => $"a mutation worker kept in it is in use - '{busy.Path}': {busy.Why}",
+                        { Verdict: LegVerdict.RefusedLocked } busy => $"a mutation worker kept in it is in use - '{busy.Path}': {busy.Why}",
                         { } stuck => $"a mutation worker kept in it could not be removed - {stuck.Told()}",
                         _ => "the removal of the mutation workers kept in it was stopped before each had been dealt with",
                     },

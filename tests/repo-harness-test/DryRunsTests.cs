@@ -140,19 +140,68 @@ public sealed class DryRunsTests
             _ = new WorkerLeft(path, "why", left).Verdict;
         }
 
-        var held = KeptCopyLine.Of(new WorkerLeft(path, "why", WorkerLeftAs.Held, claim), "held");
-        var stopping = KeptCopyLine.Of(new WorkerLeft(path, "why", WorkerLeftAs.NotRemoved), "not removed");
-        var said = KeptCopyLine.Of(new WorkerLeft(path, "why", WorkerLeftAs.Somebodys), "somebody's");
+        const string Again = "'dssharness delete-worktree o/a'";
+        var held = KeptCopyLine.Left(new WorkerLeft(path, "why.", WorkerLeftAs.Held, claim), "mutation worker", Again);
+        var stopping = KeptCopyLine.Left(new WorkerLeft(path, "why.", WorkerLeftAs.NotRemoved), "mutation worker", Again);
+        var said = KeptCopyLine.Left(new WorkerLeft(path, "why.", WorkerLeftAs.Somebodys), "mutation worker", Again);
 
-        Assert.Equal((path, false, claim), (held.HeldPath, held.Stops, held.Claim));
-        Assert.Equal((null, true), (stopping.HeldPath, stopping.Stops));
-        Assert.Equal((null, false), (said.HeldPath, said.Stops));
+        Assert.Equal((path, false, claim), (held.Told.HeldPath, held.Told.Stops, held.Told.Claim));
+        Assert.Equal($"left the mutation worker '{path}' kept in it: why; {Again} removes it once nothing holds it", held.Told.Line);
+        Assert.Equal((null, true), (stopping.Told.HeldPath, stopping.Told.Stops));
+        Assert.Equal($"left the mutation worker '{path}' kept in it: why; {Again} removes it once nothing stops it", stopping.Told.Line);
+        Assert.Equal((null, false), (said.Told.HeldPath, said.Told.Stops));
+        Assert.Equal($"left '{path}', named as a mutation worker kept in it: why", said.Told.Line);
+        Assert.Equal($"the mutation worker '{path}' kept in it went with it, forced: why", held.WentWithIt);
+        Assert.Equal($"the mutation worker '{path}' kept in it went with it, forced: why", stopping.WentWithIt);
+        Assert.Equal(WorktreeReports.WentWithItsTree(path), said.WentWithIt);
 
         var unknown = new WorkerLeft(path, "why", (WorkerLeftAs)99);
 
         Assert.Throws<ArgumentOutOfRangeException>(() => unknown.Verdict);
-        Assert.Throws<ArgumentOutOfRangeException>(() => KeptCopyLine.Of(unknown, "unknown"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => KeptCopyLine.Left(unknown, "mutation worker", Again));
         Assert.Throws<ArgumentOutOfRangeException>(() => new WorkersRemoval([], [unknown]).Verdict);
+    }
+
+    /// <summary>
+    /// What a claim records of the run holding a copy is carried only by a copy left held, which a claim holds: refused on
+    /// one left otherwise, as it is made and as a host's answer is read - never carried, and never silently dropped.
+    /// </summary>
+    [Fact]
+    public void AClaimIsCarriedOnlyByACopyLeftHeld_AsMadeAndAsAHostsAnswerIsRead()
+    {
+        var path = @"C:\src\repo\.worktrees\o\a\.mutations\x86_64-gcc-debug-1";
+        var claim = new LogOwner("this-machine", 4242, "20261012-151500-ab12cd34", DateTimeOffset.Parse("2026-10-12T15:15:00Z", System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.Equal(claim, new WorkerLeft(path, "held", WorkerLeftAs.Held, claim).Claim);
+        Assert.Throws<ArgumentException>(() => new WorkerLeft(path, "not removed", WorkerLeftAs.NotRemoved, claim));
+        Assert.Throws<ArgumentException>(() => new WorkerLeft(path, "somebody's", WorkerLeftAs.Somebodys, claim));
+
+        var answer = SyncServe.Answer(new SyncWorkersAnswer(new WorkersRemoval([], [new WorkerLeft(path, "held", WorkerLeftAs.Held, claim)])));
+
+        Assert.Equal(claim, SyncServe.ReadAnswer<SyncWorkersAnswer>(answer)!.Workers.Left.Single().Claim);
+        Assert.Contains("\"Held\"", answer, StringComparison.Ordinal);
+
+        var refusal = Assert.Throws<HarnessException>(() => SyncServe.ReadAnswer<SyncWorkersAnswer>(answer.Replace("\"Held\"", "\"NotRemoved\"", StringComparison.Ordinal)));
+
+        Assert.StartsWith("The far side answered in a shape this build cannot read: ", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <c>heldNow</c> says each standing a holder can have, and nothing only where none is known: a standing this build
+    /// does not know is refused, never said as unknown.
+    /// </summary>
+    [Fact]
+    public void HeldNowSaysEveryStanding_AndRefusesOneThisBuildDoesNotKnow()
+    {
+        var entry = new LockEntry("local", @"C:\src\repo\.worktrees\o\a", LockScope.TreeExclusive, new LockHolder("this-machine", 4242, "20261012-151500-ab12cd34", DateTimeOffset.Parse("2026-10-12T15:15:00Z", System.Globalization.CultureInfo.InvariantCulture), "test"));
+        var planned = CommandOutcome.Ok("dry run: ...");
+
+        string? Said(HolderStanding? standing)
+            => System.Text.Json.Nodes.JsonNode.Parse(OrchestrationReports.Document(planned, applied: false, RequestStanding.Sound, new TreeHeld([TreeHolder.Named(copy: false, entry, standing, ahead: null, said: "said")], null, null, [])).Data[0])!["heldNow"]![0]!["standing"]?.GetValue<string>();
+
+        Assert.Equal(["no-slot", "waiting", "holds-slot", "on-host"], Enum.GetValues<HolderStanding>().Select(standing => Said(standing)));
+        Assert.Null(Said(null));
+        Assert.Throws<ArgumentOutOfRangeException>(() => Said((HolderStanding)99));
     }
 
     /// <summary>
