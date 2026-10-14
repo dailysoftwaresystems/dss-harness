@@ -768,7 +768,7 @@ public sealed class AgentDeletionTests
 
     /// <summary>
     /// The real file system, except that once the agent's seed is written, one main-tree file is changed, as a person or
-    /// another lane would change it between a fold's write and the proof that asks what is left.
+    /// another run would change it between a fold's write and the proof that asks what is left.
     /// </summary>
     private sealed class ChangedOnSeedWriteFileSystem(IFileSystem inner, string seed, string changed) : PassThroughFileSystem(inner)
     {
