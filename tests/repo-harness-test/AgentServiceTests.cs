@@ -895,16 +895,18 @@ public sealed class AgentServiceTests
         File.Copy(Path.Combine(kit.Main, "z.txt"), Path.Combine(worktree, "z.txt"), overwrite: true);
         var alike = Path.Combine(worktree, "a.txt");
 
-        // The second reading of z.txt is the one that follows a.txt's measuring read: the session makes a.txt runnable in
-        // between, after it was weighed and before the fold records it.
+        // A fold reads the agent's z.txt once, as it weighs it, after a.txt - paths are weighed in order - and records both
+        // only after it weighed them all: the session makes a.txt runnable then, after it was weighed and before the fold
+        // records it.
         var agents = kit.Harness.Agents(
-            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "z.txt"), 2, () => kit.Harness.FilePermissions.SetExecutable(alike, executable: true)),
+            new AgentFoldMergeTests.MeanwhileFileSystem(kit.Harness.FileSystem, Path.Combine(worktree, "z.txt"), 1, () => kit.Harness.FilePermissions.SetExecutable(alike, executable: true)),
             kit.Harness.AnchorRegistryService);
 
         var folded = await agents.FoldAsync(kit.Main, "o1", "ag", new FoldAllowances(), apply: true, Token);
         var seed = kit.Harness.OrchestrationStore.ReadSeed(kit.Layout, "ag")!;
 
         Assert.True(folded.Succeeded, OrchestrationKit.Describe(folded));
+        Assert.True(kit.Harness.FilePermissions.IsExecutable(alike), "The session did not make a.txt runnable while the fold ran.");
         Assert.Equal(await DigestAsync(kit.Main, "a.txt"), seed.Paths["a.txt"]);
         Assert.DoesNotContain("a.txt", seed.Executable ?? []);
 
