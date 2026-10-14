@@ -805,6 +805,9 @@ public sealed partial class CliEndToEndTests
         var harness = new HarnessFactory();
         var platform = harness.Platform;
 
+        // A processor this machine is not, so the leg is emulated here on any machine.
+        var emulated = platform.Processor == PlatformNames.Arm64 ? PlatformNames.X64 : PlatformNames.Arm64;
+
         await harness.InitializeHarnessAsync(temp.Path, token, new HarnessConfig
         {
             BuildConfigs = { ["debug"] = new BuildConfiguration() },
@@ -816,12 +819,12 @@ public sealed partial class CliEndToEndTests
                 {
                     HostOs = platform.PlatformKey,
                     HostProcessor = platform.Processor,
-                    Processor = "arm64",
+                    Processor = emulated,
                     Witness = new EmulatorWitness { Command = ["dotnet", "--version"], Pattern = @"\d" },
                 },
             },
             Defaults = new HarnessDefaults { LocalCopy = true },
-            Legs = { ["emu"] = new LegConfig { Os = platform.PlatformKey, Processor = "arm64", Config = "debug", Emulator = "veiled" } },
+            Legs = { ["emu"] = new LegConfig { Os = platform.PlatformKey, Processor = emulated, Config = "debug", Emulator = "veiled" } },
             PredefinedRunners =
             {
                 ["format"] = new RunnerConfig
