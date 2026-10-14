@@ -76,8 +76,8 @@ internal static class CommandRunner
     /// shape, empty (<see cref="JsonAnswer"/>): where the parser refuses its command line (<see cref="UnparsedAsync"/>),
     /// where it stops before its body has an outcome, and where its body answers without one (<see cref="Report"/>).
     /// Asked for it, the command answers with one document on every exit save its usage, which <c>--help</c> asks for and
-    /// the parser answers before any command's action: a script reading standard output has one document to read
-    /// whatever happened.
+    /// the parser answers before any command's action, and a --json given twice with a value each, which asks for none:
+    /// a script reading standard output has one document to read whatever happened.
     /// </param>
     internal static void Wire(
         Command command,

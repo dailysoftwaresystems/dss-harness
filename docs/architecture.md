@@ -2130,7 +2130,8 @@ tool replaces, where a green result had quietly stopped meaning anything.
   the command's name or given twice with a value each (`CommandRunner.UnparsedAsync`); where it
   stops the command itself; and where the body answers with no document - a usage error or a
   refusal returned before anything is weighed (`CommandRunner.Report`): a command asked for
-  `--json` answers with one document on every exit save its usage.
+  `--json` answers with one document on every exit save its usage and a `--json` given twice
+  with a value each.
 - One reader reads a command line's flags wherever the parser may have refused it
   (`CommandFlags`): whether `--json` is set, and each flag a stopped document says -
   `fix-line-endings`' `check`, `install-missing-tools`' `dryRun`, and whether `check-mutations`

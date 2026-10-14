@@ -392,8 +392,9 @@ public sealed class StoppedDocumentTests
     [Fact]
     public async Task TheHelpAndTheArchitectureSayWhatAStoppedCommandAnswersWith()
     {
-        const string Said = "Asked for --json, a command answers with one document on every exit but one: --help, -h or -? prints its usage "
-            + "instead, exit 0, whatever else its command line holds, even what the parser would otherwise refuse. Stopped before it "
+        const string Said = "Asked for --json, a command answers with one document on every exit but two: --help, -h or -? prints its usage "
+            + "instead, exit 0, whatever else its command line holds, even what the parser would otherwise refuse; and --json given "
+            + "twice, a value each, asks for no document, so the parser's refusal is said alone, exit 10. Stopped before it "
             + "has anything of its own to say - a command line the parser refuses, a --directory that is not there, a repository not initialised, another usage "
             + "error, or a refusal met before anything is weighed - it answers with its own document holding nothing, exitCode and "
             + "summary first, which the leg ledger, the agent document and the check-mutations --list listing carry on every exit and "
@@ -422,7 +423,7 @@ public sealed class StoppedDocumentTests
                 + "command's own and set - never as another option's value, after `--`, before the command's name or given twice with "
                 + "a value each (`CommandRunner.UnparsedAsync`); where it stops the command itself; and where the body answers with no "
                 + "document - a usage error or a refusal returned before anything is weighed (`CommandRunner.Report`): a command asked "
-                + "for `--json` answers with one document on every exit save its usage.",
+                + "for `--json` answers with one document on every exit save its usage and a `--json` given twice with a value each.",
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
