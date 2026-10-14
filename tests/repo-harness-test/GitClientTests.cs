@@ -1640,10 +1640,17 @@ public sealed class GitClientTests
         var unknown = await harness.GitClient.RunAsync(temp.Path, ["cat-file", "-e", Assert.Single(ids)], cancellationToken: cancellationToken);
         Assert.False(unknown.Succeeded, "The repository holds an object for a file that was only read.");
 
+        // A file is staged to be read as git would store it, into an index of the question's own: the work tree's is never
+        // git's index for it, and a file staged in place writes no object.
+        var staging = processes.Started.Where(request => request.Arguments.Contains("update-index") && request.Arguments.Contains("--add")).ToList();
+        Assert.Equal(3, staging.Count);
+        Assert.All(staging, request => Assert.NotEqual(Path.GetFullPath(index), Path.GetFullPath(request.Environment["GIT_INDEX_FILE"]!)));
+        Assert.Single(staging, request => request.Arguments.Contains("--info-only"));
+
         // Every object git was told to write went to a directory outside the repository, set once the inherited one was
         // cleared, with the repository's own beside it, as one entry of a list.
-        var written = processes.Started.Where(request => request.Arguments.Contains("-w")).ToList();
-        Assert.NotEmpty(written);
+        var written = processes.Started.Where(request => request.Arguments.Contains("-w") || (staging.Contains(request) && !request.Arguments.Contains("--info-only"))).ToList();
+        Assert.Equal(3, written.Count);
         Assert.All(written, request =>
         {
             Assert.Null(request.Environment["GIT_COMMON_DIR"]);
@@ -1653,6 +1660,27 @@ public sealed class GitClientTests
             Assert.StartsWith("\"", request.Environment["GIT_ALTERNATE_OBJECT_DIRECTORIES"], StringComparison.Ordinal);
         });
         Assert.All(written, request => Assert.False(Directory.Exists(request.Environment["GIT_OBJECT_DIRECTORY"]), "The directory of a question's own was left behind."));
+        Assert.All(staging, request => Assert.False(File.Exists(request.Environment["GIT_INDEX_FILE"]), "The index of a question's own was left behind."));
+
+        var architecture = Prose.Document("docs", "architecture.md");
+
+        Assert.Contains(
+            "the agent's copy as `git add` would record it in its worktree (`ListStagedIdsAsync`, staged into a copy of the worktree's "
+                + "index), so a copy that differs from a commit's file only by a line-ending conversion is that commit's file, and one "
+                + "committed with carriage returns keeps them as git keeps them,",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "and one committed with carriage returns, under `core.autocrlf` or a `text=auto` attribute, keeps them on every side, as "
+                + "git keeps them, so a merge git makes clean is clean. A clean filter runs in the tree of the question's own.",
+            architecture,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "What git would record for a file is asked in one place (`GitClient.StagedIdsAsync`): staged, never hashed alone - `git "
+                + "hash-object` reads no index, and so misses the rule that keeps the line endings of a file whose entry holds carriage "
+                + "returns. `GitClient.HashAsync` is the one caller of `hash-object`, for bytes as they stand.",
+            architecture,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -2096,6 +2124,107 @@ public sealed class GitClientTests
         Assert.Equal([committed, committed], ids.Skip(1));
         Assert.Equal(objects, ObjectFiles(temp.Path));
         Assert.Empty(await harness.GitClient.ListStagedIdsAsync(temp.Path, [], cancellationToken));
+    }
+
+    /// <summary>
+    /// A repository that converts line endings on their way in - <c>core.autocrlf</c>, Git for Windows' default, or a
+    /// <c>* text=auto</c> attribute - holding <c>crlf.txt</c> committed with carriage returns and <c>lf.txt</c> without
+    /// them, both committed before it converted anything.
+    /// </summary>
+    private static async Task CommitBeforeConvertingAsync(HarnessFactory harness, string repository, string converting, CancellationToken cancellationToken)
+    {
+        await harness.InitializeGitRepositoryAsync(repository, cancellationToken);
+        File.WriteAllText(Path.Combine(repository, "crlf.txt"), "one\r\ntwo\r\n");
+        File.WriteAllText(Path.Combine(repository, "lf.txt"), "one\ntwo\n");
+        await harness.RunGitAsync(repository, ["-c", "core.autocrlf=false", "add", "crlf.txt", "lf.txt"], cancellationToken);
+        await harness.RunGitAsync(repository, ["-c", "core.autocrlf=false", "commit", "-q", "-m", "files committed as they stand"], cancellationToken);
+
+        if (converting == "core.autocrlf")
+        {
+            await harness.RunGitAsync(repository, ["config", "core.autocrlf", "true"], cancellationToken);
+        }
+        else
+        {
+            File.WriteAllText(Path.Combine(repository, ".gitattributes"), "* text=auto\n");
+        }
+    }
+
+    /// <summary>
+    /// The blob named for a file is the one <c>git add</c> records, in either way a repository converts line endings: a
+    /// file its index holds with carriage returns keeps them, as git keeps them for a file committed so, while one its
+    /// index holds without them, or does not hold at all, is converted. Neither the index nor the objects are written.
+    /// (The first was named converted at 0.6.13, a blob git never records.)
+    /// </summary>
+    [Theory]
+    [InlineData("core.autocrlf")]
+    [InlineData("text=auto")]
+    public async Task TheBlobAFileWouldBeStoredAs_IsTheOneGitAddRecords_ItsCarriageReturnsKeptWhereTheIndexHoldsThem(string converting)
+    {
+        using var temp = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await CommitBeforeConvertingAsync(harness, temp.Path, converting, cancellationToken);
+        string[] files = ["crlf.txt", "lf.txt", "new.txt"];
+
+        foreach (var file in files)
+        {
+            temp.WriteFile(file, "one\r\ntwo\r\nthree\r\n");
+        }
+
+        var index = Path.Combine(temp.Path, ".git", "index");
+        var indexed = File.ReadAllBytes(index);
+        var objects = ObjectFiles(temp.Path);
+
+        var ids = await harness.GitClient.ListStagedIdsAsync(temp.Path, files, cancellationToken);
+
+        Assert.Equal(indexed, File.ReadAllBytes(index));
+        Assert.Equal(objects, ObjectFiles(temp.Path));
+
+        var asTheyStand = await harness.RunGitAsync(temp.Path, ["hash-object", "--no-filters", "crlf.txt"], cancellationToken);
+        await harness.RunGitAsync(temp.Path, ["add", .. files], cancellationToken);
+        var recorded = await harness.RunGitAsync(temp.Path, ["rev-parse", .. files.Select(file => $":{file}")], cancellationToken);
+
+        Assert.Equal(recorded.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), ids);
+        Assert.Equal(asTheyStand.StandardOutput.Trim(), ids[0]);
+        Assert.NotEqual(ids[0], ids[1]);
+        Assert.Equal(ids[1], ids[2]);
+    }
+
+    /// <summary>
+    /// Each version of a merge is read as <c>git add</c> would store it at the path: where the index holds the path with
+    /// carriage returns, a file in place, a file kept elsewhere and bytes in hand all keep theirs, as git keeps them for
+    /// a file committed so; where it holds the path without them, the same bytes are converted.
+    /// (Converted at 0.6.13, so a merge git makes clean was shown as one conflict over the whole file.)
+    /// </summary>
+    [Theory]
+    [InlineData("core.autocrlf")]
+    [InlineData("text=auto")]
+    public async Task EachVersionOfAMerge_IsReadAsGitAddWouldStoreIt_ItsCarriageReturnsKeptWhereTheIndexHoldsThem(string converting)
+    {
+        using var temp = new TempDirectory();
+        using var outside = new TempDirectory();
+        var harness = new HarnessFactory();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await CommitBeforeConvertingAsync(harness, temp.Path, converting, cancellationToken);
+        var committed = (await harness.RunGitAsync(temp.Path, ["rev-parse", "HEAD:crlf.txt"], cancellationToken)).StandardOutput.Trim();
+        var edited = temp.WriteFile("crlf.txt", "one\r\nedited\r\n");
+        var kept = outside.WriteFile("kept", "one\r\nkept\r\n");
+        var objects = ObjectFiles(temp.Path);
+
+        var held = await harness.GitClient.ReadStagedAsync(
+            temp.Path,
+            "crlf.txt",
+            [new GitContent.Blob(committed), new GitContent.File(edited), new GitContent.File(kept), new GitContent.Bytes(Utf8("one\r\nin hand\r\n"))],
+            cancellationToken);
+        var converted = await harness.GitClient.ReadStagedAsync(temp.Path, "lf.txt", [new GitContent.File(kept), new GitContent.Bytes(Utf8("one\r\nin hand\r\n"))], cancellationToken);
+
+        Assert.Equal(["one\r\ntwo\r\n", "one\r\nedited\r\n", "one\r\nkept\r\n", "one\r\nin hand\r\n"], held.Select(Text));
+        Assert.Equal(["one\nkept\n", "one\nin hand\n"], converted.Select(Text));
+        Assert.Equal(objects, ObjectFiles(temp.Path));
+
+        await harness.RunGitAsync(temp.Path, ["add", "crlf.txt"], cancellationToken);
+
+        Assert.Equal("one\r\nedited\r\n", (await harness.RunGitAsync(temp.Path, ["cat-file", "blob", ":crlf.txt"], cancellationToken)).StandardOutput);
     }
 
     [Fact]

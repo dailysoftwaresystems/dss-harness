@@ -27,6 +27,9 @@ public sealed partial class GitClient
 
     private const string TheirsFile = "theirs";
 
+    /// <summary>The file a directory of a work tree declares git's attributes for the paths below it in.</summary>
+    private const string AttributesFile = ".gitattributes";
+
     /// <summary>
     /// Paths named in one git invocation that takes them as arguments. Batched because a command line is bounded
     /// -- 32,767 characters on Windows -- and a repository has more files than that allows.
@@ -217,10 +220,58 @@ public sealed partial class GitClient
     {
         ArgumentNullException.ThrowIfNull(paths);
 
-        return paths.Count == 0
-            ? []
-            : await HashAsync(directory, paths, new Hashing(Written: false, Filtered: true), "read what the tree holds as git would store it", cancellationToken)
-                .ConfigureAwait(false);
+        if (paths.Count == 0)
+        {
+            return [];
+        }
+
+        const string What = "read what the tree holds as git would store it";
+        var real = await GetIndexFileAsync(directory, cancellationToken).ConfigureAwait(false);
+
+        // Staged into a copy of the work tree's own index, as git add stages into it: each file whose entry and stat still
+        // agree is the blob the entry holds, and any other is read again, its entry's line endings deciding its own.
+        return await InIndexOfItsOwnAsync(async index =>
+        {
+            CopyIndex(real, index, What);
+
+            return await StagedIdsAsync(directory, workTree: null, index, paths, store: null, What, cancellationToken).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Copies the index at <paramref name="real"/> to <paramref name="copy"/> with the time it was last written, which git
+    /// compares each entry's own with: an entry written as late as its index could hide an edit made the same moment, and git
+    /// reads such a file again rather than trust it - a copy timed now would trust it. An index never written leaves no copy,
+    /// which git takes for one holding nothing.
+    /// </summary>
+    /// <remarks>
+    /// Read while git may replace it: opened so a replacement is not refused, and read whole from what was opened.
+    /// </remarks>
+    /// <exception cref="HarnessException">The index could not be read, or its copy written.</exception>
+    private static void CopyIndex(string real, string copy, string what)
+    {
+        try
+        {
+            DateTime written;
+
+            using (var source = new FileStream(real, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                written = File.GetLastWriteTimeUtc(source.SafeFileHandle);
+
+                using var target = new FileStream(copy, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                source.CopyTo(target);
+            }
+
+            File.SetLastWriteTimeUtc(copy, written);
+        }
+        catch (FileNotFoundException)
+        {
+            // Nothing was ever staged there: git starts the copy empty, as it reads the index that is not there.
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new HarnessException(HarnessExit.CommandFailed, $"Could not {what}: the index '{real}' could not be copied - {ex.Message}");
+        }
     }
 
     public Task<IReadOnlyList<byte[]>> ReadStagedAsync(string directory, string path, IReadOnlyList<GitContent> contents, CancellationToken cancellationToken = default)
@@ -234,7 +285,7 @@ public sealed partial class GitClient
         {
             var store = await StoreAsync(directory, scratch, cancellationToken).ConfigureAwait(false);
             var ids = new string?[contents.Count];
-            var files = new List<(int At, string File)>();
+            var placed = new List<(int At, Func<string, Task> Write)>();
 
             for (var at = 0; at < contents.Count; at++)
             {
@@ -244,26 +295,29 @@ public sealed partial class GitClient
                         ids[at] = blob.Id;
                         break;
                     case GitContent.File file:
-                        files.Add((at, Path.GetFullPath(file.Path)));
+                        placed.Add((at, destination =>
+                        {
+                            File.Copy(file.Path, destination);
+
+                            return Task.CompletedTask;
+                        }));
                         break;
                     case GitContent.Bytes bytes:
-                        var held = Path.Combine(scratch, $"content-{at}");
-                        await File.WriteAllBytesAsync(held, bytes.Content, cancellationToken).ConfigureAwait(false);
-                        files.Add((at, held));
+                        placed.Add((at, destination => File.WriteAllBytesAsync(destination, bytes.Content, cancellationToken)));
                         break;
                 }
             }
 
-            if (files.Count > 0)
+            if (placed.Count > 0)
             {
                 // Written, since it is the object that is read back - into the store of this question's own, never the
                 // repository's.
-                var hashed = await HashAsync(directory, [.. files.Select(file => file.File)], new Hashing(Written: true, Filtered: true, path, store), what, cancellationToken)
+                var staged = await StagedAtAsync(directory, path, [.. placed.Select(content => content.Write)], scratch, store, what, cancellationToken)
                     .ConfigureAwait(false);
 
-                for (var at = 0; at < files.Count; at++)
+                for (var at = 0; at < placed.Count; at++)
                 {
-                    ids[files[at].At] = hashed[at];
+                    ids[placed[at].At] = staged[at];
                 }
             }
 
@@ -273,6 +327,89 @@ public sealed partial class GitClient
                 ? Encoding.Latin1.GetBytes(blob.Content)
                 : throw new HarnessException(HarnessExit.CommandFailed, $"Could not {what}: git holds no blob '{ids[at]}'."))];
         });
+    }
+
+    /// <summary>
+    /// The blob <c>git add</c> would record for each content <paramref name="contents"/> writes, were it the file at
+    /// <paramref name="path"/> in the work tree at <paramref name="directory"/>, in the same order, each written into
+    /// <paramref name="store"/>: each placed at that path in a tree of its own under <paramref name="scratch"/> and staged
+    /// there (<see cref="StagedIdsAsync"/>), into an index holding what the work tree's own holds at the path and at each
+    /// attribute file above it, beside a copy of each such attribute file the work tree holds.
+    /// </summary>
+    /// <remarks>
+    /// git then reads what it reads in the work tree: the entry whose carriage returns decide whether the file's are kept,
+    /// and each attribute file the work tree holds or, where it holds none, the index's, with the repository's own
+    /// configuration and attributes. One that is the path itself is the content placed there, as it would be in the work
+    /// tree. A link the work tree holds in an attribute file's place is not copied, as git does not read it. A clean filter
+    /// runs in the tree of the question's own, where in the work tree it would run at its root.
+    /// </remarks>
+    /// <exception cref="HarnessException">git could not stage one - a filter of the path failed, for one.</exception>
+    /// <exception cref="IOException">A file could not be read, or a tree written.</exception>
+    private async Task<IReadOnlyList<string>> StagedAtAsync(
+        string directory,
+        string path,
+        IReadOnlyList<Func<string, Task>> contents,
+        string scratch,
+        ObjectStore store,
+        string what,
+        CancellationToken cancellationToken)
+    {
+        // The attribute file of each directory above the path, from the root down.
+        var directories = path.Split('/')[..^1];
+        var attributes = Enumerable.Range(0, directories.Length + 1)
+            .Select(depth => string.Join('/', [.. directories.Take(depth), AttributesFile]))
+            .Where(file => file != path)
+            .ToList();
+
+        var entries = await ListIndexAsync(directory, indexFile: null, [path, .. attributes], cancellationToken).ConfigureAwait(false);
+        var template = Path.Combine(scratch, "index");
+
+        if (entries.Count > 0)
+        {
+            var written = await RunWithIndexAsync(
+                    directory,
+                    template,
+                    ["update-index", "--no-split-index", "-z", "--index-info"],
+                    string.Concat(entries.Select(entry => $"{entry.Mode} {entry.ObjectId} {entry.Stage}\t{entry.Path}\0")),
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            Ensure(written, what);
+        }
+
+        var held = attributes.Where(file => new FileInfo(Path.Combine(directory, file)) is { Exists: true, LinkTarget: null }).ToList();
+        var ids = new List<string>();
+
+        for (var at = 0; at < contents.Count; at++)
+        {
+            var tree = Path.Combine(scratch, $"tree-{at}");
+            var index = Path.Combine(scratch, $"index-{at}");
+
+            foreach (var file in held)
+            {
+                File.Copy(Path.Combine(directory, file), Placed(tree, file));
+            }
+
+            await contents[at](Placed(tree, path)).ConfigureAwait(false);
+
+            if (entries.Count > 0)
+            {
+                File.Copy(template, index);
+            }
+
+            ids.Add((await StagedIdsAsync(directory, tree, index, [path], store, what, cancellationToken).ConfigureAwait(false))[0]);
+        }
+
+        return ids;
+
+        // Where a file goes at a path in a tree, its directory made.
+        static string Placed(string tree, string path)
+        {
+            var file = Path.Combine(tree, path);
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+
+            return file;
+        }
     }
 
     public Task<byte[]> ReadCheckedOutAsync(string directory, string path, byte[] staged, CancellationToken cancellationToken = default)
@@ -290,7 +427,7 @@ public sealed partial class GitClient
 
             // Stored as the bytes stand - they are the staged form already - and then read back as a checkout of the
             // path would write them.
-            var id = (await HashAsync(directory, [held], new Hashing(Written: true, Filtered: false, Store: store), what, cancellationToken).ConfigureAwait(false))[0];
+            var id = (await HashAsync(directory, [held], store, what, cancellationToken).ConfigureAwait(false))[0];
             var result = await RunForBytesAsync(directory, ["cat-file", "--filters", $"--path={path}", id], cancellationToken, objects: store).ConfigureAwait(false);
 
             Ensure(result, what);

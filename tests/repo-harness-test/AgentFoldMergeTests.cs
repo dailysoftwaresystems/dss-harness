@@ -41,6 +41,59 @@ public sealed class AgentFoldMergeTests
         return (kit, await kit.CreateAgentAsync(Agent));
     }
 
+    /// <summary><paramref name="text"/> with each line ended by a carriage return and a line feed.</summary>
+    internal static string Crlf(string text) => text.Replace("\n", "\r\n", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Has the repository of <paramref name="kit"/> convert line endings on their way in, from now on, in one of the two ways
+    /// a repository does: <c>core.autocrlf</c> set, Git for Windows' default, or a <c>* text=auto</c> attribute committed.
+    /// </summary>
+    internal static async Task ConvertLineEndingsAsync(OrchestrationKit kit, string converting)
+    {
+        if (converting == "core.autocrlf")
+        {
+            await kit.GitAsync(kit.Main, "config", "core.autocrlf", "true");
+        }
+        else
+        {
+            OrchestrationKit.Write(kit.Main, ".gitattributes", "* text=auto\n");
+            await kit.Harness.CommitAllAsync(kit.Main, "line endings converted from now on", Token);
+        }
+    }
+
+    /// <summary>
+    /// A file committed with carriage returns in a repository that converts line endings keeps them as git stores it - git
+    /// leaves a file its index holds so as it is - so two changes of different lines merge clean, as git merges them, and
+    /// the merge keeps them. (One conflict over the whole file at 0.6.13: each side read converted, what both held not.)
+    /// </summary>
+    [Theory]
+    [InlineData("core.autocrlf")]
+    [InlineData("text=auto")]
+    public async Task AFileCommittedWithCarriageReturns_MergesCleanAsGitMergesIt_AndTheMergeKeepsThem(string converting)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Both, Crlf(Text()));
+        await kit.Harness.CommitAllAsync(kit.Main, "a file committed with carriage returns", Token);
+        await ConvertLineEndingsAsync(kit, converting);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, Both, Crlf(Text((2, "AGENT 2"))));
+        OrchestrationKit.Write(kit.Main, Both, Crlf(Text((9, "MAIN 9"))));
+
+        var refused = await kit.FoldAsync(Agent, apply: false);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.EndsWith(
+            $"a three-way merge of the two is clean - 1 hunk(s) from the agent, 1 from the main tree - and --merge {Both} writes it",
+            Assert.Single(refused.Details!, line => line.StartsWith($"  '{Both}': ", StringComparison.Ordinal)),
+            StringComparison.Ordinal);
+
+        var merged = await kit.FoldAsync(Agent, apply: true, Merging(Both));
+
+        Assert.True(merged.Succeeded, OrchestrationKit.Describe(merged));
+        Assert.Equal(Crlf(Text((2, "AGENT 2"), (9, "MAIN 9"))), OrchestrationKit.Read(kit.Main, Both));
+    }
+
     /// <summary>An agent handed <see cref="Both"/> as the main tree held it uncommitted: a path it shares, weighed against its seed.</summary>
     private static async Task<(OrchestrationKit Kit, string Worktree)> HandedAsync(TempDirectory temp, string? text = null)
     {

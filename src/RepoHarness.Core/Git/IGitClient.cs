@@ -133,8 +133,10 @@ public interface IGitClient
 
     /// <summary>
     /// The blob each of <paramref name="paths"/> would be stored as at its own path in the work tree at
-    /// <paramref name="directory"/>, in the same order: its file read through the clean filters and the line-ending rules
-    /// of that path, as <c>git add</c> would read it. Nothing is written, in the repository or anywhere else.
+    /// <paramref name="directory"/>, in the same order: the one <c>git add</c> would record there - its file read through
+    /// the clean filters and the line-ending rules of that path, its line endings kept where the work tree's index holds
+    /// the path with carriage returns, as git keeps them. Staged into a copy of that index, discarded with the answer:
+    /// neither the index nor the repository's objects are written.
     /// </summary>
     /// <param name="directory">The work tree's root.</param>
     /// <param name="paths">Files in it, relative to the root, with forward separators.</param>
@@ -144,9 +146,10 @@ public interface IGitClient
 
     /// <summary>
     /// Each of <paramref name="contents"/> as git would store it at <paramref name="path"/> in the work tree at
-    /// <paramref name="directory"/>, in the same order: a blob's bytes as they are, and a file's or bytes in hand through
-    /// the clean filters and the line-ending rules of that path. Nothing in the repository is written - neither its index
-    /// nor its objects.
+    /// <paramref name="directory"/>, in the same order: a blob's bytes as they are, and a file's or bytes in hand as
+    /// <c>git add</c> would record them were they the file there - through the clean filters and the line-ending rules of
+    /// that path, their line endings kept where the work tree's index holds the path with carriage returns, as git keeps
+    /// them. Nothing in the repository is written - neither its index nor its objects.
     /// </summary>
     /// <param name="directory">The work tree's root, whose attributes and configuration say how the path is stored.</param>
     /// <param name="path">The path whose rules apply, relative to the root, with forward separators.</param>

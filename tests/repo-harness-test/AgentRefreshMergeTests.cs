@@ -75,6 +75,37 @@ public sealed class AgentRefreshMergeTests
     }
 
     /// <summary>
+    /// A file committed with carriage returns in a repository that converts line endings keeps them as git stores it, so a
+    /// path both changed at different lines merges clean, as git merges it, and named with --merge, the merge written into
+    /// the worktree keeps them. (One conflict over the whole file at 0.6.13.)
+    /// </summary>
+    [Theory]
+    [InlineData("core.autocrlf")]
+    [InlineData("text=auto")]
+    public async Task AFileCommittedWithCarriageReturns_MergesCleanAsGitMergesIt_AndTheMergeKeepsThem(string converting)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Crlf(Text()));
+        await kit.Harness.CommitAllAsync(kit.Main, "a file committed with carriage returns", Token);
+        await AgentFoldMergeTests.ConvertLineEndingsAsync(kit, converting);
+        var worktree = await kit.CreateAgentAsync(Agent);
+        OrchestrationKit.Write(worktree, Both, AgentFoldMergeTests.Crlf(Text((2, "AGENT 2"))));
+        OrchestrationKit.Write(kit.Main, Both, AgentFoldMergeTests.Crlf(Text((9, "MAIN 9"))));
+        await kit.Harness.CommitAllAsync(kit.Main, "the main tree's change", Token);
+
+        var refused = await RefreshAsync(kit, apply: true);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.Equal($"  {Both}   (a three-way merge of the two is clean - 1 hunk(s) from the agent, 1 from the main tree)", refused.Details![0]);
+
+        var applied = await RefreshAsync(kit, apply: true, Both);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal(AgentFoldMergeTests.Crlf(Text((2, "AGENT 2"), (9, "MAIN 9"))), OrchestrationKit.Read(worktree, Both));
+    }
+
+    /// <summary>
     /// Named with --merge, the merge is written into the agent's worktree - said in the dry run, written only with --apply -
     /// and the path recorded as handed the main tree's copy: the agent's copy differs from it, so its fold writes the merge,
     /// and the main tree then holds both changes. (Refused at 0.6.13.)

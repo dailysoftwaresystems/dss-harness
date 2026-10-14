@@ -467,7 +467,7 @@ public sealed partial class GitClient(
         // non-interactive shell cannot find it, or one that refuses a line ending conversion it cannot undo, then
         // failed every sync. Nothing here needs what a filter makes of a file: the index names the files a tree holds,
         // and a build reads each one's bytes itself.
-        var ids = await HashAsync(directory, wanted, new Hashing(Written: true, Filtered: false), "read what the tree holds", cancellationToken).ConfigureAwait(false);
+        var ids = await HashAsync(directory, wanted, store: null, "read what the tree holds", cancellationToken).ConfigureAwait(false);
         var modes = await ModesAsync(directory, wanted, cancellationToken).ConfigureAwait(false);
 
         // Built afresh in an index of this tool's own, and put in place whole. Staging into the index git
@@ -561,10 +561,8 @@ public sealed partial class GitClient(
 
         // An index of this question's own, holding the commit's entry for each file asked about and nothing else: git then
         // compares each with the work tree as it would once the work tree's index held it, whatever that index holds now -
-        // nothing, for a file never added. Its own name, so two questions at once never share one.
-        var index = Path.Combine(Path.GetTempPath(), $"dssharness-index-{Guid.NewGuid():N}");
-
-        try
+        // nothing, for a file never added.
+        return await InIndexOfItsOwnAsync<IReadOnlySet<string>>(async index =>
         {
             var entries = new StringBuilder();
 
@@ -603,6 +601,22 @@ public sealed partial class GitClient(
             var changed = GitName.PathsOf([.. Records(differing.StandardOutput).Select(GitName.FromBytes)]);
 
             return files.Select(file => file.Name.Text).Where(path => !changed.Contains(path)).ToHashSet(StringComparer.Ordinal);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Answers a question that writes an index of its own, at a path in the system's temporary directory no other question
+    /// shares, never made where <paramref name="ask"/> writes none; the index, and the lock git may have left beside it, are
+    /// discarded once it is answered (<see cref="Discard"/>).
+    /// </summary>
+    /// <param name="ask">Asks, given the index's path.</param>
+    private static async Task<T> InIndexOfItsOwnAsync<T>(Func<string, Task<T>> ask)
+    {
+        var index = Path.Combine(Path.GetTempPath(), $"dssharness-index-{Guid.NewGuid():N}");
+
+        try
+        {
+            return await ask(index).ConfigureAwait(false);
         }
         finally
         {
@@ -644,56 +658,36 @@ public sealed partial class GitClient(
         Ensure(result, $"move '{directory}' to {commit}");
     }
 
-    /// <summary>How <c>git hash-object</c> is asked to read files: what differs between its callers.</summary>
-    /// <param name="Written">Whether each object is written: into <paramref name="Store"/> where one is given, into the repository otherwise.</param>
-    /// <param name="Filtered">
-    /// Whether each file is read as git would store it - through the clean filters and the line-ending rules of a path, its
-    /// own or <paramref name="AsPath"/> - rather than as its bytes stand.
-    /// </param>
-    /// <param name="AsPath">The path whose rules apply to every file, for files kept somewhere else; each file's own where null.</param>
-    /// <param name="Store">An object directory of the question's own; the repository's where null.</param>
-    private sealed record Hashing(bool Written, bool Filtered, string? AsPath = null, ObjectStore? Store = null);
-
     /// <summary>
-    /// The object each of <paramref name="files"/> holds, in the same order, read as <paramref name="how"/> says: the one
-    /// caller of <c>git hash-object</c>, so the rule for a name that cannot travel on its standard input
-    /// (<see cref="NeedsAHashOfItsOwn"/>) is in one place.
+    /// The object each of <paramref name="files"/> holds as its bytes stand - through no filter and no line-ending
+    /// conversion - in the same order, each written: the one caller of <c>git hash-object</c>, so the rule for a name that
+    /// cannot travel on its standard input (<see cref="NeedsAHashOfItsOwn"/>) is in one place. What git would record for a
+    /// file is never asked of it (<see cref="StagedIdsAsync"/>).
     /// </summary>
     /// <param name="directory">The directory git runs in, which the files are relative to.</param>
     /// <param name="files">The files to read.</param>
-    /// <param name="how">Whether each is written, whether it is filtered and as which path, and where its object goes.</param>
+    /// <param name="store">An object directory of the question's own to write into; the repository's where null.</param>
     /// <param name="what">What was being done, for the failure.</param>
     /// <param name="cancellationToken">Cancels the git processes.</param>
     private async Task<IReadOnlyList<string>> HashAsync(
         string directory,
         IReadOnlyList<string> files,
-        Hashing how,
+        ObjectStore? store,
         string what,
         CancellationToken cancellationToken)
     {
-        string[] command =
-        [
-            "hash-object",
-            .. how.Written ? ["-w"] : Array.Empty<string>(),
-            .. !how.Filtered ? ["--no-filters"] : how.AsPath is { } asPath ? [$"--path={asPath}"] : Array.Empty<string>(),
-        ];
-
         Task<GitCommandResult> RunAsync(IReadOnlyList<string> arguments, ChildInput? input)
-            => RunCoreAsync(directory, [.. command, .. arguments], echoOutput: false, untranslated: false, indexFile: null, input, cancellationToken, objects: how.Store);
+            => RunCoreAsync(directory, ["hash-object", "-w", "--no-filters", .. arguments], echoOutput: false, untranslated: false, indexFile: null, input, cancellationToken, objects: store);
 
         var ids = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        // A path given for them all names their rules, and git reads no list of files on its standard input beside it:
-        // they are named as arguments, a handful of this client's own. Otherwise every name that can travel on standard
-        // input does, and each that cannot is asked about on its own.
-        var alone = how.AsPath is null ? files.Where(NeedsAHashOfItsOwn).ToHashSet(StringComparer.Ordinal) : [];
+        // Every name that can travel on standard input does, and each that cannot is asked about on its own.
+        var alone = files.Where(NeedsAHashOfItsOwn).ToHashSet(StringComparer.Ordinal);
         var together = files.Where(file => !alone.Contains(file)).ToList();
 
         if (together.Count > 0)
         {
-            var hashed = how.AsPath is null
-                ? await RunAsync(["--stdin-paths"], string.Join('\n', together) + '\n').ConfigureAwait(false)
-                : await RunAsync(["--", .. together], null).ConfigureAwait(false);
+            var hashed = await RunAsync(["--stdin-paths"], string.Join('\n', together) + '\n').ConfigureAwait(false);
 
             Ensure(hashed, what);
 
@@ -734,6 +728,62 @@ public sealed partial class GitClient(
         => path.Contains('\n', StringComparison.Ordinal)
             || path.Contains('\r', StringComparison.Ordinal)
             || path.StartsWith('"');
+
+    /// <summary>
+    /// The blob <c>git add</c> would record for each of <paramref name="paths"/>, in the same order: each file staged by
+    /// <c>git update-index --add</c> into <paramref name="index"/>, an index of the question's own, and read back from it.
+    /// The one place this client asks what git stores for a file.
+    /// </summary>
+    /// <remarks>
+    /// Staged, never hashed on its own: <c>git hash-object</c> reads no index, so it misses git's rule that leaves the line
+    /// endings of a file as they are where the file's entry in the index holds carriage returns - a file committed with
+    /// them, under <c>core.autocrlf</c> or a <c>text=auto</c> attribute - and named for such a file a blob git never
+    /// records. Staging reads what <c>git add</c> reads: the entry each path has in <paramref name="index"/>, an attribute
+    /// file the work tree lacks as that index holds it, and the clean filters and every other line-ending rule of the path.
+    /// The paths travel on standard input, NUL-separated, so no list of them outgrows a command line and no name is read
+    /// apart. <c>core.fsmonitor</c> is off for it: a work tree of the question's own is watched by nothing, and git would
+    /// start a monitor of it; a plain look at each file answers the same.
+    /// </remarks>
+    /// <param name="directory">Where git runs: the repository whose configuration and objects are read.</param>
+    /// <param name="workTree">Where the files are, where that is not <paramref name="directory"/>: a tree of the question's own.</param>
+    /// <param name="index">The index of the question's own the files are staged into; one not there yet is started empty.</param>
+    /// <param name="paths">The files, from the work tree's root, as git names them.</param>
+    /// <param name="store">Where each blob is written, for a caller that reads it back; none is written where null.</param>
+    /// <param name="what">What was being done, for the failure.</param>
+    /// <param name="cancellationToken">Cancels the git processes.</param>
+    /// <exception cref="HarnessException">git could not stage a file - a filter of its path failed, for one - or holds none of it after.</exception>
+    private async Task<IReadOnlyList<string>> StagedIdsAsync(
+        string directory,
+        string? workTree,
+        string index,
+        IReadOnlyList<string> paths,
+        ObjectStore? store,
+        string what,
+        CancellationToken cancellationToken)
+    {
+        // --no-split-index writes the index whole: a split one would be written as a new shared index file beside the
+        // work tree's own, in its git directory.
+        string[] stage =
+        [
+            "-c", "core.fsmonitor=false",
+            .. workTree is null ? Array.Empty<string>() : [$"--work-tree={workTree}"],
+            "update-index", "--no-split-index",
+            .. store is null ? ["--info-only"] : Array.Empty<string>(),
+            "--add", "-z", "--stdin",
+        ];
+        var staged = await RunCoreAsync(directory, stage, echoOutput: false, untranslated: false, index, string.Join('\0', paths) + '\0', cancellationToken, objects: store)
+            .ConfigureAwait(false);
+
+        Ensure(staged, what);
+
+        var ids = (await ListIndexAsync(directory, index, paths, cancellationToken).ConfigureAwait(false))
+            .Where(entry => entry.Stage == 0)
+            .ToDictionary(entry => entry.Path, entry => entry.ObjectId, StringComparer.Ordinal);
+
+        return [.. paths.Select(path => ids.TryGetValue(path, out var id)
+            ? id
+            : throw new HarnessException(HarnessExit.CommandFailed, $"Could not {what}: git holds no blob for '{path}' once it staged it."))];
+    }
 
     /// <summary>The mode git itself would record for each of <paramref name="paths"/>, in the same order.</summary>
     /// <remarks>
@@ -788,36 +838,55 @@ public sealed partial class GitClient(
         }
     }
 
-    public async Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(
+    public Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(
         string directory,
         CancellationToken cancellationToken = default)
+        => ListIndexAsync(directory, indexFile: null, paths: null, cancellationToken);
+
+    /// <summary>
+    /// The entries of <paramref name="indexFile"/> - the work tree's own index where null - each at every stage it is held
+    /// at: all of them, or those at exactly <paramref name="paths"/>, each read literally, a command line of them at a time.
+    /// </summary>
+    /// <exception cref="HarnessException">git could not read the index, or listed an entry in a form this build cannot read.</exception>
+    private async Task<IReadOnlyList<GitIndexEntry>> ListIndexAsync(
+        string directory,
+        string? indexFile,
+        IReadOnlyList<string>? paths,
+        CancellationToken cancellationToken)
     {
         // -v is what shows the flags that hide an edit from status, and -z keeps every path intact.
-        var result = await RunAsync(
-            directory,
-            ["ls-files", "--stage", "-v", "-z"],
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        Ensure(result, "read the index");
-
+        string[] list = ["--literal-pathspecs", "ls-files", "--stage", "-v", "-z"];
+        var asked = paths?.ToHashSet(StringComparer.Ordinal);
         var entries = new List<GitIndexEntry>();
 
-        foreach (var field in result.StandardOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        foreach (string[] batch in asked is null ? [[]] : CommandLineBatches([.. asked.Order(StringComparer.Ordinal)]).Select(batch => (string[])["--", .. batch]))
         {
-            // The tag, mode, object and stage, separated by spaces, then a tab and the path.
-            var tab = field.IndexOf('\t');
-            string[] parts = tab < 0 ? [] : field[..tab].Split(' ');
+            var result = await RunCoreAsync(directory, [.. list, .. batch], echoOutput: false, untranslated: false, indexFile, standardInput: null, cancellationToken)
+                .ConfigureAwait(false);
 
-            if (parts.Length != 4
-                || parts[0].Length != 1
-                || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out var stage))
+            Ensure(result, "read the index");
+
+            foreach (var field in result.StandardOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries))
             {
-                throw new HarnessException(
-                    HarnessExit.CommandFailed,
-                    $"git listed an index entry in a form this build cannot read: '{field}'");
-            }
+                // The tag, mode, object and stage, separated by spaces, then a tab and the path.
+                var tab = field.IndexOf('\t');
+                string[] parts = tab < 0 ? [] : field[..tab].Split(' ');
 
-            entries.Add(new GitIndexEntry(parts[0][0], parts[1], parts[2], stage, field[(tab + 1)..]));
+                if (parts.Length != 4
+                    || parts[0].Length != 1
+                    || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out var stage))
+                {
+                    throw new HarnessException(
+                        HarnessExit.CommandFailed,
+                        $"git listed an index entry in a form this build cannot read: '{field}'");
+                }
+
+                // A path asked about names what is below it too, where it is a directory: only its own entry is its answer.
+                if (asked is null || asked.Contains(field[(tab + 1)..]))
+                {
+                    entries.Add(new GitIndexEntry(parts[0][0], parts[1], parts[2], stage, field[(tab + 1)..]));
+                }
+            }
         }
 
         return entries;

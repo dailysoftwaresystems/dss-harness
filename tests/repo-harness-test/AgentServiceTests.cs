@@ -1548,6 +1548,41 @@ public sealed class AgentServiceTests
     }
 
     /// <summary>
+    /// A copy committed with carriage returns, in a repository that converts line endings, is read as git would store it
+    /// - its carriage returns kept, as git keeps them for a file its index holds so - and so proved the main tree's own at
+    /// the earlier commit that holds those bytes, and handed with --stale. (Refused at 0.6.13 as bytes the main tree's
+    /// history never held.)
+    /// </summary>
+    [Theory]
+    [InlineData("core.autocrlf")]
+    [InlineData("text=auto")]
+    public async Task ACopyCommittedWithCarriageReturns_IsProvedTheMainTreesOwn_AndHandedWithStale(string converting)
+    {
+        using var temp = new TempDirectory();
+        var kit = await OrchestrationKit.PrepareAsync(temp);
+        OrchestrationKit.Write(kit.Main, "a.txt", "first\r\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the first version", Token);
+        var first = (await kit.Harness.GitClient.ResolveCommitAsync(kit.Main, "HEAD", Token))!;
+        await AgentFoldMergeTests.ConvertLineEndingsAsync(kit, converting);
+        OrchestrationKit.Write(kit.Main, "a.txt", "first\r\nsecond\r\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the second version", Token);
+        var worktree = await kit.CreateAgentAsync("ag");
+        OrchestrationKit.Write(worktree, "a.txt", "first\r\n");
+        OrchestrationKit.Write(kit.Main, "a.txt", "first\r\nthird\r\n");
+        await kit.Harness.CommitAllAsync(kit.Main, "the third version", Token);
+
+        var refused = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", RefreshRequest.Under("a.txt"), apply: true, Token);
+
+        Assert.Equal(HarnessExit.Refused, refused.ExitCode);
+        Assert.StartsWith($"  a.txt   (its bytes are the main tree's at {Core.Output.ReportText.Commit(first)}", refused.Details![0], StringComparison.Ordinal);
+
+        var applied = await kit.Harness.AgentService.RefreshAsync(kit.Main, "o1", "ag", new RefreshRequest { Paths = ["a.txt"], Stale = ["a.txt"] }, apply: true, Token);
+
+        Assert.True(applied.Succeeded, OrchestrationKit.Describe(applied));
+        Assert.Equal("first\r\nthird\r\n", OrchestrationKit.Read(worktree, "a.txt"));
+    }
+
+    /// <summary>
     /// Where the main tree's history holds the agent's very bytes at a path across several commits in a row - another
     /// path's commits among them - the commit named is the newest of the run: what a person finds first in the log is
     /// what the line says the main tree holds.
